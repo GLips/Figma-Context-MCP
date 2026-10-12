@@ -148,6 +148,24 @@ export type WritePaint = WriteSolid | WriteGradient | WriteImage;
 // bridge.ts's toFigmaPaintStack is the ONE place that flip is known.
 export type WritePaintStack = WritePaint[];
 
+/** One place a write lands a paint stack: the node's fills or strokes, or one text run's fills (by index). */
+export type PaintSite =
+  | { at: "fills" | "strokes"; stack: WritePaintStack }
+  | { at: "runFills"; run: number; stack: WritePaintStack };
+
+// THE enumeration of paint sites. The image prefetch fetches the url paints these yield and the
+// bridge paints only stacks these yield, so a site added here is both fetched and painted — the two
+// can't drift into a paint whose bytes were never asked for.
+export function paintSitesOf(props: WriteProps): PaintSite[] {
+  const sites: PaintSite[] = [];
+  if (props.fills) sites.push({ at: "fills", stack: props.fills });
+  if (props.strokes) sites.push({ at: "strokes", stack: props.strokes });
+  props.runs?.forEach((run, i) => {
+    if (run.fills) sites.push({ at: "runFills", run: i, stack: run.fills });
+  });
+  return sites;
+}
+
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
 // read-form { type, gradient } / { type: "SOLID", color, blendMode } objects, OR an already-typed
 // WritePaint (what flcm.gradient() returns). `blendMode` on a read-form leaf is a CSS blend keyword.

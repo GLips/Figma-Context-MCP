@@ -24,7 +24,6 @@ import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseImageAdjustments, parseCssEffects, parseBlendMode, boxShorthand, cornerRadii, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
-import { requestHostImages } from "./host.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
 import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
 import { pixelRound, type SimplifiedNode } from "@framelink/core";
@@ -1495,51 +1494,6 @@ function normalizeEffects(v: EffectsInput): WriteEffect[] {
   if (Object.keys(css).length) out.push(...parseCssEffects(css as WriteCssEffects));
   if (Object.keys(sugar).length) out.push(...effects(sugar as EffectsSugar));
   return out;
-}
-
-// Gather every image url in the tree — from EVERY paint-bearing location the bridge later resolves through
-// paintOf (node fills/strokes AND per-run fills), so render() can check which still need server-fetched
-// bytes before it creates a single node. This must stay in lockstep with paintOf's coverage: a paint site
-// paintOf resolves but this misses would fetch nothing, then hit the "no bytes" throw at render.
-function collectImageUrls(tree: WriteProps | LiveRef): string[] {
-  const urls: string[] = [];
-  const addFrom = (paints: readonly WritePaint[] | undefined): void => {
-    // `"url" in paint` is the whole hash-vs-url branch: a hash-backed image already names bytes in the
-    // document, so including it here would ask the server to fetch a string that is not a source.
-    if (paints) for (const paint of paints) if (paint && paint.kind === "image" && "url" in paint) urls.push(paint.url);
-  };
-  const visit = (wn: WriteProps | LiveRef): void => {
-    if (!wn || typeof wn !== "object") return;
-    // A live node's paints are its edit delta's, fetched with the live tree (live-tree.ts); its
-    // children are this tree's.
-    if ("liveId" in wn) {
-      for (const child of wn.children ?? []) visit(child);
-      return;
-    }
-    addFrom(wn.fills);
-    addFrom(wn.strokes);
-    if (wn.runs) for (const run of wn.runs) addFrom(run.fills);
-    if (wn.children) for (const child of wn.children) visit(child);
-  };
-  visit(tree);
-  return urls;
-}
-
-// Fetch bytes for every image paint in `trees` through the host channel (protocol 2), in ONE deduped
-// awaitable request, BEFORE any canvas write — a fetch failure (blocked url, oversize, unreachable)
-// aborts with zero mutations. The await is the run's suspension point (the sandbox suspends while the
-// plugin relays the WS round-trip); a cancelled or disconnected run dies here when the host rejects
-// its pending fetch. Shared by render (one tree) and the edit verbs (a delta's fill/stroke) — the
-// walk reads only paint sites, so WriteProps (no type discriminant) is the honest input.
-//
-// Plural because ONE VERB OWES ONE ROUND TRIP: a batch of deltas dedupes across every entry, so ten
-// entries sharing an image url fetch it once and the batch has a single suspension point.
-export async function fetchImagesForTrees(trees: readonly (WriteProps | LiveRef)[]): Promise<Record<string, string>> {
-  const all: string[] = [];
-  for (const tree of trees) for (const url of collectImageUrls(tree)) all.push(url);
-  const urls = Array.from(new Set(all));
-  if (!urls.length) return {};
-  return requestHostImages(urls);
 }
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats

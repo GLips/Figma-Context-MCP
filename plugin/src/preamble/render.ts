@@ -17,7 +17,7 @@ import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens } from "./token
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
 import { attachBuiltChild, liveParentAttachFacts, settleApplySpan, assertBuiltInteriorLegal, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
-import { fetchImagesForTrees } from "./flcm.js";
+import { fetchImagesForTrees } from "./image-prefetch.js";
 import { resolveInstanceTreeTargets, planInstanceTree } from "./instance.js";
 import { LoadedResources, InstanceNeeds } from "./edit-plan.js";
 import { createResolvedTargets, ResolvedTargets } from "./read.js";

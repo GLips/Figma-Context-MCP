@@ -32,7 +32,7 @@ import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js"
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, BuiltNode, LiveRef, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef, textOfRuns } from "./ir.js";
+import { WriteType, WriteNode, BuiltNode, LiveRef, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, PaintSite, WriteImage, WriteImageUrl, paintSitesOf, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef, textOfRuns } from "./ir.js";
 import { writeBindable, unbindField, variableFor, variableLiteral, styleFor, type ResolvedTokens } from "./tokens.js";
 import { queueStyleLink, settlePivot, type ApplySpan } from "./apply-span.js";
 import { own } from "./validate.js";
@@ -196,9 +196,9 @@ function stampKey(node: any, wn: BuiltNode, ctx: RenderCtx): void {
   ctx.keys.add(wn.key);
 }
 
-// Resolve one WritePaint to a plugin Paint. An image paint needs raster BYTES (render() awaited them from
-// the server mid-run into ctx.images, keyed by url) turned into an imageHash via figma.createImage — a
-// figma.* call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other paint maps purely.
+// Resolve one WritePaint to a plugin Paint. An image paint needs raster BYTES (prefetched from the
+// server into ctx.images, keyed by url) turned into an imageHash via figma.createImage — a figma.*
+// call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other paint maps purely.
 function paintOf(paint: WritePaint, ctx: RenderResources): Paint {
   if (paint.kind === "image") return imagePaint(paint, ctx);
   // A bound solid is bound on the PAINT, before the stack is assigned: a literal paint written over a
@@ -212,8 +212,9 @@ function paintOf(paint: WritePaint, ctx: RenderResources): Paint {
 // THE order flip, and the only place either side of it is known. An authored stack is TOP FIRST (CSS
 // order, and the order a read emits); Figma stores a node's `fills`/`strokes` bottom first, so the last
 // element is what you see on top. Walking backwards is that reversal. An empty stack maps to `[]` — the
-// compiled removal word — with no branch of its own.
-function toFigmaPaintStack(stack: WritePaintStack, ctx: RenderResources): Paint[] {
+// compiled removal word — with no branch of its own. It takes a SITE, never a bare stack: only a
+// stack paintSitesOf yields was image-prefetched.
+function toFigmaPaintStack({ stack }: PaintSite, ctx: RenderResources): Paint[] {
   const paints: Paint[] = [];
   for (let i = stack.length - 1; i >= 0; i--) paints.push(paintOf(stack[i], ctx));
   return paints;
@@ -228,9 +229,8 @@ function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
   }
   const b64 = ctx.images[paint.url];
   if (typeof b64 !== "string") {
-    // render() collects and awaits every image url before any node is built, so the bytes are always
-    // present here. A miss means collectImageUrls missed a paint site paintOf resolves (the lockstep
-    // warning on collectImageUrls) — fail loud rather than paint a blank fill.
+    // Every url on a paint site (paintSitesOf) is prefetched before any node is built, so a miss is
+    // a paint that reached here some other way — fail loud rather than paint a blank fill.
     throw new Error('flcm.image: no fetched bytes for "' + paint.url + '" — the image was not resolved before render.');
   }
   const img = figma.createImage(figma.base64Decode(b64));
@@ -267,8 +267,7 @@ function stampImageData(node: any, wn: WriteProps): void {
 export function applyPaint(node: any, wn: WriteProps, ctx: ApplyResources): void {
   // A PRESENT-but-empty stack is the compiled removal word ("none") — write the clear; skipping
   // empties would make removal an unspeakable intent (the ADR-0003 silent no-op).
-  if (wn.fills) node.fills = toFigmaPaintStack(wn.fills, ctx);
-  if (wn.strokes) node.strokes = toFigmaPaintStack(wn.strokes, ctx);
+  for (const site of paintSitesOf(wn)) if (site.at !== "runFills") node[site.at] = toFigmaPaintStack(site, ctx);
   if (wn.strokeWeight != null) applyStrokeWeight(node, wn.strokeWeight, ctx.tokens);
   if (wn.strokeAlign != null && "strokeAlign" in node) node.strokeAlign = wn.strokeAlign;
   if (wn.borderRadius) applyCornerRadii(node, wn.borderRadius, ctx.tokens);
@@ -1157,7 +1156,8 @@ function buildInstance(wn: BuiltNode, ctx: RenderCtx): any {
 // API. Offsets track the concatenation order the runs were joined in (buildText). A run only carries the
 // fields it overrides, so we touch only those ranges — the rest inherit the node's base style. A run's font
 // resolves STRICTLY (resolveFontStrict): an unloaded run font fails loud rather than silently rendering base.
-function applyRuns(t: any, runs: NonNullable<WriteProps["runs"]>, ctx: RenderResources): void {
+function applyRuns(t: any, runs: NonNullable<WriteProps["runs"]>, sites: readonly PaintSite[], ctx: RenderResources): void {
+  const runFills = new Map(sites.flatMap((site) => site.at === "runFills" ? [[site.run, site] as const] : []));
   // Read once: a literal run write clears a binding only where the node has one, so plain text
   // pays no extra writes. Runs never overlap, so a binding laid by an earlier run is never in the way.
   const bound = t.boundVariables || {};
@@ -1165,7 +1165,7 @@ function applyRuns(t: any, runs: NonNullable<WriteProps["runs"]>, ctx: RenderRes
     if (bound[field]) t.setRangeBoundVariable(start, end, field, null);
   };
   let start = 0;
-  for (const run of runs) {
+  for (const [i, run] of runs.entries()) {
     const end = start + run.text.length;
     if (end > start) {
       const s = run.style;
@@ -1204,7 +1204,8 @@ function applyRuns(t: any, runs: NonNullable<WriteProps["runs"]>, ctx: RenderRes
         if (typeof s.listSpacing === "number") t.setRangeListSpacing(start, end, s.listSpacing);
       }
       // Present-but-empty is the compiled "none" — a real transparent write over the slice, not a skip.
-      if (run.fills) t.setRangeFills(start, end, toFigmaPaintStack(run.fills, ctx));
+      const fills = runFills.get(i);
+      if (fills) t.setRangeFills(start, end, toFigmaPaintStack(fills, ctx));
       if (run.hyperlink) t.setRangeHyperlink(start, end, { type: "URL", value: run.hyperlink });
     }
     start = end;
@@ -1263,7 +1264,7 @@ export function applyTextProps(t: any, wn: WriteProps, ctx: ApplyResources): voi
   // A whole-node link is a range write like a run's — over every character. Guarded on non-empty
   // characters because Figma refuses a zero-width range, and an empty text has nothing to link.
   if (ts.hyperlink && t.characters.length) t.setRangeHyperlink(0, t.characters.length, { type: "URL", value: ts.hyperlink });
-  if (wn.runs) applyRuns(t, wn.runs, ctx);
+  if (wn.runs) applyRuns(t, wn.runs, paintSitesOf(wn), ctx);
   if (textStyle) queueStyleLink(ctx.span, t, "text", textStyle.id);
 }
 
@@ -1372,14 +1373,10 @@ function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx): any {
 // Paints: only the vectors, never the containers — painting a <g>'s frame would put a backdrop behind the
 // art instead of recolouring it. A present-but-empty array is the compiled "none", same as applyPaint.
 function themeImportedArt(frame: any, wn: BuiltNode, ctx: RenderCtx): void {
-  const fills = wn.fills ? toFigmaPaintStack(wn.fills, ctx) : undefined;
-  const strokes = wn.strokes ? toFigmaPaintStack(wn.strokes, ctx) : undefined;
+  const paints = paintSitesOf(wn).flatMap((site) => site.at === "runFills" ? [] : [{ at: site.at, paints: toFigmaPaintStack(site, ctx) }]);
   const walk = (node: any): void => {
     if ("constraints" in node) node.constraints = { horizontal: "SCALE", vertical: "SCALE" };
-    if (node.type === "VECTOR") {
-      if (fills) node.fills = fills;
-      if (strokes) node.strokes = strokes;
-    }
+    if (node.type === "VECTOR") for (const { at, paints: stack } of paints) node[at] = stack;
     if (node.children) for (const child of node.children) walk(child);
   };
   for (const child of frame.children ?? []) walk(child);
