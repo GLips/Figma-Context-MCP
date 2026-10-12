@@ -279,7 +279,7 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 
 Include approval after the originating request has ended in this item. Retain a pending session entry that the user can approve later, allowing the same authenticated session to use that approval on its next connection. Approval must not execute or replay the expired script; the agent still retries. In the plugin UI, visually distinguish inactive/expired requests from actively waiting requests and state clearly that nothing is currently waiting to run. Determine the secure disconnected-session handoff during implementation; a matching display name or project path alone is not session identity. Existing wait lengths need not change. This scope includes plugin UI and approval lifecycle work, beyond the original messaging-only proposal.
 
-**Tickets:** fig-104 (shipped), fig-121 (open)
+**Tickets:** fig-104 (shipped), fig-121 (shipped)
 
 **Status:** partly.
 

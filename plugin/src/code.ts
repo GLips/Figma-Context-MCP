@@ -114,6 +114,8 @@ interface SessionConn {
   // session claim minted on its first ask. See approval-requests.ts.
   askedAt?: number;
   sessionClaim?: string;
+  // In flight while this connection collects an Allow given while it was away; status polls wait on it.
+  handover?: Promise<boolean>;
   // The server's latest word on write access (allowance spent, a sign-in code, its outcome), shown on
   // this session's row. Absent until the server has something to say.
   writeAccess?: WriteAccessNotice;
@@ -946,6 +948,7 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
               if (!granted) awayRequests.retain(awayKey, request);
               return granted;
             });
+          conn.handover = handover;
         } else {
           conn.askedAt = request.askedAt;
           conn.sessionClaim = request.sessionClaim;
@@ -961,13 +964,19 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
     else renderUi();
   } else if (msg.type === "APPROVAL_STATUS") {
     const conn = to.connKey === undefined ? undefined : connections.get(to.connKey);
-    const type = conn?.rejected ? "APPROVAL_REJECTED" :
-      to.connKey !== undefined && isApproved(to.connKey) ? "APPROVAL_GRANTED" : "PENDING_APPROVAL";
-    if (type === "PENDING_APPROVAL") {
-      noteApprovalAsked(to.connKey);
-      setExpanded(true);
-    }
-    reply(to, { type });
+    const answer = () => {
+      const type = conn?.rejected ? "APPROVAL_REJECTED" :
+        to.connKey !== undefined && isApproved(to.connKey) ? "APPROVAL_GRANTED" : "PENDING_APPROVAL";
+      if (type === "PENDING_APPROVAL") {
+        noteApprovalAsked(to.connKey);
+        setExpanded(true);
+      }
+      reply(to, { type });
+    };
+    // The first poll can beat the handover of an Allow given while away; answering pending then would
+    // pop the panel open and mint a fresh claim, a second prompt for a session already allowed.
+    if (conn?.handover) void conn.handover.then(answer);
+    else answer();
   } else if (msg.type === "EXECUTE_CODE") {
     // Protocol validation comes BEFORE the consent gate, deliberately: a malformed request can never
     // execute, so making the human click Allow for it would be asking consent for nothing. An empty

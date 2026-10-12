@@ -221,8 +221,11 @@ test("an Allow given while a session is away reaches only the connection present
   // The session that asked comes back with its claim and collects the Allow.
   h.send({ type: "WS_CONNECTED", __connKey: 5 });
   h.send({ type: "SESSION_INFO", id: "session-5", __connKey: 5, identity: "/proj", sessionClaim: claim });
-  await h.approved(5);
-  assert.equal(statusFor(5, "next"), "APPROVAL_GRANTED");
+  // Its first poll lands before the handover settles, and must not be told to wait for a second Allow.
+  h.send({ type: "APPROVAL_STATUS", id: "next", __connKey: 5 });
+  assert.equal((await h.frame((f) => f.id === "next", "the first poll's answer")).type, "APPROVAL_GRANTED");
+  assert(tokenFor(5));
+  assert(!h.frames.some((f) => f.type === "SESSION_CLAIM" && f.__connKey === 5));
   for (const key of [2, 3, 4]) {
     assert(!tokenFor(key), `connection ${key} must not be approved`);
     assert.equal(statusFor(key, `other-${key}`), "PENDING_APPROVAL");
