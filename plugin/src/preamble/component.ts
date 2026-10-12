@@ -43,7 +43,7 @@ import { enterMutatingVerb, retargetReplacedNode } from "./mutation-lock.js";
 import type { ApplySpan } from "./apply-span.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
+import { instanceAncestorOf, editableComponentOwnerOf, isComponentDefinition, variantSetOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 import { isTargetShaped, COMPONENT_TARGET_HINT, defaultValueHint } from "./flcm.js";
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
@@ -438,7 +438,7 @@ function assertPromotableBuiltRoot(tree: BuiltNode): void {
 // behavior is not a refusal at all, but a silent wrapping).
 function assertPromotable(node: any): void {
   const who = describeNodeIdentity(node);
-  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+  if (isComponentDefinition(node)) {
     throw new Error(
       SUBJECT + ": " + who + " is already a component — there is nothing to promote. Edit it with flcm.edit, stamp it with INSTANCE, or " +
         (node.type === "COMPONENT" ? "make it a variant with flcm.variants." : "add to the set with flcm.variants."),
@@ -466,7 +466,7 @@ function assertPromotable(node: any): void {
   // component, component set, or instance", and reaching it throws a bare "Cannot create component
   // from node" after the seal. Named here instead, because a component's sublayer is a node the
   // agent can see and address — and the fix depends on which of the two things they meant.
-  const owner = componentAncestorOf(node);
+  const owner = editableComponentOwnerOf(node, false);
   if (owner) {
     throw new Error(
       SUBJECT + ": " + who + " is inside " + (owner.type === "COMPONENT_SET" ? "component set " : "component ") + JSON.stringify(owner.name) +
@@ -474,19 +474,6 @@ function assertPromotable(node: any): void {
         "Edit the enclosing component, or clone the sublayer and promote that copy.",
     );
   }
-}
-
-/**
- * The COMPONENT (or COMPONENT_SET) a node sits inside, or null. THE test for "does this node belong
- * to a definition" — flcm.component refuses to promote a node that does, and a binding edit requires
- * it. Caller beware: a node inside an INSTANCE that itself sits in a component answers the OUTER
- * component, so an instance-ancestor check comes first wherever the two are different questions.
- */
-export function componentAncestorOf(node: any): any {
-  for (let p = node.parent; p; p = p.parent) {
-    if (p.type === "COMPONENT" || p.type === "COMPONENT_SET") return p;
-  }
-  return null;
 }
 
 // ---- the sealed apply ----
@@ -736,9 +723,10 @@ function setIndexAmongSurvivors(members: readonly { node: any }[], parent: any):
 
 function assertCombinable(node: any, at: string): void {
   const who = describeNodeIdentity(node);
-  if (node.parent && node.parent.type === "COMPONENT_SET") {
+  const set = variantSetOf(node);
+  if (set) {
     throw new Error(
-      at + ": " + who + " is already a variant of set " + JSON.stringify(node.parent.name) + " (id " + JSON.stringify(node.parent.id) +
+      at + ": " + who + " is already a variant of set " + JSON.stringify(set.name) + " (id " + JSON.stringify(set.id) +
         ") — a component belongs to one set. Combine components that stand on their own, or edit the set it is in.",
     );
   }

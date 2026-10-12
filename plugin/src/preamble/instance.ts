@@ -61,7 +61,7 @@ import {
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
-  instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
+  instanceAncestorOf, isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
 } from "./identity.js";
 import { SLOT_CONTENT_WORD } from "./flcm.js";
 import { own } from "./validate.js";
@@ -134,7 +134,7 @@ function componentNodeOrNull(target: Target, targets: ResolvedTargets): any | nu
 // The property values a definition declares as INSTANCE_SWAP name components; resolve those. A
 // name that matches nothing, or more than one definition, is the gate's refusal to make.
 async function resolveSwapValueTargets(owner: any | null, authored: Record<string, ComponentPropertyInput>, targets: ResolvedTargets): Promise<void> {
-  if (!owner || (owner.type !== "COMPONENT" && owner.type !== "COMPONENT_SET")) return;
+  if (!owner || !isComponentDefinition(owner)) return;
   const definitions = propertyDefinitionsOf(definitionOwnerOf(owner));
   for (const name of Object.keys(authored)) {
     const matches = matchPropertyNames(name, definitions);
@@ -238,7 +238,7 @@ interface ResolvedComponent {
 
 // A live COMPONENT, plus the set that owns its property definitions when it is a variant.
 function resolvedFromComponent(node: any): ResolvedComponent {
-  return { base: node, set: node.parent && node.parent.type === "COMPONENT_SET" ? node.parent : null };
+  return { base: node, set: variantSetOf(node) };
 }
 
 /**
@@ -795,7 +795,7 @@ export function detach(target: Target): Promise<Handle> {
       if (node.type !== "INSTANCE") {
         throw new Error(
           DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
-            (node.type === "COMPONENT" || node.type === "COMPONENT_SET"
+            (isComponentDefinition(node)
               ? "This is the component itself; detach an INSTANCE of it."
               : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
         );

@@ -30,12 +30,12 @@ import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue, bindingsOf, type LiveBindings,
+  compilePropertyDefinition, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue, bindingsOf, type LiveBindings,
 } from "./component.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, assertNoComponentPropertyBindings } from "./flcm.js";
 import { bindableFieldsOf } from "./vocabulary.js";
-import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
+import { instanceAncestorOf, editableComponentOwnerOf, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
 
 // ---- `propertyDefinitions` under edit ----
@@ -87,10 +87,11 @@ function bindInSameBatch(name: string, type: string): string {
 // variant throws), so an edit aimed at the variant would be aimed at the wrong node — including
 // for the agent's mental model, since the change reaches every variant either way.
 function assertNotVariantMember(node: any, where: string): void {
-  if (node.type === "COMPONENT" && node.parent && node.parent.type === "COMPONENT_SET") {
+  const set = variantSetOf(node);
+  if (set) {
     throw new Error(
       where + ": " + describeNodeIdentity(node) + " is a VARIANT, and a set's properties live on the SET — Figma keeps them there, and a change reaches every variant. " +
-        "Edit the set instead: flcm.edit(" + JSON.stringify(node.parent.id) + ", { propertyDefinitions: … }).",
+        "Edit the set instead: flcm.edit(" + JSON.stringify(set.id) + ", { propertyDefinitions: … }).",
     );
   }
 }
@@ -334,9 +335,7 @@ export function prepareComponentBindingEdit(
   node: any, raw: unknown, subject: string, addsOf?: (owner: any) => ReadonlyMap<string, AddedDefinition> | undefined,
 ): ComponentBindingEditPlan {
   const where = subject + ".componentPropertyReferences";
-  // The instance check comes FIRST and is not interchangeable with the component one: a sublayer of
-  // an instance that itself sits in a component has a component ancestor, and answering with THAT
-  // component would resolve the name against the wrong definitions.
+  // Asked first only for its sentence: editableComponentOwnerOf already answers null under an instance.
   const host = instanceAncestorOf(node);
   if (host) {
     throw new Error(
@@ -344,7 +343,7 @@ export function prepareComponentBindingEdit(
         "). A binding belongs to the DEFINITION — every instance gets it from there — so bind the same layer in the main component instead (flcm never auto-detaches).",
     );
   }
-  const component = componentAncestorOf(node);
+  const component = editableComponentOwnerOf(node, false);
   if (!component) {
     throw new Error(
       where + ": " + describeNodeIdentity(node) + " is not inside a component, so no component declares a property for this to point at. " +
@@ -688,10 +687,9 @@ export function prepareInsertBindings(
   if (!bound.length) return undefined;
   // A COMPONENT_SET destination is refused before this runs (structure.ts's assertBuiltInsertNotIntoSet),
   // so `component` is a standalone component or a set's VARIANT — the definition the slot rule counts in.
-  // The instance question comes FIRST: a tree landing in an instance's SLOT can sit under a
-  // component (an instance placed inside one), and a binding there would name a property the
-  // instance's own definition — not the host component — declares. Instance content binds nothing.
-  const component = instanceAncestorOf(parent) ? null : parent.type === "COMPONENT" ? parent : componentAncestorOf(parent);
+  // A tree landing in an instance's SLOT has no editable owner even under a component: instance
+  // content binds nothing.
+  const component = editableComponentOwnerOf(parent, true);
   // Not landing in a component: the standing refusal, in its own words.
   if (!component) assertNoComponentPropertyBindings(tree, subject);
   const owner = definitionOwnerOf(component);

@@ -43,8 +43,8 @@ import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
   ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, PropertyBinder, ExistingPropertyBinding,
 } from "./component-edit.js";
-import { componentAncestorOf, describeBinder } from "./component.js";
-import { definitionOwnerOf } from "./identity.js";
+import { describeBinder } from "./component.js";
+import { definitionOwnerOf, editableComponentOwnerOf } from "./identity.js";
 import type { EditDelta, EditEntry } from "./schema.js";
 
 const SUBJECT = "flcm.editMany";
@@ -452,7 +452,7 @@ function definitionsNamedByEntry(
   // A binding to a property this batch ADDS names nothing on the canvas, so no rename or delete can
   // move it — only a write resolved against a live name depends on the order.
   if (component && component.binding && component.binding.writes.some((write) => !write.add)) {
-    const around = componentAncestorOf(plan.node);
+    const around = editableComponentOwnerOf(plan.node, false);
     return around ? { owner: definitionOwnerOf(around), what: "binds a layer to a property", instead: "bind the layers" } : undefined;
   }
   if (instance && instance.namesDeclaredPropertiesOf) {
