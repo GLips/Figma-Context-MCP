@@ -22,7 +22,7 @@ import type { RenderCtx } from "./bridge.js";
 import { applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, type EditPlan, type EditPlanFailure } from "./edit-plan.js";
 import { applyInstanceRetarget, applyInstanceOverrides, type InstanceEditPlan } from "./instance.js";
 import {
-  applyBindingRelease, applyComponentDefinitionEdit, applyBoundDefaults, applyComponentBindingEdit, type ComponentEditPlan,
+  applyBindingRelease, applyComponentDefinitionEdit, applyBoundDefaults, applyComponentBindingEdit, type ComponentEditPlan, type AddedDefinition,
 } from "./component-edit.js";
 
 /** One gated edit, as the driver lands it. */
@@ -46,11 +46,16 @@ export interface EditApplyEntry {
 export function applyEditStages(entries: readonly EditApplyEntry[], walk: RenderCtx): void {
   for (const e of entries) if (e.component?.binding) applyBindingRelease(e.fail, e.node, e.component.binding);
   for (const e of entries) if (e.instance) applyInstanceRetarget(e.fail, e.node, e.instance);
-  for (const e of entries) if (e.component?.definitions) applyComponentDefinitionEdit(e.fail, e.node, e.component.definitions);
+  // A binding in one entry may name a property another entry adds: the minted names are the
+  // definitions stage's output and the binding stage's input.
+  const minted = new Map<AddedDefinition, string>();
+  for (const e of entries) {
+    if (e.component?.definitions) for (const [add, name] of applyComponentDefinitionEdit(e.fail, e.node, e.component.definitions)) minted.set(add, name);
+  }
   for (const e of entries) e.beforeWrites?.();
   for (const e of entries) if (e.plan) applyEditPlanWrites(e.fail, e.plan, walk);
   for (const e of entries) if (e.component?.defaults) applyBoundDefaults(e.fail, e.component.defaults);
-  for (const e of entries) if (e.component?.binding) applyComponentBindingEdit(e.fail, e.node, e.component.binding);
+  for (const e of entries) if (e.component?.binding) applyComponentBindingEdit(e.fail, e.node, e.component.binding, minted);
   for (const e of entries) e.afterBinding?.();
   for (const e of entries) if (e.plan) settleEditPlanSizes(e.fail, e.plan);
   for (const e of entries) if (e.plan) settleEditPlanPositions(e.fail, e.plan, walk.span);

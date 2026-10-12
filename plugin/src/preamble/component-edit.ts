@@ -51,19 +51,24 @@ interface ComponentDefinitionEditPlan {
   /** Full (suffixed) names to delete. */
   deletes: string[];
   renames: { full: string; rename: string }[];
-  adds: AddedDefinition[];
+  /** Each add with the default its binders settled — what one addComponentProperty call takes. */
+  adds: { add: AddedDefinition; defaultValue: PreparedDefinition["defaultValue"] }[];
 }
 
 /**
- * A property an edit ADDS. One object is shared by the definition plan that mints it and by every
- * binding planned against it in the same batch: `defaultValue` is settled from those bindings in the
- * gate, and `minted` — the suffixed name only addComponentProperty can hand back — is filled in at
- * apply, where the bindings (which apply after every definition) read it.
+ * A property an edit ADDS, as the gate first plans it. The object is the property's identity across
+ * the batch: the definition plan that mints it and every binding planned against it hold the same
+ * one, and the suffixed name only addComponentProperty can hand back is looked up by it
+ * (MintedPropertyNames).
  */
-export interface AddedDefinition extends PreparedDefinition {
-  type: string;
-  minted?: string;
+export interface AddedDefinition {
+  readonly name: string;
+  readonly type: string;
+  readonly figmaType: PreparedDefinition["figmaType"];
 }
+
+/** The suffixed name each add was filed under — the definitions stage's output, the binding stage's input. */
+export type MintedPropertyNames = ReadonlyMap<AddedDefinition, string>;
 
 /** A layer a property's default is read off — what it will show once the call lands — as a refusal names it. */
 export interface PropertyBinder {
@@ -154,8 +159,8 @@ export function planComponentDefinitionEdit(
     const at = where + "[" + JSON.stringify(name) + "]";
     const add = adds.get(name);
     if (add) {
-      add.defaultValue = agreedDefault(add, bindersOf(add), at, { inherited: FRESH_LAYER_SHOWS[add.figmaType], unboundRemedy: bindInSameBatch(name, add.type) });
-      plan.adds.push(add);
+      const defaultValue = agreedDefault(add, bindersOf(add), at, { inherited: FRESH_LAYER_SHOWS[add.figmaType], unboundRemedy: bindInSameBatch(name, add.type) });
+      plan.adds.push({ add, defaultValue });
       introduced.push({ name, at });
       continue;
     }
@@ -215,8 +220,8 @@ function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdi
         'Insert the frame and declare it in one move: flcm.append(component, { type: "FRAME", componentPropertyReferences: { slot: ' + JSON.stringify(name) + " } }).",
     );
   }
-  // Settled in the gate from this call's binders; a placeholder until then.
-  return { name, type: definition.type, figmaType: definition.figmaType, defaultValue: "" };
+  // Its default is settled in the gate from this call's binders (planComponentDefinitionEdit).
+  return { name, type: definition.type, figmaType: definition.figmaType };
 }
 
 // A name the component HAS: `name` renames it, and `type` may only restate what it already is — so
@@ -273,7 +278,7 @@ function restatesVariantAxis(definition: any, entry: ComponentPropertyDefinition
  * delta says are one undo step. Deletes before renames before adds: that is the order the bag reads
  * in, and the only order under which freeing a name and re-declaring it can both land.
  */
-export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, plan: ComponentDefinitionEditPlan): void {
+export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, plan: ComponentDefinitionEditPlan): MintedPropertyNames {
   try {
     if (plan.description !== undefined) node.description = plan.description;
     for (const full of plan.deletes) node.deleteComponentProperty(full);
@@ -286,7 +291,7 @@ export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, p
       const renamed = node.editComponentProperty(change.full, { name: change.rename });
       if (typeof renamed === "string" && renamed !== change.full) repointBoundSublayers(node, change.full, renamed);
     }
-    for (const add of plan.adds) add.minted = node.addComponentProperty(add.name, add.figmaType, add.defaultValue);
+    return new Map(plan.adds.map(({ add, defaultValue }) => [add, node.addComponentProperty(add.name, add.figmaType, defaultValue) as string]));
   } catch (cause) {
     throw fail(cause);
   }
@@ -457,11 +462,11 @@ function subtreeOf(root: any): any[] {
  * delta makes it before it is wired to a property. Merged onto the live bag, never replacing it: a
  * delta naming `text` leaves a `visible` binding alone, the way every other edit word behaves.
  */
-export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan): void {
+export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan, minted: MintedPropertyNames): void {
   try {
     const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
     for (const write of plan.writes) {
-      if (write.add) wire[write.wire] = write.add.minted!;
+      if (write.add) wire[write.wire] = mintedNameOf(minted, write.add);
       else if (write.full === null) delete wire[write.wire];
       else wire[write.wire] = write.full;
     }
@@ -469,6 +474,14 @@ export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan
   } catch (cause) {
     throw fail(cause);
   }
+}
+
+// An add's binders are planned only in the batch that adds it, and the stages land every definition
+// before any binding — so a miss is a stage-order bug, refused before it writes an unbound reference.
+function mintedNameOf(minted: MintedPropertyNames, add: AddedDefinition): string {
+  const name = minted.get(add);
+  if (name === undefined) throw new Error("flcm internal: " + JSON.stringify(add.name) + " was bound before it was added.");
+  return name;
 }
 
 // ---- an EXISTING property's default, settled from its binders ----
