@@ -13,8 +13,9 @@ export type {
   TemplateBody,
 } from "@framelink/core";
 
-// The public stages own their invariants; raw walk and style-table factories stay internal.
+// The public stages own their invariants; the raw walk stays internal.
 export { simplify, project } from "@framelink/core";
+export { compressDesign } from "@framelink/core/compress";
 
 // No REST entry here: a REST read is only complete with the off-tree definitions and grid siblings
 // its own Figma calls fetch, so it lives behind the read tools (`figma-developer-mcp/read`).
