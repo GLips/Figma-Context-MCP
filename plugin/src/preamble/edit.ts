@@ -29,7 +29,7 @@ import { Target, Handle } from "./ir.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { mintHandle, settleSiblingOrder, resolvePercents, beginRenderWalk } from "./bridge.js";
+import { mintHandle, settleApplySpan, beginRenderWalk } from "./bridge.js";
 import {
   rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
@@ -94,24 +94,22 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },
     // Apply — the sealed span: all writes, no awaits.
-    ({ plan, instance, component, resources }) => {
-      const fail = openEditPlanApply("edit", plan);
+    ({ plan, instance, component, resources }, span) => {
+      const applying = { ...resources, span };
+      const fail = openEditPlanApply("edit", plan, span);
       if (component && component.binding) applyBindingRelease(fail, plan.node, component.binding);
       if (instance) applyInstanceRetarget(fail, plan.node, instance);
       if (component && component.definitions) applyComponentDefinitionEdit(fail, plan.node, component.definitions);
-      applyEditPlanWrites(fail, plan, resources);
+      applyEditPlanWrites(fail, plan, applying);
       if (component && component.defaults) applyBoundDefaults(fail, component.defaults);
       if (component && component.binding) applyComponentBindingEdit(fail, plan.node, component.binding);
       settleEditPlanSizes(fail, plan);
-      settleEditPlanPositions(fail, plan);
-      if (instance) {
-        // Slot content among the overrides is BUILT, so it needs a walk; its percents settle once
-        // the whole delta has landed, as a render's do after its tree.
-        const walk = beginRenderWalk(resources);
-        applyInstanceOverrides(plan.node, instance, walk, "edit");
-        resolvePercents(walk);
-      }
-      settleSiblingOrder(resources);
+      settleEditPlanPositions(fail, plan, span);
+      // Slot content among the overrides is BUILT, so it needs a walk; its percents settle once
+      // the whole delta has landed, as a render's do after its tree.
+      if (instance) applyInstanceOverrides(plan.node, instance, beginRenderWalk(applying), "edit");
+      // Before the handle reads the node's geometry.
+      settleApplySpan(span);
       return mintHandle(plan.node);
     },
   );

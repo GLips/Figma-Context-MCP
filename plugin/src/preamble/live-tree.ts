@@ -11,7 +11,7 @@ import type { WriteNode } from "./ir.js";
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { createStandingState } from "./standing-state.js";
-import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, holdEditPlanPivot } from "./edit-plan.js";
+import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
 import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component.js";
@@ -20,7 +20,7 @@ import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwner
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { NO_TOKENS } from "./tokens.js";
-import { holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
+import { holdPivot, settlePivot } from "./apply-span.js";
 import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
 import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
 import type { EditDelta } from "./schema.js";
@@ -164,7 +164,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         attachLiveNode(parent, node, words, place);
         if (from) recordLiveMoveIntoNewNode(node, from, parent);
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
-        const pivotHold = plan ? holdEditPlanPivot(plan) : holdUnrotatedCorner(node);
+        holdPivot(ctx.span, node);
         // Before the node's own writes, so none lands on a property it is leaving (see releaseRewiredBindings).
         if (wn.componentPropertyReferences) releaseRewiredBindings(node, Object.keys(wn.componentPropertyReferences).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
         if (instance) applyInstanceRetarget(fail, node, instance);
@@ -179,8 +179,8 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         }
         if ("appendChild" in node) for (const child of wn.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
         resettleMovedNode(node, words, ctx);
-        if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan); }
-        else settleCentrePivot(node, pivotHold, words);
+        if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan, ctx.span); }
+        else settlePivot(ctx.span, node, words);
         if (instance) applyInstanceOverrides(node, instance, ctx, at);
         if (wn.source) wn.source.id = node.id;
         return node;

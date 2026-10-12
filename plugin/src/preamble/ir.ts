@@ -325,7 +325,7 @@ export interface WriteLayout {
   // settleAspectRatio); "none" unlocks.
   aspectRatio?: number | "none";
   // Percent INTENT — a `width`/`height`/`left`/`top` written as "N%" (0–100), resolved to pixels
-  // against the parent's *realized* axis size in a post-walk pass (bridge.resolvePercents): the node is
+  // against the parent's *realized* axis size in a post-walk pass (bridge.settleApplySpan): the node is
   // built at a provisional size first, then resized once the whole tree is assembled and every parent's
   // fill/hug size is readable off the canvas — the parent size isn't known at construction, and reading it
   // at walk time would predate the fill/hug pin. A percent SIZE also sets sizing.horizontal/vertical =

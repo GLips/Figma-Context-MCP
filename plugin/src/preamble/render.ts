@@ -15,7 +15,7 @@ import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
 import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens } from "./tokens.js";
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
-import { attachBuiltChild, liveParentAttachFacts, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
+import { attachBuiltChild, liveParentAttachFacts, settleApplySpan, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { fetchImagesForTrees } from "./flcm.js";
 import { resolveInstanceTreeTargets, planInstanceTree } from "./instance.js";
@@ -124,7 +124,7 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, 
  */
 export function landTree(parent: any, place: (node: any) => void, tree: WriteNode, ctx: RenderCtx, subject: string, noteOverlap: boolean): any {
   const root = attachBuiltChild(parent, tree, ctx, liveParentAttachFacts(parent, subject), place);
-  resolvePercents(ctx);
+  settleApplySpan(ctx.span);
   if (noteOverlap) {
     const overlap = describeRootOverlap(root);
     if (overlap) console.log(overlap);

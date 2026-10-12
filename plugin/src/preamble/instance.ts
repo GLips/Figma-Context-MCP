@@ -562,12 +562,12 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
     // bound text's fonts, in which case this answer is the right one. Every refusal from here is
     // a rollback, which is the cost of a fact that does not exist before the seal.
     const editPlan: EditPlan = delta ? gateEditPlan(node, delta, ctx.fonts, where) : { node, patch: {} };
-    return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan) };
+    return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan, ctx.span) };
   });
   for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, ctx);
   for (const { editPlan, slotContent, fail } of live) if (slotContent) placeSlotContent(fail, editPlan.node, slotContent, ctx, subject);
   for (const { editPlan, fail } of live) settleEditPlanSizes(fail, editPlan);
-  for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan);
+  for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan, ctx.span);
 }
 
 // Replace a live SLOT's content: every current child goes — the definition's placeholder sublayers

@@ -34,7 +34,7 @@ import { resolveTarget } from "./read.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
-  settleSiblingOrder, mintHandle, beginRenderWalk, RenderResources,
+  settleApplySpan, mintHandle, beginRenderWalk, RenderResources,
   assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
 } from "./bridge.js";
 import { loadTreeResources, gateTreeResources, landTree } from "./render.js";
@@ -50,7 +50,8 @@ import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLa
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
 import { showValue } from "./validate.js";
-import { unrotatedCornerOf, holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
+import { unrotatedCornerOf } from "./pivot.js";
+import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is a closure evaluated
 // in the APPLY span, right after the gate that built it — the sibling's index is read at the
@@ -191,10 +192,10 @@ interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; r
 // axes, the frame of reference the words were written in. Reading it in apply would be too late.
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
-function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert): AuthoredTree {
+function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert, span: ApplySpan): AuthoredTree {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
-  const ctx = beginRenderWalk(resources, { bindings: !!bindings });
+  const ctx = beginRenderWalk({ ...resources, span }, { bindings: !!bindings });
   const fail = beginMutatingApply(verb, dest.parent);
   try {
     landTree(dest.parent, dest.place, tree, ctx, "flcm." + verb, noteOverlap);
@@ -211,18 +212,16 @@ function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverla
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is
 // a move of a node that was born one instruction ago, and the place-then-resettle ORDER is the part
 // that must not be written twice (resettling before the attach would aim `fill` at the old parent).
-function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement): void {
+function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement, span: ApplySpan): void {
   const fail = beginMutatingApply(verb, node);
-  const from = node.parent;
   try {
     attachLiveNode(dest.parent, node, words, dest.place);
-    const pivotHold = holdUnrotatedCorner(node);
-    resettleMovedNode(node, words);
-    settleCentrePivot(node, pivotHold, words);
+    holdPivot(span, node);
+    resettleMovedNode(node, words, { span });
+    settlePivot(span, node, words);
   } catch (cause) {
     throw fail(cause);
   }
-
 }
 
 // ---- the placement verbs ----
@@ -268,7 +267,7 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
     }
     const bindings = prepareInsertBindings(subject, dest.parent, tree, resources);
     return { kind: "insert", dest, tree, resources, bindings, noteOverlap: verb === "render" };
-  }, prepared => applyInsert(verb, prepared));
+  }, (prepared, span) => applyInsert(verb, prepared, span));
 }
 
 export function render(spec: NodeSpec): Promise<AuthoredTree> {
@@ -375,7 +374,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       return { node, dest, words: assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone", edit?.patch.layout),
         edit, resources: gateEditResources(loaded, []), bindings: captureCloneBindings(node) };
     },
-    ({ node, dest, words, edit, resources, bindings }) => {
+    ({ node, dest, words, edit, resources, bindings }, span) => {
       const fail = beginMutatingApply("clone", node);
       let copy: any;
       const created: CreatedCloneProperties = [];
@@ -387,16 +386,16 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
           throw fail(cause);
         }
         // From here the copy is the subject, and placing it is exactly a move.
-        applyPlacement("clone", { kind: "placement", dest, node: copy, words });
+        applyPlacement("clone", { kind: "placement", dest, node: copy, words }, span);
         try { restoreCloneBindings(copy, bindings, created); } catch (cause) { throw fail(cause); }
         if (edit) {
           const plan = { ...edit, node: copy };
-          applyEditPlanWrites(fail, plan, resources);
+          applyEditPlanWrites(fail, plan, { ...resources, span });
           settleEditPlanSizes(fail, plan);
-          settleEditPlanPositions(fail, plan);
-          // Last, as edit and editMany settle it: a reorder never lands between a delta's writes and its settles.
-          settleSiblingOrder(resources);
+          settleEditPlanPositions(fail, plan, span);
         }
+        // Before the handle reads the copy's geometry, and inside the cleanup's reach.
+        settleApplySpan(span);
         return mintHandle(copy);
       } catch (cause) {
         if (!copy) throw cause;
@@ -465,8 +464,8 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       return false;
     };
     return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes), noteOverlap: false };
-  }, prepared => {
-    const result = applyInsert("replace", prepared);
+  }, (prepared, span) => {
+    const result = applyInsert("replace", prepared, span);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
       const fail = beginMutatingApply("replace", prepared.original);
       recordVerbRemovedNode(prepared.original);

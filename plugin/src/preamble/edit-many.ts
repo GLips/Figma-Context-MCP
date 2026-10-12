@@ -31,7 +31,7 @@ import { Handle } from "./ir.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { mintHandle, resolvePercents, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
+import { mintHandle, settleApplySpan, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
 import { showValue } from "./validate.js";
 import { createStandingState } from "./standing-state.js";
 import {
@@ -631,11 +631,12 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       return { plans, instances, components, resources: gateEditResources(loaded, instances.flatMap((instance) => (instance ? [instance.needs] : []))) };
     },
     // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.
-    ({ plans, instances, components, resources }) => {
+    ({ plans, instances, components, resources }, span) => {
+      const applying = { ...resources, span };
       // Every entry's failure builder BEFORE the first write of the batch: it snapshots the
       // identity the error will name, and entry 0's rename must not be what entry 0's own later
       // stage reports (see openEditPlanApply).
-      const fails = plans.map((plan, i) => openEditPlanApply("editMany (entry " + i + ")", plan));
+      const fails = plans.map((plan, i) => openEditPlanApply("editMany (entry " + i + ")", plan, span));
       const order = applyOrderShallowestFirst(plans);
       // Before every other write: a field this batch rebinds or unbinds must be free of its old
       // property when the retargets, the words and the settled defaults land (see releaseRewiredBindings).
@@ -660,7 +661,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         const component = components[i];
         if (component && component.definitions) applyComponentDefinitionEdit(fails[i], plans[i].node, component.definitions);
       }
-      for (const i of order) applyEditPlanWrites(fails[i], plans[i], resources);
+      for (const i of order) applyEditPlanWrites(fails[i], plans[i], applying);
       for (const i of order) {
         const component = components[i];
         if (component && component.defaults) applyBoundDefaults(fails[i], component.defaults);
@@ -670,15 +671,15 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         if (component && component.binding) applyComponentBindingEdit(fails[i], plans[i].node, component.binding);
       }
       for (const i of order) settleEditPlanSizes(fails[i], plans[i]);
-      for (const i of order) settleEditPlanPositions(fails[i], plans[i]);
+      for (const i of order) settleEditPlanPositions(fails[i], plans[i], span);
       // ONE walk for the batch's slot content (see beginRenderWalk): a key is unique across the set
       // as it is across a render, and every entry's content settles its percents together.
-      const walk = beginRenderWalk(resources);
+      const walk = beginRenderWalk(applying);
       for (const i of order) {
         const instance = instances[i];
         if (instance) applyInstanceOverrides(plans[i].node, instance, walk, "editMany (entry " + i + ")");
       }
-      resolvePercents(walk);
+      settleApplySpan(span);
       // Handles are minted only once every write has landed: a hug parent reflows when a child in
       // the same batch changes, so geometry read mid-batch would be a number about to move.
       return plans.map((plan) => mintHandle(plan.node));

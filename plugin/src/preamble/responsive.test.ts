@@ -98,7 +98,7 @@ test("percent SIZE on an IN-FLOW child of a HUGGING auto-layout parent fails lou
 
 test('percent SIZE resolves against a "fill" parent\'s realized size (the scrub-bar case)', async () => {
   // The headline Phase-2 win: a fill track holds a percent playhead with zero hand-computed pixels. The
-  // track's width is only knowable after it fills the row — resolvePercents reads it post-walk.
+  // track's width is only knowable after it fills the row — settleApplySpan reads it post-walk.
   const out = await render({
     type: "FRAME",
     layout: { mode: "row" },

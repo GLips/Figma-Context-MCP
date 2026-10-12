@@ -76,11 +76,11 @@ import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCat
 import { beginMutatingApply } from "./verb-error.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { assertLineFillUnrotated } from "./layout-legality.js";
-import { holdUnrotatedCorner, settleCentrePivot, type PivotHold } from "./pivot.js";
+import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize, settleAspectRatio,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
-  RenderResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
+  RenderResources, ApplyResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotEmpty } from "./validate.js";
@@ -353,8 +353,6 @@ export interface EditPlan {
   instanceWords?: InstanceEditWords;
   /** The COMPONENT half, still RAW — planned by component-edit.ts in the verb's gate. */
   componentWords?: ComponentEditWords;
-  /** Apply-time state: present once the centre-pivot span is open, with the corner it held (pivot.ts). */
-  pivotSpan?: { hold?: PivotHold };
 }
 
 // A delta whose every word restates the node's standing state (standing-state.ts): no change, so it
@@ -522,31 +520,25 @@ export function gateEditResources(loaded: LoadedResources, needs: readonly Insta
  */
 export type EditPlanFailure = (cause: unknown) => Error;
 
-export function openEditPlanApply(verb: string, plan: EditPlan): EditPlanFailure {
+export function openEditPlanApply(verb: string, plan: EditPlan, span: ApplySpan): EditPlanFailure {
   const fail = beginMutatingApply(verb, plan.node);
   // Here rather than at stage 5a: an instance retarget runs between the two and can resize the node.
-  holdEditPlanPivot(plan);
+  holdPivot(span, plan.node);
   return fail;
-}
-
-/** Open the plan's centre-pivot span, once — the caller that runs writes before stage 5a opens it early. */
-export function holdEditPlanPivot(plan: EditPlan): PivotHold | undefined {
-  plan.pivotSpan ??= { hold: holdUnrotatedCorner(plan.node) };
-  return plan.pivotSpan.hold;
 }
 
 /**
  * Stage 5a — the sealed, commit-free write span for one entry: everything that CHANGES the node.
  * No awaits, by the lock's contract.
  */
-export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resources: RenderResources): void {
+export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resources: ApplyResources): void {
   const { node, patch } = plan;
   try {
-    // First, while the transform is still the one the node arrived with.
-    const hold = holdEditPlanPivot(plan);
+    // First, while the transform is still the one the node arrived with (a no-op once open).
+    holdPivot(resources.span, node);
     // An instance's overrides land after stage 5c and can resize it, so its pivot waits for the
-    // verb's resolvePercents, which runs after them.
-    if (plan.instanceWords) (resources.pivots ??= []).push({ node, hold, layout: patch.layout });
+    // span's settle, which runs after them.
+    if (plan.instanceWords) resources.span.pivots.push({ node, layout: patch.layout });
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
     applyAnnotations(node, patch.annotations);
@@ -580,10 +572,10 @@ export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: Edit
  * then the centre pivot, which reads the final box. Dead last, so in a
  * batch they measure a canvas where every entry's sizes have already settled.
  */
-export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, pivotSpan, instanceWords }: EditPlan): void {
+export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, instanceWords }: EditPlan, span: ApplySpan): void {
   try {
     if (patch.layout) settleLiveNodePercentPosition(node, patch.layout);
-    if (!instanceWords) settleCentrePivot(node, pivotSpan?.hold, patch.layout);
+    if (!instanceWords) settlePivot(span, node, patch.layout);
   } catch (cause) {
     throw fail(cause);
   }

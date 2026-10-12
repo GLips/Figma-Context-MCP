@@ -40,6 +40,7 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
 import { loadTreeResources, gateTreeResources, landTree, LoadedTreeResources } from "./render.js";
 import { enterMutatingVerb, retargetReplacedNode } from "./mutation-lock.js";
+import type { ApplySpan } from "./apply-span.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
@@ -563,11 +564,11 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
   }, applyBuiltComponent);
 }
 
-function applyBuiltComponent({ tree, parent, place, resources, definitions, options }: GatedBuiltComponent): AuthoredTree {
+function applyBuiltComponent({ tree, parent, place, resources, definitions, options }: GatedBuiltComponent, span: ApplySpan): AuthoredTree {
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
-  const ctx = beginRenderWalk(resources, { bindings: true });
+  const ctx = beginRenderWalk({ ...resources, span }, { bindings: true });
   // The landing every tree-placing verb shares (render.landTree), overlap notice included. Only
   // then is there a laid-out node to convert.
   const root = landTree(parent, place, tree, ctx, SUBJECT, true);
@@ -578,7 +579,7 @@ function applyBuiltComponent({ tree, parent, place, resources, definitions, opti
   try {
     const comp = figma.createComponentFromNode(root);
     // Style links, diagnostics and warnings were queued on the frame, which no longer exists.
-    retargetReplacedNode(root, comp);
+    retargetReplacedNode(span, root, comp);
     // The root's own key rides across by hand: createComponentFromNode returns a NEW node, so the
     // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs:
     // Figma moves the same child nodes into the component.
