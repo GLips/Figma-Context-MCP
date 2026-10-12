@@ -47,7 +47,7 @@ const FILE_KEY_REST_PATH =
  * A file key in a figma.com URL, which a user may paste as a tool argument and
  * see echoed back in an error. Anchored to the host on purpose: `design`,
  * `board`, `deck`, `slides` and `file` are all common directory names, and
- * `rest.ts`'s missing-node help text names `/proto/` and `/figjam/` in prose.
+ * `decode/response.ts`'s missing-node help text names `/proto/` and `/figjam/` in prose.
  * Requiring `figma.com` first means only a real URL is rewritten.
  *
  * Also consumes what follows the key: a `/branch/<branchKey>` segment and the

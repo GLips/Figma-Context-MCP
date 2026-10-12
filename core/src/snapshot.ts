@@ -314,8 +314,8 @@ export type SnapshotStyleSlot = "fill" | "stroke" | "text" | "effect" | "grid";
 // ---------------------------------------------------------------------------
 // Component metadata — ~1:1 structural records (Figma component traits), typed
 // snapshot-locally so the core reads them without a REST import. The top-level
-// components/componentSets *tables* are a separate adapter concern (decoded in
-// src/adapters/rest/rest.ts); these are the per-node fields the walk reads.
+// components/componentSets *tables* are a separate adapter concern (decoded under
+// src/adapters/rest/decode/); these are the per-node fields the walk reads.
 // ---------------------------------------------------------------------------
 
 /**

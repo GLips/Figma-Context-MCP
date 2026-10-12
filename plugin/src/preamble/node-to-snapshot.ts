@@ -384,9 +384,9 @@ export async function sceneNodeToSnapshot(
   mainComponents?: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string> = new Map(),
   unreadable?: UnreadableSink,
-  contextParent?: SceneNodeLike,
+  parent?: SceneNodeLike,
 ): Promise<NodeSnapshot> {
-  const space = contextParent ? spaceUnder(contextParent) : CONTAINER_PARENT_SPACE;
+  const space = parent ? spaceUnder(parent) : CONTAINER_PARENT_SPACE;
   return sceneSubtreeToSnapshot(node, resolveToken, space, mainComponents, annotationCategories, unreadable);
 }
 
