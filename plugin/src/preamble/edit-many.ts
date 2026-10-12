@@ -34,16 +34,16 @@ import { mintHandle, settleApplySpan, beginRenderWalk, BatchLayoutDeltas } from 
 import { showValue } from "./validate.js";
 import { createStandingState } from "./standing-state.js";
 import {
-  EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
-  openEditPlanApply,
+  EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, assertEditPlanLands, openEditPlanApply,
 } from "./edit-plan.js";
+import { loadEditResources, gateEditResources } from "./verb-resources.js";
 import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan, InstancePlanning } from "./instance.js";
 import { applyEditStages } from "./edit-apply.js";
 import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
   ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, PropertyBinder, ExistingPropertyBinding,
 } from "./component-edit.js";
-import { describeBinder } from "./component.js";
+import { describeBinder } from "./component-properties.js";
 import { definitionOwnerOf, editableComponentOwnerOf } from "./identity.js";
 import type { EditDelta, EditEntry } from "./schema.js";
 

@@ -41,29 +41,23 @@ import { assertBounds } from "./size-bounds.js";
 // sealed span through the same attach-then-size entry every insert rides (bridge.attachBuiltChild),
 // so slot content lands exactly as appended content does; afterwards the structural verbs treat
 // it as the ordinary tree it is (structure.ts's gate knows a SLOT's child list is open).
-//
-// flcm.detach lives here too: it is the one verb that ENDS an instance, and it reads the same
-// facts (the ancestor chain Figma restricts overrides by).
 
-import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, Handle } from "./ir.js";
-import { resolveTarget, ResolvedTargets } from "./target.js";
-import { assertNodeStillOnCanvas } from "./freshness.js";
+import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target } from "./ir.js";
+import { ResolvedTargets } from "./target.js";
 import { FontMap } from "./fonts.js";
 import {
-  mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent, assertBuiltInteriorLegal,
-  InstancePlan, RenderCtx, RenderResources, BatchLayoutDeltas,
+  attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent, assertBuiltInteriorLegal,
+  InstancePlan, RenderCtx, BatchLayoutDeltas,
 } from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import {
   EditPlan, EditPlanFailure, InstanceNeeds, compileEditPlan, gateEditPlan, openEditPlanApply,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
-import { enterMutatingVerb } from "./mutation-lock.js";
-import { beginMutatingApply } from "./verb-error.js";
 import {
-  instanceAncestorOf, isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
+  isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
 } from "./identity.js";
-import { SLOT_CONTENT_WORD } from "./flcm.js";
+import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
 
@@ -772,56 +766,4 @@ export function applyInstanceRetarget(fail: EditPlanFailure, node: SceneNode, pl
 export function applyInstanceOverrides(node: SceneNode, plan: InstanceEditPlan, ctx: RenderCtx, verb: string): void {
   if (!plan.overrides.length) return;
   applyOverridePlans(node as any, plan.overrides, ctx, verb);
-}
-
-// ---- detach ----
-
-const DETACH_SUBJECT = "flcm.detach";
-
-/**
- * flcm.detach(target) — break an instance's link to its component. The subtree becomes ordinary
- * layers under a FRAME with a NEW id (every sublayer id changes with it), returned as that frame's
- * handle with fresh geometry. One-way: nothing re-attaches it, so the old ids and any flcm/key
- * addressing them are worth re-reading after.
- */
-// A single expression on purpose: the queue slot is reserved before detach() can possibly yield,
-// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-export function detach(target: Target): Promise<Handle> {
-  return enterMutatingVerb(
-    "detach",
-    () => resolveTarget(target),
-    (node: any) => {
-      assertNodeStillOnCanvas(node, DETACH_SUBJECT);
-      if (node.type !== "INSTANCE") {
-        throw new Error(
-          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
-            (isComponentDefinition(node)
-              ? "This is the component itself; detach an INSTANCE of it."
-              : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
-        );
-      }
-      // Figma does NOT refuse a nested detach — it WIDENS it: detachInstance on an instance inside
-      // another instance "also detaches all ancestors nodes that are instances" (plugin typings).
-      // So asking to detach one instance would silently detach three, which is exactly the kind of
-      // unasked-for mutation this surface refuses. Gated here so the agent gets the node to act on
-      // rather than a canvas it has to reconstruct.
-      const host = instanceAncestorOf(node);
-      if (host) {
-        throw new Error(
-          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
-            "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
-            JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
-        );
-      }
-      return node;
-    },
-    (node) => {
-      const fail = beginMutatingApply("detach", node);
-      try {
-        return mintHandle(node.detachInstance());
-      } catch (cause) {
-        throw fail(cause);
-      }
-    },
-  );
 }

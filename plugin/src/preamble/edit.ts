@@ -13,8 +13,9 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, settleApplySpan, beginRenderWalk } from "./bridge.js";
 import {
-  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources, openEditPlanApply,
+  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, assertEditPlanLands, openEditPlanApply,
 } from "./edit-plan.js";
+import { loadEditResources, gateEditResources } from "./verb-resources.js";
 import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan } from "./instance.js";
 import { planComponentEdit, projectedBinderValue, ComponentEditPlan } from "./component-edit.js";
 import { applyEditStages } from "./edit-apply.js";

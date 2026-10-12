@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // layout-legality — the ONE home for "can this node realize these layout words". Every rule that
-// decides a layout word's legality lives here, and BOTH verbs consult it — create via flcm.ts
+// decides a layout word's legality lives here, and BOTH verbs consult it — create via compile-nodes.ts
 // (buildLayout, render's root check) and the bridge walk, edit via assertLayoutDeltaResolvable —
 // so the two cannot answer differently (ADR-0003: a word that would do nothing must reject loud,
 // in every verb). Pure and figma-free by charter: rules take the authored WriteLayout plus any

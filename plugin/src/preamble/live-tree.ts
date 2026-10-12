@@ -2,33 +2,22 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { compileBindingBag } from "./flcm.js";
-import { bindableFieldsOf } from "./vocabulary.js";
-import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
 import type { WriteNode, LiveRef, WriteLayout, ComponentPropertyBinding } from "./ir.js";
-import { treeNodes, childTreeNodes } from "./compile-tree.js";
-import { resolveTarget, createResolvedTargets } from "./target.js";
-import { createStandingState } from "./standing-state.js";
-import { compileEditPlan, loadEditResources, assertEditPlanLands } from "./edit-plan.js";
+import { compileEditPlan, assertEditPlanLands } from "./edit-plan.js";
+import type { LoadedLiveTree } from "./verb-resources.js";
 import { applyEditStages } from "./edit-apply.js";
-import { resolveInstanceEditTargets, planInstanceEdit } from "./instance.js";
+import { planInstanceEdit } from "./instance.js";
 import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
-import { BINDING_FIELD_WIRE_KEYS } from "./component.js";
+import { BINDING_FIELD_WIRE_KEYS } from "./component-properties.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
-import { NO_TOKENS } from "./tokens.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
 import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
 import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
-import type { EditDelta } from "./schema.js";
-
-function assertSceneNode(node: BaseNode): asserts node is SceneNode {
-  if (node.type === "PAGE" || node.type === "DOCUMENT") throw new Error("a page or document cannot be placed as a scene node.");
-}
 
 // Inherited slot content moves only into another slot of its own instance, where Figma copies it
 // and placement returns the copy's id. Anywhere else Figma leaves a node that renders but throws on
@@ -43,89 +32,6 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
       JSON.stringify(owner.name) + "; anywhere else it leaves a node that renders but can't be read or removed. To put it elsewhere, copy it with flcm.clone(" +
       JSON.stringify(node.id) + ", destination); the slot keeps the original.",
   );
-}
-
-// Live nodes whose spec parent this verb builds: a new node's children, or a new instance's slot
-// content. Taken across every tree a verb loads, because an edit's slot content lists a nested new
-// instance's slot content again as a root of its own.
-export function liveChildrenOfNewNodes(trees: readonly WriteNode[]): Set<WriteNode> {
-  return new Set(trees.flatMap(treeNodes).flatMap(wn => wn.liveId !== undefined ? [] : childTreeNodes(wn)));
-}
-
-export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOfNewNodes([tree])): Promise<LoadedLiveTree> {
-  const entries = new Map<LiveRef, LoadedLiveEntry>();
-  const standing = createStandingState();
-  const parentOf = new Map(treeNodes(tree).flatMap(parent => childTreeNodes(parent).map(child => [child, parent] as const)));
-  const live: { ref: LiveRef; node: SceneNode }[] = [];
-  for (const ref of treeNodes(tree)) {
-    if (ref.liveId === undefined) continue;
-    try {
-      const node = await resolveTarget({ id: ref.liveId });
-      assertSceneNode(node);
-      if (ref.authoring.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
-      if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) throw new Error("type " + ref.source.type + " does not match live " + node.type + ".");
-      // Pre-order, so a live root's one read covers every live descendant pasted with it. A node
-      // stating no words (a bare { id } move) has nothing to compare and costs no read.
-      if (Object.keys(ref.authoring).length) await standing.load(node);
-      live.push({ ref, node });
-    } catch (cause) { throw new Error(ref.sourcePath + ": " + (cause instanceof Error ? cause.message : String(cause))); }
-  }
-  // A new parent has no live id; its source path keys its children as siblings all the same.
-  const parentKey = (wn: WriteNode): string | undefined => {
-    const parent = parentOf.get(wn);
-    return parent && (parent.liveId ?? parent.sourcePath);
-  };
-  const changed = standing.changesInCall(
-    live.map(({ ref, node }) => ({ node, words: ref.authoring, parent: parentKey(ref) })),
-    treeNodes(tree).flatMap(wn => {
-      const parent = parentKey(wn);
-      return wn.liveId === undefined && wn.layout?.zIndex !== undefined && parent ? [parent] : [];
-    }),
-  );
-  for (const [i, { ref, node }] of live.entries()) {
-    const at = ref.sourcePath;
-    try {
-      const { key, d, vectorPaths, componentPropertyReferences, ...delta } = changed[i];
-      const refs = componentPropertyReferences === undefined ? undefined : compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
-      let pathData: VectorPaths | undefined;
-      if (d !== undefined) {
-        if (node.type !== "VECTOR") throw new Error("d is a VECTOR geometry word.");
-        if (typeof d !== "string" || !d.trim()) throw new Error("d must be a non-empty SVG path string.");
-        pathData = [{ data: normalizePathData(d), windingRule: "NONZERO" }];
-      }
-      if (vectorPaths !== undefined) {
-        if (node.type !== "VECTOR" || d !== undefined) throw new Error("vectorPaths requires a VECTOR and cannot be combined with d.");
-        pathData = normalizeVectorPaths(vectorPaths);
-      }
-      if (key !== undefined && typeof key !== "string") throw new Error("key must be a string.");
-      const changes = delta as EditDelta;
-      const hint = Object.keys(delta).some(k => delta[k] !== undefined) ? compileEditPlan(node, changes, at) : undefined;
-      const targets = createResolvedTargets();
-      const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
-      const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
-      entries.set(ref, { ref, node, changes, key, refs, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(ref) });
-    } catch (cause) { throw new Error(at + ": " + (cause instanceof Error ? cause.message : String(cause))); }
-  }
-  const prepared = [...entries.values()];
-  const loaded = prepared.length ? await loadEditResources(prepared.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), prepared.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
-  return { entries, loaded };
-}
-
-/** One live node a tree names, resolved in prepare: the node, its words split by who resolves them, and the hint plans. */
-export interface LoadedLiveEntry {
-  ref: LiveRef; node: SceneNode; changes: EditDelta; key: unknown; pathData?: VectorPaths;
-  /** The binding bag the author stated, compiled against the live node's type. */
-  refs?: ComponentPropertyBinding;
-  hint: import("./edit-plan.js").EditPlan | undefined;
-  targets: ReturnType<typeof createResolvedTargets>;
-  current: Awaited<ReturnType<typeof resolveInstanceEditTargets>> | null;
-  instance: ReturnType<typeof planInstanceEdit> | undefined;
-  intoNewNode: boolean;
-}
-
-export interface LoadedLiveTree {
-  loaded: import("./edit-plan.js").LoadedResources;
-  entries: ReadonlyMap<LiveRef, LoadedLiveEntry>;
 }
 
 /** A live node as the gate resolved it — the one authority for what the call makes of it. */

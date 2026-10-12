@@ -4,7 +4,7 @@
  */
 // validate — boundary validation shared across the preamble's agent-input surfaces. Pure (no
 // figma.*), so it bundles into the QuickJS sandbox freely: one gate asserting an agent-supplied
-// bag is a plain object whose every key is known, shared by the authoring compilers (flcm.ts),
+// bag is a plain object whose every key is known, shared by the authoring compilers (compile-*.ts),
 // the locate queries (read.ts), and edit's delta — and, on top of it, the one prelude every
 // props-taking entry runs so a `get` result spreads straight in.
 
@@ -67,7 +67,7 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
 // targets). Shared by flcm.edit and by an instance's `overrides` entries, which are deltas in the
 // same vocabulary judged at construction. `key` and bare `x`/`y` get steering messages ahead of
 // the generic closed-set reject — they're the two mistakes an agent is most likely to make, and
-// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (flcm.ts owns it).
+// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (the compilers own it).
 export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, subject: string): void {
   if (changes == null || typeof changes !== "object") {
     throw new Error(subject + ": changes must be an object of props to apply — got " + showValue(changes) + ".");
@@ -101,4 +101,20 @@ export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>,
         [...known].join(", ") + ".",
     );
   }
+}
+
+// Closed-set value checks: a word outside its set refuses with every legal spelling.
+export function oneOf<T extends string>(set: ReadonlySet<T>, v: string): v is T {
+  return set.has(v as T);
+}
+
+export function words(set: ReadonlySet<string>): string {
+  return [...set].map((w) => '"' + w + '"').join(", ");
+}
+
+export function assertEnum<T extends string>(name: string, raw: unknown, set: ReadonlySet<T>): T {
+  if (typeof raw !== "string" || !oneOf(set, raw)) {
+    throw new Error("flcm: " + name + " must be one of " + words(set) + " — got " + JSON.stringify(raw) + ".");
+  }
+  return raw;
 }

@@ -12,15 +12,15 @@ import type { WarningRecord } from "./warnings.js";
 // word one side has and the other lacks fails to compile.
 //
 // THREE consumers:
-//   1. TYPES — flcm.ts infers its Props (`FrameProps`, `TextProps`, …) from these schemas via `z.infer`
+//   1. TYPES — the compilers (compile-nodes.ts, compile-text.ts) infer their Props (`FrameProps`, `TextProps`, …) from these schemas via `z.infer`
 //      and imports them as `import type` ONLY. Type-only imports are erased by esbuild, so this module's
 //      zod NEVER enters the sandbox bundle (acceptance: `grep zod plugin/dist/code.js` is empty). The
 //      compilers stay the sole runtime; this file is type + doc metadata only.
 //   2. DOCS — the server walks these schemas at startup to generate the execute_code quick-start and the
 //      get_flcm_reference sections. A prop that isn't here can't be documented; a documented prop that's
-//      deleted here also vanishes from the Props type, so flcm.ts stops compiling. Drift is structural,
+//      deleted here also vanishes from the Props type, so the compilers stop compiling. Drift is structural,
 //      not vigilance.
-//   3. SHAPE CHECK — flcm.ts asserts its real exports `satisfies Flcm`, so the typed public surface below
+//   3. SHAPE CHECK — runtime.ts asserts the real verbs `satisfies Flcm`, so the typed public surface below
 //      can't drift from the functions it describes; the compile-checked example files author against it.
 //
 // This module imports zod (runtime, server-side) but only `import type` from ir.js (the figma-free type
@@ -36,7 +36,7 @@ import {
 } from "./vocabulary.js";
 export { INPUT_ALIASES };
 import type {
-  FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, Handle,
+  FillInput, WriteCssEffects, WritePaint, WriteEffect, Handle,
   ConstraintX, ConstraintY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult, ReadNode,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
@@ -453,7 +453,7 @@ const LINE_FIELDS = fieldsFor(WORD_GROUPS.line)({
 // Negative space: no `width`/`height` here. The path form is BARE GEOMETRY — its box is the path's
 // bounding box — so a canvas-shaped size has nothing to mean but a non-uniform stretch of the art.
 // `scale` is the size word that survives that; `svg` is the form that has a canvas. (The words are
-// still accepted from a `get` round-trip and ignored with a warning — see flcm.ts compilePath.)
+// still accepted from a `get` round-trip and ignored with a warning — see compile-nodes.ts compilePath.)
 const PATH_FIELDS = fieldsFor(WORD_GROUPS.path)({
   vectorPaths: prop(z.array(z.object(fieldsFor(NESTED_WORDS.vectorPath)({ data: z.string(), windingRule: z.enum(WORD_VALUES.windingRule) }))), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg.", 'Array<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>'),
   d: z
@@ -529,7 +529,7 @@ const SWAP_FIELDS = fieldsFor(WORD_GROUPS.swap)({
 // component's children read back and author back in one vocabulary. It means something ONLY inside
 // flcm.component (the verb that declares the properties in the same call); every other verb refuses
 // a tree carrying one, by name. Which FIELDS a given type may bind is vocabulary.ts BINDABLE_FIELDS,
-// enforced at construction (flcm.ts compileBindingBag), not spelled in the type — a `slot` on a TEXT
+// enforced at construction (compile-component-words.ts compileBindingBag), not spelled in the type — a `slot` on a TEXT
 // would be a frame's word on a node with no children.
 const BINDING_FIELDS = fieldsFor(WORD_GROUPS.binding)({
   componentPropertyReferences: prop(
@@ -778,7 +778,7 @@ interface AuthoredIdentity { id: string; warnings?: WarningRecord[]; children?: 
 type AuthoredOf<S> = S extends unknown ? Omit<S, "id" | "children"> & AuthoredIdentity : never;
 export type AuthoredTree = AuthoredOf<NodeSpec>;
 
-// ---- The typed public surface. flcm.ts's real exports are asserted `satisfies Flcm`, so this can't
+// ---- The typed public surface. runtime.ts asserts the real verbs `satisfies Flcm`, so this can't
 // drift from them; the example files author against it and fail the build if a signature moves. ----
 export interface Flcm {
   detach(target: Target): Promise<Handle>;
@@ -951,8 +951,8 @@ export const FIELD_GROUPS = {
 
 // ---- Composed verb schemas → inferred Props, one per composition row, spread in row order so a
 // later group's field wins a shared word (FRAME's full `layout` over size's placement-only one), exactly
-// as the type below computes. flcm.ts imports these types (import type only). The Base/Size/Appearance
-// sub-schemas exist so flcm.ts's shared compilers type against the same fields the verbs are built from. ----
+// as the type below computes. The compilers import these types (import type only). The Base/Size/Appearance
+// sub-schemas exist so compile-nodes.ts's shared compilers type against the same fields the verbs are built from. ----
 type RowFields = typeof ROW_FIELD_GROUPS;
 type ComposedFields<R extends readonly RowGroup[], Acc = object> = R extends readonly [infer H extends RowGroup, ...infer T extends readonly RowGroup[]]
   ? ComposedFields<T, Omit<Acc, keyof RowFields[H]> & RowFields[H]>
@@ -963,7 +963,7 @@ function composeRow<const R extends readonly RowGroup[]>(row: R): ComposedFields
 
 const BaseSchema = z.object(SHARED_FIELDS);
 export const SizeSchema = z.object(SIZE_FIELDS);
-// Appearance carries the shared base fields too (name/key/opacity) — flcm.ts's appearance() compiler runs
+// Appearance carries the shared base fields too (name/key/opacity) — compile-nodes.ts's appearance compiler runs
 // base() over the same value, so the type it accepts must include them.
 const AppearanceSchema = z.object({ ...SHARED_FIELDS, ...APPEARANCE_FIELDS });
 export type BaseProps = z.infer<typeof BaseSchema>;

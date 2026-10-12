@@ -37,8 +37,8 @@ export function backgroundBlurFromCssPx(cssRadius: number): WriteBlur {
 }
 
 // ---- Beyond-CSS effect builders. These take Figma-domain values verbatim (no CSS-px ×2 scaling — there
-// is no CSS spelling to scale from). They own the `kind` tag and enum-casing so flcm.ts never hand-builds
-// an WriteEffect literal.
+// is no CSS spelling to scale from). They own the `kind` tag and enum-casing so the compilers never hand-build
+// a WriteEffect literal.
 //
 // RANGE VALIDATION is delegated to the live runtime, which was probed (execute_code) to reject out-of-range
 // values loudly — lightIntensity/refraction/dispersion 0–1 and noise density 0–1 all throw on set. The ONE

@@ -40,6 +40,7 @@ import { hostDeadlinePassed, hostRunCancelled, hostRunFinished } from "./host.js
 import { RUN_INACTIVITY_DEADLINE_MS } from "./server-deadline.js";
 import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
 import { settleApplySpan } from "./bridge.js";
+import { recordCommittedVerb } from "./verb-error.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -66,11 +67,6 @@ export async function mutationQueueIdle(): Promise<number> {
   return settledVerbs - before;
 }
 
-// Mutating verbs that ran to their success commit this run — the pointer-error contract (invariant
-// 2) tells the agent "the N mutating calls before this one committed and stand" instead of making
-// it re-read the canvas to find out where it is. Per-run state, like the chain.
-let committedVerbs = 0;
-
 const compensatedFailures = new WeakSet<Error>();
 /** An applier may mark a failure only after restoring every write in its own span. */
 export function compensatedMutationFailure(cause: unknown): Error {
@@ -79,13 +75,6 @@ export function compensatedMutationFailure(cause: unknown): Error {
   return error;
 }
 
-
-// How many mutating verbs committed so far this run. Read inside a verb's catch, it is the count
-// before the failing one (which hasn't and won't increment); read by the host after the drain, it is
-// the run's total, one of the host's two signals that the document changed (code.ts executeCode).
-export function committedVerbCount(): number {
-  return committedVerbs;
-}
 
 // Dev Mode's plugin API is read-only — every node create/delete/property write throws. Figma's own
 // refusal names the setter ("in set_fills: …") and never the mode, so an agent that hits it has no
@@ -279,7 +268,7 @@ export function enterMutatingVerb<P, G, T>(
         settleApplySpan(span);
         await flushStyleLinks(span);
         figma.commitUndo();
-        committedVerbs++;
+        recordCommittedVerb();
         finishSizingDiagnostics(verb);
         finishMovedOutDiagnostics(verb);
         registerResult(result);

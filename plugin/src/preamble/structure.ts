@@ -36,15 +36,16 @@ import {
   settleApplySpan, mintHandle, beginRenderWalk, RenderResources,
   assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
 } from "./bridge.js";
-import { loadTreeResources, gateTreeResources, landTree } from "./render.js";
+import { landTree } from "./land-tree.js";
+import { loadTreeResources, gateTreeResources, loadEditResources, gateEditResources } from "./verb-resources.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
-import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
+import { clearKeysDeep, childListClosingInstanceOf, instanceAncestorOf, isComponentDefinition, describeNodeIdentity } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
 import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
-import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
+import { compileEditPlan, assertEditPlanLands,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
@@ -472,4 +473,56 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     }
     return result;
   });
+}
+
+// ---- detach ----
+
+const DETACH_SUBJECT = "flcm.detach";
+
+/**
+ * flcm.detach(target) — break an instance's link to its component. The subtree becomes ordinary
+ * layers under a FRAME with a NEW id (every sublayer id changes with it), returned as that frame's
+ * handle with fresh geometry. One-way: nothing re-attaches it, so the old ids and any flcm/key
+ * addressing them are worth re-reading after.
+ */
+// A single expression on purpose: the queue slot is reserved before detach() can possibly yield,
+// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
+export function detach(target: Target): Promise<Handle> {
+  return enterMutatingVerb(
+    "detach",
+    () => resolveTarget(target),
+    (node: any) => {
+      assertNodeStillOnCanvas(node, DETACH_SUBJECT);
+      if (node.type !== "INSTANCE") {
+        throw new Error(
+          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
+            (isComponentDefinition(node)
+              ? "This is the component itself; detach an INSTANCE of it."
+              : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
+        );
+      }
+      // Figma does NOT refuse a nested detach — it WIDENS it: detachInstance on an instance inside
+      // another instance "also detaches all ancestors nodes that are instances" (plugin typings).
+      // So asking to detach one instance would silently detach three, which is exactly the kind of
+      // unasked-for mutation this surface refuses. Gated here so the agent gets the node to act on
+      // rather than a canvas it has to reconstruct.
+      const host = instanceAncestorOf(node);
+      if (host) {
+        throw new Error(
+          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
+            "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
+            JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
+        );
+      }
+      return node;
+    },
+    (node) => {
+      const fail = beginMutatingApply("detach", node);
+      try {
+        return mintHandle(node.detachInstance());
+      } catch (cause) {
+        throw fail(cause);
+      }
+    },
+  );
 }

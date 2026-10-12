@@ -6,7 +6,9 @@
 import type { WriteNode, WriteChild, WriteType, BuiltNode } from "./ir.js";
 import type { NodeSpec, AuthoredTree, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
 import { isElision } from "@framelink/core";
-import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
+import { assertNoComponentPropertyBindings } from "./compile-component-words.js";
+import { compileFrame, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./compile-nodes.js";
+import { compileText } from "./compile-text.js";
 import { acceptAuthoringProps, withoutReadRecords, type Accepted } from "./authoring-input.js";
 import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, wordsOf, type WordGroup } from "./vocabulary.js";
 import { own, showValue } from "./validate.js";

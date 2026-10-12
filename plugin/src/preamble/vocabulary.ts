@@ -169,6 +169,11 @@ export type NodeWord = RowWord<NodeRow>;
 /** Every word flcm.edit takes on some node type. */
 export type EditWord = Exclude<RowWord<(typeof TYPE_WORD_GROUPS)[EditableType]>, CreateOnlyWord>;
 
+/** One closed key set from several word lists — the shape every compiler's rejectUnknownKeys takes. */
+export function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
+  return new Set(groups.flat());
+}
+
 export function wordsOf(groups: readonly WordGroup[]): ReadonlySet<string> {
   return new Set(groups.flatMap((group) => WORD_GROUPS[group]));
 }

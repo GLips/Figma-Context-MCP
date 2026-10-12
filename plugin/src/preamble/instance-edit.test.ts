@@ -19,7 +19,7 @@ import { id } from "./target.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { detach } from "./instance.js";
+import { detach } from "./structure.js";
 
 let figma = createFigmaMock();
 

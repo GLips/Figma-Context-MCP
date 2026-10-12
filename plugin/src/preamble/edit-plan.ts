@@ -3,7 +3,6 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { acceptAuthoringProps } from "./authoring-input.js";
-import { loadLiveTree, gateLiveTree, liveChildrenOfNewNodes, LoadedLiveTree, LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. One driver lands them in
 // order (edit-apply.ts) for `flcm.edit`, `flcm.editMany` and a live node a tree places; an
@@ -45,7 +44,8 @@ import { sceneFigma as figma } from "./scene-access.js";
 //   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode).
 //                             Prepare runs it for the resource hint; the gate runs it for real.
 //   3. loadEditResources      the verb's ONLY awaits: one font load, one image request, and the
-//                             annotation categories the batch names (resolved, created if absent)
+//                             annotation categories the batch names (verb-resources.ts, which also
+//                             loads the live trees an edit's slot content names)
 //   4. gateEditPlan           SYNC, before the seal: the node still exists, the compile again on the
 //                             node as it stands now, proof the fonts loaded cover it, and the
 //                             live-parent layout gate — every document-reading decision, made once
@@ -69,10 +69,10 @@ import { sceneFigma as figma } from "./scene-access.js";
 // before it is wired to a property.
 
 import {
-  WriteNode, LiveRef, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
+  WriteNode, WriteProps, WriteTextStyle, InstanceEditWords, ComponentEditWords,
   ComponentPropertyBindingEdit, namesFontIdentity,
 } from "./ir.js";
-import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
+import { applyAnnotations } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { assertLineFillUnrotated } from "./layout-legality.js";
@@ -80,19 +80,16 @@ import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize, settleAspectRatio,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
-  RenderResources, ApplyResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
+  ApplyResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotEmpty } from "./validate.js";
-import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens, type ResolvedTokens } from "./tokens.js";
-import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
+import { liveFontWords, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
+import { compileNodeLocalProps, compileNodeLayout } from "./compile-nodes.js";
+import { compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount } from "./compile-text.js";
 import {
-  compileNodeLocalProps, compileNodeLayout,
-  compileLineWidth, compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount,
-  compileComponentPropertyBag, compileOverrideBag, compilePropertyDefinitionEditBag,
-  INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
-} from "./flcm.js";
-import { fetchImagesForTrees } from "./image-prefetch.js";
+  compileComponentPropertyBag, compileOverrideBag, compilePropertyDefinitionEditBag, DOCUMENT_RESOLVED_EDIT_WORDS,
+} from "./compile-component-words.js";
 import { compileSwapTarget } from "./target.js";
 import type { EditDelta } from "./schema.js";
 import { EDIT_WORDS, WORD_GROUPS, editWordsOf } from "./vocabulary.js";
@@ -408,51 +405,6 @@ export interface InstanceNeeds {
 }
 
 /**
- * Stage 3 — the verb's resource awaits, and the only suspension between the compiles and the seal.
- * ONE font load and ONE image request however many entries there are: a batch is one verb, so it
- * owes one round trip, and every extra suspension is another instant the user can edit across.
- *
- * `plans` and `needs` are prepare's HINT plans — what the deltas need loaded if the document stays
- * as it is. `needs` is every INSTANCE entry's slot content: the one way a delta BUILDS nodes, so
- * the one way an edit's resources carry tree fonts at all. The instance PLANS are not here: those
- * are the gate's to make, against the document at the seal (instance.ts planInstanceEdit).
- */
-export async function loadEditResources(plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = []): Promise<LoadedResources> {
-  const trees: WriteNode[] = [];
-  const fontNeeds: EditFontNeed[] = [];
-  for (const need of needs) {
-    trees.push(...need.slotContentTrees);
-    fontNeeds.push(...need.fontNeeds);
-  }
-  const liveTrees: LoadedLiveTree[] = [];
-  const intoNewNode = liveChildrenOfNewNodes(trees);
-  for (const tree of trees) liveTrees.push(await loadLiveTree(tree, intoNewNode));
-  for (const tree of trees) requestTreeAnnotationCategories(tree);
-  for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
-  // Tokens first: a font variable's mode values and a text style's font are font needs of their own.
-  const tokens = mergeResolvedTokens(
-    await resolveTokenRefs(collectTokenRefs([...[...plans, ...fontNeeds].map((p) => p.patch), ...trees])),
-    ...liveTrees.map((live) => live.loaded.tokens),
-  );
-  // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
-  const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees, tokens);
-  const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
-  // Categories last of the three: resolving one can CREATE a file-scoped category, so a batch whose
-  // font or image load was going to fail anyway never creates one to be cleaned up again.
-  await resolveAnnotationCategories();
-  for (const live of liveTrees) { Object.assign(fonts, live.loaded.fonts); Object.assign(images, live.loaded.images); }
-  return { fonts, images, tokens, liveTrees };
-}
-
-/** What stage 3 loaded — everything the apply span needs except the instance plans the gate makes. */
-export interface LoadedResources {
-  liveTrees?: LoadedLiveTree[];
-  fonts: FontMap;
-  images: Record<string, string>;
-  tokens: ResolvedTokens;
-}
-
-/**
  * Stage 4 — the delta's every document-reading decision, made in the verb's synchronous gate
  * (mutation-lock.ts) against the node as it stands at the seal: existence (the one live fact every
  * delta depends on, including the ones that read nothing else off the node), the compile itself
@@ -499,19 +451,6 @@ export function assertEditPlanLands(
     subject,
   );
   if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, projection);
-}
-
-/**
- * The apply span's resources: what stage 3 loaded, plus the instance plans the gate made for the
- * slot content this verb builds — every entry's, merged, since a batch walks its content once.
- */
-export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
-  const instances = new Map<WriteNode, InstancePlan>();
-  for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  const live = new Map<LiveRef, LiveTreeNode>();
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances, live };
-  for (const tree of loaded.liveTrees ?? []) for (const [ref, node] of gateLiveTree(tree, resources)) live.set(ref, node);
-  return resources;
 }
 
 /**

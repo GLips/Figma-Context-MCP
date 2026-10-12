@@ -31,9 +31,9 @@ import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
   compilePropertyDefinition, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue, bindingsOf, type LiveBindings,
-} from "./component.js";
+} from "./component-properties.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
-import { compileBindingEditBag, assertNoComponentPropertyBindings } from "./flcm.js";
+import { compileBindingEditBag, assertNoComponentPropertyBindings } from "./compile-component-words.js";
 import { bindableFieldsOf } from "./vocabulary.js";
 import { instanceAncestorOf, editableComponentOwnerOf, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";

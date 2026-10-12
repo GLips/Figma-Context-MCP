@@ -10,7 +10,7 @@ import { render } from "./structure.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { gradient, image, effects } from "./flcm.js";
+import { gradient, image, effects } from "./value-sugar.js";
 import { find } from "./read.js";
 import { compileTree } from "./compile-tree.js";
 

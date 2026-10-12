@@ -7,7 +7,7 @@ import type { NodeSpec } from "./schema.js";
 import type { NestedWord, WordValue } from "./vocabulary.js";
 // ir — the typed WriteNode currency: the ONE internal representation the whole preamble speaks. Every
 // leaf is a real type (a number, a typed edge box, a discriminated paint/effect value), never a CSS
-// string. The sugar (flcm.ts) compiles terse author props straight into this; the bridge (bridge.ts)
+// string. The sugar (compile-*.ts) compiles terse author props straight into this; the bridge (bridge.ts)
 // reads it and drives the plugin API. Nothing between them parses or re-serializes a string.
 //
 // WHY TYPED, NOT CSS-STRING LEAVES. The IR used to carry CSS strings (gap "8px", a "t r b l" padding
@@ -295,7 +295,7 @@ export function textOfRuns(runs: readonly WriteTextRun[]): string {
 // parent/child context, so the bridge resolves it. One terse→plugin map lives there; the IR stays
 // plugin-agnostic. The field names mirror CSS (justifyContent/alignItems), but the VALUES stay terse
 // render intent — the CSS-total value spellings (flex-start/space-between) are an LLM-edge concern the
-// sugar boundary (flcm.ts) maps in, never pushed through the render layer. ----
+// sugar boundary (compile-*.ts) maps in, never pushed through the render layer. ----
 export type Justify = "start" | "center" | "end" | "between";
 export type Align = "start" | "center" | "end" | "stretch" | "baseline";
 export type Sizing = "fixed" | "fill" | "hug";

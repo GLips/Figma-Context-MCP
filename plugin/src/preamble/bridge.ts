@@ -19,7 +19,7 @@ import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js"
 // paint compiled for create and for edit cannot diverge. It consumes ONLY the typed IR currency — it
 // never sees a CSS string leaf and never imports css.ts; the boundary parsed everything into types
 // upstream, so here a gap is already a number, a fill already a WritePaint, an effect already an
-// WriteEffect. The compilers in flcm.ts only build plain frozen POJOs.
+// WriteEffect. The compilers (compile-*.ts) only build plain frozen POJOs.
 //
 // Appliers touch only the fields PRESENT on their node, and a `'prop' in node` guard skips only
 // vocabulary a node KIND lacks (an ellipse has no cornerRadius). A Figma refusal on a field the node
@@ -1400,7 +1400,7 @@ function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }
   try {
     v.vectorPaths = source.paths;
   } catch (e: any) {
-    // Already normalized to Figma's absolute M/L/C/Q/Z subset at compile (flcm.ts compilePath); reaching
+    // Already normalized to Figma's absolute M/L/C/Q/Z subset at compile (compile-nodes.ts compilePath); reaching
     // here means the parser rejected something the normalizer emitted, so show what it actually sent.
     throw new Error('VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + (e && e.message ? e.message : String(e)));
   }

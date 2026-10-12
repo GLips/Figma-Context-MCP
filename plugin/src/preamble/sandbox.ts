@@ -11,6 +11,7 @@ export const session = hostSession(createSession);
 // and keeps the drain for itself (code.ts executeCode), so the reply cannot outrun a queued write.
 // committedVerbCount is the host's too: read after the drain, a nonzero count means this run changed
 // the document, known synchronously (code.ts ORs it with the observed change events).
-export { mutationQueueIdle, committedVerbCount } from "./mutation-lock.js";
+export { mutationQueueIdle } from "./mutation-lock.js";
+export { committedVerbCount } from "./verb-error.js";
 
 export { warnings } from "./warnings.js";
