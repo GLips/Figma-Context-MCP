@@ -3,18 +3,16 @@ import type {
   GetFileResponse,
   Node as FigmaNode,
 } from "@figma/rest-api-spec";
-import type { SimplifiedDesign } from "@framelink/core";
-import { readRestDesign, type RestDesignSource } from "~/adapters/rest/read-rest-design.js";
-import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
+import type { RestDesignSource } from "./read-rest-design.js";
 
 /**
- * A recorded response served as a one-file Figma. A targeted read gets the recording ids-filtered
- * the way the API filters it — each ancestor listing only the child on the path — and a
- * supplementary `?ids=` call is answered from the same document, as the live API answers a
+ * A recorded response served as a one-file Figma, for the benchmark and the tests. A targeted read
+ * gets the recording ids-filtered the way the API filters it — each ancestor listing only the
+ * child on the path — and a supplementary `?ids=` call is answered from the same document, as the live API answers a
  * same-file definition or a grid's children. A published library is unreachable, so library
  * components land on the donor floor — exactly where a 403 on the library puts them live.
  */
-export function restFixtureSource(
+export function recordedRestSource(
   response: GetFileResponse | GetFileNodesResponse,
 ): RestDesignSource {
   // A golden may record a nodes response; the read decodes either shape, the API types only one.
@@ -55,22 +53,9 @@ export function restFixtureSource(
       ),
     }),
     getPublishedComponentSite: async (key) => {
-      throw new Error(`Library component ${key} is not reachable from a one-file fixture.`);
+      throw new Error(`Library component ${key} is not reachable from a one-file recording.`);
     },
   } as RestDesignSource;
-}
-
-/** The composed REST read over a recorded response: what get_figma_data simplifies it to. */
-export async function readRestFixture(
-  response: GetFileResponse | GetFileNodesResponse,
-  { nodeId, depth }: { nodeId?: string; depth?: number } = {},
-): Promise<SimplifiedDesign> {
-  const { design } = await readRestDesign(restFixtureSource(response), {
-    fileKey: figmaFileKey("fixture"),
-    nodeId: nodeId === undefined ? undefined : figmaNodeId(nodeId),
-    depth,
-  });
-  return design;
 }
 
 /** `node` cut down to the chain that leads to `nodeId`, the target's own subtree whole. */

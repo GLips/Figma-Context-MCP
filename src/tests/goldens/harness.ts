@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { readRestFixture } from "../rest-fixture-source.js";
+import { readRestFixture } from "../read-rest-fixture.js";
 import type { SimplifiedDesign } from "@framelink/core";
 import type { GoldenFixture } from "./fixtures.js";
 

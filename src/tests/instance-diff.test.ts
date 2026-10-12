@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readRestFixture } from "./rest-fixture-source.js";
+import { readRestFixture } from "./read-rest-fixture.js";
 import type { GetFileResponse, Node as FigmaNode } from "@figma/rest-api-spec";
 
 // An instance is emitted as a diff against its component's published children, which changes what

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readRestFixture } from "./rest-fixture-source.js";
+import { readRestFixture } from "./read-rest-fixture.js";
 import { walkUncompressed } from "./walk-uncompressed.js";
 import type { TraversalOptions } from "@framelink/core";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";

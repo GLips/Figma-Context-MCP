@@ -54,8 +54,11 @@ export async function runSnapshot(
   for (const file of ["src/utils/serialize.ts", "src/utils/serializable-design.ts"])
     if (!(await exists(join(source, file))))
       throw new Error(`This revision predates ${file}. Choose a newer baseline.`);
-  // The composed read gets a source that serves the capture and refuses every supplementary
-  // fetch, so off-tree components fall back to a donor exactly as the older entry published them.
+  // The composed read gets a deliberately donor-only source: it serves the capture and refuses
+  // every supplementary fetch, so off-tree components fall back to a donor exactly as the older
+  // entries published them and any two revisions compare like for like. Spelled inline rather than
+  // importing recorded-source.ts because a replayed revision may predate that file. It must list
+  // every RestDesignSource method: a missing one throws inside enrichment, which swallows it.
   const entry = composed
     ? 'import { readRestDesign } from "./src/adapters/rest/read-rest-design.ts"; const offline = async () => { throw new Error("Replay is offline"); }; const simplify = raw => readRestDesign({ getRawFile: async () => ({ data: raw, rawSize: 0 }), getRawNodeInContext: offline, getRawNodes: offline, getPublishedComponentSite: offline }, { fileKey: "replay" }).then(read => read.design);'
     : modern

@@ -5,7 +5,7 @@ import type { NodeSnapshot } from "@framelink/core/snapshot";
 import type { SimplifiedDesign, SimplifyResult } from "@framelink/core";
 import { simplify, project } from "@framelink/core";
 import { compressDesign } from "@framelink/core/compress";
-import { readRestFixture } from "../rest-fixture-source.js";
+import { readRestFixture } from "../read-rest-fixture.js";
 import type { LoadedScene } from "./scenes-io.js";
 
 /**
