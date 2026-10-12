@@ -281,18 +281,32 @@ function resolveDefaults(
       layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
       value: boundLayerValue(definition.figmaType, wn, plans, live),
     }));
-    return { name: definition.name, figmaType: definition.figmaType, defaultValue: agreedDefault(definition, binders, at, targetForm ? promoteThenBind(definition) : undefined) };
+    return {
+      name: definition.name,
+      figmaType: definition.figmaType,
+      defaultValue: agreedDefault(definition, binders, at, { inherited: FRESH_LAYER_SHOWS[definition.figmaType], unboundRemedy: targetForm ? promoteThenBind(definition) : undefined }),
+    };
   });
 }
 
 /**
- * What one authored node states for a property of `figmaType` — the value its layer will show once
- * built. Shared with a bound insert into an existing component (component-edit.ts).
+ * What a layer built with the bound field unwritten shows before any binding — the default a property
+ * this call creates takes when none of its binders has content. An instance always names its
+ * component, so instance_swap has no entry.
  */
-export function boundLayerValue(figmaType: string, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string {
-  // A live node's `visible` and text were projected onto it at the gate (live-tree.ts), its
-  // authored edit if there is one, else what it shows now — so the read below is one rule for both.
-  if (figmaType === "BOOLEAN") return wn.visible !== false; // an unnamed `visible` is true
+export const FRESH_LAYER_SHOWS: Record<string, boolean | string> = { BOOLEAN: true, TEXT: "" };
+
+/**
+ * What one authored node states for a property of `figmaType` — the value its layer will show once
+ * built — or undefined when it states none: a node this call creates with the field unwritten has no
+ * content to lose, so it takes whatever default the property settles on. Shared with a bound insert
+ * into an existing component (component-edit.ts).
+ */
+export function boundLayerValue(figmaType: string, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string | undefined {
+  // A live node's `visible` and text were projected onto it at the gate (live-tree.ts), its authored
+  // edit if there is one, else what it shows now — so a live node always states both, and only a
+  // node this call creates can leave one unwritten.
+  if (figmaType === "BOOLEAN") return wn.visible;
   if (figmaType === "TEXT") return authoredTextOf(wn);
   // The bound node is an INSTANCE (the compilers allow `componentId` on nothing else), and
   // its plan already holds the component this call will actually STAMP — which is the point: when
@@ -319,20 +333,24 @@ export function readableComponentOf(component: any, node: any, at: string): any 
  * The one value a property's binders agree on. Shared with an edit that adds a property
  * (component-edit.ts), so both refuse the same two cases in the same words: nothing binds it (there
  * is no layer to read), and binders that disagree (whichever won, the others' content would be
- * overwritten by the binding).
+ * overwritten by the binding). A binder with no value has no content to lose: it takes the others'
+ * value, or `inherited` when none has one — an existing property's own default, or FRESH_LAYER_SHOWS.
  */
 export function agreedDefault(
-  definition: { name: string; type: string }, binders: readonly { layer: string; value: boolean | string }[], at: string,
-  unboundRemedy = "bind the layer that shows it: componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }.",
+  definition: { name: string; type: string }, binders: readonly { layer: string; value: boolean | string | undefined }[], at: string,
+  { inherited, unboundRemedy = "bind the layer that shows it: componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }." }:
+    { inherited: boolean | string; unboundRemedy?: string },
 ): boolean | string {
   if (!binders.length) {
     throw new Error(at + ": nothing in this call binds " + JSON.stringify(definition.name) + ". A property's default IS its bound layer's content, so " + unboundRemedy);
   }
-  const first = binders[0].value;
-  if (binders.every((b) => b.value === first)) return first;
+  const stated = binders.filter((b) => b.value !== undefined);
+  if (!stated.length) return inherited;
+  const first = stated[0].value!;
+  if (stated.every((b) => b.value === first)) return first;
   throw new Error(
-    at + ": " + binders.length + " layers bind " + JSON.stringify(definition.name) + " and show different " + FIELD_FOR_TYPE[definition.type] + " — " +
-      binders.map((b) => b.layer + " is " + JSON.stringify(b.value)).join(", ") +
+    at + ": " + stated.length + " layers bind " + JSON.stringify(definition.name) + " and show different " + FIELD_FOR_TYPE[definition.type] + " — " +
+      stated.map((b) => b.layer + " is " + JSON.stringify(b.value)).join(", ") +
       ". Binding writes the property's one default into every one of them, so make them agree in this call (set the same " + FIELD_FOR_TYPE[definition.type] + " on each), or bind just one.",
   );
 }
@@ -352,10 +370,10 @@ export function describeBinder(name: string | undefined, where: string): string 
 }
 
 // A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich author
-// produced (concatenated exactly as the bridge concatenates them into `characters`).
-function authoredTextOf(wn: WriteNode): string {
+// produced (concatenated exactly as the bridge concatenates them into `characters`) — undefined when it states neither.
+function authoredTextOf(wn: WriteNode): string | undefined {
   if (typeof wn.text === "string") return wn.text;
-  return (wn.runs || []).map((run) => run.text).join("");
+  return wn.runs?.map((run) => run.text).join("");
 }
 
 // ---- the live subject ----

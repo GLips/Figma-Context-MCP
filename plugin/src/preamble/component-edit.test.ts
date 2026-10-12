@@ -432,6 +432,34 @@ test("binders of an existing property that show different content are refused, e
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Overview");
 });
 
+// A layer this call creates with the bound field unwritten has no content to lose, so it shows the
+// property's default rather than driving it.
+test("a new layer with its bound field unwritten inherits the existing property's default", async () => {
+  const { comp, title, dot } = await unboundTag();
+  const label = fullName(comp, "Label");
+  const shown = fullName(comp, "Shown");
+  // Shown's default becomes false, which a new layer's unwritten `visible` (true) would contradict.
+  await edit(id(dot.id), { componentPropertyReferences: { visible: "Shown" } });
+  const before = comp.componentPropertyDefinitions;
+  await append(id(comp.id), { type: "TEXT", name: "Blank", componentPropertyReferences: { text: "Label" } });
+  await append(id(comp.id), { type: "FRAME", name: "Dot2", width: 4, height: 4, componentPropertyReferences: { visible: "Shown" } });
+  const blank = comp.findOne((n: { name: string }) => n.name === "Blank");
+  assert.equal(comp.componentPropertyDefinitions[label].defaultValue, before[label].defaultValue);
+  assert.equal(blank.characters, before[label].defaultValue);
+  assert.equal(comp.componentPropertyDefinitions[shown].defaultValue, before[shown].defaultValue);
+  assert.equal(comp.findOne((n: { name: string }) => n.name === "Dot2").visible, before[shown].defaultValue);
+  // Bound alongside a layer with content, it takes that content instead of conflicting with it…
+  const { comp: other, title: title2 } = await unboundTag();
+  await edit(id(title2.id), { componentPropertyReferences: { text: "Label" } });
+  await append(id(other.id), { type: "TEXT", name: "Blank2", componentPropertyReferences: { text: "Label" } });
+  assert.equal(other.findOne((n: { name: string }) => n.name === "Blank2").characters, "Overview");
+  // …and one whose `text` IS written still drives the value, so a conflict is still refused.
+  await assert.rejects(
+    append(id(other.id), { type: "TEXT", name: "Written", text: "", componentPropertyReferences: { text: "Label" } }),
+    /show different text — "Title" \(already bound\) is "Overview", "Blank2" \(already bound\) is "Overview", "Written" .* is ""/,
+  );
+});
+
 // While a layer is still bound, writing its field writes the property's default and every other layer
 // bound to it — so a layer leaving a property is freed before any of the call's writes land.
 test("a layer leaving a property is freed before the call's writes, so they don't reach its old binders", async () => {

@@ -30,7 +30,7 @@ import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, readableComponentOf, describeBinder, boundLayerValue,
+  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, readableComponentOf, describeBinder, boundLayerValue,
 } from "./component.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
@@ -67,7 +67,8 @@ export interface AddedDefinition extends PreparedDefinition {
 /** A layer a property's default is read off — what it will show once the call lands — as a refusal names it. */
 export interface PropertyBinder {
   layer: string;
-  value: boolean | string;
+  /** Undefined for a layer this call creates with the field unwritten: it takes whatever default the property settles on. */
+  value: boolean | string | undefined;
 }
 
 // How to bind an added property in the same call — the only call that can carry both halves.
@@ -138,7 +139,7 @@ export function planComponentDefinitionEdit(
     const at = where + "[" + JSON.stringify(name) + "]";
     const add = adds.get(name);
     if (add) {
-      add.defaultValue = agreedDefault(add, bindersOf(add), at, bindInSameBatch(name, add.type));
+      add.defaultValue = agreedDefault(add, bindersOf(add), at, { inherited: FRESH_LAYER_SHOWS[add.figmaType], unboundRemedy: bindInSameBatch(name, add.type) });
       plan.adds.push(add);
       taken.add(name);
       continue;
@@ -503,7 +504,7 @@ export function settleExistingPropertyDefaults(
         .filter((node) => own((node.componentPropertyReferences || {}) as Record<string, string>, group[0].wire) === full && !standing.leaves(node, group[0].wire))
         .map((node) => ({ layer: JSON.stringify(node.name) + " (already bound)", value: standing.shows(node, field) ?? definition.defaultValue }));
       try {
-        const value = agreedDefault({ name: bareName(full), type }, [...already, ...group.map((b) => b.binder)], group[0].at);
+        const value = agreedDefault({ name: bareName(full), type }, [...already, ...group.map((b) => b.binder)], group[0].at, { inherited: definition.defaultValue });
         if (value !== definition.defaultValue) writes.push({ owner, full, value, by: group[0] });
       } catch (cause) {
         refuse(group[0], cause);
