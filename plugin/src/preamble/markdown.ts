@@ -16,7 +16,7 @@
 // round-trip exact (spec "Round-trip requirement"): the flags a run rendered FROM are the flags it
 // parses back TO, regardless of how the markers nested.
 //
-// This module is figma-free (pure string work) and closure-private in the bundle — flcm.ts is the sole
+// This module is figma-free (pure string work) and closure-private in the bundle — compile-text.ts is the sole
 // caller. It fails loud only on markdown image syntax `![…](…)`, which has no text form (ADR-0003).
 
 export interface MdSegment {

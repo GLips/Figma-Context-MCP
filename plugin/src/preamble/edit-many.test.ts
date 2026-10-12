@@ -11,7 +11,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { image } from "./flcm.js";
+import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
 import { editMany } from "./edit-many.js";
 

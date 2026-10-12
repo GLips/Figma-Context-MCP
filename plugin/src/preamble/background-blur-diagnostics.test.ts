@@ -8,7 +8,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { effects as effectsSugar, id } from "./flcm.js";
+import { effects as effectsSugar } from "./value-sugar.js";
+import { id } from "./target.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
 import { component } from "./component.js";

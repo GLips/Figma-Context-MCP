@@ -3,20 +3,51 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Trees cross the authoring boundary once. Only this private compile produces IR.
-import type { WriteNode, WriteChild } from "./ir.js";
-import type { NodeSpec, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
+import type { WriteNode, WriteChild, WriteType, BuiltNode } from "./ir.js";
+import type { NodeSpec, AuthoredTree, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
 import { isElision, outermostInstanceId, sublayerPrefix } from "@framelink/core";
-import type { SimplifiedLayout } from "@framelink/core";
-import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
+import { assertNoComponentPropertyBindings } from "./compile-component-words.js";
+import { compileFrame, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./compile-nodes.js";
+import { compileText } from "./compile-text.js";
+import { acceptAuthoringProps, withoutReadRecords, CLONE_REMEDY, type Accepted } from "./authoring-input.js";
+import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, wordsOf, type WordGroup } from "./vocabulary.js";
 import { own, showValue } from "./validate.js";
 
-const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
-type ReadFieldDisposition = { refuse: string };
-const READ_FIELD_DISPOSITIONS: Record<string, ReadFieldDisposition> = {
-  template: { refuse: "this is a compressed template reference; read the expanded node with flcm.get" },
-  strokeDashes: { refuse: "flcm strokes are solid; there is no dash-pattern word. Remove strokeDashes to author a solid stroke" },
-  aspectRatio: { refuse: "flcm sizes width and height independently; there is no proportions-lock word. Remove aspectRatio and set both dimensions" },
-};
+// ---- NODE_ENTRY: how a new node of each type is built. Every entry runs the same prelude
+// (acceptAuthoringProps) over its type's row, ONCE, in visit(); a compiler receives only the bag it
+// returned (`Accepted`), so no compiler can skip the prelude or gate against a different vocabulary. ----
+interface NodeEntry {
+  /** The type the prelude matches a read's `type` against. */
+  type: WriteType;
+  known: ReadonlySet<string>;
+  compile(props: Accepted<Record<string, unknown>>): BuiltNode;
+}
+function nodeEntry<P>(type: WriteType, row: readonly WordGroup[], compile: (props: Accepted<P>) => BuiltNode): NodeEntry {
+  return { type, known: wordsOf(row), compile: compile as NodeEntry["compile"] };
+}
+const NODE_ENTRY = {
+  FRAME: nodeEntry<FrameProps>("FRAME", TYPE_WORD_GROUPS.FRAME, compileFrame),
+  TEXT: nodeEntry<TextProps>("TEXT", TYPE_WORD_GROUPS.TEXT, compileText),
+  RECTANGLE: nodeEntry<ShapeProps>("RECTANGLE", TYPE_WORD_GROUPS.RECTANGLE, compileRectangle),
+  ELLIPSE: nodeEntry<EllipseProps>("ELLIPSE", TYPE_WORD_GROUPS.ELLIPSE, compileEllipse),
+  LINE: nodeEntry<LineProps>("LINE", TYPE_WORD_GROUPS.LINE, compileLine),
+  INSTANCE: nodeEntry<InstanceProps>("INSTANCE", TYPE_WORD_GROUPS.INSTANCE, compileInstance),
+  // VECTOR's two forms: path geometry, and an svg import.
+  VECTOR: nodeEntry<PathProps>("VECTOR", TYPE_WORD_GROUPS.VECTOR, compilePath),
+  SVG: nodeEntry<SvgProps>("VECTOR", SVG_WORD_GROUPS, compileSvg),
+} satisfies Record<WriteType | "SVG", NodeEntry>;
+
+function nodeEntryFor(type: unknown, words: Record<string, unknown>): NodeEntry {
+  if (type === "VECTOR") {
+    if ([words.svg, words.d, words.vectorPaths].filter((value) => value !== undefined).length !== 1) {
+      throw new Error("VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.");
+    }
+    return words.svg !== undefined ? NODE_ENTRY.SVG : NODE_ENTRY.VECTOR;
+  }
+  const entry = typeof type === "string" && type !== "SVG" ? own<NodeEntry>(NODE_ENTRY, type) : undefined;
+  if (!entry) throw new Error("type must be FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. " + CLONE_REMEDY);
+  return entry;
+}
 
 /** Copy author data so compilation and returned identities never mutate a reusable template. */
 function copySpec<T>(value: T, path = "spec", ancestors = new Set<object>()): T {
@@ -62,7 +93,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
     const liftedChildEdits = type === "INSTANCE" ? liftInheritedChildEdits(id, readChildren, at) : undefined;
     const children = liftedChildEdits ? undefined : readChildren;
     if (children !== undefined && !Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
-    const props = readyNodeWords(words, at);
+    const props = withoutReadRecords(words);
     if (liftedChildEdits) props.overrides = mergeLiftedChildEdits(props.overrides, liftedChildEdits, at);
     const compiledChildren = (children as unknown[] | undefined)?.flatMap((child, i) => isElision(child) ? [] : [visit(child, at + ".children[" + i + "]")]);
     if (props.overrides && typeof props.overrides === "object" && !Array.isArray(props.overrides)) {
@@ -78,28 +109,14 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       }));
     }
     try {
-      let tree: WriteNode;
       if (id !== undefined) {
         if (type !== undefined && typeof type !== "string") throw new Error("type must be a string.");
-        tree = { type: "UNRESOLVED", liveId: id as string, authoring: props };
-      } else {
-        switch (type) {
-          case "FRAME": tree = compileFrame(props as FrameProps); break;
-          case "TEXT": tree = compileText(props as TextProps); break;
-          case "RECTANGLE": tree = compileRectangle(props as ShapeProps); break;
-          case "ELLIPSE": tree = compileEllipse(props as EllipseProps); break;
-          case "LINE": tree = compileLine(props as LineProps); break;
-          case "INSTANCE": tree = compileInstance(props as InstanceProps & { componentId: string }); break;
-          case "VECTOR": {
-            if ([props.svg, props.d, props.vectorPaths].filter(value => value !== undefined).length !== 1) throw new Error("VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.");
-            if (props.svg !== undefined) { const { svg, ...rest } = props; tree = compileSvg(svg, rest as SvgProps); }
-            else tree = compilePath(props as PathProps);
-            break;
-          }
-          default: throw new Error("type must be FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. " + CLONE_REMEDY);
-        }
-        if (compiledChildren?.length && type !== "FRAME") throw new Error(String(type) + " does not accept children; instance content belongs in slot overrides.");
+        // The authored words only: what the live node resolves to is the loaded live tree's (live-tree.ts).
+        return { liveId: id as string, authoring: props, ...(children !== undefined && { children: compiledChildren }), source: src as NodeSpec, sourcePath: at };
       }
+      const entry = nodeEntryFor(type, props);
+      const tree = entry.compile(acceptAuthoringProps(props, { type: entry.type, verb: "create", known: entry.known, subject: entry.type }));
+      if (compiledChildren?.length && type !== "FRAME") throw new Error(String(type) + " does not accept children; instance content belongs in slot overrides.");
       if (children !== undefined) tree.children = compiledChildren;
       tree.source = src as NodeSpec;
       tree.sourcePath = at;
@@ -108,21 +125,10 @@ export function compileTree(input: unknown, subject: string): WriteNode {
   }
 }
 
-function readyNodeWords(src: Record<string, unknown>, subject: string): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(src)) {
-    // These records describe a read, never an authored change. Omission preserves live children.
-    if (key === "readOnlySource" || key === "elided" || key === "warnings" || key === "comments") continue;
-    const disposition = own(READ_FIELD_DISPOSITIONS, key);
-    if (value != null && disposition) throw refuse(subject, key, disposition.refuse);
-    out[key] = readyAuthoredValue(key, value, subject);
-  }
-  return out;
-}
-
 /** The nodes placed directly into `tree`: its children, then the slot content its overrides state. */
 export function childTreeNodes(tree: WriteNode): WriteNode[] {
-  const nested = Object.values(tree.overrides ?? tree.authoring?.overrides ?? {}).flatMap((delta: any) => Array.isArray(delta?.children) ? delta.children : []);
+  const overrides = tree.liveId !== undefined ? tree.authoring.overrides as BuiltNode["overrides"] : tree.overrides;
+  const nested = Object.values(overrides ?? {}).flatMap((delta: any) => Array.isArray(delta?.children) ? delta.children : []);
   return [...(tree.children ?? []), ...nested];
 }
 
@@ -131,85 +137,19 @@ export function treeNodes(tree: WriteChild): WriteNode[] {
   return [tree, ...childTreeNodes(tree).flatMap(treeNodes)];
 }
 
-const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" | ReadFieldDisposition> = {
-  mode: "author",
-  gap: "author",
-  padding: "author",
-  justifyContent: "author",
-  alignItems: "author",
-  alignSelf: "author", // The read word is grid-only; flow stretch is an input alias for fill.
-  wrap: "author",
-  overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm word" },
-  gridTemplateColumns: "author",
-  gridTemplateRows: "author",
-  gridColumn: "author",
-  gridRow: "author",
-  justifySelf: "author",
-  zIndex: "author",
-};
-
-// ---- the refusals ----
-
-// THE refusal. Every "flcm has no word for this" message in the module is built here, so the sentence
-// and the remedy can't drift between the node-field gate, the layout-word gate and the value guards.
-function refuse(subject: string, what: string, why: string): Error {
-  return new Error(subject + ": `" + what + "` has no authored form — " + why + ". " + CLONE_REMEDY);
-}
-
-// ---- values that keep their key ----
-
-function readyAuthoredValue(key: string, value: unknown, subject: string): unknown {
-  switch (key) {
-    case "text": return readyTextContent(value, subject);
-    case "textStyle": case "effects": case "fill": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
-    default: return value;
-  }
-}
-
-// Every style slot (fill/stroke/effects/layout/textStyle) is a REF string when the read was compressed,
-// minted as `<prefix>_<8 hex>` (core/src/style-table.ts). The exact mint shape is matched — not "any
-// string" — because `fill: "#FFF"` is a paint, and only the ref shape is worth its own message: handed
-// to a value parser it reads as a malformed value, not a wrong read mode.
-const STYLE_REF = /^(layout|style|fill|effect)_[0-9a-f]{8}/;
-
-function assertNotCompressedRef<T>(value: T, field: string): T {
-  if (typeof value === "string" && STYLE_REF.test(value)) throw compressedRef(field);
-  return value;
-}
-
-function compressedRef(field: string): Error {
-  return new Error(
-    field + ' is a styles-table REFERENCE (like "fill_a1b2c3d4"), not a value — that read came from a COMPRESSED read. ' +
-      "flcm.get returns the expanded shape with every value inline; re-read the node with flcm.get, or resolve the ref against the design's `styles` table first.",
-  );
-}
-
-// The layout bag keeps its key and its authorable words verbatim (`gap` is a metric the compiler
-// parses, `padding` takes read's box shorthand directly); this only refuses the words with no flcm
-// form. Unknown words are the compiler's closed set to name.
-export function readyLayout(raw: unknown, subject: string): unknown {
-  assertNotCompressedRef(raw, subject + ".layout");
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
-  const l: Record<string, unknown> = {};
-  for (const word of Object.keys(raw)) {
-    const value = (raw as Record<string, unknown>)[word];
-    if (value == null) continue; // an explicitly-undefined word is absence, not a claim
-    const disposition = own(LAYOUT_WORD_DISPOSITIONS, word);
-    if (disposition && typeof disposition === "object") throw refuse(subject + ".layout", word, disposition.refuse);
-    l[word] = value;
-  }
-  return l;
-}
-
-// The read `text` field is already the canonical run model (a markdown string, or `[text, style]`
-// tuples), so it re-authors verbatim. The one thing to intercept is a compressed run: a tuple whose
-// style slot is a ref string rather than the delta.
-function readyTextContent(raw: unknown, subject: string): unknown {
-  if (!Array.isArray(raw)) return raw;
-  return raw.map((run, i) => {
-    if (Array.isArray(run)) assertNotCompressedRef(run[1], subject + ".text run[" + i + "] style");
-    return run;
-  });
+/**
+ * The authored tree as it landed: a fresh copy of `source` with each placed node's id (ids are keyed
+ * by the node's own spec object, recorded as it lands). The compiled tree and its source stay as authored.
+ */
+export function placedTreeOf(source: NodeSpec, ids: ReadonlyMap<NodeSpec, string>): AuthoredTree {
+  const copyPlaced = (value: unknown): unknown => {
+    if (value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return value.map(copyPlaced);
+    const copy = Object.fromEntries(Object.entries(value).map(([k, v]) => [k, copyPlaced(v)]));
+    const id = ids.get(value as NodeSpec);
+    return id === undefined ? copy : { ...copy, id };
+  };
+  return copyPlaced(source) as AuthoredTree;
 }
 
 /** Edit deltas may contain trees only under instance slot overrides. */
@@ -257,7 +197,7 @@ function liftInheritedChildEdits(id: unknown, children: unknown, at: string): Re
     // inherited rectangle at all. A real sublayer resize is written as an explicit override; the
     // sizing INTENTS ("fill"/"hug"/"50%") stay, because those are words, not measurements.
     for (const word of ["width", "height"]) if (typeof rest[word] === "number") delete rest[word];
-    const delta = readyNodeWords(rest, where);
+    const delta = withoutReadRecords(rest);
     if (Object.keys(delta).length) lifted[(childId as string).slice(prefix.length)] = delta;
     // Slot contents have ordinary live ids and are authored through the matching override, so the
     // echo of a filled slot's content is left alone rather than lifted: it is already in place.

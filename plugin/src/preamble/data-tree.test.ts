@@ -110,13 +110,12 @@ test("read-only vocabulary refuses by field and annotations survive a data copy"
   createFigmaMock();
   for (const words of [
     { strokeDashes: [1, 2] },
-    { aspectRatio: 2 },
     { fill: "fill_a1b2c3d4" },
     { layout: { mode: "grid" } },
   ]) {
     await assert.rejects(
       flcm.render({ type: "FRAME", ...words }),
-      /strokeDashes|aspectRatio|REFERENCE|grid/,
+      /strokeDashes|REFERENCE|grid/,
     );
   }
   const original = await flcm.render({
@@ -130,6 +129,55 @@ test("read-only vocabulary refuses by field and annotations survive a data copy"
   const out = await flcm.render(copy);
   assert.notEqual(out.id, id);
   assert.deepEqual(out.annotations, node.annotations);
+});
+
+test("a read's aspectRatio pastes back as a proportion lock that follows a fill width", async () => {
+  createFigmaMock();
+  const column = await flcm.render({
+    type: "FRAME",
+    width: 300,
+    layout: { mode: "column" },
+    children: [{ type: "RECTANGLE", width: "fill", aspectRatio: 1.5 }],
+  });
+  const { node } = await flcm.get(column);
+  const photo = node.children![0];
+  assert.equal(photo.aspectRatio, 1.5);
+  assert.equal(photo.height, 200);
+
+  const { id, children, ...frame } = node;
+  const copy = await flcm.render({ ...frame, width: 450, children: children!.map(({ id, ...child }) => child) });
+  const live = await figma.getNodeByIdAsync(copy.children![0].id);
+  assert.deepEqual([live.width, live.height], [450, 300]);
+  assert.ok(live.targetAspectRatio, "the copy is locked, not just sized");
+});
+
+test("aspectRatio refuses what no box can hold", async () => {
+  createFigmaMock();
+  await assert.rejects(flcm.render({ type: "RECTANGLE", width: 100, height: 100, aspectRatio: 2 }), /width 100 and height 100 are a 1 ratio/);
+  await assert.rejects(flcm.render({ type: "FRAME", width: "hug", aspectRatio: 2, layout: { mode: "row" } }), /"hug" axis/);
+  await assert.rejects(flcm.render({ type: "TEXT", text: "Hi", aspectRatio: 2 }), /sizes itself to its text/);
+  // Live sizing compile never saw: a hug axis that would drive, two axes filling after an edit.
+  const row = await flcm.render({ type: "FRAME", height: 40, layout: { mode: "row" }, children: [{ type: "RECTANGLE", width: 20, height: 20 }] });
+  await assert.rejects(flcm.edit(row, { aspectRatio: 2 }), /hugs its content on its width/);
+  const column = await flcm.render({ type: "FRAME", width: 300, height: 300, layout: { mode: "column" }, children: [{ type: "RECTANGLE", width: "fill", height: "fill" }] });
+  await assert.rejects(flcm.edit(column.children![0], { aspectRatio: 2 }), /both axes "fill"/);
+});
+
+test("a percent child sizes against its parent's ratio-settled box", async () => {
+  const figma = createFigmaMock();
+  const out = await flcm.render({
+    type: "FRAME",
+    width: 600,
+    layout: { mode: "column" },
+    children: [{ type: "FRAME", width: "fill", height: 400, aspectRatio: 2, children: [{ type: "RECTANGLE", width: 10, height: "50%", position: "absolute" }] }],
+  });
+  const child = await figma.getNodeByIdAsync(out.children![0].children![0].id);
+  assert.equal(child.height, 150);
+});
+
+test("a thin locked node's read pastes back despite the rounding of its sizes", async () => {
+  createFigmaMock();
+  await flcm.render({ type: "RECTANGLE", width: 1000, height: 3.33, aspectRatio: 300.03 });
 });
 
 test("IR words are rejected and no node constructors, fromRead or move are exported", async () => {
@@ -299,4 +347,14 @@ test("component promotion can declare bindings on existing children and derive t
   const definition: any = Object.values(live.componentPropertyDefinitions)[0];
   assert.equal(definition.defaultValue, "Existing label");
   assert.equal(live.children[0].id, text.id);
+});
+
+test("promoting a live keyed frame keeps its key on the component", async () => {
+  const figma = createFigmaMock();
+  const frame = await flcm.render({ type: "FRAME", key: "card", width: 100, height: 100, children: [{ type: "RECTANGLE", width: 20, height: 20 }] });
+  const result = await flcm.component({ id: frame.id!, children: [{ id: frame.children![0].id! }] });
+  const comp: any = await figma.getNodeByIdAsync(result.id!);
+  assert.equal(comp.type, "COMPONENT");
+  assert.equal(comp.getPluginData("flcm/key"), "card");
+  assert.equal(result.children![0].id, frame.children![0].id);
 });

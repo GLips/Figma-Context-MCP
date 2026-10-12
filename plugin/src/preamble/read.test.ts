@@ -8,9 +8,9 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./flcm.js";
+import { id } from "./target.js";
 import { render } from "./structure.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget } from "./target.js";
 
 test("resolves the SAME node from its key, bare id, flcm.id(), and a handle", async () => {
   createFigmaMock();

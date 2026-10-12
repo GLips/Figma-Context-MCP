@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { resolveTarget } from "./read.js";
+import { resolveTarget } from "./target.js";
 import { specNode } from "../../harness/spec-node.js";
 // The structural verbs. What must not regress silently: an inserted node is attached BEFORE it is
 // sized (so parent-dependent sizing actually resolves — the invariant-3 hazard), a live target is
@@ -12,7 +12,8 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { image, id } from "./flcm.js";
+import { image } from "./value-sugar.js";
+import { id } from "./target.js";
 import { render, append,
   prepend,
   insertBefore,

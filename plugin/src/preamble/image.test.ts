@@ -10,7 +10,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { image, gradient as flcmGradient, compilePaintWord } from "./flcm.js";
+import { image, gradient as flcmGradient } from "./value-sugar.js";
+import { compilePaintWord } from "./compile-nodes.js";
 import { get } from "./read.js";
 import { render } from "./structure.js";
 

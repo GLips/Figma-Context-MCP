@@ -4,80 +4,17 @@
  */
 import { render } from "./structure.js";
 // Unknown-prop rejection (ratified decision 1): the authoring surface fails loud on an unknown prop —
-// at the verb, before it touches the canvas. Two
-// concerns pinned here:
-//   1. The tier-2 DRIFT GUARD — each runtime KNOWN_KEYS group equals Object.keys of its schema FIELD_GROUP.
-//      The runtime sets can't be sourced from schema.ts's zod (it must never enter the QuickJS bundle — the
-//      purity gate), so they're hand-mirrored; this test is what keeps them honest when a prop is added.
-//   2. The REJECT FIRES loud, with the offender + path named, at every verb and nested object.
+// at the verb, before it touches the canvas. Pinned here:
+// the REJECT FIRES loud, with the offender + path named, at every verb and nested object. (Schema and
+// runtime word lists can't drift: both read vocabulary.ts, and schema.ts's exact-key check is a type.)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import {
-  KNOWN_KEYS,
-  BINDING_FIELD_KEYS,
-  NODE_KEYS_BY_TYPE,
-  gradient,
-  image,
-  effects,
-} from "./flcm.js";
+import { gradient, image, effects } from "./value-sugar.js";
 import { find } from "./read.js";
 import { compileTree } from "./compile-tree.js";
-import {
-  FIELD_GROUPS,
-  SizeSchema,
-  FrameSchema,
-  TextSchema,
-  ShapeSchema,
-  EllipseSchema,
-  LineSchema,
-  InstanceSchema,
-} from "./schema.js";
 
 createFigmaMock();
-
-test("compiler key sets match the complete prop schemas", () => {
-  const schemas = {
-    FRAME: FrameSchema,
-    TEXT: TextSchema,
-    RECTANGLE: ShapeSchema,
-    ELLIPSE: EllipseSchema,
-    LINE: LineSchema,
-    INSTANCE: InstanceSchema,
-  };
-  assert.deepEqual(Object.keys(NODE_KEYS_BY_TYPE).sort(), Object.keys(schemas).sort());
-  for (const type of Object.keys(schemas) as (keyof typeof schemas)[]) {
-    assert.deepEqual(
-      [...NODE_KEYS_BY_TYPE[type]].sort(),
-      Object.keys(schemas[type].shape).sort(),
-      type,
-    );
-  }
-});
-
-test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
-  // Same group set on both sides — neither a stray runtime group nor a missing one.
-  assert.deepEqual(Object.keys(KNOWN_KEYS).sort(), Object.keys(FIELD_GROUPS).sort());
-  for (const group of Object.keys(FIELD_GROUPS) as (keyof typeof FIELD_GROUPS)[]) {
-    assert.deepEqual(
-      [...KNOWN_KEYS[group]].sort(),
-      Object.keys(FIELD_GROUPS[group]).sort(),
-      `runtime KNOWN_KEYS.${group} drifted from schema FIELD_GROUPS.${group} — add the new prop to both, or neither`,
-    );
-  }
-});
-
-test("the binding bag's fields match their inline schema shape (drift guard)", () => {
-  // componentPropertyReferences' fields are defined inline in BINDING_FIELDS, not as their own
-  // FIELD_GROUP, so guard them by unwrapping the zod object directly. The
-  // runtime holds them as PER-CONSTRUCTOR lists (a `slot` is a frame's word); their UNION is the set.
-  const shape = (
-    FrameSchema as unknown as {
-      shape: { componentPropertyReferences: { unwrap(): { shape: Record<string, unknown> } } };
-    }
-  ).shape.componentPropertyReferences.unwrap();
-  assert.deepEqual([...BINDING_FIELD_KEYS].sort(), Object.keys(shape.shape).sort());
-});
 
 test("verbs reject an unknown top-level prop, naming it and the verb", async () => {
   await assert.rejects(

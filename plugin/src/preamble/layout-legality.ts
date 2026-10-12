@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // layout-legality — the ONE home for "can this node realize these layout words". Every rule that
-// decides a layout word's legality lives here, and BOTH verbs consult it — create via flcm.ts
+// decides a layout word's legality lives here, and BOTH verbs consult it — create via compile-nodes.ts
 // (buildLayout, render's root check) and the bridge walk, edit via assertLayoutDeltaResolvable —
 // so the two cannot answer differently (ADR-0003: a word that would do nothing must reject loud,
 // in every verb). Pure and figma-free by charter: rules take the authored WriteLayout plus any
@@ -12,10 +12,10 @@
 // the live flags. A rule that needs a fact neither side can state this way doesn't belong here.
 //
 // Convention: `subject` (the rejecting verb's name for the error prefix) is always the LAST
-// parameter. The parent-relative rules fire from create's APPLY walk, not prepare — deliberate:
-// the walk already holds each parent's authored facts beside the appliers, and duplicating that
-// derivation in a prepare pass is where the two could drift. Accepted cost: a bad percent child
-// pays prepare's font/image loads before rejecting.
+// parameter. The parent-relative rules judge a built tree's interior in the verb's GATE
+// (bridge.assertBuiltInteriorLegal), from the same authored-parent facts the build walk derives
+// (childFlowFactsOf), so a bad child refuses with zero writes. Accepted cost: it pays prepare's
+// font/image loads before rejecting.
 import { AXES, effectiveLayoutMode, type LayoutMode } from "./layout-mode.js";
 import { WriteLayout, isTokenRef, type Bindable } from "./ir.js";
 
@@ -87,8 +87,9 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
   }
 }
 
-// "fill" and "N%" resolve against a parent frame's bounded size, and a page has none. The two
-// callers that can see a page-shaped parent: render's root check (isRoot) and edit's live gate.
+// "fill" and "N%" resolve against a parent frame's bounded size, and a page has none. `isRoot` is
+// flcm.component's root check, which judges a root before it has a destination; every other caller
+// judges a node against the page it lands under.
 export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: boolean, subject: string): void {
   const s = wl.sizing || {};
   if (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos) {
@@ -96,8 +97,8 @@ export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: 
       subject + ': "fill" and "N%" resolve against a parent frame, and ' +
         (isRoot ? "the root node's" : "this node's") + " parent is the page" +
         " — a page has no bounded size. Use pixel dimensions, or " +
-        // isRoot doubles as the verb tell: only render's root check passes true, so the remedy
-        // can speak to a node being authored vs one already on the canvas.
+        // isRoot doubles as the verb tell: only flcm.component's root check passes true, so the
+        // remedy can speak to a node being authored vs one already on the canvas.
         (isRoot ? "nest the node inside a frame." : "move the node into a frame first."),
     );
   }

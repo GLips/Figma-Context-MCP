@@ -46,11 +46,17 @@ test("a render that fails on a nested node names that node, not the page it was 
   }
 });
 
-test("an flcm legality check on a nested node names that node and does not blame Figma", async () => {
+test("an flcm legality check on a nested node refuses in the gate, naming that node's path, with nothing written", async () => {
+  const before = figma.currentPage.children.length;
   await assert.rejects(
     render({ type: "FRAME", name: "Card", layout: { mode: "row" }, children: [{ type: "RECTANGLE", name: "Bar", width: "50%", height: 4 }] }),
-    /flcm\.render: failed mid-apply on RECTANGLE "Bar" at \S+\.children\[0\], being built into PAGE .* — a percent w\/h/,
+    (err: Error) => {
+      assert.match(err.message, /^flcm\.render\.spec\.children\[0\]: a percent w\/h/);
+      assert.doesNotMatch(err.message, /mid-apply|Figma refused/);
+      return true;
+    },
   );
+  assert.equal(figma.currentPage.children.length, before);
 });
 
 test("a failed placement of slot content names its spec path once and gives no edit-the-component advice", () => {

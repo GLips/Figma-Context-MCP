@@ -13,7 +13,7 @@ import { compileTree } from "./compile-tree.js";
 import { component } from "./component.js";
 import { render, append } from "./structure.js";
 import { get } from "./read.js";
-import { id } from "./flcm.js";
+import { id } from "./target.js";
 
 test("a word changed on an instance's inherited child compiles to an override at its path", () => {
   const readShape = {

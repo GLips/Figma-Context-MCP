@@ -25,16 +25,17 @@
 // own words (a rename must be part of the same step as whatever else the delta says), bindings land
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
-import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
+import { WriteNode, LiveRef, textOfRuns, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
 import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue,
-} from "./component.js";
+  compilePropertyDefinition, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue, bindingsOf, type LiveBindings,
+} from "./component-properties.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
-import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
-import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
+import { compileBindingEditBag, assertNoComponentPropertyBindings } from "./compile-component-words.js";
+import { bindableFieldsOf } from "./vocabulary.js";
+import { instanceAncestorOf, editableComponentOwnerOf, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
 
 // ---- `propertyDefinitions` under edit ----
@@ -50,19 +51,24 @@ interface ComponentDefinitionEditPlan {
   /** Full (suffixed) names to delete. */
   deletes: string[];
   renames: { full: string; rename: string }[];
-  adds: AddedDefinition[];
+  /** Each add with the default its binders settled — what one addComponentProperty call takes. */
+  adds: { add: AddedDefinition; defaultValue: PreparedDefinition["defaultValue"] }[];
 }
 
 /**
- * A property an edit ADDS. One object is shared by the definition plan that mints it and by every
- * binding planned against it in the same batch: `defaultValue` is settled from those bindings in the
- * gate, and `minted` — the suffixed name only addComponentProperty can hand back — is filled in at
- * apply, where the bindings (which apply after every definition) read it.
+ * A property an edit ADDS, as the gate first plans it. The object is the property's identity across
+ * the batch: the definition plan that mints it and every binding planned against it hold the same
+ * one, and the suffixed name only addComponentProperty can hand back is looked up by it
+ * (MintedPropertyNames).
  */
-export interface AddedDefinition extends PreparedDefinition {
-  type: string;
-  minted?: string;
+export interface AddedDefinition {
+  readonly name: string;
+  readonly type: string;
+  readonly figmaType: PreparedDefinition["figmaType"];
 }
+
+/** The suffixed name each add was filed under — the definitions stage's output, the binding stage's input. */
+export type MintedPropertyNames = ReadonlyMap<AddedDefinition, string>;
 
 /** A layer a property's default is read off — what it will show once the call lands — as a refusal names it. */
 export interface PropertyBinder {
@@ -81,10 +87,11 @@ function bindInSameBatch(name: string, type: string): string {
 // variant throws), so an edit aimed at the variant would be aimed at the wrong node — including
 // for the agent's mental model, since the change reaches every variant either way.
 function assertNotVariantMember(node: any, where: string): void {
-  if (node.type === "COMPONENT" && node.parent && node.parent.type === "COMPONENT_SET") {
+  const set = variantSetOf(node);
+  if (set) {
     throw new Error(
       where + ": " + describeNodeIdentity(node) + " is a VARIANT, and a set's properties live on the SET — Figma keeps them there, and a change reaches every variant. " +
-        "Edit the set instead: flcm.edit(" + JSON.stringify(node.parent.id) + ", { propertyDefinitions: … }).",
+        "Edit the set instead: flcm.edit(" + JSON.stringify(set.id) + ", { propertyDefinitions: … }).",
     );
   }
 }
@@ -153,8 +160,8 @@ export function planComponentDefinitionEdit(
     const at = where + "[" + JSON.stringify(name) + "]";
     const add = adds.get(name);
     if (add) {
-      add.defaultValue = agreedDefault(add, bindersOf(add), at, { inherited: FRESH_LAYER_SHOWS[add.figmaType], unboundRemedy: bindInSameBatch(name, add.type) });
-      plan.adds.push(add);
+      const defaultValue = agreedDefault(add, bindersOf(add), at, { inherited: FRESH_LAYER_SHOWS[add.figmaType], unboundRemedy: bindInSameBatch(name, add.type) });
+      plan.adds.push({ add, defaultValue });
       introduced.push({ name, at });
       continue;
     }
@@ -214,8 +221,8 @@ function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdi
         'Insert the frame and declare it in one move: flcm.append(component, { type: "FRAME", componentPropertyReferences: { slot: ' + JSON.stringify(name) + " } }).",
     );
   }
-  // Settled in the gate from this call's binders; a placeholder until then.
-  return { name, type: definition.type, figmaType: definition.figmaType, defaultValue: "" };
+  // Its default is settled in the gate from this call's binders (planComponentDefinitionEdit).
+  return { name, type: definition.type, figmaType: definition.figmaType };
 }
 
 // A name the component HAS: `name` renames it, and `type` may only restate what it already is — so
@@ -272,7 +279,7 @@ function restatesVariantAxis(definition: any, entry: ComponentPropertyDefinition
  * delta says are one undo step. Deletes before renames before adds: that is the order the bag reads
  * in, and the only order under which freeing a name and re-declaring it can both land.
  */
-export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, plan: ComponentDefinitionEditPlan): void {
+export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, plan: ComponentDefinitionEditPlan): MintedPropertyNames {
   try {
     if (plan.description !== undefined) node.description = plan.description;
     for (const full of plan.deletes) node.deleteComponentProperty(full);
@@ -285,7 +292,7 @@ export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, p
       const renamed = node.editComponentProperty(change.full, { name: change.rename });
       if (typeof renamed === "string" && renamed !== change.full) repointBoundSublayers(node, change.full, renamed);
     }
-    for (const add of plan.adds) add.minted = node.addComponentProperty(add.name, add.figmaType, add.defaultValue);
+    return new Map(plan.adds.map(({ add, defaultValue }) => [add, node.addComponentProperty(add.name, add.figmaType, defaultValue) as string]));
   } catch (cause) {
     throw fail(cause);
   }
@@ -328,9 +335,7 @@ export function prepareComponentBindingEdit(
   node: any, raw: unknown, subject: string, addsOf?: (owner: any) => ReadonlyMap<string, AddedDefinition> | undefined,
 ): ComponentBindingEditPlan {
   const where = subject + ".componentPropertyReferences";
-  // The instance check comes FIRST and is not interchangeable with the component one: a sublayer of
-  // an instance that itself sits in a component has a component ancestor, and answering with THAT
-  // component would resolve the name against the wrong definitions.
+  // Asked first only for its sentence: editableComponentOwnerOf already answers null under an instance.
   const host = instanceAncestorOf(node);
   if (host) {
     throw new Error(
@@ -338,7 +343,7 @@ export function prepareComponentBindingEdit(
         "). A binding belongs to the DEFINITION — every instance gets it from there — so bind the same layer in the main component instead (flcm never auto-detaches).",
     );
   }
-  const component = componentAncestorOf(node);
+  const component = editableComponentOwnerOf(node, false);
   if (!component) {
     throw new Error(
       where + ": " + describeNodeIdentity(node) + " is not inside a component, so no component declares a property for this to point at. " +
@@ -347,7 +352,7 @@ export function prepareComponentBindingEdit(
   }
   const owner = definitionOwnerOf(component);
   const definitions = propertyDefinitionsOf(owner);
-  const refs = compileBindingEditBag(raw, bindingFieldsForType(node.type), subject, "a " + node.type);
+  const refs = compileBindingEditBag(raw, bindableFieldsOf(node.type), subject, "a " + node.type);
   const live: Record<string, string> = node.componentPropertyReferences || {};
   const writes: ComponentBindingEditPlan["writes"] = [];
   const adds = addsOf?.(owner);
@@ -456,11 +461,11 @@ function subtreeOf(root: any): any[] {
  * delta makes it before it is wired to a property. Merged onto the live bag, never replacing it: a
  * delta naming `text` leaves a `visible` binding alone, the way every other edit word behaves.
  */
-export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan): void {
+export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan, minted: MintedPropertyNames): void {
   try {
     const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
     for (const write of plan.writes) {
-      if (write.add) wire[write.wire] = write.add.minted!;
+      if (write.add) wire[write.wire] = mintedNameOf(minted, write.add);
       else if (write.full === null) delete wire[write.wire];
       else wire[write.wire] = write.full;
     }
@@ -468,6 +473,14 @@ export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan
   } catch (cause) {
     throw fail(cause);
   }
+}
+
+// An add's binders are planned only in the batch that adds it, and the stages land every definition
+// before any binding — so a miss is a stage-order bug, refused before it writes an unbound reference.
+function mintedNameOf(minted: MintedPropertyNames, add: AddedDefinition): string {
+  const name = minted.get(add);
+  if (name === undefined) throw new Error("flcm internal: " + JSON.stringify(add.name) + " was bound before it was added.");
+  return name;
 }
 
 // ---- an EXISTING property's default, settled from its binders ----
@@ -589,19 +602,19 @@ export function existingPropertyBindings(
 }
 
 /** What a layer an edit targets will show for a binding field because of that edit — undefined if the edit doesn't touch it. */
-export function editedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined): boolean | string | undefined {
+export function editedBinderValue(field: string, plan: EditPlan | undefined, instance: InstanceEditPlan | undefined): boolean | string | undefined {
+  if (!plan) return undefined;
   if (field === "visible") return plan.patch.visible;
-  if (field === "text") return plan.patch.runs ? plan.patch.runs.map((run) => run.text).join("") : plan.patch.text;
+  if (field === "text") return plan.patch.runs ? textOfRuns(plan.patch.runs) : plan.patch.text;
   return instance && instance.retargets ? instance.becomes.id : undefined;
 }
 
-// What a bound layer will show once its edit has landed: the edit's own word for the field if it
-// names one, else the live value. That is the value a binding would write back into it, so it is
-// the value the property's default must hold. `main` is the live instance's component, for a swap binder.
-export function projectedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined, main: any | null, at: string): boolean | string {
+// What a bound live layer will show once its edit (if any) has landed: the edit's own word for the
+// field if it names one, else the live value. That is the value a binding would write back into it,
+// so it is the value the property's default must hold. `main` is the live instance's component, for a swap binder.
+export function projectedBinderValue(field: string, node: any, plan: EditPlan | undefined, instance: InstanceEditPlan | undefined, main: any | null, at: string): boolean | string {
   const edited = editedBinderValue(field, plan, instance);
   if (edited !== undefined) return edited;
-  const node = plan.node as any;
   if (field === "visible") return node.visible !== false;
   if (field === "text") return node.characters;
   return readableComponentOf(main, node, at).id;
@@ -670,14 +683,13 @@ export function prepareInsertBindings(
   subject: string, parent: any, tree: WriteNode, resources: RenderResources, removes: (node: any) => boolean = () => false,
 ): InsertBindingPlan | undefined {
   const bound: { wn: WriteNode; refs: ComponentPropertyBinding }[] = [];
-  collectTreeBindings(tree, bound);
+  collectTreeBindings(tree, resources.live, bound);
   if (!bound.length) return undefined;
   // A COMPONENT_SET destination is refused before this runs (structure.ts's assertBuiltInsertNotIntoSet),
   // so `component` is a standalone component or a set's VARIANT — the definition the slot rule counts in.
-  // The instance question comes FIRST: a tree landing in an instance's SLOT can sit under a
-  // component (an instance placed inside one), and a binding there would name a property the
-  // instance's own definition — not the host component — declares. Instance content binds nothing.
-  const component = instanceAncestorOf(parent) ? null : parent.type === "COMPONENT" ? parent : componentAncestorOf(parent);
+  // A tree landing in an instance's SLOT has no editable owner even under a component: instance
+  // content binds nothing.
+  const component = editableComponentOwnerOf(parent, true);
   // Not landing in a component: the standing refusal, in its own words.
   if (!component) assertNoComponentPropertyBindings(tree, subject);
   const owner = definitionOwnerOf(component);
@@ -717,24 +729,24 @@ export function prepareInsertBindings(
         claimSlot(full, at);
         continue;
       }
-      const layer = describeBinder(wn.name ?? resources.live?.get(wn)?.node.name, wn.sourcePath!);
+      const layer = describeBinder(wn.liveId === undefined ? wn.name : resources.live.get(wn)!.node.name, wn.sourcePath!);
       existing.push({ owner, full, wire: BINDING_FIELD_WIRE_KEYS[field].wire, binder: { layer, value: boundLayerValue(definitions[full].type, wn, resources.instances, resources.live) }, at });
       binderNodes.push({ wn, full });
     }
   }
-  // A live node in the tree is what it is once its own words land (live-tree.ts projected them onto
-  // its write node), and one that carries a binding on a field rebinds that field.
-  const liveWriteNodes = new Map<any, WriteNode>();
-  for (const [wn, liveNode] of resources.live ?? []) liveWriteNodes.set(liveNode.node, wn);
+  // A live node in the tree is what it is once its own words land (LiveTreeNode.shows), and one
+  // that carries a binding on a field rebinds that field.
+  const liveRefs = new Map<any, LiveRef>();
+  for (const [ref, liveNode] of resources.live) liveRefs.set(liveNode.node, ref);
   plan.defaults = settleExistingPropertyDefaults(existing, {
     leaves: (node, wire) => {
-      const wn = liveWriteNodes.get(node);
-      const refs = (wn?.componentPropertyReferences ?? {}) as Record<string, string>;
+      const ref = liveRefs.get(node);
+      const refs = (ref ? resources.live.get(ref)!.refs ?? {} : {}) as Record<string, string>;
       return removes(node) || Object.keys(refs).some((field) => BINDING_FIELD_WIRE_KEYS[field].wire === wire);
     },
     shows: (node, field) => {
-      const wn = liveWriteNodes.get(node);
-      return wn ? boundLayerValue(PROPERTY_TYPES[BINDING_FIELD_WIRE_KEYS[field].type], wn, resources.instances, resources.live) : undefined;
+      const ref = liveRefs.get(node);
+      return ref ? boundLayerValue(PROPERTY_TYPES[BINDING_FIELD_WIRE_KEYS[field].type], ref, resources.instances, resources.live) : undefined;
     },
   });
   for (const { wn, full } of binderNodes) {
@@ -747,10 +759,10 @@ export function prepareInsertBindings(
 // Every bound node in the tree, ROOT INCLUDED — unlike flcm.component's collectChildBindings, where the root
 // becomes the component and can't point at a property of itself. Here the root is an ordinary child
 // of the component it lands in, so binding it is exactly as meaningful as binding any other layer.
-function collectTreeBindings(wn: WriteChild, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
-  if (!wn || typeof wn !== "object") return;
-  if (wn.componentPropertyReferences) out.push({ wn, refs: wn.componentPropertyReferences });
-  for (const child of wn.children || []) collectTreeBindings(child, out);
+function collectTreeBindings(wn: WriteNode, live: LiveBindings, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
+  const refs = bindingsOf(wn, live);
+  if (refs) out.push({ wn, refs });
+  for (const child of wn.children ?? []) collectTreeBindings(child, live, out);
 }
 
 /**

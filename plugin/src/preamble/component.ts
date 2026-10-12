@@ -27,82 +27,37 @@ import { sceneFigma as figma } from "./scene-access.js";
 // layout in the definition and appears in every instance as a fillable `type: "SLOT"` [verified in
 // a live file during the design spike].
 
-import {
-  WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
-} from "./ir.js";
+import { WriteNode, BuiltNode, Handle, Target, ComponentPropertyBinding, VariantEntryInput } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
+import { mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources } from "./bridge.js";
+import { compileTree, placedTreeOf } from "./compile-tree.js";
 import {
-  mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
-} from "./bridge.js";
-import { compileTree } from "./compile-tree.js";
+  BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, quoted, compilePropertyDefinition, bindingsOf, describeBinder, boundLayerValue, agreedDefault,
+  FRESH_LAYER_SHOWS, writeInheritedDefault, writeBindingReferences, type AuthoredDefinition, type PreparedDefinition, type LiveBindings,
+} from "./component-properties.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
-import { loadTreeResources, gateTreeResources, buildTreeOnPage, LoadedTreeResources } from "./render.js";
+import { landTree } from "./land-tree.js";
+import { loadTreeResources, gateTreeResources, type LoadedTreeResources } from "./verb-resources.js";
 import { enterMutatingVerb, retargetReplacedNode } from "./mutation-lock.js";
+import type { ApplySpan } from "./apply-span.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
+import { instanceAncestorOf, editableComponentOwnerOf, isComponentDefinition, variantSetOf, readKey, writeKey, describeNodeIdentity } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
-import { KNOWN_KEYS, isTargetShaped, COMPONENT_TARGET_HINT, defaultValueHint } from "./flcm.js";
+
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
+import { wordsOf } from "./vocabulary.js";
 
 const SUBJECT = "flcm.component";
 const VARIANTS_SUBJECT = "flcm.variants";
 
-export const quoted = (names: readonly string[]): string => names.map((n) => JSON.stringify(n)).join(", ");
-
-// The read's lowercase property types → Figma's own enum. `variant` is deliberately absent: an axis
-// is minted by combining components into a SET, never declared on one (see the refusal below).
-export const PROPERTY_TYPES: Record<string, "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT"> = {
-  boolean: "BOOLEAN",
-  text: "TEXT",
-  instance_swap: "INSTANCE_SWAP",
-  slot: "SLOT",
-};
-const PROPERTY_TYPE_WORDS = Object.keys(PROPERTY_TYPES);
-
-// Figma's enum → the read's lowercase word, for a refusal that has only a LIVE definition to go on
-// (an edit resolves against `componentPropertyDefinitions`, which speaks the enum).
-export const PROPERTY_TYPE_WORD_FOR: Record<string, string> = {};
-for (const word of PROPERTY_TYPE_WORDS) PROPERTY_TYPE_WORD_FOR[PROPERTY_TYPES[word]] = word;
-
-// Each binding field: the property type it demands, and the key Figma actually stores it under.
-// The author writes the READ's spelling on both sides of the surface; only this table knows the
-// wire keys — which is the whole reason a binding is authored rather than hand-written.
-export const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: string }> = {
-  visible: { wire: "visible", type: "boolean" },
-  text: { wire: "characters", type: "text" },
-  componentId: { wire: "mainComponent", type: "instance_swap" },
-  slot: { wire: SLOT_CONTENT_WIRE_KEY, type: "slot" },
-};
-
-// Which binding field carries a property of each type — the table above inverted, for the
-// derived-default lookup ("which node binds this property?"). One field per type is the invariant.
-export const FIELD_FOR_TYPE: Record<string, string> = {};
-for (const field of Object.keys(BINDING_FIELD_WIRE_KEYS)) FIELD_FOR_TYPE[BINDING_FIELD_WIRE_KEYS[field].type] = field;
-
-const COMPONENT_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.componentOptions);
-const DEFINITION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.propertyDefinition);
-const VARIANT_ENTRY_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.variantEntry);
-const VARIANTS_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.variantsOptions);
+const COMPONENT_OPTION_KEYS = wordsOf(["componentOptions"]);
+const VARIANT_ENTRY_KEYS = wordsOf(["variantEntry"]);
+const VARIANTS_OPTION_KEYS = wordsOf(["variantsOptions"]);
 
 // ---- what an flcm.component call declares, document-blind then resolved ----
-
-/** One `propertyDefinitions` entry as authored: shape-checked, nothing looked up yet. */
-interface AuthoredDefinition {
-  name: string;
-  /** The read's lowercase word — kept as authored so refusals speak the agent's own vocabulary. */
-  type: string;
-  figmaType: "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT";
-}
-
-/** The same definition with its default read off its binders, ready for one addComponentProperty call. */
-export interface PreparedDefinition {
-  name: string;
-  figmaType: "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT";
-  defaultValue: boolean | string;
-}
 
 /** A compiled node carrying bindings, before it is built — what the definition gates read. */
 interface BoundWriteNode {
@@ -157,56 +112,23 @@ function compilePropertyDefinitions(raw: unknown): AuthoredDefinition[] {
   return out;
 }
 
-/**
- * One DECLARED property, shape-checked with nothing looked up. Shared by flcm.component's options
- * bag and by an edit's `propertyDefinitions` ADD branch (component-edit.ts), so what a definition IS
- * is stated once.
- */
-export function compilePropertyDefinition(name: string, raw: unknown, at: string): AuthoredDefinition {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(at + ' must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".");
-  }
-  rejectUnknownKeys(raw, DEFINITION_KEYS, at, "prop", defaultValueHint(raw));
-  const bag = raw as Record<string, unknown>;
-  // `name` is edit's RENAME word, and this call is DECLARING a property whose name is the key it is
-  // filed under — two names for one property, with no way to say which the bindings mean.
-  if (bag.name != null) {
-    throw new Error(
-      at + ": `name` renames an EXISTING property, and this declares a new one — the key it is filed under (" + JSON.stringify(name) + ") IS its name. " +
-        "Drop `name`, or key the entry by the property you meant to rename.",
-    );
-  }
-  const type = bag.type;
-  if (type === "variant" || type === "VARIANT") {
-    throw new Error(
-      at + ": a variant axis is not declared on a component — the axes come from the SET. Make each variant its own component, then combine them: " +
-        'flcm.variants([{ component: a, variant: { ' + JSON.stringify(name) + ': "…" } }, …], { name: "…" }).',
-    );
-  }
-  const figmaType = typeof type === "string" ? own(PROPERTY_TYPES, type) : undefined;
-  if (!figmaType) {
-    throw new Error(at + ".type must be one of " + quoted(PROPERTY_TYPE_WORDS) + " — got " + JSON.stringify(type) + ".");
-  }
-  return { name, type: type as string, figmaType };
-}
-
 // ---- the bindings in the tree ----
 
 // Every bound node in the tree, ROOT EXCLUDED: the root becomes the component itself, so a binding
 // on it would name a property of a component that is the node — refused rather than dropped.
-function collectChildBindings(tree: WriteNode): BoundWriteNode[] {
-  if (tree.componentPropertyReferences) {
+function collectChildBindings(tree: WriteNode, live: LiveBindings): BoundWriteNode[] {
+  if (bindingsOf(tree, live)) {
     throw new Error(
       SUBJECT + ": the tree's ROOT carries `componentPropertyReferences`, and the root is what BECOMES the component — there is no outer component whose property could drive it. Bind a child instead.",
     );
   }
   const out: BoundWriteNode[] = [];
-  const visit = (wn: WriteChild): void => {
-    if (!wn || typeof wn !== "object") return;
-    if (wn.componentPropertyReferences) out.push({ wn, refs: wn.componentPropertyReferences });
-    for (const child of wn.children || []) visit(child);
+  const visit = (wn: WriteNode): void => {
+    const refs = bindingsOf(wn, live);
+    if (refs) out.push({ wn, refs });
+    for (const child of wn.children ?? []) visit(child);
   };
-  for (const child of tree.children || []) visit(child);
+  for (const child of tree.children ?? []) visit(child);
   return out;
 }
 
@@ -276,89 +198,13 @@ function resolveDefaults(
     if (definition.figmaType === "SLOT") return { name: definition.name, figmaType: "SLOT", defaultValue: "" };
     const nodes = bindersOf(bound, definition).map(({ wn }) => wn);
     const binders = nodes.map((wn) => ({
-      layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
+      layer: describeBinder(wn.liveId === undefined ? wn.name : live.get(wn)!.node.name, wn.sourcePath!),
       value: boundLayerValue(definition.figmaType, wn, plans, live),
     }));
     const defaultValue = agreedDefault(definition, binders, at, { inherited: FRESH_LAYER_SHOWS[definition.figmaType], unboundRemedy: targetForm ? promoteThenBind(definition) : undefined });
     for (const wn of nodes) writeInheritedDefault(definition.figmaType, wn, defaultValue);
     return { name: definition.name, figmaType: definition.figmaType, defaultValue };
   });
-}
-
-/**
- * What a layer built with the bound field unwritten shows before any binding — the default a property
- * this call creates takes when none of its binders has content. An instance always names its
- * component, so instance_swap has no entry.
- */
-export const FRESH_LAYER_SHOWS: Record<string, boolean | string> = { BOOLEAN: true, TEXT: "" };
-
-/**
- * What one authored node states for a property of `figmaType` — the value its layer will show once
- * built — or undefined when it states none: a node this call creates with the field unwritten has no
- * content to lose, so it takes whatever default the property settles on. Shared with a bound insert
- * into an existing component (component-edit.ts).
- */
-export function boundLayerValue(figmaType: string, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string | undefined {
-  // A live node's `visible` and text were projected onto it at the gate (live-tree.ts), its authored
-  // edit if there is one, else what it shows now — so a live node always states both, and only a
-  // node this call creates can leave one unwritten.
-  if (figmaType === "BOOLEAN") return wn.visible;
-  if (figmaType === "TEXT") return authoredTextOf(wn);
-  // The bound node is an INSTANCE (the compilers allow `componentId` on nothing else), and
-  // its plan already holds the component this call will actually STAMP — which is the point: when
-  // the node names a SET and picks a member with `componentProperties`, re-resolving the target here
-  // would land on the set's DEFAULT variant and the definition's default would disagree with the very
-  // node it was derived from.
-  const liveNode = live?.get(wn);
-  return readableComponentOf(plans.get(wn)?.component ?? liveNode?.component, liveNode?.node, wn.sourcePath!).id;
-}
-
-/**
- * Give a binder that left the field unwritten the default it inherits, before it is built. Binding
- * would write it anyway, but only after the tree has settled — built with it, the layer settles at
- * the size it ends up with.
- */
-export function writeInheritedDefault(figmaType: string, wn: WriteNode, value: boolean | string): void {
-  if (figmaType === "BOOLEAN" && wn.visible === undefined) wn.visible = value as boolean;
-  if (figmaType === "TEXT" && authoredTextOf(wn) === undefined) wn.text = value as string;
-}
-
-/**
- * A bound instance's component, or a refusal naming the instance: a live one whose main sits in a
- * library the file can't reach has none to read (getMainComponentAsync answers null), so there is no
- * value to make its property's default. Shared with editMany's binders.
- */
-export function readableComponentOf(component: any, node: any, at: string): any {
-  if (component) return component;
-  throw new Error(
-    at + ": " + describeNodeIdentity(node) + " has no readable main component — it comes from a library the file can't reach right now, so there is no component to read its instance_swap default from.",
-  );
-}
-
-/**
- * The one value a property's binders agree on. Shared with an edit that adds a property
- * (component-edit.ts), so both refuse the same two cases in the same words: nothing binds it (there
- * is no layer to read), and binders that disagree (whichever won, the others' content would be
- * overwritten by the binding). A binder with no value has no content to lose: it takes the others'
- * value, or `inherited` when none has one — an existing property's own default, or FRESH_LAYER_SHOWS.
- */
-export function agreedDefault(
-  definition: { name: string; type: string }, binders: readonly { layer: string; value: boolean | string | undefined }[], at: string,
-  { inherited, unboundRemedy = "bind the layer that shows it: componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }." }:
-    { inherited: boolean | string; unboundRemedy?: string },
-): boolean | string {
-  if (!binders.length) {
-    throw new Error(at + ": nothing in this call binds " + JSON.stringify(definition.name) + ". A property's default IS its bound layer's content, so " + unboundRemedy);
-  }
-  const stated = binders.filter((b) => b.value !== undefined);
-  if (!stated.length) return inherited;
-  const first = stated[0].value!;
-  if (stated.every((b) => b.value === first)) return first;
-  throw new Error(
-    at + ": " + stated.length + " layers bind " + JSON.stringify(definition.name) + " and show different " + FIELD_FOR_TYPE[definition.type] + " — " +
-      stated.map((b) => b.layer + " is " + JSON.stringify(b.value)).join(", ") +
-      ". Binding writes the property's one default into every one of them, so make them agree in this call (set the same " + FIELD_FOR_TYPE[definition.type] + " on each), or bind just one.",
-  );
 }
 
 // A bare target (a live root with no authored children) has nowhere to write a binding. Both ways out bind
@@ -368,18 +214,6 @@ function promoteThenBind(definition: AuthoredDefinition): string {
   return "a bare target has no layer to bind. Pass the frame as data and bind its live layer — flcm.component({ id: frame, children: [{ id: layer, " + binding +
     " }] }, …), listing every child to keep their order — or promote it bare and then add and bind in one flcm.editMany: [{ id: component.id, propertyDefinitions: { " +
     JSON.stringify(definition.name) + ": { type: " + JSON.stringify(definition.type) + " } } }, { id: layer, " + binding + " }].";
-}
-
-/** A binder as a refusal names it: its layer name when it has one, and where it sits in the call. */
-export function describeBinder(name: string | undefined, where: string): string {
-  return (name === undefined ? "" : JSON.stringify(name) + " ") + "at " + where;
-}
-
-// A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich author
-// produced (concatenated exactly as the bridge concatenates them into `characters`) — undefined when it states neither.
-function authoredTextOf(wn: WriteNode): string | undefined {
-  if (typeof wn.text === "string") return wn.text;
-  return wn.runs?.map((run) => run.text).join("");
 }
 
 // ---- the live subject ----
@@ -395,7 +229,7 @@ const WOULD_WRAP =
 // path, an instance — is exactly the wrappable case above, and the mismatch is silent twice over:
 // the key the author put on the root would end up on the wrapper, not on the node they keyed.
 // Document-blind, so judged in prepare before a single resource is loaded: a refusal costs nothing.
-function assertPromotableBuiltRoot(tree: WriteNode): void {
+function assertPromotableBuiltRoot(tree: BuiltNode): void {
   if (tree.type === "FRAME") return;
   // The one non-FRAME node that builds a frame: createNodeFromSvg returns a FrameNode of vectors.
   // VECTOR (also a VECTOR) builds a real VECTOR, so it falls through to the refusal.
@@ -417,7 +251,7 @@ function assertPromotableBuiltRoot(tree: WriteNode): void {
 // behavior is not a refusal at all, but a silent wrapping).
 function assertPromotable(node: any): void {
   const who = describeNodeIdentity(node);
-  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+  if (isComponentDefinition(node)) {
     throw new Error(
       SUBJECT + ": " + who + " is already a component — there is nothing to promote. Edit it with flcm.edit, stamp it with INSTANCE, or " +
         (node.type === "COMPONENT" ? "make it a variant with flcm.variants." : "add to the set with flcm.variants."),
@@ -445,7 +279,7 @@ function assertPromotable(node: any): void {
   // component, component set, or instance", and reaching it throws a bare "Cannot create component
   // from node" after the seal. Named here instead, because a component's sublayer is a node the
   // agent can see and address — and the fix depends on which of the two things they meant.
-  const owner = componentAncestorOf(node);
+  const owner = editableComponentOwnerOf(node, false);
   if (owner) {
     throw new Error(
       SUBJECT + ": " + who + " is inside " + (owner.type === "COMPONENT_SET" ? "component set " : "component ") + JSON.stringify(owner.name) +
@@ -453,19 +287,6 @@ function assertPromotable(node: any): void {
         "Edit the enclosing component, or clone the sublayer and promote that copy.",
     );
   }
-}
-
-/**
- * The COMPONENT (or COMPONENT_SET) a node sits inside, or null. THE test for "does this node belong
- * to a definition" — flcm.component refuses to promote a node that does, and a binding edit requires
- * it. Caller beware: a node inside an INSTANCE that itself sits in a component answers the OUTER
- * component, so an instance-ancestor check comes first wherever the two are different questions.
- */
-export function componentAncestorOf(node: any): any {
-  for (let p = node.parent; p; p = p.parent) {
-    if (p.type === "COMPONENT" || p.type === "COMPONENT_SET") return p;
-  }
-  return null;
 }
 
 // ---- the sealed apply ----
@@ -484,23 +305,6 @@ function declareProperties(comp: any, definitions: readonly PreparedDefinition[]
   writeBindingReferences(bound, suffixed);
 }
 
-/**
- * Write each built node's binding bag onto it, translating the AUTHORED property names to the full
- * names Figma actually files the properties under. Shared by flcm.component (which mints them with
- * addComponentProperty) and by a bound insert into an existing component (component-edit.ts, whose
- * map is mostly names it resolved off the live definitions) — so there is one place that knows a
- * reference stores the suffixed name and merges rather than replaces the node's existing bag.
- */
-export function writeBindingReferences(bound: readonly BoundLiveNode[], suffixed: Record<string, string>): void {
-  for (const { node, refs } of bound) {
-    const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
-    for (const field of Object.keys(refs)) {
-      wire[BINDING_FIELD_WIRE_KEYS[field].wire] = suffixed[(refs as Record<string, string>)[field]];
-    }
-    node.componentPropertyReferences = wire;
-  }
-}
-
 interface PreparedBuiltComponent {
   tree: WriteNode;
   loaded: LoadedTreeResources;
@@ -510,6 +314,9 @@ interface PreparedBuiltComponent {
 
 interface GatedBuiltComponent {
   tree: WriteNode;
+  /** Where the root lands: the current page for a built root, its own parent for a live one. */
+  parent: any;
+  place: (node: any) => void;
   resources: RenderResources;
   definitions: PreparedDefinition[];
   options: PreparedOptions;
@@ -528,7 +335,7 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
       ? { id: (await resolveTarget(specOrTarget as Target)).id } : specOrTarget;
     const tree = compileTree(spec, "flcm.component.spec");
     const loaded = await loadTreeResources(tree);
-    if (tree.liveId) assertPromotable(loaded.live.entries.find(e => e.wn === tree)!.node);
+    if (tree.liveId !== undefined) assertPromotable(loaded.live.entries.get(tree)!.node);
     else {
       assertPromotableBuiltRoot(tree);
       if (tree.layout) {
@@ -536,49 +343,49 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
         assertSizingResolvesAgainstParentFrame(tree.layout, true, SUBJECT);
       }
     }
-    const bound = collectChildBindings(tree);
+    const bound = collectChildBindings(tree, loaded.live.entries);
     assertBindingsResolve(bound, prepared.definitions);
     assertSlotsAreBound(bound, prepared.definitions);
     return { tree, loaded, bound, options: prepared };
   }, (prepared): GatedBuiltComponent => {
     const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
-    const live = resources.live?.get(prepared.tree);
+    const live = prepared.tree.liveId !== undefined ? resources.live.get(prepared.tree)! : undefined;
     if (live) assertPromotable(live.node);
-    return { tree: prepared.tree, resources,
+    // A live root converts where it stands; a built one lands on the page as flcm.render's would.
+    const parent = live ? live.node.parent! : figma.currentPage;
+    const place = live ? () => {} : (node: any) => parent.appendChild(node);
+    return { tree: prepared.tree, parent, place, resources,
       definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live,
         // A live root with no authored children: nothing in the call can carry a binding.
-        Boolean(prepared.tree.liveId) && !prepared.tree.children?.length), options: prepared.options };
+        live !== undefined && !prepared.tree.children?.length), options: prepared.options };
   }, applyBuiltComponent);
 }
 
-function applyBuiltComponent({ tree, resources, definitions, options }: GatedBuiltComponent): AuthoredTree {
+function applyBuiltComponent({ tree, parent, place, resources, definitions, options }: GatedBuiltComponent, span: ApplySpan): AuthoredTree {
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
-  const ctx = beginRenderWalk(resources, { bindings: true });
-  // render's own build sequence, shared rather than copied (render.buildTreeOnPage): the tree lands
-  // exactly as flcm.render would land it, overlap notice included. Only then is there a laid-out
-  // node to convert.
-  const root = buildTreeOnPage(tree, ctx);
+  const ctx = beginRenderWalk({ ...resources, span }, { bindings: true });
+  // The landing every tree-placing verb shares (render.landTree), overlap notice included. Only
+  // then is there a laid-out node to convert.
+  const root = landTree(parent, place, tree, ctx, SUBJECT, true);
   // The seal opens on the FRAME, before the conversion: createComponentFromNode is the likeliest
   // Figma refusal in this verb, and the frame is the identity the author authored and can act on
   // (the component it would have become doesn't exist to be named).
   const fail = beginMutatingApply("component", root);
   try {
+    // Read before the conversion: the frame's pluginData doesn't ride across (below).
+    const key = readKey(root);
     const comp = figma.createComponentFromNode(root);
     // Style links, diagnostics and warnings were queued on the frame, which no longer exists.
-    retargetReplacedNode(root, comp);
+    retargetReplacedNode(span, root, comp);
     // The root's own key rides across by hand: createComponentFromNode returns a NEW node, so the
     // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs:
     // Figma moves the same child nodes into the component.
-    if (typeof tree.key === "string") {
-      writeKey(comp, tree.key);
-    }
+    if (key) writeKey(comp, key);
     declareProperties(comp, definitions, ctx.bindings!, options);
     applyExposures(ctx.exposures);
-    tree.source!.id = comp.id;
-    tree.source!.type = "COMPONENT";
-    return tree.source as AuthoredTree;
+    return { ...placedTreeOf(tree.source!, ctx.placedIds), id: comp.id, type: "COMPONENT" } as AuthoredTree;
   } catch (cause) {
     throw fail(cause);
   }
@@ -712,9 +519,10 @@ function setIndexAmongSurvivors(members: readonly { node: any }[], parent: any):
 
 function assertCombinable(node: any, at: string): void {
   const who = describeNodeIdentity(node);
-  if (node.parent && node.parent.type === "COMPONENT_SET") {
+  const set = variantSetOf(node);
+  if (set) {
     throw new Error(
-      at + ": " + who + " is already a variant of set " + JSON.stringify(node.parent.name) + " (id " + JSON.stringify(node.parent.id) +
+      at + ": " + who + " is already a variant of set " + JSON.stringify(set.name) + " (id " + JSON.stringify(set.id) +
         ") — a component belongs to one set. Combine components that stand on their own, or edit the set it is in.",
     );
   }

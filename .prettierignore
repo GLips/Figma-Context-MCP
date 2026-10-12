@@ -13,3 +13,7 @@ src/tests/parity/snapshots/
 # reformatting it here would only churn faithfully-moved, well-tested code.
 plugin/
 bridge/
+
+# Narrative code samples are laid out for the reader: their extracted regions ship verbatim in the
+# served reference, where Prettier's one-prop-per-line wrapping would only spend context budget.
+src/commercial/tools/flcm-docs/examples/narrative-samples.ts

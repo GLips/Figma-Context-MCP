@@ -4,7 +4,7 @@
  */
 // Native variant-member cloning drops bindings before placement. Capture ownership and structural
 // paths before that boundary; definition display names are never used as identity.
-import { definitionOwnerOf } from "./identity.js";
+import { definitionOwnerOf, isComponentDefinition } from "./identity.js";
 import { bareName } from "./instance.js";
 
 type Path = number[];
@@ -20,7 +20,7 @@ export function captureCloneBindings(root: any): CloneBindings {
   const owners: Owner[] = [];
   function discover(node: any, path: Path): void {
     if (node.type === "INSTANCE") return;
-    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+    if (isComponentDefinition(node)) {
       const source = definitionOwnerOf(node);
       const definitions = JSON.parse(JSON.stringify(source.componentPropertyDefinitions || {}));
       for (const def of Object.values(definitions) as Definition[]) {
@@ -28,7 +28,7 @@ export function captureCloneBindings(root: any): CloneBindings {
       }
       const owner: Owner = { path, source, definitions, layers: [] };
       function layers(layer: any, relative: Path): void {
-        if (relative.length && (layer.type === "COMPONENT_SET" || layer.type === "COMPONENT") && !(node.type === "COMPONENT_SET" && relative.length === 1)) {
+        if (relative.length && isComponentDefinition(layer) && !(node.type === "COMPONENT_SET" && relative.length === 1)) {
           discover(layer, path.concat(relative)); return;
         }
         const refs = { ...(layer.componentPropertyReferences || {}) };

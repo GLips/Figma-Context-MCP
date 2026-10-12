@@ -28,7 +28,7 @@ const COPY_FIELDS = ["gridRowSizes", "gridColumnSizes", "gridRowGap", "gridColum
   // x/y ride along because a live clone() preserves position: without them the mock can't show
   // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
   // parent — real behavior that would otherwise be invisible here.
-  "x", "y", "_fixedW", "_fixedH",
+  "x", "y", "_fixedW", "_fixedH", "targetAspectRatio",
   // A sublayer's binding to a component property (visible/characters/mainComponent → property
   // name) rides into every instance's sublayers — it is what setProperties resolves through.
   "componentPropertyReferences"];
@@ -148,6 +148,7 @@ class Node {
     this.name = type === "FRAME" ? "Frame" : type === "TEXT" ? "Text" : type;
     this.removed = false;
     this.parent = null;
+    this.targetAspectRatio = null;
     // auto-layout
     this.layoutMode = "NONE";
     this.gridRowSizes = [{ type: "FLEX", value: 1 }];
@@ -402,7 +403,15 @@ class Node {
     this._fixedW = this._bounded(w, "Width");
     this._fixedH = this._bounded(h, "Height");
     if (before) this._reflowConstrainedChildren(before);
+    // Like the live API: resize ignores a lock and re-locks at the new ratio.
+    if (this.targetAspectRatio) this.targetAspectRatio = { x: this.width, y: this.height };
   }
+  // The live lock records the box's current proportions; an auto-resizing text refuses it.
+  lockAspectRatio() {
+    if (this.type === "TEXT" && this.textAutoResize !== "NONE") throw new Error("targetAspectRatio cannot be used with auto-resizing text");
+    this.targetAspectRatio = { x: this.width, y: this.height };
+  }
+  unlockAspectRatio() { this.targetAspectRatio = null; }
 
   // Figma reflows a constrained child when the parent's box changes, and a STRETCH child holds BOTH
   // its margins — so it grows by the parent's delta on that axis. That is what makes the order of

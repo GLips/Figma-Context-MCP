@@ -9,7 +9,7 @@ import { get } from "./read.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { render, append, measure } from "./structure.js";
-import { id } from "./flcm.js";
+import { id } from "./target.js";
 
 test("grid vocabulary round-trips through render/get/edit/editMany, with parent-dependent alignment", async () => {
   createFigmaMock();

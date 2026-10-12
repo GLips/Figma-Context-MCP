@@ -15,8 +15,9 @@
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { enterMutatingVerb, committedVerbCount, mutationQueueIdle } from "./mutation-lock.js";
-import { image } from "./flcm.js";
+import { enterMutatingVerb, mutationQueueIdle } from "./mutation-lock.js";
+import { committedVerbCount } from "./verb-error.js";
+import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 

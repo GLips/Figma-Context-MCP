@@ -9,7 +9,7 @@
 // typing), and each progressive blur maps to its own LAYER_BLUR / BACKGROUND_BLUR PROGRESSIVE variant.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { effects } from "./flcm.js";
+import { effects } from "./value-sugar.js";
 import { toFigmaEffects } from "./effects.js";
 import type {
   SimplifiedGlass,

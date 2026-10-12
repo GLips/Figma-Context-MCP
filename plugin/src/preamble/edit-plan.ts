@@ -3,11 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { acceptAuthoringProps } from "./authoring-input.js";
-import { loadLiveTree, gateLiveTree, liveChildrenOfNewNodes, LoadedLiveTree } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
-// edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
-// `flcm.edit` (edit.ts) once, `flcm.editMany` (edit-many.ts) N times over one queue slot, and an
-// INSTANCE's override deltas (instance.ts), which are edits of one sublayer each.
+// edit-plan — the STAGES of the mutate pipeline, with no verb attached. One driver lands them in
+// order (edit-apply.ts) for `flcm.edit`, `flcm.editMany` and a live node a tree places; an
+// INSTANCE's override deltas (instance.ts), edits of one sublayer each, run them directly.
 //
 // The stages live here rather than beside the verb because instance.ts needs them and edit.ts needs
 // instance.ts (an instance delta's component words resolve there) — a cycle if the verb and the
@@ -45,12 +44,13 @@ import { sceneFigma as figma } from "./scene-access.js";
 //   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode).
 //                             Prepare runs it for the resource hint; the gate runs it for real.
 //   3. loadEditResources      the verb's ONLY awaits: one font load, one image request, and the
-//                             annotation categories the batch names (resolved, created if absent)
+//                             annotation categories the batch names (verb-resources.ts, which also
+//                             loads the live trees an edit's slot content names)
 //   4. gateEditPlan           SYNC, before the seal: the node still exists, the compile again on the
 //                             node as it stands now, proof the fonts loaded cover it, and the
 //                             live-parent layout gate — every document-reading decision, made once
 //   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
-//   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then the text clamp
+//   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then aspectRatio, then the text clamp
 //   5c. settleEditPlanPositions  what CONSUMES it: percent position, last of all
 //
 // 5a/5b/5c are one span, split only so a BATCH can run each across every entry before starting the
@@ -59,7 +59,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 // An INSTANCE delta adds no stage here. Its three component words are split off by stage 2 and left
 // RAW on the plan (`instanceWords`); the verb resolves their targets in prepare and plans them in
 // its gate through instance.ts, and BRACKETS the stages above with the result — the retarget
-// before 5a, the overrides after 5c (see edit.ts). They bracket rather than join because a swap or
+// before 5a, the overrides after 5c (see edit-apply.ts). They bracket rather than join because a swap or
 // a variant change replaces the very sublayers the override paths name.
 //
 // A COMPONENT delta is split the same way (`componentWords` → component-edit.ts) and brackets the
@@ -69,61 +69,42 @@ import { sceneFigma as figma } from "./scene-access.js";
 // before it is wired to a property.
 
 import {
-  WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
-  ComponentPropertyBindingEdit, EDIT_TYPE_WORD_GROUPS, namesFontIdentity,
+  WriteNode, WriteProps, WriteTextStyle, InstanceEditWords, ComponentEditWords,
+  ComponentPropertyBindingEdit, namesFontIdentity,
 } from "./ir.js";
-import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
+import { applyAnnotations } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { assertLineFillUnrotated } from "./layout-legality.js";
-import { holdUnrotatedCorner, settleCentrePivot, type PivotHold } from "./pivot.js";
+import { settleAspectRatio } from "./aspect-ratio.js";
+import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
-  RenderResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
+  ApplyResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotEmpty } from "./validate.js";
-import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens, type ResolvedTokens } from "./tokens.js";
-import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
+import { liveFontWords, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
+import { compileNodeLocalProps, compileNodeLayout } from "./compile-nodes.js";
+import { compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount } from "./compile-text.js";
 import {
-  KNOWN_KEYS, compileNodeLocalProps, compileNodeLayout,
-  compileLineWidth, compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount, fetchImagesForTrees,
-  compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, compilePropertyDefinitionEditBag,
-  INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
-} from "./flcm.js";
+  compileComponentPropertyBag, compileOverrideBag, compilePropertyDefinitionEditBag, DOCUMENT_RESOLVED_EDIT_WORDS,
+} from "./compile-component-words.js";
+import { compileSwapTarget } from "./target.js";
 import type { EditDelta } from "./schema.js";
+import { EDIT_WORDS, WORD_GROUPS, editWordsOf } from "./vocabulary.js";
 
-const EDIT_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.edit);
+const EDIT_KEYS: ReadonlySet<string> = EDIT_WORDS;
 
-// A create-verb's word groups, intersected with the current edit surface. The intersection is what
-// makes later slices additive: when a word group's members join KNOWN_KEYS.edit (size/layout in 2.4,
-// text in 2.5), each type's gate widens to create's exact shape with no edits here.
-function editableWords(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
-  return new Set(groups.flat().filter((k) => EDIT_KEYS.has(k)));
-}
-
-// What each node type's delta may name — composed from EDIT_TYPE_WORD_GROUPS (ir.ts), the single
-// source the generated per-type doc lists also render, so edit accepts on a node exactly the words
-// create accepts for its type (invariant 1: one vocabulary, no permissive edit dialect — `fill` on
-// a LINE rejects here the way LINE rejects it, instead of landing on a property Figma never
-// renders). VECTOR uses VECTOR's words: an svg-born vector shares the type, but path's words
-// are the only authored vocabulary the type has.
-const DELTA_KEYS_BY_TYPE = Object.fromEntries(
-  (Object.keys(EDIT_TYPE_WORD_GROUPS) as EditableType[]).map((t) => [
-    t,
-    editableWords(...EDIT_TYPE_WORD_GROUPS[t].map((g) => KNOWN_KEYS[g])),
-  ]),
-) as Record<EditableType, ReadonlySet<string>>;
-
-// A node type with no per-type vocabulary (GROUP, SECTION, POLYGON, …) takes the shared words (minus `key`,
-// which isn't editable anywhere). Deliberately a conservative floor, not a mixin-derived ceiling:
-// effects/rotation on a GROUP would land but wait for a deliberate widening.
-const SHARED_DELTA_KEYS = editableWords(KNOWN_KEYS.shared);
+// A node type with no row of its own (GROUP, SECTION, …) takes the shared words minus `key`. A
+// conservative floor, not a mixin-derived ceiling: effects/rotation on a GROUP would land but wait for
+// a deliberate widening.
+const SHARED_DELTA_KEYS: ReadonlySet<string> = new Set(WORD_GROUPS.shared.filter((word) => EDIT_KEYS.has(word)));
 // A SLICE is the one SceneNode with no MinimalBlendMixin — opacity/mixBlendMode don't exist on it,
 // so accepting them would commit an undo step that changed nothing (the silent no-op the surface
 // rejects everywhere else). The appliers' `in node` guards are belt for the same fact.
-const SLICE_DELTA_KEYS = editableWords(["name", "visible", "locked"]);
+const SLICE_DELTA_KEYS: ReadonlySet<string> = new Set(["name", "visible", "locked"]);
 
 // Stage 1 — the document-blind gate (validate.ts owns it: an instance's `overrides` entries are
 // deltas judged by the same rule at construction), bound to the edit vocabulary.
@@ -135,9 +116,9 @@ export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
 // runs; an illegal word rejects with zero writes). Returns the type's word set so the compile step
 // can flag radius/clip from it.
 function assertDeltaLegalForType(node: SceneNode, changes: EditDelta, subject: string): ReadonlySet<string> {
-  const legal =
-    (DELTA_KEYS_BY_TYPE as Record<string, ReadonlySet<string>>)[node.type] ||
-    (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
+  // edit accepts on a node exactly its type's create row minus the create-only words (vocabulary.ts)
+  // — one vocabulary, no permissive edit dialect: `fill` on a LINE rejects here as LINE rejects it.
+  const legal = editWordsOf(node.type) ?? (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
   for (const prop of Object.keys(changes)) {
     if (!legal.has(prop)) {
       throw new Error(
@@ -372,8 +353,6 @@ export interface EditPlan {
   instanceWords?: InstanceEditWords;
   /** The COMPONENT half, still RAW — planned by component-edit.ts in the verb's gate. */
   componentWords?: ComponentEditWords;
-  /** Apply-time state: present once the centre-pivot span is open, with the corner it held (pivot.ts). */
-  pivotSpan?: { hold?: PivotHold };
 }
 
 // A delta whose every word restates the node's standing state (standing-state.ts): no change, so it
@@ -389,7 +368,7 @@ export function restatedEditPlan(node: SceneNode): EditPlan {
  * before the round trip, against the document as it stood then.
  */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
-  changes = acceptAuthoringProps(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
+  changes = acceptAuthoringProps<EditDelta>(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
   // A delta of ONLY read-only words (`{ type }`) folds to nothing — same refusal as an empty object,
   // now that the prelude has run.
   assertDeltaNotEmpty(changes, EDIT_KEYS, subject);
@@ -424,51 +403,6 @@ export interface InstanceNeeds {
   plans: Map<WriteNode, InstancePlan>;
   fontNeeds: EditFontNeed[];
   slotContentTrees: WriteNode[];
-}
-
-/**
- * Stage 3 — the verb's resource awaits, and the only suspension between the compiles and the seal.
- * ONE font load and ONE image request however many entries there are: a batch is one verb, so it
- * owes one round trip, and every extra suspension is another instant the user can edit across.
- *
- * `plans` and `needs` are prepare's HINT plans — what the deltas need loaded if the document stays
- * as it is. `needs` is every INSTANCE entry's slot content: the one way a delta BUILDS nodes, so
- * the one way an edit's resources carry tree fonts at all. The instance PLANS are not here: those
- * are the gate's to make, against the document at the seal (instance.ts planInstanceEdit).
- */
-export async function loadEditResources(plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = []): Promise<LoadedResources> {
-  const trees: WriteNode[] = [];
-  const fontNeeds: EditFontNeed[] = [];
-  for (const need of needs) {
-    trees.push(...need.slotContentTrees);
-    fontNeeds.push(...need.fontNeeds);
-  }
-  const liveTrees: LoadedLiveTree[] = [];
-  const intoNewNode = liveChildrenOfNewNodes(trees);
-  for (const tree of trees) liveTrees.push(await loadLiveTree(tree, intoNewNode));
-  for (const tree of trees) requestTreeAnnotationCategories(tree);
-  for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
-  // Tokens first: a font variable's mode values and a text style's font are font needs of their own.
-  const tokens = mergeResolvedTokens(
-    await resolveTokenRefs(collectTokenRefs([...plans, ...fontNeeds].map((p) => p.patch).concat(trees))),
-    ...liveTrees.map((live) => live.loaded.tokens),
-  );
-  // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
-  const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees, tokens);
-  const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
-  // Categories last of the three: resolving one can CREATE a file-scoped category, so a batch whose
-  // font or image load was going to fail anyway never creates one to be cleaned up again.
-  await resolveAnnotationCategories();
-  for (const live of liveTrees) { Object.assign(fonts, live.loaded.fonts); Object.assign(images, live.loaded.images); }
-  return { fonts, images, tokens, liveTrees };
-}
-
-/** What stage 3 loaded — everything the apply span needs except the instance plans the gate makes. */
-export interface LoadedResources {
-  liveTrees?: LoadedLiveTree[];
-  fonts: FontMap;
-  images: Record<string, string>;
-  tokens: ResolvedTokens;
 }
 
 /**
@@ -521,51 +455,31 @@ export function assertEditPlanLands(
 }
 
 /**
- * The apply span's resources: what stage 3 loaded, plus the instance plans the gate made for the
- * slot content this verb builds — every entry's, merged, since a batch walks its content once.
- */
-export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
-  const instances = new Map<WriteNode, InstancePlan>();
-  for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances };
-  const live = new Map();
-  for (const tree of loaded.liveTrees ?? []) for (const [wn, plan] of gateLiveTree(tree, resources)) live.set(wn, plan);
-  resources.live = live;
-  return resources;
-}
-
-/**
  * The failure builder for one entry's apply, obtained ONCE for all three stages. The identity is
  * snapshotted here (see beginMutatingApply) and stage 5a may rename the node, so re-opening the
  * span per stage would report a name the rollback is about to erase.
  */
 export type EditPlanFailure = (cause: unknown) => Error;
 
-export function openEditPlanApply(verb: string, plan: EditPlan): EditPlanFailure {
+export function openEditPlanApply(verb: string, plan: EditPlan, span: ApplySpan): EditPlanFailure {
   const fail = beginMutatingApply(verb, plan.node);
   // Here rather than at stage 5a: an instance retarget runs between the two and can resize the node.
-  holdEditPlanPivot(plan);
+  holdPivot(span, plan.node);
   return fail;
-}
-
-/** Open the plan's centre-pivot span, once — the caller that runs writes before stage 5a opens it early. */
-export function holdEditPlanPivot(plan: EditPlan): PivotHold | undefined {
-  plan.pivotSpan ??= { hold: holdUnrotatedCorner(plan.node) };
-  return plan.pivotSpan.hold;
 }
 
 /**
  * Stage 5a — the sealed, commit-free write span for one entry: everything that CHANGES the node.
  * No awaits, by the lock's contract.
  */
-export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resources: RenderResources): void {
+export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resources: ApplyResources): void {
   const { node, patch } = plan;
   try {
-    // First, while the transform is still the one the node arrived with.
-    const hold = holdEditPlanPivot(plan);
+    // First, while the transform is still the one the node arrived with (a no-op once open).
+    holdPivot(resources.span, node);
     // An instance's overrides land after stage 5c and can resize it, so its pivot waits for the
-    // verb's resolvePercents, which runs after them.
-    if (plan.instanceWords) (resources.pivots ??= []).push({ node, hold, layout: patch.layout });
+    // span's settle, which runs after them.
+    if (plan.instanceWords) resources.span.pivots.push({ node, layout: patch.layout });
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
     applyAnnotations(node, patch.annotations);
@@ -580,13 +494,14 @@ export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resou
 }
 
 /**
- * Stage 5b — what still PRODUCES geometry after the writes: the percent SIZE, then the clamp that
- * clips against the wrap that size produced (the ordering `edit` has always had, and the reason
+ * Stage 5b — what still PRODUCES geometry after the writes: the percent SIZE, then the aspectRatio
+ * it may drive, then the clamp that clips against the wrap those sizes produced (the ordering `edit` has always had, and the reason
  * clamp isn't simply last).
  */
 export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: EditPlan): void {
   try {
     if (patch.layout) settleLiveNodePercentSize(node, patch.layout);
+    if (patch.layout) settleAspectRatio(node, patch.layout);
     if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
   } catch (cause) {
     throw fail(cause);
@@ -598,10 +513,10 @@ export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: Edit
  * then the centre pivot, which reads the final box. Dead last, so in a
  * batch they measure a canvas where every entry's sizes have already settled.
  */
-export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, pivotSpan, instanceWords }: EditPlan): void {
+export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, instanceWords }: EditPlan, span: ApplySpan): void {
   try {
     if (patch.layout) settleLiveNodePercentPosition(node, patch.layout);
-    if (!instanceWords) settleCentrePivot(node, pivotSpan?.hold, patch.layout);
+    if (!instanceWords) settlePivot(span, node, patch.layout);
   } catch (cause) {
     throw fail(cause);
   }

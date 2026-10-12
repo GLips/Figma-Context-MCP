@@ -6,7 +6,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { clone } from "./structure.js";
-import { id } from "./flcm.js";
+import { id } from "./target.js";
 let figma: any;
 beforeEach(() => { figma = createFigmaMock(); });
 function fixture() {

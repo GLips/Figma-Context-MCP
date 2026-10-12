@@ -13,9 +13,24 @@
 // Lives in its own module because both edit-plan.ts and structure.ts throw it and neither should
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
-import { Identity, WriteNode } from "./ir.js";
+import type { Identity, BuiltNode } from "./ir.js";
 import { identityOf, childListClosingInstanceOf } from "./identity.js";
-import { committedVerbCount } from "./mutation-lock.js";
+
+// Mutating verbs that ran to their success commit this run (the lock records each). The pointer
+// error tells the agent "the N mutating calls before this one committed and stand" instead of making
+// it re-read the canvas to find out where it is. Per-run state: the preamble is evaluated per run.
+let committedVerbs = 0;
+
+export function recordCommittedVerb(): void {
+  committedVerbs++;
+}
+
+// How many mutating verbs committed so far this run. Read inside a verb's catch, it is the count
+// before the failing one (which hasn't and won't increment); read by the host after the drain, it is
+// the run's total, one of the host's two signals that the document changed (run-executor.ts executeCode).
+export function committedVerbCount(): number {
+  return committedVerbs;
+}
 
 /**
  * Open a mutating verb's sealed apply span and get back the failure builder for it. Call this as
@@ -47,7 +62,7 @@ export class NodeBuildError extends Error {
   readonly nodeName: string | undefined;
   readonly reason: string;
   readonly flcmRefusal: boolean;
-  constructor(wn: WriteNode, sourcePath: string, cause: unknown, opts: { flcmRefusal?: boolean } = {}) {
+  constructor(wn: BuiltNode, sourcePath: string, cause: unknown, opts: { flcmRefusal?: boolean } = {}) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     super(reason.includes(sourcePath) ? reason : sourcePath + ": " + reason);
     this.sourcePath = sourcePath;

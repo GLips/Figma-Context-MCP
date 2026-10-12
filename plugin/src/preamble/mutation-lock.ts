@@ -38,6 +38,9 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
 import { hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, type RunCancelCause } from "./host.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
+import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
+import { settleApplySpan } from "./bridge.js";
+import { recordCommittedVerb } from "./verb-error.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -64,11 +67,6 @@ export async function mutationQueueIdle(): Promise<number> {
   return settledVerbs - before;
 }
 
-// Mutating verbs that ran to their success commit this run — the pointer-error contract (invariant
-// 2) tells the agent "the N mutating calls before this one committed and stand" instead of making
-// it re-read the canvas to find out where it is. Per-run state, like the chain.
-let committedVerbs = 0;
-
 const compensatedFailures = new WeakSet<Error>();
 /** An applier may mark a failure only after restoring every write in its own span. */
 export function compensatedMutationFailure(cause: unknown): Error {
@@ -77,13 +75,6 @@ export function compensatedMutationFailure(cause: unknown): Error {
   return error;
 }
 
-
-// How many mutating verbs committed so far this run. Read inside a verb's catch, it is the count
-// before the failing one (which hasn't and won't increment); read by the host after the drain, it is
-// the run's total, one of the host's two signals that the document changed (run-executor.ts executeCode).
-export function committedVerbCount(): number {
-  return committedVerbs;
-}
 
 // Dev Mode's plugin API is read-only — every node create/delete/property write throws. Figma's own
 // refusal names the setter ("in set_fills: …") and never the mode, so an agent that hits it has no
@@ -136,7 +127,7 @@ function refuseIfCancelled(verb: string): void {
  * is no await left between the decision and the write.
  *
  *   prepare — async, and DOCUMENT-BLIND in what it decides: shape-check the input, resolve every
- *   target the input names to a live node (read.ts createResolvedTargets — the one read that has
+ *   target the input names to a live node (target.ts createResolvedTargets — the one read that has
  *   to be async under dynamic-page), load fonts and image bytes, resolve the annotation categories
  *   the input names. It MAY read the document to learn what to load (which fonts a text edit's live
  *   font implies), and a planner run for that hint may refuse early — the same refusal the gate
@@ -156,14 +147,15 @@ function refuseIfCancelled(verb: string): void {
  *   is about what does not exist before the seal: a sublayer this span's own retarget produces
  *   (instance.ts applyOverridePlans). A refusal there is a rollback, the price of that fact.
  *
- *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold:
- *     entry seal → stamp → apply → style links → success commit   (the verb is exactly one undo step)
+ *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold. It receives the verb's
+ *   ApplySpan (apply-span.ts), which the lock settles after apply returns:
+ *     entry seal → stamp → apply → settle span → style links → success commit   (exactly one undo step)
  *     entry seal → stamp → apply or a link throws → commit + trigger (seal the partial writes, pop that step)
  *
  * gate and apply are SYNCHRONOUS BY TYPE: neither can suspend, so nothing can interleave between a
  * gate's read, the seal, and apply's writes. Anything a verb wants to await belongs in prepare.
  *
- * The ONE await inside the sealed span is flushStyleWrites: linking a style is async-only under
+ * The ONE await inside the sealed span is flushStyleLinks: linking a style is async-only under
  * dynamic-page (the sync setters throw). It writes only links apply decided, onto nodes already
  * holding the style's values. While it suspends, a human edit or un-awaited agent figma.* writes
  * can land inside this verb's undo step — the price of the link.
@@ -198,15 +190,6 @@ type SyncOnly<T> = T extends PromiseLike<unknown> ? never : T;
 // value — a same-value write is not a mutation — so it toggles. It stays after a success as part
 // of the step: clearing it would make a no-op verb a net-zero step whose coalescing behaviour is
 // unproven, and the value itself means nothing.
-// Style links queued by this verb's apply, landed in order by the lock after apply returns.
-type StyleSlot = "fill" | "stroke" | "effect" | "text";
-let pendingStyleWrites: { node: any; slot: StyleSlot; styleId: string }[] = [];
-
-/** Queue a style link for the lock to land after apply. The caller has already written the style's values. */
-export function queueStyleWrite(node: any, slot: StyleSlot, styleId: string): void {
-  pendingStyleWrites.push({ node, slot, styleId });
-}
-
 // Where this verb's warnings start in the registry; set by enterMutatingVerb before apply runs.
 let verbWarningCheckpoint = 0;
 
@@ -216,17 +199,15 @@ let verbWarningCheckpoint = 0;
  * "does not exist", so each per-verb accumulator that holds a node must follow the replacement
  * here, before the lock reads it after apply. A new accumulator holding nodes belongs in this list.
  */
-export function retargetReplacedNode(from: any, to: any): void {
-  for (const write of pendingStyleWrites) if (write.node === from) write.node = to;
+export function retargetReplacedNode(span: ApplySpan, from: any, to: any): void {
+  retargetSpanNode(span, from, to);
   retargetSizingDiagnostics(from, to);
   retargetMovedOutDiagnostics(from, to);
   warnings.retargetNode(from.id, to.id, verbWarningCheckpoint);
 }
 
-async function flushStyleWrites(): Promise<void> {
-  const writes = pendingStyleWrites;
-  pendingStyleWrites = [];
-  for (const { node, slot, styleId } of writes) {
+async function flushStyleLinks(span: ApplySpan): Promise<void> {
+  for (const { node, slot, styleId } of span.styleLinks.splice(0)) {
     if (slot === "fill") await node.setFillStyleIdAsync(styleId);
     else if (slot === "stroke") await node.setStrokeStyleIdAsync(styleId);
     else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
@@ -244,7 +225,7 @@ export function enterMutatingVerb<P, G, T>(
   verb: string,
   prepare: () => Promise<P>,
   gate: (prepared: P) => SyncOnly<G>,
-  apply: (gated: G) => SyncOnly<T>,
+  apply: (gated: G, span: ApplySpan) => SyncOnly<T>,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
     refuseIfRunFinished("flcm." + verb);
@@ -273,12 +254,14 @@ export function enterMutatingVerb<P, G, T>(
       try {
         beginSizingDiagnostics();
         beginMovedOutDiagnostics();
-        // Cleared first: a failed verb's queue must never link nodes on the next verb's behalf.
-        pendingStyleWrites = [];
-        const result = apply(gated);
-        await flushStyleWrites();
+        // One span per verb, so a failed verb's queue can never land on the next verb's behalf.
+        const span = openApplySpan();
+        const result = apply(gated, span);
+        // The backstop: whatever geometry the verb didn't settle itself, before any style links.
+        settleApplySpan(span);
+        await flushStyleLinks(span);
         figma.commitUndo();
-        committedVerbs++;
+        recordCommittedVerb();
         finishSizingDiagnostics(verb);
         finishMovedOutDiagnostics(verb);
         registerResult(result);

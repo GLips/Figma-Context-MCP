@@ -111,11 +111,12 @@ export async function loginExample(flcm: Flcm) {
   };
 
   const out = await flcm.render(screen);
+  const title = out.children![1]; // the result mirrors the spec, so narrow by type to read a TEXT word
 
   return {
     node: out.id, // the login frame's id
     card: out.children![2].id,
-    title: out.children![1].text, // "Welcome back"
+    title: title.type === "TEXT" ? title.text : undefined, // "Welcome back"
   };
   // example:end
 }

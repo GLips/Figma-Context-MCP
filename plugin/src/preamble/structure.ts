@@ -4,10 +4,8 @@
  */
 import { registerRead } from "./egress.js";
 import type { WarningRecord } from "./warnings.js";
-import { describeRootOverlap } from "./root-overlap.js";
 import { sceneFigma as figma } from "./scene-access.js";
-import { compileTree, treeNodes } from "./compile-tree.js";
-import { isTargetShaped } from "./flcm.js";
+import { compileTree, treeNodes, placedTreeOf } from "./compile-tree.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 // structure — the tree-shape verbs (sibling to edit.ts, the field-level one). Position is the
 // VERB, DOM-style: `append`/`prepend` take the parent, `insertBefore`/`insertAfter` take a sibling
@@ -31,27 +29,29 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 // enterMutatingVerb expression, so its queue slot is reserved before it can yield.
 
 import { WriteNode, WriteLayout, Target, Handle, RemoveResult } from "./ir.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, isTargetShaped } from "./target.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
-  attachBuiltChild, settleSiblingOrder, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
-  liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
+  settleApplySpan, mintHandle, beginRenderWalk, RenderResources,
+  assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
 } from "./bridge.js";
-import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
+import { landTree } from "./land-tree.js";
+import { loadTreeResources, gateTreeResources, loadEditResources, gateEditResources } from "./verb-resources.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
-import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
+import { clearKeysDeep, childListClosingInstanceOf, instanceAncestorOf, isComponentDefinition, describeNodeIdentity } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
 import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
-import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
+import { compileEditPlan, assertEditPlanLands,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
 import { showValue } from "./validate.js";
-import { unrotatedCornerOf, holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
+import { unrotatedCornerOf } from "./pivot.js";
+import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is a closure evaluated
 // in the APPLY span, right after the gate that built it — the sibling's index is read at the
@@ -186,21 +186,19 @@ function containerHandle(parent: any): Handle | undefined {
   return parent && parent.type !== "PAGE" ? mintHandle(parent) : undefined;
 }
 
-interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan }
+// `noteOverlap`: render's root lands on the page unseen, so it is told when it buried something (root-overlap.ts).
+interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan; noteOverlap: boolean }
 // `words` is the subject's parent-relative intent read BEFORE the reparent — under the OLD parent's
 // axes, the frame of reference the words were written in. Reading it in apply would be too late.
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
-function applyInsert(verb: string, { dest, tree, resources, bindings }: PreparedInsert): AuthoredTree {
+function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert, span: ApplySpan): AuthoredTree {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
-  const ctx = beginRenderWalk(resources, { bindings: !!bindings });
+  const ctx = beginRenderWalk({ ...resources, span }, { bindings: !!bindings });
   const fail = beginMutatingApply(verb, dest.parent);
-  let root: any;
   try {
-    root = attachBuiltChild(dest.parent, tree, ctx, liveParentAttachFacts(dest.parent, "flcm." + verb), dest.place);
-    resolvePercents(ctx);
-    if (verb === "render") { const overlap = describeRootOverlap(root); if (overlap) console.log(overlap); }
+    landTree(dest.parent, dest.place, tree, ctx, "flcm." + verb, noteOverlap);
     // After the tree is attached and settled: the property references (and the slot properties this
     // insert declares) land in the same sealed span, so a bound layer is never on the canvas unbound.
     if (bindings) applyInsertBindings(bindings, ctx.bindings!);
@@ -208,24 +206,22 @@ function applyInsert(verb: string, { dest, tree, resources, bindings }: Prepared
   } catch (cause) {
     throw fail(cause);
   }
-  return tree.source as AuthoredTree;
+  return placedTreeOf(tree.source!, ctx.placedIds);
 }
 
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is
 // a move of a node that was born one instruction ago, and the place-then-resettle ORDER is the part
 // that must not be written twice (resettling before the attach would aim `fill` at the old parent).
-function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement): void {
+function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement, span: ApplySpan): void {
   const fail = beginMutatingApply(verb, node);
-  const from = node.parent;
   try {
     attachLiveNode(dest.parent, node, words, dest.place);
-    const pivotHold = holdUnrotatedCorner(node);
-    resettleMovedNode(node, words);
-    settleCentrePivot(node, pivotHold, words);
+    holdPivot(span, node);
+    resettleMovedNode(node, words, { span });
+    settlePivot(span, node, words);
   } catch (cause) {
     throw fail(cause);
   }
-
 }
 
 // ---- the placement verbs ----
@@ -256,22 +252,22 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
   }, ({ tree, anchorNode, pages, loaded }): PreparedInsert => {
     const dest = destinationOf(subject, anchorNode, placement, pages);
     assertInstanceChildListUntouched(subject, dest.parent, "destination");
-    if (!tree.liveId) {
+    if (tree.liveId === undefined) {
       assertBuiltInsertNotIntoSet(subject, dest.parent);
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, subject);
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
-    for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
-    const liveRoot = resources.live?.get(tree);
-    if (liveRoot) {
+    for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
+    if (tree.liveId !== undefined) {
       // Also checked as each live node is placed; here it refuses the common case before the seal.
-      assertInheritedSlotContentStays(tree.sourcePath!, liveRoot.node, dest.parent);
-      assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
+      const liveRoot = resources.live.get(tree)!;
+      assertInheritedSlotContentStays(tree.sourcePath, liveRoot.node, dest.parent);
+      assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, liveRoot.layout);
     }
     const bindings = prepareInsertBindings(subject, dest.parent, tree, resources);
-    return { kind: "insert", dest, tree, resources, bindings };
-  }, prepared => applyInsert(verb, prepared));
+    return { kind: "insert", dest, tree, resources, bindings, noteOverlap: verb === "render" };
+  }, (prepared, span) => applyInsert(verb, prepared, span));
 }
 
 export function render(spec: NodeSpec): Promise<AuthoredTree> {
@@ -378,7 +374,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       return { node, dest, words: assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone", edit?.patch.layout),
         edit, resources: gateEditResources(loaded, []), bindings: captureCloneBindings(node) };
     },
-    ({ node, dest, words, edit, resources, bindings }) => {
+    ({ node, dest, words, edit, resources, bindings }, span) => {
       const fail = beginMutatingApply("clone", node);
       let copy: any;
       const created: CreatedCloneProperties = [];
@@ -390,16 +386,16 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
           throw fail(cause);
         }
         // From here the copy is the subject, and placing it is exactly a move.
-        applyPlacement("clone", { kind: "placement", dest, node: copy, words });
+        applyPlacement("clone", { kind: "placement", dest, node: copy, words }, span);
         try { restoreCloneBindings(copy, bindings, created); } catch (cause) { throw fail(cause); }
         if (edit) {
           const plan = { ...edit, node: copy };
-          applyEditPlanWrites(fail, plan, resources);
+          applyEditPlanWrites(fail, plan, { ...resources, span });
           settleEditPlanSizes(fail, plan);
-          settleEditPlanPositions(fail, plan);
-          // Last, as edit and editMany settle it: a reorder never lands between a delta's writes and its settles.
-          settleSiblingOrder(resources);
+          settleEditPlanPositions(fail, plan, span);
         }
+        // Before the handle reads the copy's geometry, and inside the cleanup's reach.
+        settleApplySpan(span);
         return mintHandle(copy);
       } catch (cause) {
         if (!copy) throw cause;
@@ -451,14 +447,14 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       place: (built) => after ? parent.insertChild(parent.children.indexOf(after), built) : parent.appendChild(built),
     };
     assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
-    if (!tree.liveId) {
+    if (tree.liveId === undefined) {
       assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
       Object.assign(tree, replacementTree(node, tree));
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
-    for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
+    for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
     // The original leaves unless the replacement keeps it, and its descendants leave with it unless kept.
     const removes = (layer: any): boolean => {
       for (let p = layer; p; p = p.parent) {
@@ -467,9 +463,9 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       }
       return false;
     };
-    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes) };
-  }, prepared => {
-    const result = applyInsert("replace", prepared);
+    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes), noteOverlap: false };
+  }, (prepared, span) => {
+    const result = applyInsert("replace", prepared, span);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
       const fail = beginMutatingApply("replace", prepared.original);
       recordVerbRemovedNode(prepared.original);
@@ -477,4 +473,56 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     }
     return result;
   });
+}
+
+// ---- detach ----
+
+const DETACH_SUBJECT = "flcm.detach";
+
+/**
+ * flcm.detach(target) — break an instance's link to its component. The subtree becomes ordinary
+ * layers under a FRAME with a NEW id (every sublayer id changes with it), returned as that frame's
+ * handle with fresh geometry. One-way: nothing re-attaches it, so the old ids and any flcm/key
+ * addressing them are worth re-reading after.
+ */
+// A single expression on purpose: the queue slot is reserved before detach() can possibly yield,
+// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
+export function detach(target: Target): Promise<Handle> {
+  return enterMutatingVerb(
+    "detach",
+    () => resolveTarget(target),
+    (node: any) => {
+      assertNodeStillOnCanvas(node, DETACH_SUBJECT);
+      if (node.type !== "INSTANCE") {
+        throw new Error(
+          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
+            (isComponentDefinition(node)
+              ? "This is the component itself; detach an INSTANCE of it."
+              : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
+        );
+      }
+      // Figma does NOT refuse a nested detach — it WIDENS it: detachInstance on an instance inside
+      // another instance "also detaches all ancestors nodes that are instances" (plugin typings).
+      // So asking to detach one instance would silently detach three, which is exactly the kind of
+      // unasked-for mutation this surface refuses. Gated here so the agent gets the node to act on
+      // rather than a canvas it has to reconstruct.
+      const host = instanceAncestorOf(node);
+      if (host) {
+        throw new Error(
+          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
+            "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
+            JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
+        );
+      }
+      return node;
+    },
+    (node) => {
+      const fail = beginMutatingApply("detach", node);
+      try {
+        return mintHandle(node.detachInstance());
+      } catch (cause) {
+        throw fail(cause);
+      }
+    },
+  );
 }

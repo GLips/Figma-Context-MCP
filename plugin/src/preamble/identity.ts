@@ -2,9 +2,15 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// identity — a node's stable flcm identity, stamped in pluginData. The render walk WRITES it (bridge.stampKey)
-// and the target resolver's key scan READS it (read.resolveTarget); giving the pluginData key and its
-// accessors one home is what keeps write-stamp and read-scan from disagreeing on the string.
+// identity — who a node is and where it sits among components and instances.
+//
+// Its flcm key, stamped in pluginData: the render walk WRITES it (bridge.stampKey) and the target
+// resolver's key scan READS it, so one home keeps write-stamp and read-scan agreeing on the string.
+//
+// Its topology: every "which instance / component / set is this under" question is asked here and
+// answered by a named query, never by a verb walking parents itself. The queries are distinct on
+// purpose — the instance above a node, the component definition a write there would change, and
+// the node that holds that definition's property declarations are three different nodes.
 
 import { Identity } from "./ir.js";
 import { isSublayerId } from "@framelink/core";
@@ -36,6 +42,23 @@ interface ParentedNode {
 export function instanceAncestorOf<T extends ParentedNode>(node: T): T | null {
   for (let p = node.parent; p && p.type !== "PAGE"; p = p.parent) {
     if (p.type === "INSTANCE") return p as T;
+  }
+  return null;
+}
+
+/** A component definition node: a COMPONENT, or the COMPONENT_SET that holds variants. */
+export function isComponentDefinition(node: { type: string }): boolean {
+  return node.type === "COMPONENT" || node.type === "COMPONENT_SET";
+}
+
+// The component definition a write at `node` would change, or null when there is none — including
+// whenever an INSTANCE comes first, since an instance's sublayers are its component's copies and the
+// definition they belong to is not this one. `countSelf` as in childListClosingInstanceOf: a
+// destination counts itself, a subject starts at its parent.
+export function editableComponentOwnerOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
+  for (let p: ParentedNode | null | undefined = countSelf ? node : node.parent; p; p = p.parent) {
+    if (p.type === "INSTANCE") return null;
+    if (isComponentDefinition(p)) return p as T;
   }
   return null;
 }
@@ -87,11 +110,16 @@ export function isSlotHole(node: { type: string; componentPropertyReferences?: R
   return node.type === "FRAME" && !!refs && Object.prototype.hasOwnProperty.call(refs, SLOT_CONTENT_WIRE_KEY) && !!refs[SLOT_CONTENT_WIRE_KEY];
 }
 
+/** The COMPONENT_SET a component is a variant of, or null for a standalone component (or any other node). */
+export function variantSetOf<T extends ParentedNode>(node: T): T | null {
+  return node.type === "COMPONENT" && node.parent?.type === "COMPONENT_SET" ? (node.parent as T) : null;
+}
+
 // Who holds a component's property definitions: the SET, for a variant. A variant's own
 // `componentPropertyDefinitions` throws in the live API — Figma keeps a variant's properties on the
 // set it belongs to — so every read and every write of them goes to this node.
 export function definitionOwnerOf<T extends ParentedNode>(component: T): T {
-  return component.parent && component.parent.type === "COMPONENT_SET" ? (component.parent as T) : component;
+  return variantSetOf(component) ?? component;
 }
 
 /** The owner's declarations, `{}` for a component that declares none. Pair with definitionOwnerOf. */

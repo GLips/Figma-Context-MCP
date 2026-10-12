@@ -4,7 +4,7 @@
  */
 // validate — boundary validation shared across the preamble's agent-input surfaces. Pure (no
 // figma.*), so it bundles into the QuickJS sandbox freely: one gate asserting an agent-supplied
-// bag is a plain object whose every key is known, shared by the authoring compilers (flcm.ts),
+// bag is a plain object whose every key is known, shared by the authoring compilers (compile-*.ts),
 // the locate queries (read.ts), and edit's delta — and, on top of it, the one prelude every
 // props-taking entry runs so a `get` result spreads straight in.
 
@@ -12,6 +12,7 @@
 // reaches Object.prototype: `{ type: "toString" }` would pass a type gate and `{ compiler: 1 }` a
 // field gate, both silently. Own-property only — a closed set has to actually be closed.
 import { normalizeInputAliases } from "./input-aliases.js";
+import { nodeWordDisposition } from "./vocabulary.js";
 
 export function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
@@ -60,15 +61,13 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
   }
 }
 
-// Contextual read dimensions need their measured fallback. Identity is interpreted by verbs.
-export const READ_ONLY_WORDS: ReadonlySet<string> = new Set(["type", "children", "designedWidth", "designedHeight", "warnings", "comments"]);
 
 // The pure, document-blind half of a DELTA's validation (invariant 2's validate-then-mutate: this
 // runs before any target is resolved, so a misspelled word reads "unknown prop" no matter what it
 // targets). Shared by flcm.edit and by an instance's `overrides` entries, which are deltas in the
 // same vocabulary judged at construction. `key` and bare `x`/`y` get steering messages ahead of
 // the generic closed-set reject — they're the two mistakes an agent is most likely to make, and
-// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (flcm.ts owns it).
+// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (the compilers own it).
 export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, subject: string): void {
   if (changes == null || typeof changes !== "object") {
     throw new Error(subject + ": changes must be an object of props to apply — got " + showValue(changes) + ".");
@@ -83,12 +82,13 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
       subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
     );
   }
-  // The read shape's read-only words (`type`, `children`, a root's `designedWidth`) are judged
-  // later, where the live node's TYPE is known. They pass this document-blind gate unjudged;
-  // everything else is judged now, against the edit vocabulary alone.
+  // The read shape's non-authoring words (`type`, `children`, a root's `designedWidth`, a refused
+  // `strokeDashes`) are judged later, by the prelude, where the live node's TYPE is known. They pass
+  // this document-blind gate unjudged; everything else is judged now, against the edit vocabulary alone.
   const foreign: Record<string, unknown> = {};
   for (const key of Object.keys(changes)) {
-    if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
+    const disposition = nodeWordDisposition(key);
+    if (disposition === undefined || disposition === "author") foreign[key] = (changes as Record<string, unknown>)[key];
   }
   rejectUnknownKeys(normalizeInputAliases(foreign, subject), known, subject);
   assertDeltaNotEmpty(changes, known, subject);
@@ -101,4 +101,20 @@ export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>,
         [...known].join(", ") + ".",
     );
   }
+}
+
+// Closed-set value checks: a word outside its set refuses with every legal spelling.
+export function oneOf<T extends string>(set: ReadonlySet<T>, v: string): v is T {
+  return set.has(v as T);
+}
+
+export function words(set: ReadonlySet<string>): string {
+  return [...set].map((w) => '"' + w + '"').join(", ");
+}
+
+export function assertEnum<T extends string>(name: string, raw: unknown, set: ReadonlySet<T>): T {
+  if (typeof raw !== "string" || !oneOf(set, raw)) {
+    throw new Error("flcm: " + name + " must be one of " + words(set) + " — got " + JSON.stringify(raw) + ".");
+  }
+  return raw;
 }

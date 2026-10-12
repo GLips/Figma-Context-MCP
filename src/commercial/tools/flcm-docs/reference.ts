@@ -21,7 +21,9 @@ import {
   VERBS,
   FIELD_GROUPS,
   INPUT_ALIASES,
-  EDIT_TYPE_WORD_GROUPS,
+  TYPE_WORD_GROUPS,
+  CREATE_ONLY_WORDS,
+  editWordsOf,
   FrameSchema,
   TextSchema,
   ShapeSchema,
@@ -151,8 +153,7 @@ function propTable(fields: Fields): string {
   return ["| Prop | Type | Notes |", "| --- | --- | --- |", ...rows].join("\n");
 }
 
-// The props a node type is created with. INSTANCE adds the swap group: its schema leaves componentId to
-// the verb, which requires it on a new instance.
+// The props a node type is created with.
 const CREATE_FIELDS_BY_TYPE: Record<string, Fields> = {
   FRAME: FrameSchema.shape,
   TEXT: TextSchema.shape,
@@ -160,7 +161,7 @@ const CREATE_FIELDS_BY_TYPE: Record<string, Fields> = {
   ELLIPSE: EllipseSchema.shape,
   LINE: LineSchema.shape,
   VECTOR: { ...PathSchema.shape, ...SvgSchema.shape },
-  INSTANCE: { ...InstanceSchema.shape, ...FIELD_GROUPS.swap },
+  INSTANCE: InstanceSchema.shape,
 };
 
 const words = (keys: Iterable<string>) => [...keys].map((k) => `\`${k}\``).join(", ");
@@ -200,27 +201,13 @@ function appearanceCoverage(): string {
   return `${take(full)} every prop below; ${parts.join("; ")}.`;
 }
 
-// Why a create word is absent from edit. The set itself is computed, so a new create-only word with
-// no entry here fails docs:gen instead of being silently undocumented.
-const PATH_GEOMETRY =
-  "path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values)";
-const CREATE_ONLY_REASONS: Record<string, string> = {
-  key: "immutable, since re-keying could mint a duplicate address; rename with `name`",
-  d: PATH_GEOMETRY,
-  vectorPaths: PATH_GEOMETRY,
-  scale: PATH_GEOMETRY,
-};
+type DocumentedType = keyof typeof TYPE_WORD_GROUPS;
 
-// The words flcm.edit takes per node type, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
-// runtime gate composes (edit-plan.ts DELTA_KEYS_BY_TYPE), intersected with the edit field set the
-// same way — so the doc can't promise a word the gate rejects.
-function editWordsFor(type: keyof typeof EDIT_TYPE_WORD_GROUPS): Set<string> {
-  const editable = new Set(documentedFields(FIELD_GROUPS.edit).map(([key]) => key));
-  return new Set(
-    EDIT_TYPE_WORD_GROUPS[type]
-      .flatMap((g) => documentedFields(FIELD_GROUPS[g]).map(([key]) => key))
-      .filter((k) => editable.has(k)),
-  );
+// The words flcm.edit takes per node type — the runtime gate's own row (vocabulary.ts editWordsOf),
+// narrowed to documented words — so the doc can't promise a word the gate rejects.
+function editWordsFor(type: DocumentedType): Set<string> {
+  const documented = new Set(documentedFields(FIELD_GROUPS.edit).map(([key]) => key));
+  return new Set([...(editWordsOf(type) ?? [])].filter((k) => documented.has(k)));
 }
 
 // Edit is create's vocabulary, so the doc prints only where the two differ: create words edit
@@ -229,7 +216,7 @@ function editExceptions(): string {
   const createOnly = new Map<string, string[]>(); // word → types
   const editOnlyByType = new Map<string, string[]>();
   for (const [type, fields] of Object.entries(CREATE_FIELDS_BY_TYPE)) {
-    const editable = editWordsFor(type as keyof typeof EDIT_TYPE_WORD_GROUPS);
+    const editable = editWordsFor(type as DocumentedType);
     const created = documentedFields(fields).map(([k]) => k);
     for (const k of created.filter((k) => !editable.has(k)))
       createOnly.set(k, [...(createOnly.get(k) ?? []), type]);
@@ -240,9 +227,13 @@ function editExceptions(): string {
   const allTypes = Object.keys(CREATE_FIELDS_BY_TYPE).length;
   const byReason = new Map<string, { words: string[]; types: string[] }>();
   for (const [word, types] of createOnly) {
-    const reason = CREATE_ONLY_REASONS[word];
+    const reason: string | undefined = Object.prototype.hasOwnProperty.call(CREATE_ONLY_WORDS, word)
+      ? CREATE_ONLY_WORDS[word as keyof typeof CREATE_ONLY_WORDS]
+      : undefined;
     if (!reason)
-      throw new Error(`flcm docgen: create-only word '${word}' needs a CREATE_ONLY_REASONS entry.`);
+      throw new Error(
+        `flcm docgen: create word '${word}' is missing from edit with no CREATE_ONLY_WORDS reason.`,
+      );
     const key = `${reason}|${types.join(",")}`;
     byReason.set(key, { words: [...(byReason.get(key)?.words ?? []), word], types });
   }
@@ -257,7 +248,7 @@ function editExceptions(): string {
   // Types with no create path, described against FRAME's words when they're close to it.
   const frame = editWordsFor("FRAME");
   const byVocabulary = new Map<string, string[]>();
-  for (const type of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
+  for (const type of Object.keys(TYPE_WORD_GROUPS) as DocumentedType[]) {
     if (type in CREATE_FIELDS_BY_TYPE) continue;
     const own = editWordsFor(type);
     const minus = [...frame].filter((k) => !own.has(k));

@@ -4,9 +4,10 @@
  */
 import type { WarningRecord } from "./warnings.js";
 import type { NodeSpec } from "./schema.js";
+import type { NestedWord, WordValue } from "./vocabulary.js";
 // ir — the typed WriteNode currency: the ONE internal representation the whole preamble speaks. Every
 // leaf is a real type (a number, a typed edge box, a discriminated paint/effect value), never a CSS
-// string. The sugar (flcm.ts) compiles terse author props straight into this; the bridge (bridge.ts)
+// string. The sugar (compile-*.ts) compiles terse author props straight into this; the bridge (bridge.ts)
 // reads it and drives the plugin API. Nothing between them parses or re-serializes a string.
 //
 // WHY TYPED, NOT CSS-STRING LEAVES. The IR used to carry CSS strings (gap "8px", a "t r b l" padding
@@ -46,51 +47,6 @@ export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "V
 // bound frame) are edited but never constructed — flcm.component PROMOTES a frame; no compiler
 // builds one.
 export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT" | "POLYGON" | "STAR";
-
-// Which schema word GROUPS compose each editable type's surface — the same compositions as the
-// per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named once
-// so the two consumers can't drift: edit-plan.ts builds the runtime legality gate from it (via
-// KNOWN_KEYS, intersected with the edit surface) and reference.ts renders the per-type doc lists
-// from it (via schema.ts's FIELD_GROUPS). Both index their group tables with these literals, so a
-// misspelled group name is a compile error on each side. Lives here, not in flcm.ts or schema.ts,
-// because ir.ts is the one module both sides already import type-safely with no zod and no figma.
-//
-// INSTANCE combines frame-like root overrides with instance controls and the componentId target.
-//
-// `binding` (`componentPropertyReferences`) composes into every type that can BE a component's
-// sublayer — the same universality it has at create, where every compiler takes it. Not onto
-// COMPONENT/COMPONENT_SET: Figma has no component inside a component, so a component's own binding
-// would name a property of something that can't exist. Not onto SLOT either: a slot is what an
-// INSTANCE shows for a bound frame, and the binding lives on that frame back in the definition.
-//
-// COMPONENT and COMPONENT_SET take a FRAME's words because their root IS a frame (layout, fill,
-// borderRadius, width… all land exactly as on one), plus `componentDefinition` — the two words that
-// change what the component DECLARES. SLOT takes the frame surface without them [verified live:
-// layoutMode, gap and fills are settable on an instance's slot].
-// Annotation support follows https://developers.figma.com/docs/plugins/api/Annotation/, widened by
-// what a live document answers: GROUP and SECTION carry no annotations, but a SLOT does — both the
-// component's bound frame and the slot an instance shows for it take writable notes [verified live].
-export const EDIT_TYPE_WORD_GROUPS = {
-  FRAME: ["annotation", "shared", "size", "appearance", "frame", "binding"],
-  TEXT: ["annotation", "shared", "size", "text", "binding"],
-  RECTANGLE: ["annotation", "shared", "size", "appearance", "binding"],
-  ELLIPSE: ["annotation", "shared", "size", "ellipse", "binding"],
-  LINE: ["annotation", "shared", "line", "binding"],
-  VECTOR: ["annotation", "shared", "size", "path", "binding"],
-  INSTANCE: ["annotation", "shared", "size", "appearance", "frame", "instance", "swap", "binding"],
-  COMPONENT: ["annotation", "shared", "size", "appearance", "frame", "componentDefinition"],
-  COMPONENT_SET: ["annotation", "shared", "size", "appearance", "frame", "componentDefinition"],
-  POLYGON: ["shared", "annotation"],
-  STAR: ["shared", "annotation"],
-  SLOT: ["annotation", "shared", "size", "appearance", "frame"],
-} as const satisfies Record<EditableType, readonly string[]>;
-
-/** The schema's frame group is the authority for container-only layout words. */
-export function hasContainerLayout(type: string): boolean {
-  const groups: readonly string[] | undefined = Object.prototype.hasOwnProperty.call(EDIT_TYPE_WORD_GROUPS, type)
-    ? EDIT_TYPE_WORD_GROUPS[type as EditableType] : undefined;
-  return groups?.includes("frame") ?? false;
-}
 
 // ---- Token references. A compiled `{ variable }` / `{ style }` input: the author named a token by id,
 // by name, or both (id wins), and the word it stands in for decides what kind it must be. Nothing here
@@ -192,6 +148,24 @@ export type WritePaint = WriteSolid | WriteGradient | WriteImage;
 // bridge.ts's toFigmaPaintStack is the ONE place that flip is known.
 export type WritePaintStack = WritePaint[];
 
+/** One place a write lands a paint stack: the node's fills or strokes, or one text run's fills (by index). */
+export type PaintSite =
+  | { at: "fills" | "strokes"; stack: WritePaintStack }
+  | { at: "runFills"; run: number; stack: WritePaintStack };
+
+// THE enumeration of paint sites. The image prefetch fetches the url paints these yield and the
+// bridge paints only stacks these yield, so a site added here is both fetched and painted — the two
+// can't drift into a paint whose bytes were never asked for.
+export function paintSitesOf(props: WriteProps): PaintSite[] {
+  const sites: PaintSite[] = [];
+  if (props.fills) sites.push({ at: "fills", stack: props.fills });
+  if (props.strokes) sites.push({ at: "strokes", stack: props.strokes });
+  props.runs?.forEach((run, i) => {
+    if (run.fills) sites.push({ at: "runFills", run: i, stack: run.fills });
+  });
+  return sites;
+}
+
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
 // read-form { type, gradient } / { type: "SOLID", color, blendMode } objects, OR an already-typed
 // WritePaint (what flcm.gradient() returns). `blendMode` on a read-form leaf is a CSS blend keyword.
@@ -235,17 +209,17 @@ export type WriteEffect = WriteShadow | WriteBlur | WriteGlass | WriteNoise | Wr
 
 // Author input shape for CSS-string effects: the { boxShadow, filter, backdropFilter, textShadow } bag.
 // Here (not css.ts) for the same reason as FillInput — the schema sources it without pulling in parsers.
-export interface WriteCssEffects { boxShadow?: string; filter?: string; backdropFilter?: string; textShadow?: string }
+export type WriteCssEffects = { [K in NestedWord<"cssEffects">]?: string };
 
 // ---- Text style currency (plugin-domain units). The boundary coerces author CSS ("32px", "-0.02em")
 // into these {value,unit} forms; the bridge applies them with no further work. ----
 export type WriteLineHeight = { value: number; unit: "PIXELS" | "PERCENT" } | { unit: "AUTO" };
 export type WriteLetterSpacing = { value: number; unit: "PIXELS" | "PERCENT" };
-export type TextAlign = "left" | "center" | "right" | "justify";
+export type TextAlign = WordValue<"textAlign">;
 // CSS text-decoration-line, the realizable subset. "none" is a per-run INVERSE override only
 // (clearing an inherited base decoration) — the base omits it; the bridge maps each to Figma's
 // TextDecoration enum (UNDERLINE/STRIKETHROUGH/NONE).
-export type TextDecoration = "underline" | "line-through" | "none";
+export type TextDecoration = WordValue<"textDecoration">;
 // Figma conflates CSS `text-transform` and `font-variant-caps` into ONE `textCase` enum, so the
 // author's two words (`textTransform`, `fontVariant`) resolve to this single Figma-domain field at
 // the css/sugar boundary — the same shape `blend` → `blendMode` takes. Resolving there is what makes
@@ -311,12 +285,17 @@ export interface WriteTextRun {
   hyperlink?: string;
 }
 
+/** The characters a TEXT node holds once its runs land: the bridge writes exactly this, and a bound layer's projected value reads it. */
+export function textOfRuns(runs: readonly WriteTextRun[]): string {
+  return runs.map((run) => run.text).join("");
+}
+
 // ---- Layout currency. Alignment and sizing are stored as terse INTENT, not plugin enums: which plugin
 // axis a `justifyContent`/`alignItems`/`fill`/`hug` maps to depends on the frame's direction and
 // parent/child context, so the bridge resolves it. One terse→plugin map lives there; the IR stays
 // plugin-agnostic. The field names mirror CSS (justifyContent/alignItems), but the VALUES stay terse
 // render intent — the CSS-total value spellings (flex-start/space-between) are an LLM-edge concern the
-// sugar boundary (flcm.ts) maps in, never pushed through the render layer. ----
+// sugar boundary (compile-*.ts) maps in, never pushed through the render layer. ----
 export type Justify = "start" | "center" | "end" | "between";
 export type Align = "start" | "center" | "end" | "stretch" | "baseline";
 export type Sizing = "fixed" | "fill" | "hug";
@@ -333,8 +312,8 @@ export interface CornerRadii<T = number> { topLeft: T; topRight: T; bottomRight:
 // "none" is edit's per-axis clearing word: it restores MIN (Figma's default, pinned to the near
 // edge) — the auto-derived constraint create chose isn't stored anywhere live, so the default is
 // the stated inverse, not a recovered intent.
-export type ConstraintX = "left" | "center" | "right" | "stretch" | "scale" | "none";
-export type ConstraintY = "top" | "center" | "bottom" | "stretch" | "scale" | "none";
+export type ConstraintX = WordValue<"constraintX">;
+export type ConstraintY = WordValue<"constraintY">;
 
 // ---- Blend mode (node `mixBlendMode`, paint `blendMode`). The CSS mix-blend-mode names normalize to
 // Figma's BlendMode enum at the css.ts boundary; this is the resolved Figma-domain currency. A SUBSET of
@@ -353,7 +332,7 @@ export interface WriteLayout {
   gridColumn?: { anchor?: number; span: number };
   gridRow?: { anchor?: number; span: number };
   // "stretch" is an ALIAS that never survives childLayout — it is rewritten to sizing.horizontal
-  // "fill" (input-aliases normalizeChildLayoutAliases) before any applier sees the bag.
+  // "fill" (layout-mode normalizeChildLayoutAliases) before any applier sees the bag.
   justifySelf?: "MIN" | "CENTER" | "MAX" | "AUTO" | "stretch";
   alignSelf?: "center" | "stretch" | "start" | "end" | "auto";
   zIndex?: number;
@@ -365,8 +344,11 @@ export interface WriteLayout {
   sizing?: { horizontal?: Sizing; vertical?: Sizing };
   // A bound size sizes "fixed" and carries its variable here; the bind lands the number.
   dimensions?: { width?: Bindable; height?: Bindable };
+  // Width ÷ height, held by Figma's proportion lock once every size has landed (bridge
+  // settleAspectRatio); "none" unlocks.
+  aspectRatio?: number | "none";
   // Percent INTENT — a `width`/`height`/`left`/`top` written as "N%" (0–100), resolved to pixels
-  // against the parent's *realized* axis size in a post-walk pass (bridge.resolvePercents): the node is
+  // against the parent's *realized* axis size in a post-walk pass (bridge.settleApplySpan): the node is
   // built at a provisional size first, then resized once the whole tree is assembled and every parent's
   // fill/hug size is readable off the canvas — the parent size isn't known at construction, and reading it
   // at walk time would predate the fill/hug pin. A percent SIZE also sets sizing.horizontal/vertical =
@@ -556,15 +538,29 @@ export interface InstanceEditWords {
   overrides?: Record<string, OverrideDeltaInput>;
 }
 
-export type WriteNode = WriteProps & {
-  ignoredSize?: { width?: unknown; height?: unknown };
+/** A node this call builds: its compiled words. */
+export type BuiltNode = WriteProps & {
+  type: WriteType;
+  liveId?: never;
+  ignoredSize?: { width?: unknown; height?: unknown; aspectRatio?: unknown };
   source?: NodeSpec;
   sourcePath?: string;
-} & (
-  | { type: WriteType; liveId?: never; authoring?: never }
-  // Live types come from the document, including node kinds that cannot be created here.
-  | { type: string; liveId: string; authoring: Record<string, unknown> }
-);
+};
+
+/**
+ * A live node an authored tree names by id — what the author wrote about it, and nothing else. It
+ * is never resolved in place: its live type, compiled delta and projected values are the loaded
+ * live tree's (live-tree.ts), so one value never mixes authored and document facts.
+ */
+export interface LiveRef {
+  readonly liveId: string;
+  readonly authoring: Readonly<Record<string, unknown>>;
+  readonly children?: readonly WriteNode[];
+  readonly source: NodeSpec;
+  readonly sourcePath: string;
+}
+
+export type WriteNode = BuiltNode | LiveRef;
 
 // Compiled children are private IR nodes; author input is validated before the walk.
 export type WriteChild = WriteNode;
@@ -641,7 +637,13 @@ export interface SlimHandle extends Identity {
 // every instance of it, so they are emitted here once and each INSTANCE carries only its
 // `overrides` diff. Absent when the subtree touched no component. This is the shape REST already
 // serves, so the two read edges stay one vocabulary.
-export interface GetResult { node: SimplifiedNode; components?: Record<string, SimplifiedComponentEntry> }
+// A read node as `get` returns it. The brand exists only in the type: it is what lets a spec carry the
+// read's own words (NodeSpec's read arm) without reopening that arm to a hand-written literal — the
+// prelude judges those words at runtime, so a type that admitted any SimplifiedNode-shaped literal
+// would let `{ type: "LINE", height: 10 }` type-check.
+declare const READ_NODE: unique symbol;
+export type ReadNode = Omit<SimplifiedNode, "children"> & { readonly [READ_NODE]: true; children?: ReadNode[] };
+export interface GetResult { node: ReadNode; components?: Record<string, SimplifiedComponentEntry> }
 
 // `remove` can't hand back a handle for a node that no longer exists, so it names the id it
 // deleted — enough for the agent to scrub any handle it was still holding.
@@ -715,7 +717,7 @@ export type ReadPredicate = (node: SimplifiedNode) => unknown;
 // string could be read either way. Plain data, like a WriteNode.
 export interface RawIdRef { __flcmId: string }
 
-// What any target-taking verb (get/find/edit) accepts, resolved by shape (read.resolveTarget):
+// What any target-taking verb (get/find/edit) accepts, resolved by shape (target.ts resolveTarget):
 // a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any
 // handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
 // POJO. SlimHandle is named in the union (not just assignable) because it's what the locate verbs

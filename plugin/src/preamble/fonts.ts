@@ -275,7 +275,8 @@ export async function loadFontsForTree(tree: WriteNode, tokens?: ResolvedTokens)
 
 function collectText(wn: WriteChild, needs: FontNeed[], styles: StyleRef[]): void {
   if (!wn || typeof wn !== "object") return;
-  if (wn.type === "TEXT") {
+  // A live text's fonts are its edit delta's, loaded with the live tree (live-tree.ts).
+  if (wn.liveId === undefined && wn.type === "TEXT") {
     const ts = wn.textStyle || {};
     needs.push(needOf(ts));
     if (ts.style) styles.push(ts.style);
@@ -283,7 +284,7 @@ function collectText(wn: WriteChild, needs: FontNeed[], styles: StyleRef[]): voi
     // per-range setRangeFontName has the exact style loaded — a run that reaches the bridge with an
     // unloaded font fails loud (resolveFontStrict) rather than silently rendering in the base style.
     // The run's style carries the EFFECTIVE (family, weight, italic) triple whenever it changes any of
-    // them (flcm.ts's compileRun), so this key matches what the bridge asks for.
+    // them (compile-text.ts's compileRun), so this key matches what the bridge asks for.
     for (const run of wn.runs || []) needs.push(needOf(run.style || {}));
   }
   for (const kid of wn.children || []) collectText(kid, needs, styles);

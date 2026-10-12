@@ -13,6 +13,7 @@
 // value that is already a Figma radius can never be double-doubled.
 
 import { WriteEffect, WriteShadow, WriteBlur, WriteGlass, WriteNoise, WriteTexture, WriteProgressiveBlur, Rgba } from "./ir.js";
+import type { WordValue } from "./vocabulary.js";
 
 interface ShadowParts {
   inner: boolean;
@@ -36,8 +37,8 @@ export function backgroundBlurFromCssPx(cssRadius: number): WriteBlur {
 }
 
 // ---- Beyond-CSS effect builders. These take Figma-domain values verbatim (no CSS-px ×2 scaling — there
-// is no CSS spelling to scale from). They own the `kind` tag and enum-casing so flcm.ts never hand-builds
-// an WriteEffect literal.
+// is no CSS spelling to scale from). They own the `kind` tag and enum-casing so the compilers never hand-build
+// a WriteEffect literal.
 //
 // RANGE VALIDATION is delegated to the live runtime, which was probed (execute_code) to reject out-of-range
 // values loudly — lightIntensity/refraction/dispersion 0–1 and noise density 0–1 all throw on set. The ONE
@@ -49,7 +50,7 @@ type GlassParts = Omit<WriteGlass, "kind">;
 type TextureParts = Omit<WriteTexture, "kind">;
 type ProgressiveBlurParts = Omit<WriteProgressiveBlur, "kind">;
 interface NoiseParts {
-  noiseType: "monotone" | "duotone" | "multitone";
+  noiseType: WordValue<"noiseType">;
   color: Rgba;
   noiseSize: number;
   density: number;
@@ -64,7 +65,7 @@ export function glass(p: GlassParts): WriteGlass {
 export function texture(p: TextureParts): WriteTexture { return { kind: "texture", ...p }; }
 export function progressiveBlur(p: ProgressiveBlurParts): WriteProgressiveBlur { return { kind: "progressiveBlur", ...p }; }
 
-const NOISE_TYPES = { monotone: "MONOTONE", duotone: "DUOTONE", multitone: "MULTITONE" } as const;
+const NOISE_TYPES: Record<WordValue<"noiseType">, WriteNoise["noiseType"]> = { monotone: "MONOTONE", duotone: "DUOTONE", multitone: "MULTITONE" };
 
 export function noise(p: NoiseParts): WriteNoise {
   const noiseType = NOISE_TYPES[p.noiseType];

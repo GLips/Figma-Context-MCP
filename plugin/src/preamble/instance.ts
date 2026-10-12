@@ -42,29 +42,23 @@ import { componentPath, definitionId, liveSublayerId } from "@framelink/core";
 // sealed span through the same attach-then-size entry every insert rides (bridge.attachBuiltChild),
 // so slot content lands exactly as appended content does; afterwards the structural verbs treat
 // it as the ordinary tree it is (structure.ts's gate knows a SLOT's child list is open).
-//
-// flcm.detach lives here too: it is the one verb that ENDS an instance, and it reads the same
-// facts (the ancestor chain Figma restricts overrides by).
 
-import { WriteNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, Handle } from "./ir.js";
-import { resolveTarget, ResolvedTargets } from "./read.js";
-import { assertNodeStillOnCanvas } from "./freshness.js";
+import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target } from "./ir.js";
+import { ResolvedTargets } from "./target.js";
 import { FontMap } from "./fonts.js";
 import {
-  mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent,
-  InstancePlan, RenderCtx, RenderResources, BatchLayoutDeltas,
+  attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent, assertBuiltInteriorLegal,
+  InstancePlan, RenderCtx, BatchLayoutDeltas,
 } from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import {
   EditPlan, EditPlanFailure, InstanceNeeds, compileEditPlan, gateEditPlan, openEditPlanApply,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
-import { enterMutatingVerb } from "./mutation-lock.js";
-import { beginMutatingApply } from "./verb-error.js";
 import {
-  instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
+  isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
 } from "./identity.js";
-import { SLOT_CONTENT_WORD } from "./flcm.js";
+import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
 
@@ -110,10 +104,10 @@ export interface InstancePlanning { targets: ResolvedTargets; fonts?: FontMap }
  * through the same path). Two rounds per node, because WHICH property values are targets is a fact
  * of the component the first round resolves: its swap-typed properties. Read here as the document
  * stands now; the gate reads the definitions again, and a value that became a swap during the
- * loads is a miss the lookup refuses (read.ts ResolvedTargets).
+ * loads is a miss the lookup refuses (target.ts ResolvedTargets).
  */
 export async function resolveInstanceTreeTargets(tree: WriteNode, targets: ResolvedTargets): Promise<void> {
-  const instances: WriteNode[] = [];
+  const instances: BuiltNode[] = [];
   collectInstanceNodes(tree, instances);
   for (const wn of instances) {
     await targets.resolve(wn.component as Target);
@@ -135,7 +129,7 @@ function componentNodeOrNull(target: Target, targets: ResolvedTargets): any | nu
 // The property values a definition declares as INSTANCE_SWAP name components; resolve those. A
 // name that matches nothing, or more than one definition, is the gate's refusal to make.
 async function resolveSwapValueTargets(owner: any | null, authored: Record<string, ComponentPropertyInput>, targets: ResolvedTargets): Promise<void> {
-  if (!owner || (owner.type !== "COMPONENT" && owner.type !== "COMPONENT_SET")) return;
+  if (!owner || !isComponentDefinition(owner)) return;
   const definitions = propertyDefinitionsOf(definitionOwnerOf(owner));
   for (const name of Object.keys(authored)) {
     const matches = matchPropertyNames(name, definitions);
@@ -155,7 +149,7 @@ async function resolveSwapValueTargets(owner: any | null, authored: Record<strin
  */
 export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): InstanceNeeds {
   const needs: InstanceNeeds = { plans: new Map(), fontNeeds: [], slotContentTrees: [] };
-  const instances: WriteNode[] = [];
+  const instances: BuiltNode[] = [];
   collectInstanceNodes(tree, instances);
   for (const wn of instances) {
     const { plan, overrides } = (() => {
@@ -173,9 +167,9 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
 
 // Descends into slot content as well as children: a `INSTANCE` inside an override's `children`
 // is an INSTANCE node like any other, and the build walk will ask for its plan by identity.
-function collectInstanceNodes(wn: WriteChild, out: WriteNode[]): void {
+function collectInstanceNodes(wn: WriteChild, out: BuiltNode[]): void {
   if (!wn || typeof wn !== "object") return;
-  if (wn.type === "INSTANCE" && !wn.liveId) out.push(wn);
+  if (wn.liveId === undefined && wn.type === "INSTANCE") out.push(wn);
   for (const child of wn.children || []) collectInstanceNodes(child, out);
   for (const content of slotContentListsOf(wn)) for (const child of content) collectInstanceNodes(child, out);
 }
@@ -184,6 +178,7 @@ function collectInstanceNodes(wn: WriteChild, out: WriteNode[]): void {
 // construction (flcm.compileOverrideBag) and resolved to a slot here.
 function slotContentListsOf(wn: WriteNode): WriteChild[][] {
   const out: WriteChild[][] = [];
+  if (wn.liveId !== undefined) return out; // a live instance's slot content is its edit delta's (planInstanceEdit)
   for (const path of Object.keys(wn.overrides || {})) {
     const content = own(wn.overrides![path], SLOT_CONTENT_WORD);
     if (Array.isArray(content)) out.push(content as WriteChild[]);
@@ -207,7 +202,7 @@ function planSlotContentNeeds(content: readonly WriteNode[], planning: InstanceP
   return needs;
 }
 
-function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
+function planInstanceNode(wn: BuiltNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
   const resolved = resolveComponentNode(planning.targets.node(wn.component as Target, SUBJECT), SUBJECT);
   const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
@@ -238,7 +233,7 @@ interface ResolvedComponent {
 
 // A live COMPONENT, plus the set that owns its property definitions when it is a variant.
 function resolvedFromComponent(node: any): ResolvedComponent {
-  return { base: node, set: node.parent && node.parent.type === "COMPONENT_SET" ? node.parent : null };
+  return { base: node, set: variantSetOf(node) };
 }
 
 /**
@@ -459,7 +454,11 @@ function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInp
   // layout words projected, the way a batch projects a parent's delta) — a percent under a hug
   // slot, or a fill-height text in its flow, refuses here with zero writes, not from the span.
   const deltas: BatchLayoutDeltas | undefined = plan.patch.layout ? { [sublayer.id]: plan.patch.layout } : undefined;
-  for (const content of slotContent) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
+  // A live root is judged against the slot where it lands, like every live node it places (live-tree.ts).
+  for (const content of slotContent) {
+    if (content.liveId === undefined) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
+    assertBuiltInteriorLegal(content);
+  }
   return { path, delta: words, plan, slotContent };
 }
 
@@ -544,12 +543,12 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
     // bound text's fonts, in which case this answer is the right one. Every refusal from here is
     // a rollback, which is the cost of a fact that does not exist before the seal.
     const editPlan: EditPlan = delta ? gateEditPlan(node, delta, ctx.fonts, where) : { node, patch: {} };
-    return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan) };
+    return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan, ctx.span) };
   });
   for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, ctx);
   for (const { editPlan, slotContent, fail } of live) if (slotContent) placeSlotContent(fail, editPlan.node, slotContent, ctx, subject);
   for (const { editPlan, fail } of live) settleEditPlanSizes(fail, editPlan);
-  for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan);
+  for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan, ctx.span);
 }
 
 // Replace a live SLOT's content: every current child goes — the definition's placeholder sublayers
@@ -572,7 +571,7 @@ function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonl
  * One instance delta's component half, resolved. `swapTo` is the component to `swapComponent` to
  * (null when this delta leaves the instance pointing where it points, including when it names the
  * component it already has); `properties` are ready for setProperties; `overrides` are compiled
- * per sublayer. The verb applies them AROUND the node-local stages — see edit.ts.
+ * per sublayer. The verb applies them AROUND the node-local stages — see edit-apply.ts.
  *
  * `retargets` is the fact the rest of the pipeline turns on: this delta REPLACES the sublayer tree
  * (a swap, or a variant change Figma re-points through). It decides which sublayers the override
@@ -749,56 +748,4 @@ export function applyInstanceRetarget(fail: EditPlanFailure, node: SceneNode, pl
 export function applyInstanceOverrides(node: SceneNode, plan: InstanceEditPlan, ctx: RenderCtx, verb: string): void {
   if (!plan.overrides.length) return;
   applyOverridePlans(node as any, plan.overrides, ctx, verb);
-}
-
-// ---- detach ----
-
-const DETACH_SUBJECT = "flcm.detach";
-
-/**
- * flcm.detach(target) — break an instance's link to its component. The subtree becomes ordinary
- * layers under a FRAME with a NEW id (every sublayer id changes with it), returned as that frame's
- * handle with fresh geometry. One-way: nothing re-attaches it, so the old ids and any flcm/key
- * addressing them are worth re-reading after.
- */
-// A single expression on purpose: the queue slot is reserved before detach() can possibly yield,
-// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-export function detach(target: Target): Promise<Handle> {
-  return enterMutatingVerb(
-    "detach",
-    () => resolveTarget(target),
-    (node: any) => {
-      assertNodeStillOnCanvas(node, DETACH_SUBJECT);
-      if (node.type !== "INSTANCE") {
-        throw new Error(
-          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
-            (node.type === "COMPONENT" || node.type === "COMPONENT_SET"
-              ? "This is the component itself; detach an INSTANCE of it."
-              : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
-        );
-      }
-      // Figma does NOT refuse a nested detach — it WIDENS it: detachInstance on an instance inside
-      // another instance "also detaches all ancestors nodes that are instances" (plugin typings).
-      // So asking to detach one instance would silently detach three, which is exactly the kind of
-      // unasked-for mutation this surface refuses. Gated here so the agent gets the node to act on
-      // rather than a canvas it has to reconstruct.
-      const host = instanceAncestorOf(node);
-      if (host) {
-        throw new Error(
-          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
-            "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
-            JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
-        );
-      }
-      return node;
-    },
-    (node) => {
-      const fail = beginMutatingApply("detach", node);
-      try {
-        return mintHandle(node.detachInstance());
-      } catch (cause) {
-        throw fail(cause);
-      }
-    },
-  );
 }
