@@ -108,7 +108,18 @@ interface ScenePatternPaint {
   visible?: boolean;
 }
 
-export type ScenePaint = SceneSolidPaint | SceneGradientPaint | SceneImagePaint | ScenePatternPaint;
+/** A paint the snapshot has no kind for. Named so the typings check sees it; the decoder drops it. */
+interface SceneUndecodedPaint {
+  type: "VIDEO" | "SHADER";
+  visible?: boolean;
+}
+
+export type ScenePaint =
+  | SceneSolidPaint
+  | SceneGradientPaint
+  | SceneImagePaint
+  | ScenePatternPaint
+  | SceneUndecodedPaint;
 
 export interface SceneEffect {
   type: string;
@@ -230,7 +241,7 @@ export interface SceneNodeLike {
   readonly paddingRight?: number;
   readonly paddingBottom?: number;
   readonly paddingLeft?: number;
-  readonly primaryAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN";
+  readonly primaryAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN" | "SPACE_AROUND" | "SPACE_EVENLY";
   readonly counterAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "BASELINE";
   readonly counterAxisAlignContent?: "AUTO" | "SPACE_BETWEEN";
   readonly layoutWrap?: "NO_WRAP" | "WRAP";
@@ -267,7 +278,7 @@ export interface SceneNodeLike {
   readonly textAlignHorizontal?: string;
   readonly textAlignVertical?: string;
   readonly getStyledTextSegments?: (
-    fields: ReadonlyArray<string>,
+    fields: Array<keyof Omit<SceneTextSegment, "characters">>,
   ) => ReadonlyArray<SceneTextSegment>;
 
   // Tokens — variable bindings, and style ids resolved to names through the injected resolver
@@ -306,11 +317,11 @@ export interface SceneNodeLike {
   readonly overrides?: ReadonlyArray<{ readonly id: string; readonly overriddenFields: ReadonlyArray<string> }>;
 }
 
-/** The subset of a live ComponentNode this adapter reads off an instance's main component. */
-interface MainComponentLike {
-  readonly id: string;
-  readonly key?: string;
-  readonly name?: string;
+/**
+ * An instance's main component: a node the adapter reads like any other (an off-tree definition is
+ * decoded from it), plus the enclosing variant set's provenance off its parent.
+ */
+interface MainComponentLike extends SceneNodeLike {
   readonly parent?: {
     readonly id: string;
     readonly type: string;
@@ -676,6 +687,9 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
         verticalAlignment: paint.verticalAlignment,
         visible: paint.visible,
       };
+    case "VIDEO":
+    case "SHADER":
+      return undefined;
     default:
       return undefined;
   }
@@ -731,7 +745,7 @@ function toSnapshotTransform(transform: SceneTransform): SnapshotTransform {
 // ---------------------------------------------------------------------------
 
 /** The segment fields the decode requests — every run-diffable style the snapshot carries. */
-const TEXT_SEGMENT_FIELDS: ReadonlyArray<keyof Omit<SceneTextSegment, "characters">> = [
+const TEXT_SEGMENT_FIELDS: Array<keyof Omit<SceneTextSegment, "characters">> = [
   "fontName",
   "fontStyle",
   "fontWeight",

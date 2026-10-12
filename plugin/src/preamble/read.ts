@@ -24,7 +24,7 @@ import { simplify, project, projectNames, projectReadNode, type SimplifiedNode }
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
-type ScanRoot = BaseNode & ChildrenMixin;
+type ScanRoot = (PageNode | SceneNode) & ChildrenMixin;
 
 function isRawIdRef(value: unknown): value is RawIdRef {
   return !!value && typeof value === "object" && typeof (value as RawIdRef).__flcmId === "string";
@@ -181,7 +181,7 @@ function liveTokenResolver(): SceneTokenResolver {
 // `inContext` reads the node under its live parent (simplify's `placement`), so a nested target
 // keeps the sizing and position it has as a child. A scan root takes none: it is never a hit.
 async function simplifyScene(
-  node: BaseNode,
+  node: PageNode | SceneNode,
   unreadable: UnreadableSink,
   categories?: ReadonlyMap<string, string>,
   inContext = false,
@@ -201,19 +201,31 @@ async function simplifyScene(
 }
 
 async function simplifyLive(
-  node: BaseNode,
+  node: PageNode | SceneNode,
   unreadable: UnreadableSink,
   categories: ReadonlyMap<string, string> | undefined,
   inContext: boolean,
   comments?: CommentCounts,
 ): Promise<import("@framelink/core").SimplifyResult> {
-  return readSceneDesign([node as unknown as SceneNodeLike], {
-    parent: inContext && node.parent ? node.parent as unknown as SceneNodeLike : undefined,
+  const parent = node.parent;
+  return readSceneDesign([sceneView(node)], {
+    parent: inContext && parent && parent.type !== "DOCUMENT" ? sceneView(parent) : undefined,
     resolveToken: liveTokenResolver(),
     annotationCategories: categories ?? await readAnnotationCategoryNames(),
     unreadable,
     comments,
   });
+}
+
+/**
+ * The adapter's structural view of a live node, checked against @figma/plugin-typings here — the
+ * one place both types are in scope. Every node family must satisfy `SceneNodeLike` (an instance's
+ * main component included, through `getMainComponentAsync`), so a plugin API change to a field the
+ * adapter reads fails the build instead of decoding to `undefined` while parity, fed by fixtures
+ * written to the view, still passes.
+ */
+function sceneView(node: PageNode | SceneNode): SceneNodeLike {
+  return node;
 }
 
 /**
@@ -269,7 +281,7 @@ async function scanRoot(within: Target | undefined): Promise<ScanRoot> {
   if (!("findAll" in node)) {
     throw new Error(`flcm: \`within\` target resolved to a ${node.type} with no children to search — pass a container (frame/group/section) or a page.`);
   }
-  return node as ScanRoot;
+  return node;
 }
 
 // ---- locate: find / findOne / selection → SlimHandle[] ----

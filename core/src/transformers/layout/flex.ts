@@ -14,6 +14,10 @@ export function convertJustifyContent(align?: NodeSnapshot["primaryAxisAlignItem
       return "center";
     case "SPACE_BETWEEN":
       return "space-between";
+    // Figma's newer distributions have no read word: flcm can't write them, so emitting one would
+    // hand an agent a value that refuses to paste back. They read as the default.
+    case "SPACE_AROUND":
+    case "SPACE_EVENLY":
     default:
       return undefined;
   }

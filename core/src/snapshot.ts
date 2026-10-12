@@ -491,7 +491,13 @@ export interface NodeSnapshot {
   paddingRight?: number;
   paddingBottom?: number;
   paddingLeft?: number;
-  primaryAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN";
+  primaryAxisAlignItems?:
+    | "MIN"
+    | "CENTER"
+    | "MAX"
+    | "SPACE_BETWEEN"
+    | "SPACE_AROUND"
+    | "SPACE_EVENLY";
   counterAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "BASELINE";
   counterAxisAlignContent?: "AUTO" | "SPACE_BETWEEN";
   layoutWrap?: "NO_WRAP" | "WRAP";

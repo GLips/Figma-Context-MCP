@@ -90,7 +90,7 @@ async function offTreeDefinitions(
       try {
         definitions.push(
           await sceneNodeToSnapshot(
-            main as unknown as SceneNodeLike,
+            main,
             resolveToken,
             mainComponents,
             annotationCategories,

@@ -25,7 +25,7 @@ import { enabledLibraryListing, scanUsedTokens, TokenLookups } from "./tokens.js
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
 import { liveFontWords } from "./fonts.js";
-import { decodeSceneEffect, decodeScenePaints, decodeSegmentStyle, type SceneEffect, type ScenePaint, type SceneTextSegment } from "./node-to-snapshot.js";
+import { decodeSceneEffect, decodeScenePaints, decodeSegmentStyle } from "./node-to-snapshot.js";
 import {
   foldPaintStack, formatSolidColor, pixelRound, simplifyEffectStack, simplifyLiteralTextStyle,
   styleReference, variableReference,
@@ -316,14 +316,14 @@ async function describeStyle(style: ListedStyle, variables: VariableDescriber, l
 
 async function styleValue(style: ListedStyle, variables: VariableDescriber): Promise<DesignTokenStyle["value"]> {
   if (style.type === "PAINT") {
-    const paints = decodeScenePaints(style.paints as ReadonlyArray<ScenePaint>) ?? [];
+    const paints = decodeScenePaints(style.paints) ?? [];
     for (const paint of paints) {
       if (paint.type === "SOLID" && paint.colorVariable) paint.colorVariable = await variables.ref(paint.colorVariable.id);
     }
     return foldPaintStack(paints);
   }
   if (style.type === "EFFECT") {
-    const effects = simplifyEffectStack(style.effects.map((e) => decodeSceneEffect(e as unknown as SceneEffect)), false);
+    const effects = simplifyEffectStack(style.effects.map((e) => decodeSceneEffect(e)), false);
     return Object.keys(effects).length ? effects : undefined;
   }
   // A text style is the segment a node set to it would report. A style has no weight or slant field of
@@ -335,14 +335,14 @@ async function styleValue(style: ListedStyle, variables: VariableDescriber): Pro
     fontWeight: fontWeight as number,
     fontStyle: fontStyle === "italic" ? "ITALIC" : "REGULAR",
     fontSize: style.fontSize,
-    lineHeight: style.lineHeight as SceneTextSegment["lineHeight"],
+    lineHeight: style.lineHeight,
     letterSpacing: style.letterSpacing,
     textCase: style.textCase,
     textDecoration: style.textDecoration,
     paragraphSpacing: style.paragraphSpacing,
     paragraphIndent: style.paragraphIndent,
     listSpacing: style.listSpacing,
-    boundVariables: style.boundVariables as SceneTextSegment["boundVariables"],
+    boundVariables: style.boundVariables,
   });
   if (decoded.boundVariables) {
     const named: typeof decoded.boundVariables = {};
