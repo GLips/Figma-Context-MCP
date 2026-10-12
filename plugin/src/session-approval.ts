@@ -247,11 +247,11 @@ export function pluginApprovalTransition(
       // A session back from away presents the claim its last request was given and takes that
       // request over: allowed while away, it collects its token now; otherwise the request stays
       // expired here, under the claim the server still holds. A token the store already approves
-      // just retires the request.
+      // still takes the request, only to retire it: nothing is left to collect or ask.
+      const taken =
+        event.sessionClaim === null ? undefined : takeAwayRequest(away, event.sessionClaim, event.identity, event.now);
       const claimed =
-        event.sessionClaim === null || (conn.credential !== null && store.approval(conn.credential) === "approved")
-          ? undefined
-          : takeAwayRequest(away, event.sessionClaim, event.identity, event.now);
+        conn.credential !== null && store.approval(conn.credential) === "approved" ? undefined : taken;
       if (claimed?.request.allowedBy) {
         conn.allowing = { token: event.freshToken, user: claimed.request.allowedBy.user, collecting: true };
         effects.push({ type: "persistAllow", key: event.key, token: event.freshToken, from: claimed });

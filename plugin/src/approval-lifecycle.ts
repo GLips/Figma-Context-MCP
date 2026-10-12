@@ -13,8 +13,6 @@ export type ApprovalAnswer = "approved" | "unapproved" | "unknown";
 /** A definite answer, once the store has one. */
 export type SettledApproval = Exclude<ApprovalAnswer, "unknown">;
 
-export type ApprovalLifecycle = ReturnType<typeof createApprovalLifecycle>;
-
 /** Ordered durable approvals. Restoration and every change run in one chain, in order. */
 export function createApprovalLifecycle(storage: {
   load(): Promise<unknown>;
