@@ -14,6 +14,8 @@ export interface SnapshotDifference {
   rest: unknown;
   scene: unknown;
   node: Partial<NodeSnapshot>;
+  /** Whether `node` or any ancestor is rotated, which puts its box in page space at an angle. */
+  rotatedOnPage: boolean;
 }
 
 /** Every number within this of its counterpart is the same measurement. */
@@ -31,9 +33,12 @@ export const SNAPSHOT_DIVERGENCES: Record<string, (d: SnapshotDifference) => boo
     typeof scene === "number" &&
     Math.abs(rest - scene) <= NUMERIC_TOLERANCE * Math.max(1, Math.abs(rest)),
   // REST withholds an own box it can't solve — a root has no parent space to solve it in, and some
-  // rotations defeat the inversion (shared-subset.ts pin 7). The plugin reads it off the node.
-  withheldOwnBox: ({ key, rest }) =>
-    (key === "ownSize" || key === "ownOrigin") && rest === undefined,
+  // page rotations, own or inherited, defeat the inversion (shared-subset.ts pin 7). The plugin
+  // reads it off the node. An unrotated non-root always has one, so losing it there fails.
+  withheldOwnBox: ({ path, key, rest, rotatedOnPage }) =>
+    (key === "ownSize" || key === "ownOrigin") &&
+    rest === undefined &&
+    (/^\.children\.\d+$/.test(path) || rotatedOnPage),
   // A paragraph with no list: REST sends empty per-line arrays, the plugin one entry per line.
   unlistedParagraph: ({ key, rest, scene }) =>
     Array.isArray(rest) &&
@@ -50,7 +55,8 @@ export const SNAPSHOT_DIVERGENCES: Record<string, (d: SnapshotDifference) => boo
   // Defaults REST omits and the plugin states: an image filter at 0, a paint at full opacity.
   statedDefaults: ({ path, key, rest, scene }) =>
     rest === undefined &&
-    ((path.endsWith(".filters") && scene === 0) || (key === "opacity" && scene === 1)),
+    ((path.endsWith(".filters") && scene === 0) ||
+      (key === "opacity" && scene === 1 && /\.(fills|strokes)\.\d+$/.test(path))),
   // Pin 3: REST can't name a variable (Enterprise-only endpoint), so it can't vouch for a name.
   tokenNames: ({ path, key, rest }) =>
     (key === "name" || key === "nameSuffices") &&
@@ -80,6 +86,7 @@ export function diffSnapshots(
     path: string,
     key: string,
     node: Partial<NodeSnapshot>,
+    rotatedOnPage: boolean,
   ) => {
     if (JSON.stringify(a) === JSON.stringify(b)) return;
     const comparable =
@@ -95,15 +102,14 @@ export function diffSnapshots(
       for (const field of new Set([...Object.keys(a), ...Object.keys(b)])) {
         const nextA = (a as Record<string, unknown>)[field];
         const nextB = (b as Record<string, unknown>)[field];
-        const owner =
-          nextA && typeof nextA === "object" && isNode(nextA) && key === "children"
-            ? (nextA as Partial<NodeSnapshot>)
-            : node;
-        visit(nextA, nextB, here, field, owner);
+        const ownsNode =
+          key === "children" && typeof nextA === "object" && nextA !== null && isNode(nextA);
+        const owner = ownsNode ? (nextA as Partial<NodeSnapshot>) : node;
+        visit(nextA, nextB, here, field, owner, rotatedOnPage || (ownsNode && !!owner.rotation));
       }
       return;
     }
-    const difference = { path, key, rest: a, scene: b, node };
+    const difference = { path, key, rest: a, scene: b, node, rotatedOnPage };
     const allowedBy = Object.entries(SNAPSHOT_DIVERGENCES).find(([, allows]) =>
       allows(difference),
     )?.[0];
@@ -111,6 +117,6 @@ export function diffSnapshots(
   };
   // JSON round-trip: a field present-but-undefined and an absent one are the same snapshot.
   const plain = (value: readonly NodeSnapshot[]) => JSON.parse(JSON.stringify(value)) as unknown;
-  visit(plain(rest), plain(scene), "", "children", {});
+  visit(plain(rest), plain(scene), "", "children", {}, false);
   return out;
 }
