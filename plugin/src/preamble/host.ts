@@ -38,7 +38,8 @@ export interface FlcmHost {
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /**
    * Private transport for server-shipped verbs. Never expose this on flcm or session. Every call
-   * goes through withServerCall (server-deadline.ts), or the run's clock counts server work as silence.
+   * goes through serverCall below: withServerCall (server-deadline.ts) keeps the run's clock from
+   * counting server work as silence, and a finished runtime is refused before it asks.
    */
   callServer(capability: string, payload: unknown): Promise<unknown>;
   /** Why this run was cancelled, or null while it wasn't. Only the host sees a CANCEL, a disconnect
@@ -81,7 +82,7 @@ export async function requestHostImages(urls: string[]): Promise<Record<string, 
       "flcm.image: this runtime has no host (FlcmHost) — image fills need the live plugin bridge.",
     );
   }
-  const payload = await withServerCall(() => host.callServer("images.fetch", urls));
+  const payload = await serverCall(host, "flcm.image", "images.fetch", urls);
   if (!payload || typeof payload !== "object") {
     throw new Error("flcm.image: the server's image reply was malformed.");
   }
@@ -110,7 +111,7 @@ export async function requestHostCommentPins(fileKey: string): Promise<HostComme
   const host = currentHost();
   if (!host) return null;
   try {
-    const reply = await withServerCall(() => host.callServer("comments.pins", { fileKey }));
+    const reply = await serverCall(host, "flcm.read", "comments.pins", { fileKey });
     const pins = (reply as { pins?: unknown } | null)?.pins;
     if (!Array.isArray(pins)) return null;
     return pins.filter(
@@ -141,12 +142,24 @@ export function hostDeadlinePassed(): boolean {
 }
 
 /**
- * Whether this runtime's own run has already replied. Fails OPEN for the same reason as
- * cancellation: no host means no run to outlive.
+ * Refuse when this runtime's own run has already replied: the agent kept `flcm` across calls (on
+ * globalThis — session refuses functions). Nothing carries its reads out, nothing can cancel or wait
+ * for its writes, and its server calls answer a request nobody holds. Fails OPEN like cancellation:
+ * no host means no run to outlive. `action` names the verb the refusal is from.
  */
-export function hostRunFinished(): boolean {
-  const host = currentHost();
-  return host ? host.isRunFinished() : false;
+export function refuseIfRunFinished(action: string): void {
+  if (!currentHost()?.isRunFinished()) return;
+  throw new Error(
+    action + ": this flcm belongs to an earlier call that has already finished and replied, so " +
+      "it can no longer read, write or fetch. Use the flcm your current call was given (store ids " +
+      "and specs in `session`, never flcm itself).",
+  );
+}
+
+/** Every server call: refused from a finished runtime, and bracketed for the deadline clock. */
+function serverCall(host: FlcmHost, action: string, capability: string, payload: unknown): Promise<unknown> {
+  refuseIfRunFinished(action);
+  return withServerCall(() => host.callServer(capability, payload));
 }
 
 /** Diagnostics must not change the result or rejection of a native operation. */

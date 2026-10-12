@@ -12,7 +12,7 @@
 // module-level on purpose: a factory evaluation is one run, so registrations die with the run.
 import { looksLikeNode } from "./live-node.js";
 import { warnings } from "./warnings.js";
-import { hostRunFinished } from "./host.js";
+import { refuseIfRunFinished } from "./host.js";
 import { TOKEN_ENTRY_MARK, type TokenEntryKind } from "./token-mark.js";
 
 /** Where an egress copy is going. Only the result is read by the server's renderer, so only it is marked. */
@@ -69,13 +69,7 @@ function unchangedSinceRead(value: object): boolean {
  * reading on must fail loud rather than look like it works.
  */
 export function registerRead(value: object, project: () => unknown, nodeId?: string): void {
-  if (hostRunFinished()) {
-    throw new Error(
-      "flcm: this runtime belongs to an earlier call that has already finished and replied — a stored " +
-        "flcm cannot read, because its reply address is gone. Use the flcm your current call was given " +
-        "(store ids and specs in `session`, never flcm itself).",
-    );
-  }
+  refuseIfRunFinished("flcm.read");
   warnings.observe(value, nodeId);
   registrations.set(value, { project });
   captureFrom(value);

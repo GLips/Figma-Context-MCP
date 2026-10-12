@@ -36,7 +36,7 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { hostDeadlinePassed, hostRunCancellation, hostRunFinished, type RunCancelCause } from "./host.js";
+import { hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, type RunCancelCause } from "./host.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
@@ -126,20 +126,6 @@ function refuseIfCancelled(verb: string): void {
       "flcm." + verb + ": this run held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
         "s without reaching the server, past the server's inactivity deadline — no further mutating verbs start. The canvas holds what " +
         "completed before this point. Split long synchronous work across calls.",
-    );
-  }
-}
-
-// A runtime whose own run has replied: the agent kept `flcm` across calls (on globalThis — session
-// refuses functions, so that is where it lands). Its host answers for a run nobody is waiting on, so
-// its cancellation checks are permanently false and its writes are unstoppable. Refused at the same
-// two points as cancellation, and worded so the agent reaches for the binding it was just handed.
-function refuseIfRunFinished(verb: string): void {
-  if (hostRunFinished()) {
-    throw new Error(
-      "flcm." + verb + ": this flcm belongs to an earlier call that has already finished and " +
-        "replied — a stored runtime cannot write, because nothing can cancel or wait for it. Use " +
-        "the flcm your current call was given (store ids and specs in `session`, never flcm itself).",
     );
   }
 }
@@ -261,7 +247,7 @@ export function enterMutatingVerb<P, G, T>(
   apply: (gated: G) => SyncOnly<T>,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
-    refuseIfRunFinished(verb);
+    refuseIfRunFinished("flcm." + verb);
     refuseIfCancelled(verb);
     // The verb's annotation-category slate, opened here rather than by prepare because its other
     // half is the failure path below: what a prepare created must be removable from a catch that
@@ -272,7 +258,7 @@ export function enterMutatingVerb<P, G, T>(
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
       // during them is the same kind of fact, read at the same place.
-      refuseIfRunFinished(verb);
+      refuseIfRunFinished("flcm." + verb);
       refuseIfCancelled(verb);
       refuseIfDevMode(verb);
       invalidateSceneAccess();

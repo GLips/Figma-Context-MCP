@@ -1027,14 +1027,6 @@ const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
   revoked: "the human revoked this session's approval while the run was still queued",
 };
 
-// The server-call half of the stale-runtime refusal; the preamble words the read and write halves,
-// which it reaches through the host's isRunFinished. Same fact each way: a runtime is built per
-// request and is only serviceable while its own request is open.
-const STALE_RUNTIME_REFUSAL =
-  "flcm: this runtime belongs to an earlier call that has already finished and replied — a stored " +
-  "flcm cannot fetch, because its reply address is gone. Use the flcm your current call was " +
-  "given (store ids and specs in `session`, never flcm itself).";
-
 /**
  * Runs the agent's raw code string against the live figma.* API and posts back
  * `{ id, result, console, errors }`. The agent's code is never bundled or
@@ -1122,8 +1114,8 @@ async function executeCode(
     const host: FlcmHost = {
       getSession: (initialize) => agentSession ??= initialize(),
       traceNative: (stage, operation) => { if (!settled) trace(stage, operation); },
-      callServer: (capability: string, payload: unknown) =>
-        settled ? Promise.reject(new Error(STALE_RUNTIME_REFUSAL)) : callServer(to, capability, payload),
+      // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
+      callServer: (capability: string, payload: unknown) => callServer(to, capability, payload),
       runCancellation: () => cancelledRuns.cancellation(to),
       isRunFinished: () => settled,
       runStartedAt,
