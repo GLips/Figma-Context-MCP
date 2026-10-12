@@ -126,7 +126,7 @@ This is server-only, so it is not launch-gated. It is ranked 3rd on value.
 
 **Verdict (Graham, 2026-10-02): approve, clarify through removal.** Consolidate search guidance into one authoritative reference row: the listed query keys are closed; the optional predicate can test any field in each candidate's full flcm read shape. Remove redundant surrounding explanations rather than adding another paragraph or expanding example lists. Route likely query-key misses concisely in the existing error guidance. No additional search facets in this batch. Apply the illusion-of-completeness principle; examples are optional, not the fix.
 
-**Tickets:** fig-101 (shipped)
+**Tickets:** fig-101 (shipped), fig-130 (shipped)
 
 **Status:** partly.
 
