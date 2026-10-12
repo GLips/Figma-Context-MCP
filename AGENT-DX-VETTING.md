@@ -692,6 +692,10 @@ All are settled scope per REMAINING §2.
 
 ### A-43. `flcm.component` rollback blamed `get_layoutMode` on a node that "does not exist" ⚪
 
+**Verdict (Graham, 2026-10-11): fixed by fig-128.** That fix stopped reads of the frame `createComponentFromNode` replaces, which is the same "does not exist" signature. If it recurs, get a proper repro then.
+
+**Tickets:** fig-128 (shipped)
+
 **Status:** unclear. I found nothing addressing it. It was seen once and not narrowed.
 
 **Fix (note):** Reproduce first. The rollback message itself is praised; only the attribution is wrong.
