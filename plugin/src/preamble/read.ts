@@ -7,17 +7,11 @@ import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 
 import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
-import { readCommentCounts, type CommentCounts } from "./comment-counts.js";
+import { readCommentCounts } from "./comment-counts.js";
 import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
-import {
-  sceneNodeToSnapshot,
-  sceneContextParent,
-  type MainComponentSink,
-  type UnreadableSink,
-  type SceneNodeLike,
-  type SceneTokenResolver,
-} from "./node-to-snapshot.js";
+import { type UnreadableSink, type SceneNodeLike, type SceneTokenResolver } from "./node-to-snapshot.js";
+import { readSceneDesign, type CommentCounts } from "./scene-read.js";
 import { rejectUnknownKeys, showValue } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { registerRead } from "./host.js";
@@ -27,7 +21,6 @@ import { mapInBatches } from "./batches.js";
 import { FIND_MATERIALIZE_CAP } from "./find-cap.js";
 import { TokenLookups } from "./tokens.js";
 import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
-import type { NodeSnapshot } from "@framelink/core/snapshot";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
@@ -185,7 +178,7 @@ function liveTokenResolver(): SceneTokenResolver {
 
 // The adapter's structural view narrows plugin typings at this boundary. The resulting data is
 // complete in the sandbox; registration defers every lossy decision until host egress.
-// `inContext` reads the node under its live parent (simplify's `contextParent`), so a nested target
+// `inContext` reads the node under its live parent (simplify's `placement`), so a nested target
 // keeps the sizing and position it has as a child. A scan root takes none: it is never a hit.
 async function simplifyScene(
   node: BaseNode,
@@ -214,23 +207,13 @@ async function simplifyLive(
   inContext: boolean,
   comments?: CommentCounts,
 ): Promise<import("@framelink/core").SimplifyResult> {
-  const annotationCategories = categories ?? await readAnnotationCategoryNames();
-  const mainComponents: MainComponentSink = new Map();
-  const resolveToken = liveTokenResolver();
-  const parent = inContext && node.parent ? node.parent as unknown as SceneNodeLike : undefined;
-  const snapshot = await sceneNodeToSnapshot(
-    node as unknown as SceneNodeLike,
-    resolveToken,
-    mainComponents,
-    annotationCategories,
+  return readSceneDesign([node as unknown as SceneNodeLike], {
+    parent: inContext && node.parent ? node.parent as unknown as SceneNodeLike : undefined,
+    resolveToken: liveTokenResolver(),
+    annotationCategories: categories ?? await readAnnotationCategoryNames(),
     unreadable,
-    parent,
-  );
-  const componentDefinitions =
-    await offTreeDefinitions(snapshot, mainComponents, annotationCategories, resolveToken);
-  if (comments) attachCommentCounts(snapshot, comments);
-  const contextParent = parent && sceneContextParent(parent);
-  return simplify([snapshot], { componentDefinitions, contextParent });
+    comments,
+  });
 }
 
 /**
@@ -248,54 +231,6 @@ export async function readStandingState(node: SceneNode): Promise<Map<string, Si
   full.nodes.forEach(index);
   project(full).nodes.forEach(read => index(projectNames(read)));
   return standing;
-}
-
-/**
- * The real definition for every component this subtree instantiates but doesn't contain — what the
- * core publishes instead of donating some instance's already-edited children.
- *
- * Free here in a way it never is over REST: the snapshot walk ALREADY resolved every instance's
- * main component (that is where `componentId` comes from), so `mainComponents` is that work handed
- * back rather than repeated. Published library components included — no key lookup, no second
- * file, no permission that can be missing. Definitions already IN the subtree are skipped: the core
- * prefers the in-tree node anyway.
- *
- * Supplementary by definition, so it never fails the read: a component that refuses to snapshot
- * costs its own entry a donated body, nothing more.
- */
-async function offTreeDefinitions(
-  snapshot: NodeSnapshot,
-  mainComponents: MainComponentSink,
-  annotationCategories: ReadonlyMap<string, string>,
-  resolveToken: SceneTokenResolver,
-): Promise<NodeSnapshot[]> {
-  if (mainComponents.size === 0) return [];
-
-  const defined = new Set<string>();
-  const scan = (node: NodeSnapshot): void => {
-    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
-    for (const child of node.children ?? []) scan(child);
-  };
-  scan(snapshot);
-
-  const definitions: NodeSnapshot[] = [];
-  for (const [id, main] of mainComponents) {
-    if (defined.has(id)) continue;
-    defined.add(id);
-    try {
-      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveToken, mainComponents, annotationCategories));
-    } catch {
-      // The component was deleted mid-read, or the library refused to load it. Donor floor.
-    }
-  }
-  return definitions;
-}
-
-function attachCommentCounts(snapshot: NodeSnapshot, counts: CommentCounts): void {
-  if (!counts.size) return;
-  const count = counts.get(snapshot.id);
-  if (count) snapshot.comments = count;
-  for (const child of snapshot.children ?? []) attachCommentCounts(child, counts);
 }
 
 // A skipped node must never read as absent: the agent is told what Figma listed but couldn't read.

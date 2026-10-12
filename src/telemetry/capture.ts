@@ -96,6 +96,8 @@ function toGetFigmaDataEvent(
     component_property_count: outcome.metrics?.componentPropertyCount,
     has_variables: outcome.metrics?.hasVariables,
     fetch_ms: outcome.metrics?.fetchMs,
+    decode_ms: outcome.metrics?.decodeMs,
+    enrich_ms: outcome.metrics?.enrichMs,
     simplify_ms: outcome.metrics?.simplifyMs,
     serialize_ms: outcome.metrics?.serializeMs,
     ...errorFields(outcome.error),

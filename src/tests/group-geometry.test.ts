@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
-import { restResponseToSnapshots } from "~/adapters/rest/rest.js";
+import { parseRestResponse } from "~/adapters/rest/decode/response.js";
 import { simplify } from "@framelink/core";
 import type { SimplifiedNode } from "@framelink/core";
 import { GOLDEN_FIXTURES } from "./goldens/fixtures.js";
@@ -26,7 +26,7 @@ for (const producer of ["rest", "plugin"] as const) {
       const scene = loadScene("grouped-nodes")!;
       const snapshots =
         producer === "rest"
-          ? restResponseToSnapshots(fixture.response).snapshots
+          ? parseRestResponse(fixture.response).snapshots
           : await Promise.all(
               scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveToken)),
             );

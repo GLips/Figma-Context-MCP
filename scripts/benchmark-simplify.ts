@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { cli } from "cleye";
-import { simplifyRestResponse } from "../src/adapters/rest/rest.js";
+import { readRestDesign } from "../src/adapters/rest/read-rest-design.js";
+import { restFixtureSource } from "../src/tests/rest-fixture-source.js";
 import type { NodeCounter, SimplifiedNode } from "@framelink/core";
 import { serializeResult } from "../src/utils/serialize.js";
 import { wrapForSerialization } from "../src/utils/serializable-design.js";
@@ -103,7 +104,13 @@ async function main() {
 
   const nodeCounter: NodeCounter = { count: 0 };
   const simplifyStart = performance.now();
-  const result = await simplifyRestResponse(apiResponse, { nodeCounter });
+  // The composed read get_figma_data runs, served from the recording: same-file definitions
+  // resolve from it, library ones fall back to a donor as they would on a 403.
+  const { design: result } = await readRestDesign(
+    restFixtureSource(apiResponse),
+    { fileKey: "benchmark" },
+    { nodeCounter },
+  );
   const simplifyMs = performance.now() - simplifyStart;
 
   const outputNodeCount = countOutputNodes(result.nodes);

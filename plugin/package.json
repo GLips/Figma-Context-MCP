@@ -14,7 +14,8 @@
     "./node-to-snapshot": "./src/preamble/node-to-snapshot.ts",
     "./server-deadline": "./src/preamble/server-deadline.ts",
     "./token-mark": "./src/preamble/token-mark.ts",
-    "./find-cap": "./src/preamble/find-cap.ts"
+    "./find-cap": "./src/preamble/find-cap.ts",
+    "./scene-read": "./src/preamble/scene-read.ts"
   },
   "dependencies": {
     "@framelink/core": "workspace:*",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import { readRestFixture } from "./rest-fixture-source.js";
 import { walkUncompressed } from "./walk-uncompressed.js";
 import type { TraversalOptions } from "@framelink/core";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
@@ -867,7 +867,7 @@ describe("component property support", () => {
   });
 });
 
-describe("simplifyRestResponse", () => {
+describe("readRestDesign", () => {
   it("produces a complete SimplifiedDesign from a mock API response", async () => {
     const mockResponse = {
       name: "Test File",
@@ -889,7 +889,7 @@ describe("simplifyRestResponse", () => {
       editorType: "figma",
     } as unknown as GetFileResponse;
 
-    const result = await simplifyRestResponse(mockResponse);
+    const result = await readRestFixture(mockResponse);
 
     expect(result.name).toBe("Test File");
     expect(result.nodes).toHaveLength(3);
@@ -935,7 +935,7 @@ describe("simplifyRestResponse", () => {
       editorType: "figma",
     } as unknown as GetFileResponse;
 
-    const result = await simplifyRestResponse(mockResponse);
+    const result = await readRestFixture(mockResponse);
 
     expect(result.components["20:1"]).toMatchObject({
       type: "COMPONENT",

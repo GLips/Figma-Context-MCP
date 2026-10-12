@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import { readRestFixture } from "./rest-fixture-source.js";
 import type { GetFileResponse, Node as FigmaNode } from "@figma/rest-api-spec";
 
 // An instance is emitted as a diff against its component's published children, which changes what
@@ -34,7 +34,7 @@ describe("instances as diffs", () => {
     // Two instances recolor the same sublayer, so the value is shared and belongs hoisted. The
     // count that decides that has to see INTO `overrides`; a ref counted zero times is treated as
     // single-use, dropped from the table, and never inlined — leaving the color unrecoverable.
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "10:1",
@@ -86,7 +86,7 @@ describe("instances as diffs", () => {
   });
 
   it("states a field the instance put back to its default", async () => {
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "40:1",
@@ -124,7 +124,7 @@ describe("instances as diffs", () => {
         boundVariables: { color: { type: "VARIABLE_ALIAS", id: "VariableID:1:1" } },
       },
     ];
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "50:1",
@@ -146,7 +146,7 @@ describe("instances as diffs", () => {
   });
 
   it("reports an instance whose every sublayer was hidden", async () => {
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "20:1",
@@ -177,7 +177,7 @@ describe("instances as diffs", () => {
     // copy it would rewrite the copy while inlining styles out from under the real children.
     const twin = (id: string) =>
       node({ id, name: "t", type: "TEXT", characters: "Hi", fills: solid(1, 0, 0) });
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "10:1",
@@ -206,7 +206,7 @@ describe("instances as diffs", () => {
   });
 
   it("reports a slot the designer emptied", async () => {
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "50:1",
@@ -237,7 +237,7 @@ describe("instances as diffs", () => {
   });
 
   it("republishes children the designer resequenced", async () => {
-    const design = await simplifyRestResponse(
+    const design = await readRestFixture(
       page([
         node({
           id: "30:1",

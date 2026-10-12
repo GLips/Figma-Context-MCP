@@ -40,9 +40,13 @@ export type GetFigmaDataMetrics = {
   componentPropertyCount: number;
   /** True if any node in the raw API response has non-empty `boundVariables`. */
   hasVariables: boolean;
-  /** Wall-clock ms spent on the Figma API fetch (network + parse). */
+  /** Wall-clock ms spent on the Figma API fetch (network + JSON parse). */
   fetchMs: number;
-  /** Wall-clock ms spent on the simplification walk. */
+  /** Wall-clock ms spent decoding the response into snapshots. */
+  decodeMs: number;
+  /** Wall-clock ms spent fetching off-tree component definitions and grid siblings. */
+  enrichMs: number;
+  /** Wall-clock ms spent on the simplification walk and projection. */
   simplifyMs: number;
   /** Wall-clock ms spent serializing to YAML/JSON. */
   serializeMs: number;

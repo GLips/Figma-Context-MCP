@@ -185,11 +185,11 @@ describe("figma identifier redaction in telemetry error_message", () => {
   });
 
   it("scrubs the node ID from the REST adapter's missing-node error", async () => {
-    const { simplifyRestResponse } = await import("~/adapters/rest/rest.js");
+    const { parseRestResponse } = await import("~/adapters/rest/decode/response.js");
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
 
     const error = await captureThrown(async () =>
-      simplifyRestResponse({ name: "test", nodes: { [NODE_ID]: null } } as never),
+      parseRestResponse({ name: "test", nodes: { [NODE_ID]: null } } as never),
     );
     expect(String((error as Error).message)).toContain(NODE_ID);
 

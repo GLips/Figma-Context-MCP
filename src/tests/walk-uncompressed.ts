@@ -1,5 +1,6 @@
 import type { Node as FigmaNode, Style } from "@figma/rest-api-spec";
-import { restNodeToSnapshot, type RestComponentTables } from "~/adapters/rest/node-to-snapshot.js";
+import { restNodeToSnapshot } from "~/adapters/rest/decode/node-to-snapshot.js";
+import type { RestComponentTables } from "~/adapters/rest/decode/component-tables.js";
 import { simplify } from "@framelink/core";
 import type { TraversalOptions } from "@framelink/core";
 import { createRefStyleTable, projectIntoTable } from "@framelink/core/internal";

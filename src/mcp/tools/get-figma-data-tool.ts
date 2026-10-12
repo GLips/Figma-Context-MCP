@@ -10,6 +10,7 @@ import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/prog
 import {
   getFigmaData as runGetFigmaData,
   type GetFigmaDataOutcome,
+  type GetFigmaDataPhase,
 } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 
@@ -72,29 +73,31 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
-    let stopFetchHeartbeat: (() => Promise<void>) | undefined;
-    let stopSimplifyHeartbeat: (() => Promise<void>) | undefined;
+    // One heartbeat per phase that can run long: two of them wait on Figma, one on the walk.
+    const steps: Partial<Record<GetFigmaDataPhase, [step: number, message: string]>> = {
+      fetch: [0, "Fetching design data from Figma API"],
+      enrich: [1, "Fetching component definitions"],
+      simplify: [2, "Simplifying design data"],
+      serialize: [3, "Serializing response"],
+    };
+    let stopHeartbeat: (() => Promise<void>) | undefined;
 
     const result = await runGetFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat, {
-      onFetchStart: async () => {
-        await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
-        stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
-      },
-      onFetchComplete: async () => {
-        await stopFetchHeartbeat?.();
-      },
-      onSimplifyStart: async (progress) => {
-        await sendProgress(extra, 1, 3, "Fetched design data, simplifying");
-        stopSimplifyHeartbeat = startProgressHeartbeat(
-          extra,
-          () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
+      onPhaseStart: async (phase, progress) => {
+        const step = steps[phase];
+        if (!step) return;
+        const [index, message] = step;
+        await sendProgress(extra, index, 4, message);
+        if (phase === "serialize") return;
+        stopHeartbeat = startProgressHeartbeat(extra, () =>
+          phase === "simplify"
+            ? `Simplifying design data (${progress.getNodeCount()} nodes processed)`
+            : message,
         );
       },
-      onSimplifyComplete: async () => {
-        await stopSimplifyHeartbeat?.();
-      },
-      onSerializeStart: async () => {
-        await sendProgress(extra, 2, 3, "Simplified design, serializing response");
+      onPhaseEnd: async () => {
+        await stopHeartbeat?.();
+        stopHeartbeat = undefined;
       },
       onComplete,
     });

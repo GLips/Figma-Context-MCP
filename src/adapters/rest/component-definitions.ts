@@ -1,15 +1,12 @@
-import type {
-  Component,
-  ComponentSet,
-  GetFileNodesResponse,
-  GetFileResponse,
-  Node as FigmaDocumentNode,
-} from "@figma/rest-api-spec";
+import type { Component } from "@figma/rest-api-spec";
+import { offTreeComponentIds } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
-import type { FigmaService } from "~/services/figma.js";
+import { limitConcurrency } from "~/utils/concurrency.js";
 import { Logger } from "~/utils/logger.js";
-import { parseAPIResponse } from "./rest.js";
-import { restNodeToSnapshot } from "./node-to-snapshot.js";
+import { mainComponentOf, type RestComponentTables } from "./decode/component-tables.js";
+import { restNodeToSnapshot } from "./decode/node-to-snapshot.js";
+import type { ParsedRestResponse } from "./decode/response.js";
+import type { RestDesignSource } from "./read-rest-design.js";
 
 /**
  * Fetch the definitions for components a read REFERENCED but didn't contain.
@@ -38,14 +35,21 @@ import { restNodeToSnapshot } from "./node-to-snapshot.js";
  * read still returns, one notch less pristine.
  */
 export async function fetchComponentDefinitions(
-  figmaService: FigmaService,
+  source: RestDesignSource,
   fileKey: string,
-  apiResponse: GetFileResponse | GetFileNodesResponse,
-  maxDepth?: number | null,
-  nodeId?: string,
+  { snapshots, tables: consuming }: ParsedRestResponse,
+  maxDepth?: number,
 ): Promise<NodeSnapshot[]> {
-  const { rawNodes, components, componentSets } = parseAPIResponse(apiResponse, nodeId);
-  const found = missingDefinitions(rawNodes, components, maxDepth);
+  // Discovery walks the slice of the document the READ will keep: a hidden layer or one below the
+  // depth cut never reaches the output, so fetching its component spends a request — and a slot of
+  // the fetch budget — on bytes nobody sees. A component with no table row has no key and no
+  // `remote` flag, nothing to fetch WITH; the donor floor covers it, as it does a 403.
+  const found = offTreeComponentIds(snapshots, { read: "wire", maxDepth }).flatMap(
+    (id): Array<[string, Component]> => {
+      const component = consuming.components[id];
+      return component ? [[id, component]] : [];
+    },
+  );
   if (found.length === 0) return [];
 
   // A published component costs its OWN key lookup, so a design-system page referencing a hundred
@@ -61,16 +65,15 @@ export async function fetchComponentDefinitions(
 
   const local = missing.filter(([, component]) => !component.remote);
   const remote = missing.filter(([, component]) => component.remote);
-  const consuming: FileComponentTables = { components, componentSets };
 
   const fetches: Promise<NodeSnapshot[]>[] = [];
   if (local.length > 0) {
     // Same-file ids address real nodes here, so nothing needs re-keying and one call answers all.
     const wanted = new Map(local.map(([id]) => [id, { id, key: undefined }]));
-    fetches.push(fetchDefinitionNodes(figmaService, fileKey, wanted, consuming, false));
+    fetches.push(fetchDefinitionNodes(source, fileKey, wanted, consuming, false));
   }
-  for (const [libraryFileKey, wanted] of await locateRemote(figmaService, remote)) {
-    fetches.push(fetchDefinitionNodes(figmaService, libraryFileKey, wanted, consuming, true));
+  for (const [libraryFileKey, wanted] of await locateRemote(source, remote)) {
+    fetches.push(fetchDefinitionNodes(source, libraryFileKey, wanted, consuming, true));
   }
 
   const settled = await Promise.all(fetches);
@@ -88,75 +91,6 @@ const MAX_DEFINITION_FETCHES = 40;
 /** Concurrent key lookups. Enough to hide latency, low enough not to look like a burst. */
 const KEY_LOOKUP_CONCURRENCY = 6;
 
-/** Run `work` over `items` with at most `limit` in flight, preserving nothing but the results. */
-async function mapWithLimit<T, R>(
-  items: T[],
-  limit: number,
-  work: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      results.push(await work(items[index]));
-    }
-  });
-  await Promise.all(runners);
-  return results;
-}
-
-/**
- * The component ids instances point at that no COMPONENT/COMPONENT_SET node in the response
- * defines, paired with their table row. The row is what says where to look: `remote` picks the
- * fetch shape and `key` is the only cross-file handle.
- */
-function missingDefinitions(
-  rawNodes: FigmaDocumentNode[],
-  components: Record<string, Component>,
-  maxDepth?: number | null,
-): Array<[string, Component]> {
-  const referenced = new Set<string>();
-  const defined = new Set<string>();
-  // Discovery walks the same slice of the document the READ will keep. A hidden layer or one below
-  // the depth cut never reaches the output, so fetching its component spends a request — and a slot
-  // of the fetch budget — on bytes nobody sees. The visibility rule mirrors `shouldProcessNode` in
-  // the core exactly, INCLUDING its context: a hidden node whose visibility a component property
-  // drives survives only inside a component definition, where some instance will turn it on. The
-  // same node hidden inside an instance is simply hidden.
-  const visit = (node: FigmaDocumentNode, depth: number, insideDefinition: boolean): void => {
-    const propertyDriven =
-      insideDefinition &&
-      "componentPropertyReferences" in node &&
-      !!node.componentPropertyReferences &&
-      "visible" in node.componentPropertyReferences;
-    if ("visible" in node && node.visible === false && !propertyDriven) return;
-    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
-    if (node.type === "INSTANCE" && node.componentId) referenced.add(node.componentId);
-    if (maxDepth !== undefined && maxDepth !== null && depth >= maxDepth) return;
-    const childContext =
-      node.type === "COMPONENT" || node.type === "COMPONENT_SET"
-        ? true
-        : node.type === "INSTANCE"
-          ? false
-          : insideDefinition;
-    for (const child of "children" in node ? (node.children ?? []) : []) {
-      visit(child, depth + 1, childContext);
-    }
-  };
-  for (const node of rawNodes) visit(node, 0, false);
-
-  const missing: Array<[string, Component]> = [];
-  for (const id of referenced) {
-    if (defined.has(id)) continue;
-    const component = components[id];
-    // No table row means no key and no `remote` flag — nothing to fetch WITH. The donor floor
-    // covers it, which is the same place a 403 or a deleted component lands.
-    if (component) missing.push([id, component]);
-  }
-  return missing;
-}
-
 /**
  * Trade each published component's key for the library file + node it lives at, grouped so one
  * library costs one `?ids=` call however many of its components the read used. The returned map's
@@ -164,22 +98,27 @@ function missingDefinitions(
  * the fetched subtree has to come back under.
  */
 async function locateRemote(
-  figmaService: FigmaService,
+  source: RestDesignSource,
   remote: Array<[string, Component]>,
 ): Promise<Map<string, Map<string, WantedDefinition>>> {
   const byFile = new Map<string, Map<string, WantedDefinition>>();
-  const sites = await mapWithLimit(remote, KEY_LOOKUP_CONCURRENCY, async ([localId, component]) => {
-    try {
-      const site = await figmaService.getPublishedComponentSite(component.key);
-      return { localId, key: component.key, ...site };
-    } catch (error) {
-      Logger.log(
-        `Component definition for ${component.name} (key ${component.key}) is unreachable — ` +
-          `falling back to a donated instance: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return null;
-    }
-  });
+  const lookup = limitConcurrency(KEY_LOOKUP_CONCURRENCY);
+  const sites = await Promise.all(
+    remote.map(([localId, component]) =>
+      lookup(async () => {
+        try {
+          const site = await source.getPublishedComponentSite(component.key);
+          return { localId, key: component.key, ...site };
+        } catch (error) {
+          Logger.log(
+            `Component definition for ${component.name} (key ${component.key}) is unreachable — ` +
+              `falling back to a donated instance: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        }
+      }),
+    ),
+  );
   for (const site of sites) {
     if (!site) continue;
     const wanted = byFile.get(site.fileKey) ?? new Map<string, WantedDefinition>();
@@ -202,16 +141,16 @@ interface WantedDefinition {
  * path (`I<instance>;<tail>`) is already stated in the definition's id space.
  */
 async function fetchDefinitionNodes(
-  figmaService: FigmaService,
+  source: RestDesignSource,
   fileKey: string,
   wanted: Map<string, WantedDefinition>,
-  consuming: FileComponentTables,
+  consuming: Required<RestComponentTables>,
   /** A published library answers with its CURRENT version; the same file answers with this one. */
   fromLibrary: boolean,
 ): Promise<NodeSnapshot[]> {
   let response;
   try {
-    response = await figmaService.getRawNodes(fileKey, [...wanted.keys()]);
+    response = await source.getRawNodes(fileKey, [...wanted.keys()]);
   } catch (error) {
     // Access, rate limit, network. Expected enough to be a fallback rather than a failure.
     Logger.log(
@@ -275,8 +214,8 @@ async function fetchDefinitionNodes(
 function localize(
   snapshot: NodeSnapshot,
   rootId: string,
-  library: FileComponentTables,
-  consuming: FileComponentTables,
+  library: Required<RestComponentTables>,
+  consuming: Required<RestComponentTables>,
   fromLibrary: boolean,
 ): NodeSnapshot {
   const componentIdByKey = new Map<string, string>();
@@ -295,7 +234,7 @@ function localize(
       const localId = key ? componentIdByKey.get(key) : undefined;
       if (localId) {
         node.componentId = localId;
-        node.mainComponent = referenceFrom(localId, consuming);
+        node.mainComponent = mainComponentOf(localId, consuming);
       } else {
         // No counterpart here: better unnamed than named wrong. The nested instance keeps its
         // children and simply isn't attributed — the same place an unpublished component lands.
@@ -309,34 +248,4 @@ function localize(
   // Another page of the SAME file is this document's own reading of the component. Only a library
   // can hand back a version this document never adopted.
   return { ...snapshot, id: rootId, definitionUnverified: fromLibrary || undefined };
-}
-
-/** A component's provenance as the CONSUMING file states it, for a reference translated into it. */
-function referenceFrom(
-  componentId: string,
-  consuming: FileComponentTables,
-): NodeSnapshot["mainComponent"] {
-  const component = consuming.components[componentId];
-  if (!component) return undefined;
-  const reference: NonNullable<NodeSnapshot["mainComponent"]> = {
-    name: component.name,
-    key: component.key || undefined,
-  };
-  const setId = component.componentSetId;
-  if (setId) {
-    const set = consuming.componentSets[setId];
-    reference.set = {
-      id: setId,
-      key: set?.key || undefined,
-      name: set?.name ?? setId,
-      description: set?.description || undefined,
-    };
-  }
-  return reference;
-}
-
-/** A file's component tables, the pair that has to travel together to translate a reference. */
-interface FileComponentTables {
-  components: Record<string, Component>;
-  componentSets: Record<string, ComponentSet>;
 }

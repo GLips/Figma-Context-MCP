@@ -41,15 +41,24 @@ import type {
 export interface SimplifyOptions {
   scheduler?: WalkScheduler;
   nodeCounter?: NodeCounter;
+  /** Definitions for components the snapshots instantiate but don't contain (`offTreeComponentIds`). */
   componentDefinitions?: NodeSnapshot[];
+  placement?: PlacementContext;
+}
+
+/**
+ * Where a targeted read's roots sit, read for layout context only and never emitted, so a nested
+ * node keeps the fill/hug/fixed sizing and parent-relative position it has when read through its
+ * parent. A page or section parent is ignored on purpose: canvas-level sizing stays `"contextual"`.
+ */
+export interface PlacementContext {
+  /** Without `children`: the parent's child list is `siblings`, stated on its own. */
+  parent: Omit<NodeSnapshot, "children">;
   /**
-   * The parent a targeted read's roots sit in, read for layout context only and never emitted, so
-   * a nested node keeps the fill/hug/fixed sizing and parent-relative position it has when read
-   * through that parent. Its `children` must list every sibling when it is a GRID (cell placement
-   * depends on them) and are unused otherwise. A page or section parent is ignored on purpose:
-   * canvas-level sizing stays `"contextual"`.
+   * The parent's children in order. A GRID places each cell against every in-flow sibling, so under
+   * a GRID this must be the complete list, the roots among it. No other parent reads it.
    */
-  contextParent?: NodeSnapshot;
+  siblings: readonly NodeSnapshot[];
 }
 
 export interface SimplifyResult {
@@ -85,7 +94,7 @@ export async function simplify(
 ): Promise<SimplifyResult> {
   const notes = createComponentNotes();
   const context: ReadContext = { notes, snapshots: new Map(), definitions: [] };
-  const nodes = await walkNodes(snapshots, options, notes, context, options.contextParent);
+  const nodes = await walkNodes(snapshots, options, notes, context, options.placement);
   context.definitions = await walkNodes(
     options.componentDefinitions ?? [],
     options,
@@ -146,7 +155,7 @@ async function walkNodes(
   options: SimplifyOptions,
   notes: ComponentNotes,
   read: ReadContext,
-  contextParent?: NodeSnapshot,
+  placement?: PlacementContext,
 ): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
     components: notes,
@@ -156,7 +165,7 @@ async function walkNodes(
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
-    const parent = contextParent && rootParent(node, contextParent);
+    const parent = placement && rootParent(node, placement);
     processedNodes.push(
       await extractNode(
         node,
@@ -174,13 +183,16 @@ async function walkNodes(
 const CANVAS_LEVEL_PARENT_TYPES = new Set(["DOCUMENT", "CANVAS", "PAGE", "SECTION"]);
 
 /**
- * The context parent as the root's own parent, with the root standing in for its entry among the
+ * The placement parent as the root's own parent, with the root standing in for its entry among the
  * siblings: grid placement finds a child by identity (`parent.children.indexOf`).
  */
-function rootParent(root: NodeSnapshot, contextParent: NodeSnapshot): NodeSnapshot | undefined {
-  if (CANVAS_LEVEL_PARENT_TYPES.has(contextParent.type)) return undefined;
-  const children = contextParent.children?.map((child) => (child.id === root.id ? root : child));
-  return { ...contextParent, children };
+function rootParent(
+  root: NodeSnapshot,
+  { parent, siblings }: PlacementContext,
+): NodeSnapshot | undefined {
+  if (CANVAS_LEVEL_PARENT_TYPES.has(parent.type)) return undefined;
+  const children = siblings.map((child) => (child.id === root.id ? root : child));
+  return { ...parent, children };
 }
 
 /**

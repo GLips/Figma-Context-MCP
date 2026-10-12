@@ -426,7 +426,7 @@ export interface NodeSnapshot {
    *
    * Optional because the REST producer has to SOLVE for it — the wire carries no
    * `size` without `geometry=paths`, and that inversion has no answer near every
-   * odd multiple of 45° (see `DEGENERATE_DETERMINANT`, `adapters/rest/own-box.ts`).
+   * odd multiple of 45° (see `DEGENERATE_DETERMINANT`, `adapters/rest/decode/own-box.ts`).
    * The plugin producer reads it straight off the live node. Absent → consumers
    * fall back to the AABB.
    */

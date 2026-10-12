@@ -1,8 +1,9 @@
-import type { GetFileResponse } from "@figma/rest-api-spec";
-import { FigmaService } from "~/services/figma.js";
-import { restResponseToSnapshots, simplifyRestRead } from "~/adapters/rest/rest.js";
-import { withGridSiblings } from "~/adapters/rest/grid-siblings.js";
-import { fetchComponentDefinitions } from "~/adapters/rest/component-definitions.js";
+import {
+  readRestDesign,
+  type RestDesignRequest,
+  type RestDesignSource,
+  type RestReadPhase,
+} from "~/adapters/rest/read-rest-design.js";
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
 import { wrapForSerialization } from "~/utils/serializable-design.js";
@@ -16,11 +17,7 @@ import {
 
 export type { GetFigmaDataMetrics } from "~/services/get-figma-data-metrics.js";
 
-export type GetFigmaDataInput = {
-  fileKey: string;
-  nodeId?: string;
-  depth?: number;
-};
+export type GetFigmaDataInput = RestDesignRequest;
 
 export type GetFigmaDataResult = {
   formatted: string;
@@ -36,7 +33,7 @@ export type GetFigmaDataOutcome = {
 };
 
 /**
- * Live progress reader exposed to onSimplifyStart so callers can render
+ * Live progress reader exposed to the simplify phase so callers can render
  * heartbeats showing real-time node counts. Closes over the per-call counter
  * the walker is incrementing — no module-global state involved.
  */
@@ -44,12 +41,11 @@ export type SimplifyProgress = {
   getNodeCount: () => number;
 };
 
+export type GetFigmaDataPhase = RestReadPhase | "serialize";
+
 export type GetFigmaDataHooks = {
-  onFetchStart?: () => void | Promise<void>;
-  onFetchComplete?: () => void | Promise<void>;
-  onSimplifyStart?: (progress: SimplifyProgress) => void | Promise<void>;
-  onSimplifyComplete?: () => void | Promise<void>;
-  onSerializeStart?: () => void | Promise<void>;
+  onPhaseStart?: (phase: GetFigmaDataPhase, progress: SimplifyProgress) => void | Promise<void>;
+  onPhaseEnd?: (phase: GetFigmaDataPhase) => void | Promise<void>;
   /**
    * Fires exactly once per call, after the pipeline completes (success or
    * failure). Lets shells observe outcomes without embedding telemetry
@@ -60,7 +56,7 @@ export type GetFigmaDataHooks = {
 };
 
 /**
- * Shared pipeline for "get figma data": fetch raw response, simplify, serialize.
+ * "Get figma data": the composed REST read, then metrics and serialization.
  * Used by both the MCP `get_figma_data` tool and the `fetch` CLI command, which
  * differ only in how they wrap this pipeline (progress notifications vs. plain
  * stdout) and how they report errors (MCP envelope vs. process exit).
@@ -69,100 +65,49 @@ export type GetFigmaDataHooks = {
  * CLI passes none.
  */
 export async function getFigmaData(
-  figmaService: FigmaService,
+  source: RestDesignSource,
   input: GetFigmaDataInput,
   outputFormat: OutputFormat,
   hooks: GetFigmaDataHooks = {},
 ): Promise<GetFigmaDataResult> {
-  const { fileKey, nodeId, depth } = input;
   const startedAt = Date.now();
   let metrics: GetFigmaDataMetrics | undefined;
   let caughtError: unknown;
   // Per-call counter shared with the walker. Lives in the call closure so
   // overlapping HTTP requests each have their own — no module-global state.
   const nodeCounter = { count: 0 };
+  const progress: SimplifyProgress = { getNodeCount: () => nodeCounter.count };
 
   try {
-    await hooks.onFetchStart?.();
-    let rawResult: { data: GetFileResponse; rawSize: number };
-    const fetchStart = Date.now();
-    try {
-      if (nodeId) {
-        rawResult = await figmaService.getRawNodeInContext(fileKey, nodeId);
-      } else {
-        rawResult = await figmaService.getRawFile(fileKey, depth);
-      }
-    } catch (error) {
-      tagError(error, { phase: "fetch" });
-    } finally {
-      await hooks.onFetchComplete?.();
-    }
-    const fetchMs = Date.now() - fetchStart;
-    const rawApiResponse = rawResult.data;
-    const rawSizeKb = rawResult.rawSize / 1024;
+    const read = await readRestDesign(source, input, {
+      nodeCounter,
+      onPhaseStart: (phase) => hooks.onPhaseStart?.(phase, progress),
+      onPhaseEnd: (phase) => hooks.onPhaseEnd?.(phase),
+    });
+    const { design, response } = read;
 
-    // Off-tree component definitions, fetched before the walk so a component whose subtree the
-    // read didn't contain is emitted from the REAL definition rather than a donated instance. Any
-    // failure returns an empty list and the core falls back to the donor (see the module).
-    const componentDefinitions = await fetchComponentDefinitions(
-      figmaService,
-      fileKey,
-      rawApiResponse,
-      depth,
-      nodeId,
-    );
+    writeLogs("figma-simplified.json", design);
 
-    await hooks.onSimplifyStart?.({ getNodeCount: () => nodeCounter.count });
-    let simplifiedDesign;
-    const simplifyStart = Date.now();
-    try {
-      const read = restResponseToSnapshots(rawApiResponse, nodeId);
-      read.contextParent = await withGridSiblings(figmaService, fileKey, read.contextParent);
-      simplifiedDesign = await simplifyRestRead(read, {
-        maxDepth: depth,
-        nodeCounter,
-        componentDefinitions,
-      });
-    } catch (error) {
-      tagError(error, { phase: "simplify" });
-    } finally {
-      await hooks.onSimplifyComplete?.();
-    }
-    const simplifyMs = Date.now() - simplifyStart;
-
-    writeLogs("figma-simplified.json", simplifiedDesign);
-
-    const rawNodeCount = nodeCounter.count;
-    const hasVariables = detectVariables(rawApiResponse);
-    const namedStyleCount = countNamedStyles(rawApiResponse);
-    const measured = measureSimplifiedDesign(simplifiedDesign);
-
-    await hooks.onSerializeStart?.();
+    await hooks.onPhaseStart?.("serialize", progress);
     const serializeStart = Date.now();
     let formatted: string;
     try {
-      formatted = serializeResult(wrapForSerialization(simplifiedDesign), outputFormat);
+      formatted = serializeResult(wrapForSerialization(design), outputFormat);
     } catch (error) {
       tagError(error, { phase: "serialize" });
+    } finally {
+      await hooks.onPhaseEnd?.("serialize");
     }
-    const simplifiedSizeKb = Buffer.byteLength(formatted, "utf8") / 1024;
     const serializeMs = Date.now() - serializeStart;
 
     metrics = {
-      rawSizeKb,
-      simplifiedSizeKb,
-      rawNodeCount,
-      simplifiedNodeCount: measured.simplifiedNodeCount,
-      maxDepth: measured.maxDepth,
-      namedStyleCount,
-      componentCount: measured.componentCount,
-      instanceCount: measured.instanceCount,
-      textNodeCount: measured.textNodeCount,
-      imageNodeCount: measured.imageNodeCount,
-      componentPropertyCount: measured.componentPropertyCount,
-      hasVariables,
-      fetchMs,
-      simplifyMs,
+      rawSizeKb: read.rawSize / 1024,
+      simplifiedSizeKb: Buffer.byteLength(formatted, "utf8") / 1024,
+      rawNodeCount: nodeCounter.count,
+      ...measureSimplifiedDesign(design),
+      namedStyleCount: countNamedStyles(response),
+      hasVariables: detectVariables(response),
+      ...read.timings,
       serializeMs,
     };
     return { formatted, metrics };

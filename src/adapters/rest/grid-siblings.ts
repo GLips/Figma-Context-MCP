@@ -1,32 +1,33 @@
-import type { NodeSnapshot } from "@framelink/core/snapshot";
-import type { FigmaService } from "~/services/figma.js";
+import type { PlacementContext } from "@framelink/core";
 import { Logger } from "~/utils/logger.js";
-import { restResponseToSnapshots } from "./rest.js";
+import { parseRestResponse } from "./decode/response.js";
+import type { RestDesignSource } from "./read-rest-design.js";
 
 /**
- * A targeted read's context parent with its siblings, when it is a GRID.
+ * A targeted read's placement with every sibling, when its parent is a GRID.
  *
  * Grid cell placement (packed or explicit, z-order) is read against every in-flow sibling, and an
  * ids-filtered response lists only the child on the path. So a grid parent costs one more call for
  * its children, one level deep; every other parent needs none. Supplementary, like the component
- * definition fetch: on failure the read keeps the path-only parent, placing the node against itself.
+ * definition fetch: on failure the read keeps the path-only siblings, placing the node against itself.
  */
 export async function withGridSiblings(
-  figmaService: FigmaService,
+  source: RestDesignSource,
   fileKey: string,
-  contextParent: NodeSnapshot | undefined,
-): Promise<NodeSnapshot | undefined> {
-  if (contextParent?.layoutMode !== "GRID") return contextParent;
+  placement: PlacementContext | undefined,
+): Promise<PlacementContext | undefined> {
+  if (placement?.parent.layoutMode !== "GRID") return placement;
+  const { parent } = placement;
   try {
-    const response = await figmaService.getRawNodes(fileKey, [contextParent.id], 1);
-    const [parent] = restResponseToSnapshots(response).snapshots;
-    return { ...contextParent, children: parent.children };
+    const response = await source.getRawNodes(fileKey, [parent.id], 1);
+    const [fetched] = parseRestResponse(response).snapshots;
+    return { parent, siblings: fetched.children ?? [] };
   } catch (error) {
     // Access, rate limit, network. Expected enough to be a fallback rather than a failure.
     Logger.log(
-      `Grid siblings of ${contextParent.id} in ${fileKey} are unreachable — placing the node ` +
+      `Grid siblings of ${parent.id} in ${fileKey} are unreachable — placing the node ` +
         `against itself: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return contextParent;
+    return placement;
   }
 }

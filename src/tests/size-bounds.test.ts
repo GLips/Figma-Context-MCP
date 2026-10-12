@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Node } from "@figma/rest-api-spec";
-import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import { restNodeToSnapshot } from "~/adapters/rest/decode/node-to-snapshot.js";
 import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
 import { simplify } from "@framelink/core";
 

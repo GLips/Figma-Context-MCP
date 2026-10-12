@@ -372,7 +372,7 @@ type Classification = {
  * tuples for the arbitrary-style residual.
  *
  * The wire override tables are already resolved into `node.text` runs by the
- * adapter (see src/adapters/rest/text.ts); this function only:
+ * adapter (see src/adapters/rest/decode/text.ts); this function only:
  *   1. Determines the canonical `boldWeight` — the heavier fontWeight that
  *      appears across the most characters across all lines. This is what
  *      plain `**` maps to.

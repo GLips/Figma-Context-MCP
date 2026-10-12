@@ -52,7 +52,11 @@ export { convertSizing } from "./transformers/layout/common.js";
 
 // Full runtime reads; project owns the wire representation.
 export { simplify } from "./simplify.js";
-export type { SimplifyOptions, SimplifyResult } from "./simplify.js";
+export type { PlacementContext, SimplifyOptions, SimplifyResult } from "./simplify.js";
+
+// Which components a read needs definitions for, under the same admission rule projection applies.
+export { offTreeComponentIds } from "./off-tree.js";
+export type { OffTreeScope } from "./off-tree.js";
 
 // The REST adapter hashes text styles with this; two producers stringifying differently would
 // emit different style refs for identical styling.

@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { simplify, type SimplifiedNode } from "@framelink/core";
 import type { GetFileNodesResponse, GetFileResponse } from "@figma/rest-api-spec";
-import { restResponseToSnapshots } from "~/adapters/rest/rest.js";
-import { withGridSiblings } from "~/adapters/rest/grid-siblings.js";
-import type { FigmaService } from "~/services/figma.js";
+import { parseRestResponse } from "~/adapters/rest/decode/response.js";
+import { readRestDesign, type RestDesignSource } from "~/adapters/rest/read-rest-design.js";
 
 // A-7: a nested node reads the same whether targeted or reached through its parent. These are
 // ids-filtered file responses, where each ancestor lists only the child on the path.
@@ -39,8 +38,8 @@ function fileOf(...topLevel: object[]): GetFileResponse {
 }
 
 async function read(file: GetFileResponse | GetFileNodesResponse, nodeId?: string) {
-  const { snapshots, contextParent } = restResponseToSnapshots(file, nodeId);
-  const { nodes } = await simplify(snapshots, { contextParent });
+  const { snapshots, placement } = parseRestResponse(file, nodeId);
+  const { nodes } = await simplify(snapshots, { placement });
   return nodes[0];
 }
 
@@ -118,16 +117,14 @@ describe("targeted REST reads", () => {
       },
     } as unknown as GetFileNodesResponse;
     const calls: unknown[][] = [];
-    const service = {
+    const source = {
+      getRawNodeInContext: async () => ({ data: file, rawSize: 0 }),
       getRawNodes: async (...args: unknown[]) => (calls.push(args), siblings),
-    } as unknown as FigmaService;
+    } as unknown as RestDesignSource;
 
-    const { snapshots, contextParent } = restResponseToSnapshots(file, "2:2");
-    const { nodes } = await simplify(snapshots, {
-      contextParent: await withGridSiblings(service, "file", contextParent),
-    });
+    const { design } = await readRestDesign(source, { fileKey: "file", nodeId: "2:2" });
 
     expect(calls).toEqual([["file", ["2:1"], 1]]);
-    expect(nodes[0].layout).toMatchObject({ gridColumn: "1", gridRow: "1" });
+    expect(design.nodes[0].layout).toMatchObject({ gridColumn: "1", gridRow: "1" });
   });
 });

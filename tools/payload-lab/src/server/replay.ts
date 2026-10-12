@@ -37,15 +37,22 @@ export async function runSnapshot(
   raw: Buffer,
   revision: string,
 ): Promise<Replay> {
-  const modern = await exists(join(source, "src/adapters/rest/rest.ts"));
+  // Three generations of entry: the composed read, the un-enriched REST entry before it, and the
+  // extractors before that. A baseline can be any of them.
+  const composed = await exists(join(source, "src/adapters/rest/read-rest-design.ts"));
+  const modern = composed || (await exists(join(source, "src/adapters/rest/rest.ts")));
   if (!modern && !(await exists(join(source, "src/extractors/index.ts"))))
     throw new Error("This revision has no supported replay entry point.");
   for (const file of ["src/utils/serialize.ts", "src/utils/serializable-design.ts"])
     if (!(await exists(join(source, file))))
       throw new Error(`This revision predates ${file}. Choose a newer baseline.`);
-  const entry = modern
-    ? 'import { simplifyRestResponse } from "./src/adapters/rest/rest.ts"; const simplify = raw => simplifyRestResponse(raw);'
-    : 'import { simplifyRawFigmaObject, allExtractors, collapseSvgContainers } from "./src/extractors/index.ts"; const simplify = raw => simplifyRawFigmaObject(raw, allExtractors, { afterChildren: collapseSvgContainers });';
+  // The composed read gets a source that serves the capture and refuses every supplementary
+  // fetch, so off-tree components fall back to a donor exactly as the older entry published them.
+  const entry = composed
+    ? 'import { readRestDesign } from "./src/adapters/rest/read-rest-design.ts"; const offline = async () => { throw new Error("Replay is offline"); }; const simplify = raw => readRestDesign({ getRawFile: async () => ({ data: raw, rawSize: 0 }), getRawNodeInContext: offline, getRawNodes: offline, getPublishedComponentSite: offline }, { fileKey: "replay" }).then(read => read.design);'
+    : modern
+      ? 'import { simplifyRestResponse } from "./src/adapters/rest/rest.ts"; const simplify = raw => simplifyRestResponse(raw);'
+      : 'import { simplifyRawFigmaObject, allExtractors, collapseSvgContainers } from "./src/extractors/index.ts"; const simplify = raw => simplifyRawFigmaObject(raw, allExtractors, { afterChildren: collapseSvgContainers });';
   const code = `${entry}
 import { wrapForSerialization } from "./src/utils/serializable-design.ts";
 import { serializeResult } from "./src/utils/serialize.ts";

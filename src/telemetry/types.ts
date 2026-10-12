@@ -74,6 +74,8 @@ export type GetFigmaDataCall = CommonCallProps & {
   component_property_count?: number;
   has_variables?: boolean;
   fetch_ms?: number;
+  decode_ms?: number;
+  enrich_ms?: number;
   simplify_ms?: number;
   serialize_ms?: number;
   depth: number | null;

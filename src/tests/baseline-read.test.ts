@@ -1,7 +1,7 @@
 import { it, expect } from "vitest";
 import { simplify } from "@framelink/core";
 import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
-import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import { restNodeToSnapshot } from "~/adapters/rest/decode/node-to-snapshot.js";
 import type { Node } from "@figma/rest-api-spec";
 
 it("REST and plugin adapters preserve native baseline through simplification", async () => {

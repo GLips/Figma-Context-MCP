@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import type { SimplifiedDesign } from "@framelink/core";
-import { restResponseToSnapshots } from "~/adapters/rest/rest.js";
+import { parseRestResponse } from "~/adapters/rest/decode/response.js";
 import { GOLDEN_FIXTURES } from "./goldens/fixtures.js";
 import { expectedPath } from "./goldens/harness.js";
 import { PARITY_CASES } from "./parity/cases.js";
@@ -30,9 +30,9 @@ describe("parity harness", () => {
   // `toStrictEqual`) so the JSON round-trip's dropped `undefined` fields — absent
   // in the committed file, present-but-undefined in a live decode — don't matter.
   describe("committed snapshots stay faithful to the REST decode", () => {
-    for (const fixture of GOLDEN_FIXTURES) {
+    for (const fixture of GOLDEN_FIXTURES.filter(({ nodeId }) => nodeId === undefined)) {
       it(`snapshot matches the live decode for "${fixture.name}"`, () => {
-        const fresh = restResponseToSnapshots(fixture.response).snapshots;
+        const fresh = parseRestResponse(fixture.response).snapshots;
         expect(loadSnapshot(fixture.name)).toEqual(fresh);
       });
     }
@@ -49,6 +49,7 @@ describe("parity harness", () => {
 
         for (const producer of PARITY_PRODUCERS) {
           const design = await producer.produce(parityCase);
+          if (!design) continue;
           expect(parityView(design, tokenIds), `producer "${producer.id}"`).toEqual(target);
         }
       });

@@ -15,7 +15,14 @@
  * original meta is still discoverable.
  */
 
-export type ErrorPhase = "validate" | "fetch" | "simplify" | "serialize" | "download";
+export type ErrorPhase =
+  | "validate"
+  | "fetch"
+  | "decode"
+  | "enrich"
+  | "simplify"
+  | "serialize"
+  | "download";
 
 export type ErrorCategory =
   | "rate_limit"

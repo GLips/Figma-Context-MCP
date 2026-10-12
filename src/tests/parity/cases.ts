@@ -12,6 +12,7 @@ import { loadScene } from "./scenes-io.js";
 export const PARITY_CASES: ParityCase[] = GOLDEN_FIXTURES.map((fixture) => ({
   name: fixture.name,
   rest: fixture.response,
-  snapshot: loadSnapshot(fixture.name),
+  nodeId: fixture.nodeId,
+  snapshot: fixture.nodeId === undefined ? loadSnapshot(fixture.name) : undefined,
   scene: loadScene(fixture.name),
 }));

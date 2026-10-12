@@ -5,8 +5,8 @@ import type {
   Node as FigmaNode,
 } from "@figma/rest-api-spec";
 import { fetchComponentDefinitions } from "~/adapters/rest/component-definitions.js";
-import { simplifyRestResponse } from "~/adapters/rest/rest.js";
-import type { FigmaService } from "~/services/figma.js";
+import { parseRestResponse } from "~/adapters/rest/decode/response.js";
+import { readRestDesign, type RestDesignSource } from "~/adapters/rest/read-rest-design.js";
 
 // The fetched upgrade: when a read instantiates a component whose subtree it didn't fetch, ask
 // Figma for the real definition instead of donating some instance's already-edited children. Every
@@ -85,12 +85,13 @@ const LIBRARY_RESPONSE = {
   },
 } as unknown as GetFileNodesResponse;
 
-function stubService(overrides: Partial<FigmaService>): FigmaService {
+function stubService(overrides: Partial<RestDesignSource>): RestDesignSource {
   return {
+    getRawFile: async () => ({ data: CONSUMING_FILE, rawSize: 0 }),
     getPublishedComponentSite: async () => ({ fileKey: "lib", nodeId: "77:7" }),
     getRawNodes: async () => LIBRARY_RESPONSE,
     ...overrides,
-  } as unknown as FigmaService;
+  } as RestDesignSource;
 }
 
 describe("off-tree component definitions", () => {
@@ -103,14 +104,9 @@ describe("off-tree component definitions", () => {
       },
     });
 
-    const definitions = await fetchComponentDefinitions(service, "consumer", CONSUMING_FILE);
+    const { design } = await readRestDesign(service, { fileKey: "consumer" });
     // One lookup for the one component, however many instances referenced it.
     expect(asked).toEqual(["pub-button"]);
-    expect(definitions.map((d) => d.id)).toEqual(["9:1"]);
-
-    const design = await simplifyRestResponse(CONSUMING_FILE, {
-      componentDefinitions: definitions,
-    });
     const entry = design.components["9:1"];
     // No `childrenFrom`: these children are the definition's own, not a worked example. But the
     // library serves its CURRENT version, which this file may never have taken — so the entry says
@@ -193,7 +189,11 @@ describe("off-tree component definitions", () => {
         }) as unknown as GetFileNodesResponse,
     });
 
-    const [definition] = await fetchComponentDefinitions(service, "consumer", consuming);
+    const [definition] = await fetchComponentDefinitions(
+      service,
+      "consumer",
+      parseRestResponse(consuming),
+    );
     // Same publish key on both sides — the reference lands on the id the consuming file uses, and
     // its provenance is rebuilt from THIS file's tables, set id included. A library set id left in
     // place would key a sidecar entry that means something else here.
@@ -210,12 +210,7 @@ describe("off-tree component definitions", () => {
       },
     });
 
-    const definitions = await fetchComponentDefinitions(service, "consumer", CONSUMING_FILE);
-    expect(definitions).toEqual([]);
-
-    const design = await simplifyRestResponse(CONSUMING_FILE, {
-      componentDefinitions: definitions,
-    });
+    const { design } = await readRestDesign(service, { fileKey: "consumer" });
     // An instance donated instead, and says so — its own edits are baked into these children.
     expect(design.components["9:1"].childrenFrom).toBeTruthy();
     expect(design.components["9:1"].children).toHaveLength(1);

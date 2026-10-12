@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 import { simplify, project } from "@framelink/core";
-import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import { restNodeToSnapshot } from "~/adapters/rest/decode/node-to-snapshot.js";
 
 // Phase 2 Done-when (Invariant 3): simplify with defaults emits EXPANDED
 // output — every style value inline on its node, no style refs, no

@@ -4,7 +4,7 @@
  */
 import { serializeGridTracks } from "./grid-tracks.js";
 // node-to-snapshot — the plugin adapter to `NodeSnapshot` (Invariant 2), the counterpart of the REST
-// adapter (src/adapters/rest/node-to-snapshot.ts). It decodes plugin-native forms DIRECTLY onto the
+// adapter (src/adapters/rest/decode/node-to-snapshot.ts). It decodes plugin-native forms DIRECTLY onto the
 // plan-neutral snapshot the shared `simplify` core consumes — it never fabricates REST wire structures
 // (no imageRef tables, no gradientHandlePositions arrays, no characterStyleOverrides) to feed a
 // REST-shaped parser; that throwaway encode-then-decode is what ADR-0004 refuses.
@@ -22,7 +22,7 @@ import { serializeGridTracks } from "./grid-tracks.js";
 
 import { decodeAnnotations, type SceneAnnotation } from "./annotations.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
-import { isCoordinateTransparentType, rotateIntoParentFrame } from "@framelink/core";
+import { isCoordinateTransparentType, rotateIntoParentFrame, type PlacementContext } from "@framelink/core";
 import type {
   NodeSnapshot,
   SnapshotColor,
@@ -380,13 +380,13 @@ export async function sceneNodeToSnapshot(
 }
 
 /**
- * A targeted read's parent as layout context (simplify's `contextParent`): only the fields the core
+ * A targeted read's parent as layout context (simplify's `placement`): only the fields the core
  * reads to place a child, never paints or tokens, so it costs no style or variable lookup. Siblings
- * are listed only under a GRID, whose cell placement depends on them.
+ * are listed only under a GRID, the one parent whose placement reads them.
  */
-export function sceneContextParent(parent: SceneNodeLike): NodeSnapshot {
-  const siblings = parent.layoutMode === "GRID" ? (readableChildren(parent) ?? []).filter(isReadableSceneNode) : undefined;
-  return { ...placementTraits(parent), children: siblings?.map(placementTraits) };
+export function scenePlacement(parent: SceneNodeLike): PlacementContext {
+  const siblings = parent.layoutMode === "GRID" ? (readableChildren(parent) ?? []).filter(isReadableSceneNode) : [];
+  return { parent: placementTraits(parent), siblings: siblings.map(placementTraits) };
 }
 
 function placementTraits(node: SceneNodeLike): NodeSnapshot {
@@ -727,7 +727,7 @@ function toSnapshotTransform(transform: SceneTransform): SnapshotTransform {
 // ---------------------------------------------------------------------------
 // Text — getStyledTextSegments → per-line runs with deltas against a base.
 // The counterpart of the REST adapter's override-table resolution
-// (src/adapters/rest/text.ts): both producers must land on the same base/delta
+// (src/adapters/rest/decode/text.ts): both producers must land on the same base/delta
 // split, so the run shape and merge behavior mirror that module.
 // ---------------------------------------------------------------------------
 

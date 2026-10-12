@@ -12,13 +12,13 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { GOLDEN_FIXTURES } from "../goldens/fixtures.js";
-import { restResponseToSnapshots } from "~/adapters/rest/rest.js";
+import { parseRestResponse } from "~/adapters/rest/decode/response.js";
 import { SNAPSHOTS_DIR, snapshotPath } from "./snapshots-io.js";
 
 mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 
-for (const fixture of GOLDEN_FIXTURES) {
-  const { snapshots } = restResponseToSnapshots(fixture.response);
+for (const fixture of GOLDEN_FIXTURES.filter(({ nodeId }) => nodeId === undefined)) {
+  const { snapshots } = parseRestResponse(fixture.response);
   const json = JSON.stringify(snapshots, null, 2) + "\n";
   writeFileSync(snapshotPath(fixture.name), json);
   console.error(`Wrote snapshot: ${fixture.name} (${json.length.toLocaleString()} bytes)`);

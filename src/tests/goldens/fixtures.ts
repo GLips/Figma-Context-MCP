@@ -15,7 +15,7 @@ import type {
  * comparator cases (plain/autolayout frame, component + instance, named styles
  * and bound variables as token references, deep-nested dedup).
  *
- * The golden test runs each through the PUBLIC entry (`simplifyRestResponse`)
+ * The golden test runs each through the composed REST read (`readRestDesign`)
  * so it survives the carve gutting the internals: the committed golden output
  * is whatever the current transform produces, and the carve must reproduce it
  * byte-for-byte. Fixtures are synthetic (the walk.test.ts pattern) — they
@@ -1422,6 +1422,8 @@ const boundTokens = fileResponse(
 export type GoldenFixture = {
   name: string;
   response: GetFileResponse | GetFileNodesResponse;
+  /** A targeted read of this node, served ids-filtered; a whole-file read without one. */
+  nodeId?: string;
 };
 
 export const GOLDEN_FIXTURES: GoldenFixture[] = [

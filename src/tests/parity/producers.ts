@@ -1,23 +1,26 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
+import type { SceneNodeLike } from "@framelink/plugin/node-to-snapshot";
+import { readSceneDesign } from "@framelink/plugin/scene-read";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
-import type { SimplifiedDesign } from "@framelink/core";
+import type { SimplifiedDesign, SimplifyResult } from "@framelink/core";
 import { simplify, project } from "@framelink/core";
-import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import { readRestFixture } from "../rest-fixture-source.js";
 import type { LoadedScene } from "./scenes-io.js";
 
 /**
  * One case in the parity harness: a shared golden and the per-producer inputs
  * that must all reduce to it. `rest` is the REST wire response; `snapshot` is the
- * committed `NodeSnapshot[]` the REST adapter decodes it to (see snapshots/);
- * `scene` is the plugin-native fixture (roots + its token resolver) fed through
- * the real `sceneNodeToSnapshot` (see scenes-io.ts).
+ * committed `NodeSnapshot[]` the REST adapter decodes it to (see snapshots/), for
+ * a whole-file read only; `scene` is the plugin-native fixture (roots + its token
+ * resolver) fed through the plugin's composed read (see scenes-io.ts).
  */
 export interface ParityCase {
   /** Golden basename in ../goldens/expected and the snapshots/ fixture name. */
   name: string;
   rest: GetFileResponse | GetFileNodesResponse;
-  snapshot: NodeSnapshot[];
+  /** A targeted read of this node; a whole-file read without one. */
+  nodeId?: string;
+  snapshot?: NodeSnapshot[];
   scene: LoadedScene;
 }
 
@@ -25,61 +28,72 @@ export interface ParityCase {
  * A producer turns a case into a `SimplifiedDesign` via the ONE shared core. The
  * only thing that varies between producers is how the `NodeSnapshot`s reach the
  * core; everything downstream is identical, which is the whole point of the
- * harness.
+ * harness. `undefined`: the producer can't model this case.
  */
 export interface ParityProducer {
   id: string;
-  produce(parityCase: ParityCase): Promise<SimplifiedDesign>;
+  produce(parityCase: ParityCase): Promise<SimplifiedDesign | undefined>;
 }
 
-/**
- * REST producer — the shipped path, verbatim: raw response → `restNodeToSnapshot`
- * → core (compressed) → assembled design. This is the reference producer; it is
- * independently gated byte-exact against the goldens by goldens.test.ts.
- */
-const restProducer: ParityProducer = {
-  id: "rest",
-  produce: (parityCase) => simplifyRestResponse(parityCase.rest),
-};
-
-/**
- * Assemble a `SimplifiedDesign` from snapshots the way the plugin path does: the
- * one shared core and nothing else. The components sidecar comes from the core, not
- * from a response envelope — both producers fold the same provenance onto their nodes — so
- * it is compared like the tree.
- */
-async function designFromSnapshots(snapshots: NodeSnapshot[]): Promise<SimplifiedDesign> {
-  const { nodes, styles, templates, components } = project(await simplify(snapshots), {
-    compress: true,
-  });
+/** The wire form both producers egress: compressed projection of a full simplify result. */
+function compressed(full: SimplifyResult): SimplifiedDesign {
+  const { nodes, styles, templates, components } = project(full, { compress: true });
   // `name` is scoped out of the parity view — no source name in a snapshot.
   return { name: "", nodes, components, styles, templates };
 }
 
 /**
- * Snapshot producer — feeds the committed plan-neutral `NodeSnapshot[]` straight
- * into the same core. It proves the core turns a neutral snapshot into the
- * shared output independent of any adapter, so a `scene` failure localizes to
- * the adapter's decode rather than the core.
+ * REST producer — the shipped path: `readRestDesign`, the same composed read
+ * get_figma_data runs, with Figma served from the recorded response (a targeted
+ * read ids-filtered, supplementary fetches answered from the same file). It is
+ * independently gated byte-exact against the goldens by goldens.test.ts.
  */
-const snapshotProducer: ParityProducer = {
-  id: "snapshot",
-  produce: (parityCase) => designFromSnapshots(parityCase.snapshot),
+const restProducer: ParityProducer = {
+  id: "rest",
+  produce: ({ rest, nodeId }) => readRestFixture(rest, { nodeId }),
 };
 
 /**
- * Scene producer — the plugin path proper: a committed plugin-native fixture
- * through the REAL `sceneNodeToSnapshot`, then the same core. The token resolver
+ * Snapshot producer — feeds the committed plan-neutral `NodeSnapshot[]` straight
+ * into the same core. It proves the core turns a neutral snapshot into the
+ * shared output independent of any adapter, so a `scene` failure localizes to
+ * the adapter's decode rather than the core. A targeted case has no committed
+ * snapshot: its placement and definitions are the composed reads' to assemble.
+ */
+const snapshotProducer: ParityProducer = {
+  id: "snapshot",
+  produce: async ({ snapshot }) => snapshot && compressed(await simplify(snapshot)),
+};
+
+/**
+ * Scene producer — the plugin path proper: `readSceneDesign`, the composed read
+ * the flcm read verbs run, over the plugin-native fixture. Its token resolver
  * reads the fixture's styles and variables tables, standing in for
  * `figma.getStyleByIdAsync` and `figma.variables.getVariableByIdAsync`.
  */
 const sceneProducer: ParityProducer = {
   id: "scene",
-  produce: ({ scene }) =>
-    Promise.all(scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveToken))).then(
-      designFromSnapshots,
-    ),
+  produce: async ({ scene, nodeId }) => {
+    const target = nodeId === undefined ? undefined : findScene(scene.roots, nodeId);
+    if (nodeId !== undefined && !target) throw new Error(`Scene has no node ${nodeId}.`);
+    const full = await readSceneDesign(target ? [target] : scene.roots, {
+      // Revived fixtures carry the live parent (scenes-io.ts).
+      parent: (target?.parent as SceneNodeLike | null | undefined) ?? undefined,
+      resolveToken: scene.resolveToken,
+      annotationCategories: new Map(),
+    });
+    return compressed(full);
+  },
 };
+
+function findScene(nodes: readonly SceneNodeLike[], id: string): SceneNodeLike | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findScene(node.children ?? [], id);
+    if (found) return found;
+  }
+  return undefined;
+}
 
 /** The registered producers; the harness fans over whatever is here. */
 export const PARITY_PRODUCERS: ParityProducer[] = [restProducer, snapshotProducer, sceneProducer];

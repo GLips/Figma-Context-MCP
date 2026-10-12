@@ -136,7 +136,7 @@ function buildNodeGeometry(
   // reports its sizing FIXED relative to an absent container — an artifact of being
   // top-level, not design intent. Honoring it as a hard width/height pins the whole
   // design to its artboard and kills responsiveness. Every other node, a nested
-  // target included (simplify's `contextParent`), keeps its fill/hug/fixed semantics.
+  // target included (simplify's `placement`), keeps its fill/hug/fixed semantics.
   const isRoot = parent === undefined;
   const geometry: NodeGeometry = {};
   const bound = n.boundVariables;

@@ -16,8 +16,8 @@ import { hitTestCommentPin, type CommentPinGeometry } from "@framelink/core";
 import { sceneFigma as figma } from "./scene-access.js";
 import { requestHostCommentPins, type HostCommentPin } from "./host.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
+import type { CommentCounts } from "./scene-read.js";
 
-export type CommentCounts = ReadonlyMap<string, number>;
 
 let pins: Promise<readonly HostCommentPin[]> | undefined;
 

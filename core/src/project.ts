@@ -1,3 +1,4 @@
+import { admittedOnWire, childrenInsideDefinition } from "./admission.js";
 import { compressDesign } from "./compress.js";
 import { createComponentNotes, extractComponents } from "./components.js";
 import { readContext, type ReadContext } from "./read-context.js";
@@ -68,11 +69,7 @@ function projectTrees(
     for (const full of input) {
       const snapshot = context.snapshots.get(full);
       if (!snapshot) throw new Error("Read tree contains a node without producer metadata.");
-      if (
-        full.visible === false &&
-        !(insideDefinition && full.componentPropertyReferences?.visible)
-      )
-        continue;
+      if (!admittedOnWire(full, insideDefinition)) continue;
       const { children, d, vectorPaths, ...body } = full;
       const node = JSON.parse(JSON.stringify(body)) as SimplifiedNode;
       for (const field of [
@@ -127,13 +124,11 @@ function projectTrees(
       if (children?.length && !atLimit) {
         const order = computeGridChildOrder(snapshot) ?? children.map((_, i) => i);
         const ordered = order.map((i) => children[i]);
-        const nextInside =
-          full.type === "COMPONENT" || full.type === "COMPONENT_SET"
-            ? true
-            : full.type === "INSTANCE"
-              ? false
-              : insideDefinition;
-        const projected = walk(ordered, depth + 1, nextInside);
+        const projected = walk(
+          ordered,
+          depth + 1,
+          childrenInsideDefinition(full, insideDefinition),
+        );
         if (projected.length) {
           const kept = collapseSvgContainers(snapshot, node, projected);
           if (kept.length) node.children = kept;

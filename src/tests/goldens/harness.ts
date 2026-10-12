@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import { readRestFixture } from "../rest-fixture-source.js";
 import type { SimplifiedDesign } from "@framelink/core";
 import type { GoldenFixture } from "./fixtures.js";
 
@@ -8,13 +8,12 @@ import type { GoldenFixture } from "./fixtures.js";
 export const EXPECTED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "expected");
 
 /**
- * Run a fixture through the PUBLIC simplify entry exactly as production does
- * (`getFigmaData` passes only depth/progress options). Targeting the public
- * entry — not the walk internals — is what lets these goldens survive
+ * Run a fixture through the composed REST read `get_figma_data` runs, fetch served from the
+ * recording. Targeting that entry — not the walk internals — is what lets these goldens survive
  * refactors gutting everything underneath.
  */
 export async function runFixture(fixture: GoldenFixture): Promise<SimplifiedDesign> {
-  return simplifyRestResponse(fixture.response);
+  return readRestFixture(fixture.response, { nodeId: fixture.nodeId });
 }
 
 /**

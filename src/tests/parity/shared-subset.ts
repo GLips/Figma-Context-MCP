@@ -76,14 +76,14 @@ export interface SceneTokenIds {
  *     mystery.
  *
  *  5. SVG COLLAPSE (`collapseSvgContainers`, `core/simplify.ts`) and
- *  6. HIDDEN COMPONENT-PROPERTY NODES (`shouldProcessNode`,
- *     `core/simplify.ts`) are both pure CORE behavior over the snapshot —
+ *  6. HIDDEN COMPONENT-PROPERTY NODES (`admittedOnWire`,
+ *     `core/admission.ts`) are both pure CORE behavior over the snapshot —
  *     identical for identical snapshots, so parity holds by construction. No
  *     normalization; the fixtures exercise them (the component-instance fixture's
  *     hidden Sale Ribbon is rescued by rule 6) so a regression in the shared core
  *     still fails the harness.
  *
- *  7. ROTATIONS REST CAN'T INVERT (`solveOwnBox`, `adapters/rest/own-box.ts`).
+ *  7. ROTATIONS REST CAN'T INVERT (`solveOwnBox`, `adapters/rest/decode/own-box.ts`).
  *     The plugin READS a node's own size and origin off the live node; REST has to
  *     invert them out of the page-space AABB, and two families of angle defeat that.
  *
