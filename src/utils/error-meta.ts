@@ -61,6 +61,34 @@ export function tagError(error: unknown, meta: ErrorMeta): never {
   throw error;
 }
 
+/** Start/end hooks around a pipeline phase, for a caller's progress reports. */
+export interface PhaseHooks<P extends ErrorPhase> {
+  onPhaseStart?: (phase: P) => void | Promise<void>;
+  onPhaseEnd?: (phase: P) => void | Promise<void>;
+}
+
+/**
+ * Run one pipeline phase: fire its hooks, record its duration in `timings`, and tag what it throws
+ * with the phase, so telemetry can say where a call failed. The end hook and timing run on failure too.
+ */
+export async function runTaggedPhase<P extends ErrorPhase, T>(
+  phase: P,
+  hooks: PhaseHooks<P>,
+  timings: Record<`${P}Ms`, number>,
+  run: () => T | Promise<T>,
+): Promise<T> {
+  await hooks.onPhaseStart?.(phase);
+  const startedAt = Date.now();
+  try {
+    return await run();
+  } catch (error) {
+    return tagError(error, { phase });
+  } finally {
+    timings[`${phase}Ms`] = Date.now() - startedAt;
+    await hooks.onPhaseEnd?.(phase);
+  }
+}
+
 /**
  * Walk the error → cause chain and merge any attached meta. Outer errors win
  * for overlapping keys — a `phase` tagged at the pipeline level should not be

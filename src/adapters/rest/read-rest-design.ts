@@ -3,7 +3,7 @@ import { project, simplify, type NodeCounter, type SimplifiedDesign } from "@fra
 import { compressDesign } from "@framelink/core/compress";
 import type { FigmaService } from "~/services/figma.js";
 import type { FigmaFileKey, FigmaNodeId } from "~/utils/figma-url.js";
-import { tagError, type ErrorPhase } from "~/utils/error-meta.js";
+import { runTaggedPhase, type ErrorPhase, type PhaseHooks } from "~/utils/error-meta.js";
 import { fetchComponentDefinitions } from "./component-definitions.js";
 import { parseRestResponse } from "./decode/response.js";
 import { withGridSiblings } from "./grid-siblings.js";
@@ -28,11 +28,9 @@ export interface RestDesignRequest {
 /** A read's stages, in order. Each is timed and tags the errors it throws. */
 export type RestReadPhase = Extract<ErrorPhase, "fetch" | "decode" | "enrich" | "simplify">;
 
-export interface RestReadOptions {
+export interface RestReadOptions extends PhaseHooks<RestReadPhase> {
   /** Counts nodes as the walk visits them, for a caller's progress reports. */
   nodeCounter?: NodeCounter;
-  onPhaseStart?: (phase: RestReadPhase) => void | Promise<void>;
-  onPhaseEnd?: (phase: RestReadPhase) => void | Promise<void>;
 }
 
 export interface RestDesignRead {
@@ -60,18 +58,9 @@ export async function readRestDesign(
   options: RestReadOptions = {},
 ): Promise<RestDesignRead> {
   const timings = { fetchMs: 0, decodeMs: 0, enrichMs: 0, simplifyMs: 0 };
-  const phase = async <T>(name: RestReadPhase, run: () => Promise<T>): Promise<T> => {
+  const phase = <T>(name: RestReadPhase, run: () => T | Promise<T>): Promise<T> => {
     source.signal?.throwIfAborted();
-    await options.onPhaseStart?.(name);
-    const startedAt = Date.now();
-    try {
-      return await run();
-    } catch (error) {
-      tagError(error, { phase: name });
-    } finally {
-      timings[`${name}Ms`] = Date.now() - startedAt;
-      await options.onPhaseEnd?.(name);
-    }
+    return runTaggedPhase(name, options, timings, run);
   };
 
   const { data: response, rawSize } = await phase("fetch", () =>
@@ -79,7 +68,7 @@ export async function readRestDesign(
   );
 
   // Decoded once; discovery, the sibling fetch and the walk all read this.
-  const parsed = await phase("decode", async () => parseRestResponse(response, nodeId));
+  const parsed = await phase("decode", () => parseRestResponse(response, nodeId));
 
   const [componentDefinitions, placement] = await phase("enrich", () =>
     Promise.all([

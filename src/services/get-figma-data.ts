@@ -7,7 +7,7 @@ import {
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
 import { wrapForSerialization } from "~/utils/serializable-design.js";
-import { tagError } from "~/utils/error-meta.js";
+import { runTaggedPhase, type PhaseHooks } from "~/utils/error-meta.js";
 import {
   type GetFigmaDataMetrics,
   measureSimplifiedDesign,
@@ -77,28 +77,21 @@ export async function getFigmaData(
   // overlapping HTTP requests each have their own — no module-global state.
   const nodeCounter = { count: 0 };
   const progress: SimplifyProgress = { getNodeCount: () => nodeCounter.count };
+  const phaseHooks: PhaseHooks<GetFigmaDataPhase> = {
+    onPhaseStart: (phase) => hooks.onPhaseStart?.(phase, progress),
+    onPhaseEnd: hooks.onPhaseEnd,
+  };
 
   try {
-    const read = await readRestDesign(source, input, {
-      nodeCounter,
-      onPhaseStart: (phase) => hooks.onPhaseStart?.(phase, progress),
-      onPhaseEnd: (phase) => hooks.onPhaseEnd?.(phase),
-    });
+    const read = await readRestDesign(source, input, { nodeCounter, ...phaseHooks });
     const { design, response } = read;
 
     writeLogs("figma-simplified.json", design);
 
-    await hooks.onPhaseStart?.("serialize", progress);
-    const serializeStart = Date.now();
-    let formatted: string;
-    try {
-      formatted = serializeResult(wrapForSerialization(design), outputFormat);
-    } catch (error) {
-      tagError(error, { phase: "serialize" });
-    } finally {
-      await hooks.onPhaseEnd?.("serialize");
-    }
-    const serializeMs = Date.now() - serializeStart;
+    const serializeTiming = { serializeMs: 0 };
+    const formatted = await runTaggedPhase("serialize", phaseHooks, serializeTiming, () =>
+      serializeResult(wrapForSerialization(design), outputFormat),
+    );
 
     metrics = {
       rawSizeKb: read.rawSize / 1024,
@@ -108,7 +101,7 @@ export async function getFigmaData(
       namedStyleCount: countNamedStyles(response),
       hasVariables: detectVariables(response),
       ...read.timings,
-      serializeMs,
+      ...serializeTiming,
     };
     return { formatted, metrics };
   } catch (error) {
