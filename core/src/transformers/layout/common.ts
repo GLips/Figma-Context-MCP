@@ -1,4 +1,4 @@
-import { exhaustiveCheck, isFrame, isInAutoLayoutFlow, pixelRound } from "../../utils.js";
+import { exhaustiveCheck, isFrameFamily, isInAutoLayoutFlow, pixelRound } from "../../utils.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 import type { VariableReference } from "../../tokens.js";
 import type { BindableNumber, BoundSides } from "../bound-values.js";
@@ -146,7 +146,7 @@ export function layoutModeToSchema(
 }
 
 export function getParentAutoLayoutMode(parent?: NodeSnapshot): "row" | "column" | undefined {
-  if (!isFrame(parent)) return undefined;
+  if (!isFrameFamily(parent)) return undefined;
   if (parent.layoutMode === "HORIZONTAL") return "row";
   if (parent.layoutMode === "VERTICAL") return "column";
   return undefined;

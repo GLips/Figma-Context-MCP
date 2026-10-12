@@ -4,6 +4,7 @@ import type { NodeSnapshot } from "../src/snapshot.js";
 
 function makeFrame(overrides: Record<string, unknown> = {}) {
   return {
+    type: "FRAME",
     clipsContent: true,
     layoutMode: "HORIZONTAL",
     children: [],

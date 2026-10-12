@@ -1,7 +1,7 @@
 import type { NodeSnapshot } from "../snapshot.js";
 import {
   generateCSSShorthand,
-  isFrame,
+  isFrameFamily,
   isInAutoLayoutFlow,
   isLayout,
   pixelRound,
@@ -48,7 +48,7 @@ export function buildSimplifiedLayout(
 }
 
 function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
-  if (!isFrame(n)) {
+  if (!isFrameFamily(n)) {
     return {};
   }
 

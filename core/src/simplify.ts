@@ -1,4 +1,4 @@
-import { isRectangleCornerRadii, pixelRound } from "./utils.js";
+import { isFrameFamily, isRectangleCornerRadii, pixelRound } from "./utils.js";
 import { buildSimplifiedLayout, gridFacts, type GridFacts } from "./transformers/layout.js";
 import { buildStrokeGeometry, cssBlendKeyword, paintSlot } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
@@ -218,11 +218,7 @@ async function extractNode(
   result.readOnlySource = readOnlySource;
   if (node.visible === false) result.visible = false;
   if (node.locked) result.locked = true;
-  if (
-    ["FRAME", "INSTANCE", "COMPONENT", "COMPONENT_SET", "SLOT"].includes(node.type) &&
-    node.clipsContent !== undefined
-  )
-    result.clip = node.clipsContent;
+  if (isFrameFamily(node) && node.clipsContent !== undefined) result.clip = node.clipsContent;
   const mixBlendMode = cssBlendKeyword(node.blendMode);
   if (mixBlendMode) result.mixBlendMode = mixBlendMode;
   if (node.constraints) {

@@ -395,7 +395,6 @@ function placementTraits(node: SceneNodeLike): NodeSnapshot {
     name: node.name,
     type: node.type,
     absoluteBoundingBox: node.absoluteBoundingBox ?? undefined,
-    clipsContent: node.clipsContent,
     layoutMode: node.layoutMode,
     layoutPositioning: node.layoutPositioning,
     gridColumnAnchorIndex: node.gridColumnAnchorIndex,

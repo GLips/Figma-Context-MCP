@@ -407,6 +407,11 @@ export interface NodeSnapshot {
    */
   isExposedInstance?: boolean;
   componentPropertyReferences?: Record<string, string>;
+  /**
+   * Absent and empty differ: absent means the node holds no child list (a leaf) or the producer
+   * didn't descend (a depth limit); `[]` is a container's own empty list. Never collapse one into
+   * the other — the components pass tells an emptied container from an untouched one by it.
+   */
   children?: NodeSnapshot[];
 
   // ------------------------------------------------------------------------
@@ -443,6 +448,7 @@ export interface NodeSnapshot {
   maxWidth?: number | null;
   minHeight?: number | null;
   maxHeight?: number | null;
+  /** Absent outside an auto-layout flow (or on a node with no sizing at all) reads as fixed. */
   layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL";
   layoutSizingVertical?: "FIXED" | "HUG" | "FILL";
   layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";
@@ -471,7 +477,8 @@ export interface NodeSnapshot {
   gridChildVerticalAlign?: "AUTO" | "MIN" | "CENTER" | "MAX";
 
   // ------------------------------------------------------------------------
-  // Frame / auto-layout container traits (Figma HasFramePropertiesTrait).
+  // Frame / auto-layout container traits (Figma HasFramePropertiesTrait). Core reads these only on
+  // the frame family, classified by `type` (`isFrameFamily`), never by which of them are present.
   // ------------------------------------------------------------------------
   clipsContent?: boolean;
   layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";

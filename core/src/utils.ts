@@ -1,6 +1,6 @@
 /**
  * Builtin-free helpers for the simplify core: CSS formatting utilities plus the
- * snapshot trait guards (isFrame, hasAutoLayout, …). This module must stay
+ * snapshot trait guards (isFrameFamily, hasAutoLayout, …). This module must stay
  * pure — no Node builtins, no external packages — because the whole core graph
  * bundles into the plugin's QuickJS sandbox (Invariant 4, gated by the esbuild
  * `platform:'neutral'` purity probe).
@@ -124,24 +124,20 @@ export function stableStringify(value: unknown): string {
 // Snapshot trait guards
 // ---------------------------------------------------------------------------
 
-/** A snapshot known to carry frame/auto-layout traits (has `clipsContent`). */
-export type FrameSnapshot = NodeSnapshot & { clipsContent: boolean };
 /** A snapshot known to have a concrete bounding box (participates in layout). */
 export type LayoutSnapshot = NodeSnapshot & { absoluteBoundingBox: SnapshotRect };
 
-// Checks for `HasFramePropertiesTrait`, not node type. This is the FRAME family
-// — FRAME, GROUP, COMPONENT, COMPONENT_SET, INSTANCE — i.e. the nodes that can
-// carry auto-layout properties like `layoutMode`, `paddingTop`, etc. NOT a
-// general "is container" check: SECTION, BOOLEAN_OPERATION, and TABLE all hold
-// children but do not have frame properties. Structural checking via
-// `clipsContent` covers the FRAME family without maintaining a type-string list.
-export function isFrame(val: unknown): val is FrameSnapshot {
-  return (
-    typeof val === "object" &&
-    !!val &&
-    "clipsContent" in val &&
-    typeof val.clipsContent === "boolean"
-  );
+/**
+ * The frame family: the node types that carry frame properties — auto-layout (`layoutMode`,
+ * padding, gaps) and `clipsContent`. Classified by `type`, never by which fields a producer
+ * happened to fill in: REST reports `clipsContent` on a GROUP and the plugin API doesn't, so a
+ * presence check would split the two producers on the same node. NOT a general "is container"
+ * check — GROUP, SECTION and BOOLEAN_OPERATION hold children without frame properties.
+ */
+const FRAME_FAMILY_TYPES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"]);
+
+export function isFrameFamily(node: NodeSnapshot | undefined): node is NodeSnapshot {
+  return !!node && FRAME_FAMILY_TYPES.has(node.type);
 }
 
 /**
@@ -215,8 +211,10 @@ export function isLayout(val: unknown): val is LayoutSnapshot {
  * semantics specifically should use this; callers that want "any non-NONE auto-layout"
  * should use {@link hasAutoLayout}.
  */
-export function hasFlexLayout(val: unknown): val is FrameSnapshot {
-  return isFrame(val) && (val.layoutMode === "HORIZONTAL" || val.layoutMode === "VERTICAL");
+export function hasFlexLayout(node: NodeSnapshot | undefined): node is NodeSnapshot {
+  return (
+    isFrameFamily(node) && (node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL")
+  );
 }
 
 /**
@@ -225,8 +223,8 @@ export function hasFlexLayout(val: unknown): val is FrameSnapshot {
  * Children of grid frames are positioned via gridRow/ColumnAnchorIndex + gridRow/ColumnSpan
  * rather than flex flow or absolute coordinates.
  */
-export function hasGridLayout(val: unknown): val is FrameSnapshot {
-  return isFrame(val) && val.layoutMode === "GRID";
+export function hasGridLayout(node: NodeSnapshot | undefined): node is NodeSnapshot {
+  return isFrameFamily(node) && node.layoutMode === "GRID";
 }
 
 /**
@@ -239,8 +237,8 @@ export function hasGridLayout(val: unknown): val is FrameSnapshot {
  * When the answer matters per-mode (e.g., emitting flex vs grid CSS), branch on
  * `layoutMode` directly or use the narrower {@link hasFlexLayout} / {@link hasGridLayout}.
  */
-export function hasAutoLayout(val: unknown): val is FrameSnapshot {
-  return hasFlexLayout(val) || hasGridLayout(val);
+export function hasAutoLayout(node: NodeSnapshot | undefined): node is NodeSnapshot {
+  return hasFlexLayout(node) || hasGridLayout(node);
 }
 
 /**
@@ -252,7 +250,7 @@ export function hasAutoLayout(val: unknown): val is FrameSnapshot {
  * @param parent - The parent node.
  * @returns True if the node is a child of an auto-layout frame, false otherwise.
  */
-export function isInAutoLayoutFlow(node: unknown, parent: unknown): boolean {
+export function isInAutoLayoutFlow(node: NodeSnapshot, parent: NodeSnapshot | undefined): boolean {
   return hasAutoLayout(parent) && isLayout(node) && node.layoutPositioning !== "ABSOLUTE";
 }
 

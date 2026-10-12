@@ -1,4 +1,4 @@
-import { hasGridLayout, isFrame, isLayout } from "../../utils.js";
+import { hasGridLayout, isFrameFamily, isLayout } from "../../utils.js";
 import { anyRectsOverlap } from "../../rect.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 import type { SimplifiedLayout } from "./common.js";
@@ -128,7 +128,7 @@ export interface GridFacts {
 
 /** Undefined when `parent` isn't a GRID frame with a child list. */
 export function gridFacts(parent: NodeSnapshot | undefined): GridFacts | undefined {
-  if (!isFrame(parent) || parent.layoutMode !== "GRID" || !parent.children) return undefined;
+  if (!isFrameFamily(parent) || parent.layoutMode !== "GRID" || !parent.children) return undefined;
   return {
     packed: isPackedGrid(parent.children),
     order: computeGridChildOrder(parent),
