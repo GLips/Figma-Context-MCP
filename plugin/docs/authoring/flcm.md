@@ -551,7 +551,7 @@ A paint value (for `fill`, `stroke`, or a run's `color`) is one of:
 ```js
 const background = { type: "FRAME", fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)" };
 const sameBackground = { type: "FRAME", fill: flcm.gradient({ stops: ["#0B1020", "#131A2E"], angle: 180 }) };
-flcm.gradient("linear" | "radial", stops, angle);   // the positional form
+const positional = flcm.gradient("linear", ["#0B1020", "#131A2E"], 180); // (type, stops, angle?)
 ```
 
 **A stack is an array, first entry on top** — CSS order, and exactly what `get` returns, so a read pastes back unchanged. `fill`, `stroke` and a run's `color` all take one; a single paint stays a bare value. The composite this is for is a photograph under a legibility scrim:
@@ -946,108 +946,111 @@ One render builds the whole tree. A node declared first paints behind its siblin
 
 ```js
 const fields = [
-    { key: "email", label: "Email", placeholder: "you@example.com" },
-    { key: "password", label: "Password", placeholder: "••••••••" },
+  { key: "email", label: "Email", placeholder: "you@example.com" },
+  { key: "password", label: "Password", placeholder: "••••••••" },
 ].map(({ key, label, placeholder }) => ({
-    type: "FRAME",
-    key,
-    layout: { mode: "column", gap: 6 },
-    width: "fill",
-    children: [
+  type: "FRAME",
+  key,
+  layout: { mode: "column", gap: 6 },
+  width: "fill",
+  children: [
+    {
+      type: "TEXT",
+      text: label,
+      textStyle: { fontSize: 13, fontWeight: 500 },
+      fill: "rgba(255,255,255,0.7)",
+    },
+    {
+      type: "FRAME",
+      layout: { mode: "row", alignItems: "center", padding: { x: 16 } },
+      width: "fill",
+      height: 48,
+      borderRadius: 12,
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.12)",
+      strokeWidth: 1,
+      children: [
         {
-            type: "TEXT",
-            text: label,
-            textStyle: { fontSize: 13, fontWeight: 500 },
-            fill: "rgba(255,255,255,0.7)",
+          type: "TEXT",
+          text: placeholder,
+          textStyle: { fontSize: 15 },
+          fill: "rgba(255,255,255,0.4)",
         },
-        {
-            type: "FRAME",
-            layout: { mode: "row", alignItems: "center", padding: { x: 16 } },
-            width: "fill",
-            height: 48,
-            borderRadius: 12,
-            fill: "rgba(255,255,255,0.06)",
-            stroke: "rgba(255,255,255,0.12)",
-            strokeWidth: 1,
-            children: [
-                {
-                    type: "TEXT",
-                    text: placeholder,
-                    textStyle: { fontSize: 15 },
-                    fill: "rgba(255,255,255,0.4)",
-                },
-            ],
-        },
-    ],
+      ],
+    },
+  ],
 }));
+
 const screen = {
-    type: "FRAME",
-    key: "login",
-    name: "Login",
-    layout: { mode: "column", gap: 28, padding: 32 },
-    width: 390,
-    height: 844,
-    fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
-    children: [
-        // Declared first → sits behind everything. `left`/`top` lift it out of the column flow.
+  type: "FRAME",
+  key: "login",
+  name: "Login",
+  layout: { mode: "column", gap: 28, padding: 32 },
+  width: 390,
+  height: 844,
+  fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
+  children: [
+    // Declared first → sits behind everything. `left`/`top` lift it out of the column flow.
+    {
+      type: "ELLIPSE",
+      name: "Glow",
+      left: -80,
+      top: -60,
+      width: 180,
+      height: 180,
+      fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
+      opacity: 0.6,
+    },
+    {
+      type: "TEXT",
+      text: "Welcome back",
+      key: "title",
+      fill: "#FFFFFF",
+      textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
+    },
+    {
+      type: "FRAME",
+      key: "card",
+      name: "Card",
+      layout: { mode: "column", gap: 16, padding: 28 },
+      width: "fill",
+      borderRadius: 20,
+      fill: "rgba(255,255,255,0.04)",
+      stroke: "rgba(255,255,255,0.08)",
+      strokeWidth: 1,
+      effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
+      children: [
+        ...fields,
         {
-            type: "ELLIPSE",
-            name: "Glow",
-            left: -80,
-            top: -60,
-            width: 180,
-            height: 180,
-            fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
-            opacity: 0.6,
+          type: "FRAME",
+          key: "submit",
+          name: "Submit",
+          layout: { mode: "row", justifyContent: "center", alignItems: "center" },
+          width: "fill",
+          height: 48,
+          borderRadius: 12,
+          fill: "#6366F1",
+          children: [
+            {
+              type: "TEXT",
+              text: "Sign in",
+              textStyle: { fontSize: 15, fontWeight: 600 },
+              fill: "#FFFFFF",
+            },
+          ],
         },
-        {
-            type: "TEXT",
-            text: "Welcome back",
-            key: "title",
-            fill: "#FFFFFF",
-            textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
-        },
-        {
-            type: "FRAME",
-            key: "card",
-            name: "Card",
-            layout: { mode: "column", gap: 16, padding: 28 },
-            width: "fill",
-            borderRadius: 20,
-            fill: "rgba(255,255,255,0.04)",
-            stroke: "rgba(255,255,255,0.08)",
-            strokeWidth: 1,
-            effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
-            children: [
-                ...fields,
-                {
-                    type: "FRAME",
-                    key: "submit",
-                    name: "Submit",
-                    layout: { mode: "row", justifyContent: "center", alignItems: "center" },
-                    width: "fill",
-                    height: 48,
-                    borderRadius: 12,
-                    fill: "#6366F1",
-                    children: [
-                        {
-                            type: "TEXT",
-                            text: "Sign in",
-                            textStyle: { fontSize: 15, fontWeight: 600 },
-                            fill: "#FFFFFF",
-                        },
-                    ],
-                },
-            ],
-        },
-    ],
+      ],
+    },
+  ],
 };
+
 const out = await flcm.render(screen);
 const title = out.children[1]; // the result mirrors the spec, so narrow by type to read a TEXT word
+
 return {
-    node: out.id, // the login frame's id
-    card: out.children[2].id,
-    title: title.type === "TEXT" ? title.text : undefined, // "Welcome back"
+  node: out.id, // the login frame's id
+  card: out.children[2].id,
+  title: title.type === "TEXT" ? title.text : undefined, // "Welcome back"
 };
 ```
 
@@ -1057,33 +1060,33 @@ Name the columns and give the frame a width: `fr` tracks divide a fixed width. L
 
 ```js
 const grid = await flcm.render({
-    type: "FRAME",
-    name: "Grid cards",
-    width: 400,
-    layout: {
-        mode: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: "12px 16px",
-        padding: 16,
+  type: "FRAME",
+  name: "Grid cards",
+  width: 400,
+  layout: {
+    mode: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "12px 16px",
+    padding: 16,
+  },
+  children: [
+    // A double-wide banner, then tiles: the row count follows from the placement.
+    {
+      type: "RECTANGLE",
+      width: "fill",
+      height: 72,
+      fill: "#6366F1",
+      layout: { gridColumn: "span 2" },
     },
-    children: [
-        // A double-wide banner, then tiles: the row count follows from the placement.
-        {
-            type: "RECTANGLE",
-            width: "fill",
-            height: 72,
-            fill: "#6366F1",
-            layout: { gridColumn: "span 2" },
-        },
-        { type: "RECTANGLE", width: "fill", height: 56, fill: "#14B8A6" },
-        {
-            type: "RECTANGLE",
-            width: 40,
-            height: 40,
-            fill: "#F59E0B",
-            layout: { justifySelf: "center", alignSelf: "end" },
-        },
-    ],
+    { type: "RECTANGLE", width: "fill", height: 56, fill: "#14B8A6" },
+    {
+      type: "RECTANGLE",
+      width: 40,
+      height: 40,
+      fill: "#F59E0B",
+      layout: { justifySelf: "center", alignSelf: "end" },
+    },
+  ],
 });
 return (await flcm.get(grid)).node;
 ```
@@ -1098,9 +1101,9 @@ const { node } = await flcm.get("card");
 const moved = await flcm.append("sidebar", { ...node, width: 480 });
 // Ids select live nodes: this wraps all of the card's children in a new row, inside the card.
 const row = await flcm.append(moved, {
-    type: "FRAME",
-    layout: { mode: "row", gap: 8 },
-    children: (node.children ?? []).map(({ id }) => ({ id })),
+  type: "FRAME",
+  layout: { mode: "row", gap: 8 },
+  children: (node.children ?? []).map(({ id }) => ({ id })),
 });
 // clone copies, carrying live state a spec can't express.
 const copy = await flcm.clone(moved, "sidebar");
@@ -1115,58 +1118,65 @@ Build the component as a frame whose layers name the property that drives them, 
 // Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
 // so with `componentPropertyReferences`.
 const buildButton = (height) => ({
-    type: "FRAME",
-    name: "Button",
-    height,
-    layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
-    fill: "#111827",
-    borderRadius: 8,
-    children: [
-        // A boolean property drives this dot's `visible`; hidden here, so instances start hidden.
-        {
-            type: "ELLIPSE",
-            width: 8,
-            height: 8,
-            fill: "#22C55E",
-            visible: false,
-            componentPropertyReferences: { visible: "Show Dot" },
-        },
-        // A text property drives this content; its default is what the layer shows ("Save").
-        {
-            type: "TEXT",
-            text: "Save",
-            key: "label",
-            fill: "#FFFFFF",
-            componentPropertyReferences: { text: "Label" },
-        },
-        // A slot property: this frame is the hole every instance fills.
-        { type: "FRAME", width: 24, height: 24, componentPropertyReferences: { slot: "Trailing" } },
-    ],
+  type: "FRAME",
+  name: "Button",
+  height,
+  layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
+  fill: "#111827",
+  borderRadius: 8,
+  children: [
+    // A boolean property drives this dot's `visible`; hidden here, so instances start hidden.
+    {
+      type: "ELLIPSE",
+      width: 8,
+      height: 8,
+      fill: "#22C55E",
+      visible: false,
+      componentPropertyReferences: { visible: "Show Dot" },
+    },
+    // A text property drives this content; its default is what the layer shows ("Save").
+    {
+      type: "TEXT",
+      text: "Save",
+      key: "label",
+      fill: "#FFFFFF",
+      componentPropertyReferences: { text: "Label" },
+    },
+    // A slot property: this frame is the hole every instance fills.
+    { type: "FRAME", width: 24, height: 24, componentPropertyReferences: { slot: "Trailing" } },
+  ],
 });
+
 const definitions = {
-    Label: { type: "text" },
-    "Show Dot": { type: "boolean" },
-    Trailing: { type: "slot" },
+  Label: { type: "text" },
+  "Show Dot": { type: "boolean" },
+  Trailing: { type: "slot" },
 };
+
 const small = await flcm.component(buildButton(32), {
-    name: "Button",
-    description: "The primary action.",
-    propertyDefinitions: definitions,
+  name: "Button",
+  description: "The primary action.",
+  propertyDefinitions: definitions,
 });
 const large = await flcm.component(buildButton(44), {
-    name: "Button",
-    propertyDefinitions: definitions,
+  name: "Button",
+  propertyDefinitions: definitions,
 });
+
 // Each entry says which member of the set its component IS; the axes are what an instance picks.
-const set = await flcm.variants([
+const set = await flcm.variants(
+  [
     { component: small, variant: { Size: "Small" } },
     { component: large, variant: { Size: "Large" } },
-], { name: "Button" });
+  ],
+  { name: "Button" },
+);
+
 // The set carries its members' shared properties, so Label is set beside the axis.
 await flcm.render({
-    type: "INSTANCE",
-    componentId: set,
-    componentProperties: { Size: "Large", Label: "Publish" },
+  type: "INSTANCE",
+  componentId: set,
+  componentProperties: { Size: "Large", Label: "Publish" },
 });
 // Each returned child carries its live identity.
 return { set: set.id, label: small.children[1].id };
@@ -1181,30 +1191,32 @@ Find the component by name and read it first: `get`'s `components` sidecar lists
 // names and sublayer paths, e.g. { Size: { type: "variant", variantOptions: [...] }, Label: { type: "text" } }.
 const button = await flcm.findOne({ type: "COMPONENT_SET", name: "Button" });
 const { components } = await flcm.get(button);
+
 const toolbar = {
-    type: "FRAME",
-    key: "toolbar",
-    layout: { mode: "row", gap: 8, padding: 12 },
-    children: [
-        // The variant is picked by its axes, as a whole combination.
-        {
-            type: "INSTANCE",
-            componentId: button,
-            key: "save",
-            componentProperties: { Size: "Large", State: "Default", Label: "Save" },
-        },
-        // Plus a root-level override (width) and a sublayer override by component-relative path.
-        {
-            type: "INSTANCE",
-            componentId: button,
-            key: "cancel",
-            width: 120,
-            componentProperties: { Size: "Large", Label: "Cancel" },
-            overrides: { "11:9": { fill: "#B91C1C" } },
-        },
-    ],
+  type: "FRAME",
+  key: "toolbar",
+  layout: { mode: "row", gap: 8, padding: 12 },
+  children: [
+    // The variant is picked by its axes, as a whole combination.
+    {
+      type: "INSTANCE",
+      componentId: button,
+      key: "save",
+      componentProperties: { Size: "Large", State: "Default", Label: "Save" },
+    },
+    // Plus a root-level override (width) and a sublayer override by component-relative path.
+    {
+      type: "INSTANCE",
+      componentId: button,
+      key: "cancel",
+      width: 120,
+      componentProperties: { Size: "Large", Label: "Cancel" },
+      overrides: { "11:9": { fill: "#B91C1C" } },
+    },
+  ],
 };
 const out = await flcm.render(toolbar);
+
 await flcm.clone(out.children[0], { name: "Save (copy)" }, "toolbar");
 return { toolbar: out.id, definitions: Object.keys(components ?? {}) };
 ```

@@ -5,7 +5,8 @@
 // Hand-written narrative fragments — the conceptual half of the docs that generation can't author:
 // the mental model, the CSS subset, the fail-loud boundary, render/keys, the ADR-0003 promise. The
 // drift-prone half (every verb/prop/type/example) is GENERATED from the schema (see reference.ts); this
-// file holds only the prose that explains, frames, and warns.
+// file holds only the prose that explains, frames, and warns; its code samples are compile-checked
+// in examples/narrative-samples.ts. The CSS gradient list is values, not code, so it stays inline.
 //
 // ADR-0003 (faithful CSS): the CSS surface is faithful — Figma's quirks are absorbed in code or fail
 // loud, never surfaced here as "this behaves differently than you'd expect" footguns. So there is NO
@@ -16,16 +17,14 @@ import { FIND_MATERIALIZE_CAP } from "@framelink/plugin/find-cap";
 import { UPLOAD_TTL_MS } from "~/commercial/plugin-bridge/image-intake.js";
 import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
+import { NARRATIVE_SAMPLES } from "./examples-code.generated.js";
+
+// A code sample from examples/narrative-samples.ts, where it type-checks against the flcm surface.
+const sample = (id: keyof typeof NARRATIVE_SAMPLES) => "```js\n" + NARRATIVE_SAMPLES[id] + "\n```";
 
 export const MENTAL_MODEL = `Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE, and children is an ordinary array of node specs. A spec is a value, not a node: every placement verb returns a deep copy with ids filled in and never changes its input, so rendering one template twice makes two independent trees.
 
-\`\`\`js
-const template = { type: "FRAME", layout: { mode: "column", gap: 16 }, children: [
-  { type: "TEXT", text: "Hello" }
-] };
-const first = await flcm.render(template);
-const second = await flcm.render(template);
-\`\`\`
+${sample("mentalModel")}
 
 ### Identity
 
@@ -39,23 +38,9 @@ A read is a spec with ids, so \`const { node } = await flcm.get(target); await f
 
 Each call has a fresh scope: top-level declarations and that call's \`flcm\` are gone when it returns. \`session\` is the one object that persists — the same object for the whole plugin run, shared by approved callers, kept across WebSocket reconnects and page switches, cleared when the plugin closes or the file switches, and never saved anywhere. Save specs, constants, SVG markup and looked-up ids in session. Ids keep pointing at live nodes; everything else is a snapshot, so re-read with \`flcm.get\` when the canvas may have changed.
 
-\`\`\`js
-// Call 1
-const root = await flcm.render({ type: "FRAME" });
-session.root = root.id;
-const screen = { type: "FRAME", children: [
-  { type: "TEXT", text: "First" }, { type: "TEXT", text: "Second" }
-] };
-session.screen = await flcm.append(root, screen);
-return session.screen;
-\`\`\`
+${sample("sessionCall1")}
 
-\`\`\`js
-// Call 2
-session.screen.children.unshift(session.screen.children.pop());
-session.screen = await flcm.append(session.root, session.screen);
-return session.screen.children.map(n => n.id);
-\`\`\`
+${sample("sessionCall2")}
 
 Assigning into session copies plain objects and arrays, so mutate the stored value, not the original. Session holds plain data only: functions, live Figma nodes and class instances are refused by name, and the same goes for a call's return — return ids and handles, never live nodes. Delete a property to drop it.`;
 
@@ -114,22 +99,13 @@ export const RICH_TEXT = `\`TEXT\` takes **either** a plain string **or** an arr
 
 **Markdown in a plain string** — \`**bold**\`, \`*italic*\`, \`~~strike~~\`, \`[text](url)\` — parses to styled spans:
 
-\`\`\`js
-const message = { type: "TEXT", text: "Ship it **today** — see the [runbook](https://ex.co/run) first." };
-\`\`\`
+${sample("markdownText")}
 
 Backslash-escape to render one literally: \`"save 20% \\\\*today\\\\*"\`. Only \`\\ * _ ~ [ ] ( ) { }\` are escapable, and this matches figma-mcp's read output, so text you read back round-trips. \`![alt](url)\` fails loud — use \`flcm.image(url)\`.
 
 **Runs array** — a run is a bare string or a \`[text, style]\` tuple. The style is a **delta** over the node-level \`textStyle\` base, so each span carries only what it changes:
 
-\`\`\`js
-// a feed caption as ONE node: a colored @handle, plain body, a muted "more"
-const caption = { type: "TEXT", text: [
-  ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
-  " summited at golden hour. ",
-  ["more", { color: "#8E8E93" }],
-], textStyle: { fontSize: 14 } };
-\`\`\`
+${sample("textRuns")}
 
 A run resolves its font exactly as the node does, and its delta may set any field in the table below. \`textAlign\`, \`textAlignVertical\` and \`lineClamp\` are whole-node only. A fixed \`width\` wraps the node into a flowing paragraph, so a styled paragraph is runs + a width.`;
 
@@ -146,11 +122,7 @@ export const LAYOUT_MODEL = `Layout is flexbox and CSS grid (\`layout.mode\` row
 
 A percent resolves against the parent's size once layout settles, so a percent child of a \`"fill"\` or percent-sized parent is fine:
 
-\`\`\`js
-const track = { type: "FRAME", width: 300, height: 8, borderRadius: 4, fill: "#E5E7EB", children: [
-  { type: "RECTANGLE", width: "35%", height: 8, borderRadius: 4, fill: "#6366F1" }, // 35% of the track
-] };
-\`\`\`
+${sample("percentTrack")}
 
 Three cases fail loud because there is no size to resolve against: an in-flow percent child of a parent that hugs that axis (each would size to the other — give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`); a percent or \`"fill"\` on a root, whose parent is the unbounded page; and an in-flow child of a grid, whose base would be the cell. Absolute grid children resolve against the whole grid frame.
 
@@ -177,12 +149,7 @@ A positioned child — one in a free-form parent (\`layout.mode: "none"\`), or o
 
 \`constraints\` overrides that choice; it is ignored on an in-flow child, which reflows through \`fill\`/\`hug\` instead.
 
-\`\`\`js
-// a close button that stays top-right as the card widens
-const card = { type: "FRAME", width: 320, height: 200, children: [
-  { type: "RECTANGLE", width: 28, height: 28, left: 284, top: 12, constraints: { x: "right", y: "top" } },
-] };
-\`\`\`
+${sample("constraints")}
 
 ### Bounds and overflow
 
@@ -192,20 +159,7 @@ Overflow never fails a write. The run summary names each container a child overf
 
 export const VECTOR_INTRO = `Use \`type: "VECTOR"\` with exactly one geometry prop. The two forms answer different questions — \`d\` is a shape, \`svg\` is a drawing on a canvas:
 
-\`\`\`js
-// d: bare geometry. The node's box IS the path's bounding box.
-await flcm.render({ type: "VECTOR", d: "M0 0 L24 24", stroke: "#111", strokeWidth: 2 });
-await flcm.render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", scale: 2 }); // same art, twice as big
-
-// svg: art on the canvas its viewBox declares — and fill/stroke recolor every vector inside it.
-await flcm.render({
-  type: "VECTOR",
-  svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="red"/></svg>',
-  fill: "#6366F1", // recolors the circle, whatever the markup said
-  width: 24,
-  height: 24,
-});
-\`\`\`
+${sample("vectorForms")}
 
 \`d\` is a themeable SVG path, and \`vectorPaths\` the same form spelled with multiple native paths and their NONZERO, EVENODD or NONE winding rules. Use exactly one of d, vectorPaths or svg. There is no icon catalog. Supply the artwork.
 
@@ -222,36 +176,17 @@ export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, or a run's 
 - \`flcm.gradient(...)\`, which builds the same value without the string; or
 - \`flcm.image(src)\` — a raster fill from a url or local path (see **Images**).
 
-\`\`\`js
-const background = { type: "FRAME", fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)" };
-const sameBackground = { type: "FRAME", fill: flcm.gradient({ stops: ["#0B1020", "#131A2E"], angle: 180 }) };
-flcm.gradient("linear" | "radial", stops, angle);   // the positional form
-\`\`\`
+${sample("paintForms")}
 
 **A stack is an array, first entry on top** — CSS order, and exactly what \`get\` returns, so a read pastes back unchanged. \`fill\`, \`stroke\` and a run's \`color\` all take one; a single paint stays a bare value. The composite this is for is a photograph under a legibility scrim:
 
-\`\`\`js
-const hero = {
-  type: "RECTANGLE", width: 390, height: 260,
-  fill: [
-    flcm.gradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }), // the scrim, on top
-    flcm.image("https://example.com/photo.jpg"),                                 // the photo, beneath
-  ],
-};
-\`\`\`
+${sample("paintStack")}
 
 An empty array is "no paint", the same as \`"none"\`. To change just the photo inside a stack — on an instance, say — write the whole stack back with that one entry replaced; \`overrides[path].fill\` takes the array like any other paint slot.`;
 
 export const TOKENS = `A value bound to a design token reads as a **reference** in place of the literal, carrying the literal as \`value\`: \`{ variable: "color/bg", value: "#2D4024" }\` or \`{ style: "Surface", value }\`. The token is named alone when that name finds it from any page; when another token shares the name, or only a page's use of it reaches it (any library style), the reference is \`{ id, name }\` instead. The \`value\` is the literal the node renders with, in whatever mode applies to it; a token's values per mode are in its \`designTokens()\` entry. A style's \`value\` is the slot spelled as an unstyled read spells it; a text style's sits inside \`textStyle\`, beside the words a style doesn't cover. Write the same reference back and the binding stays, since a write ignores \`value\` and binds by the token. Writing the bare literal instead detaches the token. A reference also binds a value that was never bound. On a write, the token can be a name, an id or a library key: \`{ variable: "Spacing/12" }\`, \`{ style: "Heading / Large" }\`, or \`{ variable: { id } }\`. When both an id and a name are given, the id wins.
 
-\`\`\`js
-await flcm.edit(card, {
-  fill: { style: "Surface" },                                  // a paint style takes the whole slot
-  stroke: { variable: "Border/Subtle" },                      // a color variable binds one paint layer
-  layout: { padding: { variable: "Spacing/16" }, gap: { variable: "Spacing/8" } },
-  borderRadius: { variable: "Radius/M" },
-});
-\`\`\`
+${sample("tokenWrites")}
 
 - A variable stands in for a number or a color: \`width\`, \`height\`, the four bounds, \`opacity\`, \`borderRadius\`, \`strokeWidth\`, \`layout.padding\` and a flex \`layout.gap\`; a solid paint layer, including a run's \`color\`; and \`fontFamily\`, \`fontSize\`, \`fontWeight\`, \`lineHeight\`, \`letterSpacing\`, \`paragraphSpacing\` and \`paragraphIndent\`, on \`textStyle\` or in a run. To bind one side of a shorthand, use its object form, e.g. \`padding: { top: { variable: "Spacing/8" }, right: 16, bottom: 8, left: 16 }\` or \`borderRadius: { topLeft, topRight, bottomRight, bottomLeft }\`. A blended or translucent bound paint is \`{ type: "SOLID", color: { variable }, opacity, blendMode }\`.
 - A style takes a whole slot: \`fill\`, \`stroke\`, \`effects\`, or \`textStyle: { style }\`. Beside a text style, \`textStyle\` keeps only the words a text style doesn't set: \`textAlign\`, \`textAlignVertical\`, \`hyperlink\` and \`lineClamp\`. Font words beside it, or in its runs, are refused.
@@ -263,11 +198,7 @@ await flcm.edit(card, {
 
 \`libraries\` catalogs the libraries enabled for the file: \`[{ name, collections: [{ name, variables }] }]\`, with \`variables\` a count. **Load a library's variables** by name from it: \`await flcm.designTokens({ library, collection?, type? })\` returns \`{ variables }\`, entries in the same shape, ready to write. Each one is imported from the library, which takes time, so narrow a large library to the collection or type you need. An unknown library or collection name fails and lists the real ones. Load a large library in a call of its own: a write later in that call can be refused for holding the plugin too long. Any of these calls can read a lot: keep what you need in \`session\`, and filter in your script rather than returning a large listing:
 
-\`\`\`js
-const { libraries } = await flcm.designTokens();
-const { variables } = await flcm.designTokens({ library: libraries[0].name, type: "COLOR" });
-return variables.filter((v) => v.collection === "semantic colors");
-\`\`\`
+${sample("libraryVariables")}
 
 **In the reply**, returned entries print as token lines rather than JSON, wherever they sit in the result: \`[COLLECTION] "Theme" modes=["Light","Dark"]\`, then one line per variable, \`[COLOR] "color/bg" #FFFFFF #000000\`, its values in the header's mode order. A style prints as \`[TEXT] "Heading/L" value={…}\`. \`"color/bg"\` stands for \`reference: { variable: "color/bg" }\`, and \`"Dark" #VariableID:1:2\` for \`{ variable: { id, name } }\`. Fields without a slot follow as \`key=value\`, and library entries sit under \`[LIBRARY] "name"\` (or \`[REMOTE]\`). A copy you build (\`map\`, spread), or an entry kept in \`session\` and returned by a later call, prints as JSON.
 
@@ -277,11 +208,7 @@ export const IMAGE_INTRO = `Place a **real raster image** — feed media, an ava
 
 \`flcm.image(src, opts?)\` is a **paint value**, like \`flcm.gradient\`. An image in Figma is a fill, so any shape carries one: a RECTANGLE for a photo, an ELLIPSE for a circular avatar, a FRAME for a hero. \`src\` is an https url or a local file path, like CSS \`url()\`.
 
-\`\`\`js
-const avatar = { type: "ELLIPSE", width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") };
-const logo = { type: "RECTANGLE", width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) };
-const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotation: 90, filters: { saturation: -1 } });
-\`\`\`
+${sample("imageFills")}
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
 - **Local paths are confined to the server's asset root** (\`--asset-root\`, default: the directory the server started in). A path outside it is refused, naming the root.
@@ -290,10 +217,7 @@ const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotatio
 
 export const EFFECTS_INTRO = `Write effects as the CSS you'd already write — a bag of \`{ boxShadow?, textShadow?, filter?, backdropFilter? }\`. \`flcm.effects({...})\` is the second form, and the only way to reach the Figma-native effects CSS has no word for (\`glass\`, \`noise\`, \`texture\`, \`progressiveBlur\`, \`progressiveBackgroundBlur\`).
 
-\`\`\`js
-const frosted = { type: "FRAME", effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } };
-const glass = { type: "FRAME", effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, glass: { refraction: 0.4 } }) };
-\`\`\`
+${sample("effectForms")}
 
 Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.
 
@@ -319,22 +243,13 @@ ${screenshotHowTo}
 
 export const RAW_FIGMA = `The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`**, the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for document operations the DSL doesn't cover, like the viewport and selection.
 
-\`\`\`js
-const out = await flcm.render(screen);                     // author with flcm
-const live = await figma.getNodeByIdAsync(out.id);         // drop out for document ops
-figma.viewport.scrollAndZoomIntoView([live]);
-return out.id;
-\`\`\`
+${sample("rawFigma")}
 
 Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended), so use it for plumbing and come back to \`flcm\` to author.`;
 
 export const PAGES = `The current page is the default scope: \`render\` places roots on it, and \`selection\`, a key lookup and a \`find\` without \`within\` search it. An id or handle reaches its node on any page of the open file, and \`within\` can name another page. \`flcm.page\` reads and switches the current page:
 
-\`\`\`js
-await flcm.page.current();          // { fileName, page: { id, name }, pages: [ … ] } — where am I?
-await flcm.page.new("pricing");     // make it and switch to it; a name already in the file fails loud
-await flcm.page.use("pricing");     // switch to one that exists (name or id); never creates
-\`\`\`
+${sample("pages")}
 
 Switch **before** you render: a render lands on whatever page is current. Don't assign \`figma.currentPage\`; under \`documentAccess: "dynamic-page"\` it is read-only and throws.`;
 
@@ -415,10 +330,7 @@ export const EDIT_MANY = `### Many at once — \`flcm.editMany\`
 
 \`await flcm.editMany([{ id, ...changes }, …])\` applies several edit deltas as one transaction and returns a handle per entry, in order. Each entry needs a live node \`id\`; a key or a handle won't do, so locate the nodes first:
 
-\`\`\`js
-const cards = await flcm.find({ type: "FRAME", name: /^Card$/ });
-await flcm.editMany(cards.map((card) => ({ id: card.id, fill: "#F6F7F9", borderRadius: 12 })));
-\`\`\`
+${sample("editMany")}
 
 Prefer it to a loop of \`flcm.edit\` whenever more than one node changes:
 
@@ -431,11 +343,7 @@ Props only: tree shape stays with the placement verbs, \`remove\` and \`clone\`.
 
 export const STRUCTURE_INTRO = `All placement verbs take a plain spec. append and prepend take a parent; insertBefore and insertAfter take a sibling. render uses the current page. Each returns a deep copy of the spec with every node id filled in.
 
-\`\`\`js
-const panel = await flcm.render({ type: "FRAME", width: 320, height: 200 });
-const label = await flcm.append(panel, { type: "TEXT", text: "Hello" });
-await flcm.prepend(panel, { id: label.id, text: "Moved and edited" });
-\`\`\`
+${sample("placement")}
 
 No id creates. An id moves and edits that live node. This applies recursively, including new children inside moved nodes and live children inside new nodes.`;
 
@@ -455,23 +363,7 @@ A primary nested instance inside a component definition accepts \`exposed: true\
 
 \`propertyDefinitions\` declares what the component exposes; each node inside names the property that drives one of its fields with \`componentPropertyReferences\` (\`null\` is the edit-side unbind word, not a create word). Both are checked against each other before any write.
 
-\`\`\`js
-await flcm.component(
-  { type: "FRAME", name: "Row", children: [
-    { type: "INSTANCE", componentId: icon, componentPropertyReferences: { componentId: "Icon" } },
-    { type: "TEXT", text: "Label", componentPropertyReferences: { text: "Label", visible: "Show Label" } },
-    { type: "FRAME", width: 240, height: 80, componentPropertyReferences: { slot: "Content" } },
-  ] },
-  {
-    propertyDefinitions: {
-      Icon: { type: "instance_swap" },
-      Label: { type: "text" },
-      "Show Label": { type: "boolean" },
-      Content: { type: "slot" },
-    },
-  },
-);
-\`\`\`
+${sample("componentProperties")}
 
 - **One field per type, on the node that owns it:** \`boolean\` → \`visible\` (any node), \`text\` → \`text\` (\`TEXT\`), \`instance_swap\` → \`componentId\` (\`INSTANCE\`), \`slot\` → \`slot\` (\`FRAME\`). A field on the wrong node type fails at the verb; an undeclared name fails loud listing the declared ones, a mismatched type fails loud.
 - **A property's default IS its bound layer's content**: the text it shows, its \`visible\`, its instance's component. Figma keeps the two identical in a main component, so there is no \`defaultValue\`: to start instances somewhere else, author the layer that way. Promoting existing layers keeps their content. A new layer that leaves the field unwritten (no \`text\`, no \`visible\`) has no content of its own: it takes the other binders' value, else \`""\` / \`true\`.
@@ -482,17 +374,7 @@ await flcm.component(
 
 export const COMPONENTS_VARIANTS = `\`await flcm.variants(entries, { name, description? })\` folds standalone components into a COMPONENT_SET and returns its handle. Each entry says which member of the set its component **is**; an instance picks a member by those axes in \`componentProperties\`.
 
-\`\`\`js
-const small = await flcm.component({ type: "FRAME", width: 96, height: 32 }, { name: "Button" });
-const large = await flcm.component({ type: "FRAME", width: 128, height: 44 }, { name: "Button" });
-const set = await flcm.variants(
-  [
-    { component: small, variant: { Size: "Small" } },
-    { component: large, variant: { Size: "Large" } },
-  ],
-  { name: "Button" },
-);
-\`\`\`
+${sample("variants")}
 
 - Every entry names the same axes, order-free; the first entry's key order is the set's. Names and values are non-empty with no \`=\` or \`,\` (Figma's variant-name grammar); no two entries may name the same combination.
 - Each component is renamed to that grammar (\`Size=Large, State=Default\`) as it joins. \`name\` is required, or Figma names the set after the first member's axes. The set lands where the first component sat: its parent, its index.
@@ -500,18 +382,7 @@ const set = await flcm.variants(
 
 export const COMPONENTS_EDIT_MAIN = `**A main component is edited with \`flcm.edit\` and the structural verbs, as a frame is**, and every instance follows: its root takes a frame's whole vocabulary (so does a COMPONENT_SET, whose layout arranges its variants), and its sublayers are ordinary nodes to edit by id, \`append\` to, or \`remove\`. Two words exist only here, \`description\` and \`propertyDefinitions\`, the latter keyed by each property's current name (bare, or with its \`#suffix\`):
 
-\`\`\`js
-await flcm.edit(comp, {
-  propertyDefinitions: {
-    Icon: { name: "Leading" },                   // a known name → renames
-    Legacy: null,                                //              → deletes
-  },
-});
-await flcm.editMany([
-  { id: comp.id, propertyDefinitions: { Size: { type: "text" } } },       // a new name → ADDS
-  { id: sizeLabelId, componentPropertyReferences: { text: "Size" } },     // …bound in the same batch
-]);
-\`\`\`
+${sample("propertyDefinitionEdits")}
 
 - **Adding needs a binder in the same \`editMany\`**: the default is that layer's content, as at create (several binders must agree). A plain \`edit\` can't bind a sublayer, so an add there is refused.
 - **To change a default, edit the bound layer**: Figma keeps a main component's default and its bound layer identical.
@@ -525,10 +396,7 @@ await flcm.editMany([
 
 The compiler's word on a live sublayer of a component; \`null\` unbinds a field, which keeps its value.
 
-\`\`\`js
-await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } });   // an existing property drives it now
-await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });     // unbind
-\`\`\`
+${sample("bindingEdits")}
 
 - **The layer keeps its content.** A property's default and every layer bound to it are one value, so they must agree. With no other layer bound, the default takes this layer's content. Otherwise its content must match the layers already bound, and binders in the same call must match each other. A mismatch is refused, naming each layer and what it shows. This applies to inserted bound layers too, except one that leaves the bound field unwritten: it has no content to lose, so it shows the property's current default.
 - The node must be inside a COMPONENT or a set's variant: inside an INSTANCE it is refused naming the instance, and outside any component there is no property to point at.
@@ -540,10 +408,7 @@ await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });   
 
 \`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component or its sublayers accept a plain node spec carrying \`componentPropertyReferences\`.
 
-\`\`\`js
-await flcm.append(comp, { type: "TEXT", text: "Save", componentPropertyReferences: { text: "Label" } });   // matches Label's other layers
-await flcm.append(comp, { type: "FRAME", width: 240, height: 80, componentPropertyReferences: { slot: "Content" } });
-\`\`\`
+${sample("boundInserts")}
 
 Every name must already be declared, except a \`slot\` naming a property that doesn't exist, which **declares it**; naming one that already has its frame is refused. Into a set's VARIANT, a new \`slot\` declares the property on the SET and this variant realizes it; the others insert their own bound frame. An insert into the COMPONENT_SET itself is refused: its children are its variants.`;
 
@@ -557,11 +422,7 @@ export const COMPONENTS_EDIT = `### Changing an instance
 
 No separate variant or swap verb: **an instance changes through \`flcm.edit\`, in the words \`get\` reports on it.**
 
-\`\`\`js
-await flcm.edit(inst, { componentProperties: { Size: "Large", Label: "Save" } }); // variant + a text property
-await flcm.edit(inst, { overrides: { "11:9": { fill: "#F00" } }, width: 240 });   // a sublayer, and a root word
-await flcm.edit(inst, { componentId: other.id });                                 // swap the component
-\`\`\`
+${sample("instanceEdits")}
 
 - **A frame's words** are root-level overrides, including the layout gates, which read the live mode.
 - **\`componentProperties\`** resolve against the component the instance is on now. An unnamed axis keeps its value: \`{ State: "Hover" }\` on \`Size=Large\` selects \`Size=Large, State=Hover\`. The instance keeps its id; its sublayer ids become the new variant's.
@@ -601,13 +462,4 @@ Figma **comments** are separate: a read's \`comments: n\` counts the unresolved 
 
 Start from \`flcm.selection()\`: check the selected root's own \`annotations\`, then \`find({ hasAnnotations: true, within: root })\` for its descendants (\`within\` searches descendants only); the handles come back carrying their \`annotations\`. Annotations have no id, so to remove one, re-read the node **immediately before writing** and match your entry by \`text\` in that fresh collection:
 
-\`\`\`js
-const [hit] = await flcm.find({ hasAnnotations: true, within: root });
-const task = hit.annotations[0].text;
-// … make the change the note asks for, verify the result, then:
-const fresh = (await flcm.get(hit)).node.annotations ?? [];
-const done = fresh.find((a) => a.text === task);
-if (done) {
-  await flcm.edit(hit, { annotations: fresh.filter((a) => a !== done) });
-} // not there any more: leave the node alone and say so in chat
-\`\`\``;
+${sample("resolveAnnotation")}`;

@@ -752,7 +752,8 @@ const EFFECTS_FIELDS = fieldsFor(WORD_GROUPS.effects)({
 // row (vocabulary.ts TYPE_WORD_GROUPS) — `{ type: "LINE", height: 10 }` is a type error, as it is a
 // runtime refusal. A LIVE node (`id`) is edited in place, so it takes the edit words, judged against
 // its live type when it resolves. A READ node is a `get` result passed back whole or spread: its
-// words are the read's, and the prelude judges them at runtime.
+// words are the read's, and the prelude judges them at runtime. Its children may be any spec, so a
+// read with a new child appended is still one.
 type NewNode<T extends string, P> = { type: T; id?: undefined } & P;
 export type NodeSpec =
   | (NewNode<"FRAME", FrameProps> & { children?: NodeSpec[] })
@@ -764,8 +765,9 @@ export type NodeSpec =
   | NewNode<"VECTOR", SvgProps & { svg: string }>
   | NewNode<"INSTANCE", InstanceProps & { componentId: Target }>
   | ({ id: string; type?: string; children?: NodeSpec[] } & EditDelta)
-  | ReadNode;
-// What a placement verb returns: the spec copied, with an id on every node.
+  | (Omit<ReadNode, "children"> & { children?: NodeSpec[] });
+// What a placement verb returns: the spec copied, with an id on every node — itself a spec, so it
+// places again.
 interface AuthoredIdentity { id: string; warnings?: WarningRecord[]; children?: AuthoredTree[] }
 type AuthoredOf<S> = S extends unknown ? Omit<S, "id" | "children"> & AuthoredIdentity : never;
 export type AuthoredTree = AuthoredOf<NodeSpec>;

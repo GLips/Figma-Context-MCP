@@ -8,7 +8,8 @@ import ts from "typescript";
 // ships, and the code that just type-checked share one source:
 //
 //   • src/commercial/tools/flcm-docs/examples-code.generated.ts — the marked region of each worked example
-//     (examples/<id>.ts), transpiled to runnable JavaScript. The examples stay real compile-checked .ts files; the
+//     (examples/<id>.ts) and each named narrative sample (examples/narrative-samples.ts), transpiled
+//     to runnable JavaScript. The sources stay real .ts files the root tsc program type-checks; the
 //     runtime imports these strings instead of reading source files, because the npm product runs
 //     from a tsup bundle where sources aren't on disk.
 //   • plugin/docs/authoring/flcm.md — the committed human-readable authoring doc, rendered by the
@@ -37,13 +38,62 @@ const EXAMPLE_IDS = ["login", "grid", "reuse", "makeComponent", "components"] as
 const START = "// example:start";
 const END = "// example:end";
 
+function readExampleSource(name: string): { path: string; lines: string[] } {
+  const path = fileURLToPath(new URL(`examples/${name}.ts`, FLCM_DOCS_DIR));
+  return { path, lines: readFileSync(path, "utf8").split("\n") };
+}
+
+// Type-checking happened in the root tsc program; this only cuts the TS-only syntax (annotations,
+// `!`, `as`, type arguments) out of the source text, so the served code keeps the layout it was
+// written in — TS's printer would re-indent it. Two proofs keep the cut honest: both texts transpile
+// alike (only type syntax went), and the result holds no type syntax (nothing TS-only stayed).
+const PRINT_OPTIONS = {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+};
+function toJavaScript(region: string[]): string {
+  const source = dedent(region);
+  const file = ts.createSourceFile("region.ts", source, ts.ScriptTarget.ES2022, true);
+  const cuts: [number, number][] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeNode(node)) return; // cut whole by its owner; a nested cut would overlap
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && node.type) {
+      cuts.push([(node.questionToken ?? node.name).end, node.type.end]);
+    } else if (ts.isFunctionLike(node) && node.type) {
+      const colon = node.getChildren().find((child) => child.kind === ts.SyntaxKind.ColonToken)!;
+      cuts.push([colon.getStart(), node.type.end]); // the return type
+    } else if (ts.isNonNullExpression(node)) {
+      cuts.push([node.expression.end, node.end]);
+    } else if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+      cuts.push([node.expression.end, node.end]);
+    } else if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && node.typeArguments) {
+      cuts.push([node.typeArguments.pos - 1, node.typeArguments.end + 1]); // the `<` … `>` around them
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  let code = source;
+  for (const [from, to] of cuts.sort((a, b) => b[0] - a[0]))
+    code = code.slice(0, from) + code.slice(to);
+  const print = (text: string) => ts.transpileModule(text, PRINT_OPTIONS).outputText;
+  const hasTypeSyntax = (node: ts.Node): boolean =>
+    ts.isTypeNode(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.forEachChild(node, hasTypeSyntax) === true;
+  const left = ts.createSourceFile("region.ts", code, ts.ScriptTarget.ES2022, true);
+  if (print(code) !== print(source) || hasTypeSyntax(left)) {
+    throw new Error(
+      `Cannot serve this region as JavaScript — it uses TS syntax the doc generator doesn't strip:\n${source}`,
+    );
+  }
+  return code.trim();
+}
+
 // Pull the marked region out of an example file and dedent it to column 0. Markers are matched as
 // whole lines (trimmed), so a stray mention of the token in prose can't be mistaken for a real
 // marker. Fail loud if they're gone: a silently-empty example is exactly the stale-docs failure
 // this generator exists to kill.
 function extractExample(id: string): string {
-  const path = fileURLToPath(new URL(`examples/${id}.ts`, FLCM_DOCS_DIR));
-  const lines = readFileSync(path, "utf8").split("\n");
+  const { path, lines } = readExampleSource(id);
   const start = lines.findIndex((l) => l.trim() === START);
   const end = lines.findIndex((l) => l.trim() === END);
   if (start === -1 || end === -1 || end <= start) {
@@ -51,11 +101,32 @@ function extractExample(id: string): string {
       `Cannot inline example: the ${START} / ${END} marker lines are missing or out of order in ${path}.`,
     );
   }
-  return ts
-    .transpileModule(dedent(lines.slice(start + 1, end)), {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-    })
-    .outputText.trim();
+  return toJavaScript(lines.slice(start + 1, end));
+}
+
+// Every `// sample:start <id>` … `// sample:end` region of the narrative samples file, in file order.
+// The ids become NARRATIVE_SAMPLES keys, so narrative.ts naming a missing one fails to compile.
+const SAMPLE_START = /^\/\/ sample:start (\w+)$/;
+const SAMPLE_END = "// sample:end";
+function extractNarrativeSamples(): [string, string][] {
+  const { path, lines } = readExampleSource("narrative-samples");
+  const samples: [string, string][] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const id = SAMPLE_START.exec(lines[i].trim())?.[1];
+    if (!id) continue;
+    const end = lines.findIndex((l, j) => j > i && l.trim() === SAMPLE_END);
+    const nextStart = lines.findIndex((l, j) => j > i && SAMPLE_START.test(l.trim()));
+    if (end === -1 || (nextStart !== -1 && nextStart < end)) {
+      throw new Error(
+        `Narrative sample '${id}' in ${path} has no ${SAMPLE_END} before the next sample.`,
+      );
+    }
+    if (samples.some(([seen]) => seen === id))
+      throw new Error(`Narrative sample '${id}' appears twice in ${path}.`);
+    samples.push([id, toJavaScript(lines.slice(i + 1, end))]);
+    i = end;
+  }
+  return samples;
 }
 
 // Strip the common leading indentation (the region sits inside a function body) and trim blank edges.
@@ -77,14 +148,21 @@ function templateLiteral(code: string): string {
 
 function buildExamplesModule(): string {
   const entries = EXAMPLE_IDS.map((id) => `  ${id}: ${templateLiteral(extractExample(id))},`);
+  const samples = extractNarrativeSamples().map(
+    ([id, code]) => `  ${id}: ${templateLiteral(code)},`,
+  );
   return (
     COMMERCIAL_HEADER +
     "// Generated by `pnpm docs:gen` (scripts/gen-flcm-doc.ts) — do not edit.\n" +
-    "// Each entry is the marked region of examples/<id>.ts, extracted verbatim (and dedented) so the\n" +
-    "// served example is byte-for-byte the code that type-checked. `pnpm docs:check` fails on drift.\n" +
+    "// Each entry is a marked region of examples/, extracted (dedented, TS syntax stripped) so the\n" +
+    "// served code is the code that type-checked. `pnpm docs:check` fails on drift.\n" +
     "\n" +
     "export const EXAMPLE_CODE = {\n" +
     entries.join("\n") +
+    "\n} as const;\n" +
+    "\n" +
+    "export const NARRATIVE_SAMPLES = {\n" +
+    samples.join("\n") +
     "\n} as const;\n"
   );
 }
