@@ -73,18 +73,28 @@ const snapshotProducer: ParityProducer = {
  */
 const sceneProducer: ParityProducer = {
   id: "scene",
-  produce: async ({ scene, nodeId }) => {
-    const target = nodeId === undefined ? undefined : findScene(scene.roots, nodeId);
-    if (nodeId !== undefined && !target) throw new Error(`Scene has no node ${nodeId}.`);
-    const full = await readSceneDesign(target ? [target] : scene.roots, {
-      // Revived fixtures carry the live parent (scenes-io.ts).
-      parent: (target?.parent as SceneNodeLike | null | undefined) ?? undefined,
-      resolveToken: scene.resolveToken,
+  produce: async (parityCase) => {
+    const { roots, parent } = sceneRootsOf(parityCase);
+    const full = await readSceneDesign(roots, {
+      parent,
+      resolveToken: parityCase.scene.resolveToken,
       annotationCategories: new Map(),
     });
     return compressed(full);
   },
 };
+
+/** What the plugin reads for a case: the targeted node under its live parent, or every root. */
+export function sceneRootsOf({ scene, nodeId }: ParityCase): {
+  roots: readonly SceneNodeLike[];
+  parent?: SceneNodeLike;
+} {
+  if (nodeId === undefined) return { roots: scene.roots };
+  const target = findScene(scene.roots, nodeId);
+  if (!target) throw new Error(`Scene has no node ${nodeId}.`);
+  // Revived fixtures carry the live parent (scenes-io.ts).
+  return { roots: [target], parent: (target.parent as SceneNodeLike | null) ?? undefined };
+}
 
 function findScene(nodes: readonly SceneNodeLike[], id: string): SceneNodeLike | undefined {
   for (const node of nodes) {

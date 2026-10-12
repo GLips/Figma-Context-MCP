@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "id": "30:1",
+      "name": "Screen",
+      "type": "FRAME",
+      "visible": true,
+      "clipsContent": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100
+      },
+      "width": 200,
+      "height": 100,
+      "x": 0,
+      "y": 0,
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "children": [
+        {
+          "id": "30:2",
+          "name": "Badge",
+          "type": "INSTANCE",
+          "visible": true,
+          "clipsContent": true,
+          "mainComponentId": "30:9",
+          "absoluteBoundingBox": {
+            "x": 10,
+            "y": 10,
+            "width": 60,
+            "height": 30
+          },
+          "width": 60,
+          "height": 30,
+          "x": 10,
+          "y": 10,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "children": [
+            {
+              "id": "I30:2;30:10",
+              "name": "Dot",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 15,
+                "y": 15,
+                "width": 20,
+                "height": 20
+              },
+              "width": 20,
+              "height": 20,
+              "x": 5,
+              "y": 5,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 1,
+                    "g": 0,
+                    "b": 0
+                  },
+                  "visible": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "30:9",
+      "name": "Badge",
+      "key": "badge-key",
+      "description": "",
+      "type": "COMPONENT",
+      "visible": true,
+      "clipsContent": true,
+      "absoluteBoundingBox": {
+        "x": 400,
+        "y": 0,
+        "width": 60,
+        "height": 30
+      },
+      "width": 60,
+      "height": 30,
+      "x": 400,
+      "y": 0,
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "children": [
+        {
+          "id": "30:10",
+          "name": "Dot",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 405,
+            "y": 5,
+            "width": 20,
+            "height": 20
+          },
+          "width": 20,
+          "height": 20,
+          "x": 5,
+          "y": 5,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 1
+              },
+              "visible": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

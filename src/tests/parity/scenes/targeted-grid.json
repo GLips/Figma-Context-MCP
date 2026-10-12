@@ -1,0 +1,135 @@
+{
+  "nodes": [
+    {
+      "id": "20:1",
+      "name": "Screen",
+      "type": "FRAME",
+      "visible": true,
+      "clipsContent": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 200
+      },
+      "width": 300,
+      "height": 200,
+      "x": 0,
+      "y": 0,
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "children": [
+        {
+          "id": "20:2",
+          "name": "Grid",
+          "type": "FRAME",
+          "visible": true,
+          "clipsContent": true,
+          "layoutMode": "GRID",
+          "absoluteBoundingBox": {
+            "x": 10,
+            "y": 10,
+            "width": 170,
+            "height": 130
+          },
+          "width": 170,
+          "height": 130,
+          "x": 10,
+          "y": 10,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "gridRowGap": 10,
+          "gridColumnGap": 10,
+          "gridColumnSizes": [
+            {
+              "type": "FIXED",
+              "value": 80
+            },
+            {
+              "type": "FIXED",
+              "value": 80
+            }
+          ],
+          "gridRowSizes": [
+            {
+              "type": "FIXED",
+              "value": 60
+            },
+            {
+              "type": "FIXED",
+              "value": 60
+            }
+          ],
+          "children": [
+            {
+              "id": "20:3",
+              "name": "First cell",
+              "type": "RECTANGLE",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 10,
+                "y": 10,
+                "width": 40,
+                "height": 40
+              },
+              "width": 40,
+              "height": 40,
+              "x": 0,
+              "y": 0,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 1
+                  },
+                  "visible": true
+                }
+              ],
+              "gridColumnAnchorIndex": 0,
+              "gridRowAnchorIndex": 0,
+              "gridColumnSpan": 1,
+              "gridRowSpan": 1
+            },
+            {
+              "id": "20:4",
+              "name": "Last cell",
+              "type": "RECTANGLE",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 100,
+                "y": 80,
+                "width": 40,
+                "height": 40
+              },
+              "width": 40,
+              "height": 40,
+              "x": 90,
+              "y": 70,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 1,
+                    "b": 0
+                  },
+                  "visible": true
+                }
+              ],
+              "gridColumnAnchorIndex": 1,
+              "gridRowAnchorIndex": 1,
+              "gridColumnSpan": 1,
+              "gridRowSpan": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

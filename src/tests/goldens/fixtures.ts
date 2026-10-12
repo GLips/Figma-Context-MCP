@@ -1419,6 +1419,144 @@ const boundTokens = fileResponse(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Targeted reads — what a single response doesn't hold. Each is served ids-filtered, so every
+// ancestor lists only the child on the path, and the composed read has to fetch the rest.
+// ---------------------------------------------------------------------------
+const solidFill = (r: number, g: number, b: number) => [
+  { type: "SOLID", color: { r, g, b, a: 1 }, visible: true },
+];
+const fixedBox = (x: number, y: number, width: number, height: number) => ({
+  absoluteBoundingBox: { x, y, width, height },
+  layoutSizingHorizontal: "FIXED",
+  layoutSizingVertical: "FIXED",
+});
+
+// A grid cell read alone. Its one sibling leaves cells empty, so the grid is unpacked and the cell
+// is placed explicitly — which the read only knows after fetching that sibling.
+const targetedGrid = fileResponse("Targeted Grid", [
+  node({
+    id: "20:0",
+    name: "Page",
+    type: "CANVAS",
+    children: [
+      node({
+        id: "20:1",
+        name: "Screen",
+        type: "FRAME",
+        clipsContent: true,
+        ...fixedBox(0, 0, 300, 200),
+        children: [
+          node({
+            id: "20:2",
+            name: "Grid",
+            type: "FRAME",
+            clipsContent: true,
+            layoutMode: "GRID",
+            ...fixedBox(10, 10, 170, 130),
+            gridColumnsSizing: "80px 80px",
+            gridRowsSizing: "60px 60px",
+            gridRowGap: 10,
+            gridColumnGap: 10,
+            children: [
+              node({
+                id: "20:3",
+                name: "First cell",
+                type: "RECTANGLE",
+                ...fixedBox(10, 10, 40, 40),
+                fills: solidFill(0, 0, 1),
+                gridColumnAnchorIndex: 0,
+                gridRowAnchorIndex: 0,
+                gridColumnSpan: 1,
+                gridRowSpan: 1,
+              }),
+              node({
+                id: "20:4",
+                name: "Last cell",
+                type: "RECTANGLE",
+                ...fixedBox(100, 80, 40, 40),
+                fills: solidFill(0, 1, 0),
+                gridColumnAnchorIndex: 1,
+                gridRowAnchorIndex: 1,
+                gridColumnSpan: 1,
+                gridRowSpan: 1,
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  }),
+]);
+
+// A screen whose instance's component sits beside it on the page, outside the targeted read. The
+// instance recolors its sublayer, so the real definition and a donated body publish differently.
+const offTreeComponent = fileResponse(
+  "Off-tree Component",
+  [
+    node({
+      id: "30:0",
+      name: "Page",
+      type: "CANVAS",
+      children: [
+        node({
+          id: "30:1",
+          name: "Screen",
+          type: "FRAME",
+          clipsContent: true,
+          ...fixedBox(0, 0, 200, 100),
+          children: [
+            node({
+              id: "30:2",
+              name: "Badge",
+              type: "INSTANCE",
+              componentId: "30:9",
+              clipsContent: true,
+              ...fixedBox(10, 10, 60, 30),
+              children: [
+                node({
+                  id: "I30:2;30:10",
+                  name: "Dot",
+                  type: "FRAME",
+                  ...fixedBox(15, 15, 20, 20),
+                  fills: solidFill(1, 0, 0),
+                }),
+              ],
+            }),
+          ],
+        }),
+        node({
+          id: "30:9",
+          name: "Badge",
+          type: "COMPONENT",
+          clipsContent: true,
+          ...fixedBox(400, 0, 60, 30),
+          children: [
+            node({
+              id: "30:10",
+              name: "Dot",
+              type: "FRAME",
+              ...fixedBox(405, 5, 20, 20),
+              fills: solidFill(0, 0, 1),
+            }),
+          ],
+        }),
+      ],
+    }),
+  ],
+  {
+    components: {
+      "30:9": {
+        key: "badge-key",
+        name: "Badge",
+        description: "",
+        documentationLinks: [],
+        remote: false,
+      },
+    },
+  } as unknown as Partial<GetFileResponse>,
+);
+
 export type GoldenFixture = {
   name: string;
   response: GetFileResponse | GetFileNodesResponse;
@@ -1441,4 +1579,6 @@ export const GOLDEN_FIXTURES: GoldenFixture[] = [
   { name: "grouped-nodes", response: groupedNodes },
   { name: "component-variants", response: componentVariants },
   { name: "bound-tokens", response: boundTokens },
+  { name: "targeted-grid", response: targetedGrid, nodeId: "20:3" },
+  { name: "off-tree-component", response: offTreeComponent, nodeId: "30:1" },
 ];

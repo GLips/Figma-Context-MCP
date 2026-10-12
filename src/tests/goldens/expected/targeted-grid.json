@@ -1,0 +1,20 @@
+{
+  "name": "Targeted Grid",
+  "nodes": [
+    {
+      "id": "20:3",
+      "name": "First cell",
+      "type": "RECTANGLE",
+      "width": 40,
+      "height": 40,
+      "layout": {
+        "gridColumn": "1",
+        "gridRow": "1"
+      },
+      "fill": "#0000FF"
+    }
+  ],
+  "components": {},
+  "styles": {},
+  "templates": {}
+}
