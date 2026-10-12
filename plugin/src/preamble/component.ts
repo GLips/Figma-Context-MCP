@@ -277,15 +277,14 @@ function resolveDefaults(
     const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
     // A slot's "value" is the empty string Figma wants; its content is the bound frame.
     if (definition.figmaType === "SLOT") return { name: definition.name, figmaType: "SLOT", defaultValue: "" };
-    const binders = bindersOf(bound, definition).map(({ wn }) => ({
+    const nodes = bindersOf(bound, definition).map(({ wn }) => wn);
+    const binders = nodes.map((wn) => ({
       layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
       value: boundLayerValue(definition.figmaType, wn, plans, live),
     }));
-    return {
-      name: definition.name,
-      figmaType: definition.figmaType,
-      defaultValue: agreedDefault(definition, binders, at, { inherited: FRESH_LAYER_SHOWS[definition.figmaType], unboundRemedy: targetForm ? promoteThenBind(definition) : undefined }),
-    };
+    const defaultValue = agreedDefault(definition, binders, at, { inherited: FRESH_LAYER_SHOWS[definition.figmaType], unboundRemedy: targetForm ? promoteThenBind(definition) : undefined });
+    for (const wn of nodes) writeInheritedDefault(definition.figmaType, wn, defaultValue);
+    return { name: definition.name, figmaType: definition.figmaType, defaultValue };
   });
 }
 
@@ -315,6 +314,16 @@ export function boundLayerValue(figmaType: string, wn: WriteNode, plans: Instanc
   // node it was derived from.
   const liveNode = live?.get(wn);
   return readableComponentOf(plans.get(wn)?.component ?? liveNode?.component, liveNode?.node, wn.sourcePath!).id;
+}
+
+/**
+ * Give a binder that left the field unwritten the default it inherits, before it is built. Binding
+ * would write it anyway, but only after the tree has settled — built with it, the layer settles at
+ * the size it ends up with.
+ */
+export function writeInheritedDefault(figmaType: string, wn: WriteNode, value: boolean | string): void {
+  if (figmaType === "BOOLEAN" && wn.visible === undefined) wn.visible = value as boolean;
+  if (figmaType === "TEXT" && authoredTextOf(wn) === undefined) wn.text = value as string;
 }
 
 /**

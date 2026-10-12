@@ -1081,7 +1081,10 @@ function compileText(props: TextProps): WriteNode {
   if (Object.keys(ts).length) wn.textStyle = ts;
   // An absent `text` stays absent: the builder writes "" for it anyway, and a binding reads the
   // absence as "no content of its own", so the layer takes its property's default (component.ts boundLayerValue).
-  if (content !== undefined) Object.assign(wn, compileTextContent(content, ts, props.boldWeight ?? undefined));
+  if (content != null) Object.assign(wn, compileTextContent(content, ts, props.boldWeight ?? undefined));
+  else if (props.boldWeight != null) {
+    throw new Error("TEXT: `boldWeight` says what `**` in `text` resolves to, and this node has no `text` — pass the content as `text`, or drop it.");
+  }
   assertRunColorsBesideFillStyle(wn, "TEXT");
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
   if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);

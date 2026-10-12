@@ -30,7 +30,7 @@ import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, readableComponentOf, describeBinder, boundLayerValue,
+  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue,
 } from "./component.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
@@ -652,6 +652,7 @@ export function prepareInsertBindings(
   const definitions = propertyDefinitionsOf(owner);
   const plan: InsertBindingPlan = { owner, resolved: {}, declaresSlots: [], defaults: [] };
   const existing: ExistingPropertyBinding[] = [];
+  const binderNodes: { wn: WriteNode; full: string }[] = [];
   const where = subject + ".componentPropertyReferences";
   // A slot is one hole, and the second claim on it can come from this same tree — where neither
   // frame is on the canvas yet for the live count to see. Declared names and full names never
@@ -686,6 +687,7 @@ export function prepareInsertBindings(
       }
       const layer = describeBinder(wn.name ?? resources.live?.get(wn)?.node.name, wn.sourcePath!);
       existing.push({ owner, full, wire: BINDING_FIELD_WIRE_KEYS[field].wire, binder: { layer, value: boundLayerValue(definitions[full].type, wn, resources.instances, resources.live) }, at });
+      binderNodes.push({ wn, full });
     }
   }
   // A live node in the tree is what it is once its own words land (live-tree.ts projected them onto
@@ -703,6 +705,10 @@ export function prepareInsertBindings(
       return wn ? boundLayerValue(PROPERTY_TYPES[BINDING_FIELD_WIRE_KEYS[field].type], wn, resources.instances, resources.live) : undefined;
     },
   });
+  for (const { wn, full } of binderNodes) {
+    const settled = plan.defaults.find((write) => write.full === full);
+    writeInheritedDefault(definitions[full].type, wn, settled ? settled.value : definitions[full].defaultValue);
+  }
   return plan;
 }
 
