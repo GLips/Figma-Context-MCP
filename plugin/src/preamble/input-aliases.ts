@@ -109,34 +109,3 @@ export function normalizeInputAliases(bag: Bag, subject: string, type?: string):
   }
   return out;
 }
-
-import type { WriteLayout } from "./ir.js";
-import type { LayoutMode } from "./layout-mode.js";
-
-/**
- * Stretch is a size request on the axis its CSS word governs, not a second alignment implementation:
- * Figma has no STRETCH alignment anywhere, and "fill that axis" is the same picture. `alignSelf`
- * governs the block axis — a flow parent's cross axis, a grid cell's height — and `justifySelf` the
- * inline axis, which only grid has a word for. Both rewrite the same way, so the spelling a CSS
- * author reaches for never becomes a refusal for a picture flcm can draw.
- */
-export function normalizeChildLayoutAliases(layout: WriteLayout, parent: LayoutMode, absolute: boolean, subject: string): WriteLayout {
-  let out = layout;
-  if (layout.alignSelf === "stretch") {
-    if (absolute || parent.kind === "free") throw new Error(subject + ': alignSelf "stretch" requires an in-flow row/column or grid parent.');
-    out = stretchIntoFill(out, "alignSelf", parent.kind === "flow" ? parent.cross : "vertical", subject);
-  }
-  // Out of flow (or under a row/column, which has no cell) the word is left alone for childLayout's
-  // own "grid placement requires an in-flow GRID parent" refusal — one home for that sentence.
-  if (out.justifySelf === "stretch" && parent.kind === "grid" && !absolute) out = stretchIntoFill(out, "justifySelf", "horizontal", subject);
-  return out;
-}
-
-function stretchIntoFill(layout: WriteLayout, word: "alignSelf" | "justifySelf", axis: "horizontal" | "vertical", subject: string): WriteLayout {
-  if (layout.sizing?.[axis] !== undefined && layout.sizing[axis] !== "fill") {
-    throw new Error(subject + ": " + word + ' "stretch" conflicts with the authored ' + (axis === "horizontal" ? "width" : "height") + '; use "fill".');
-  }
-  const words = { ...layout };
-  delete words[word];
-  return { ...words, sizing: { ...layout.sizing, [axis]: "fill" } };
-}

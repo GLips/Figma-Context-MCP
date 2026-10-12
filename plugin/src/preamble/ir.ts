@@ -309,7 +309,7 @@ export interface WriteLayout {
   gridColumn?: { anchor?: number; span: number };
   gridRow?: { anchor?: number; span: number };
   // "stretch" is an ALIAS that never survives childLayout — it is rewritten to sizing.horizontal
-  // "fill" (input-aliases normalizeChildLayoutAliases) before any applier sees the bag.
+  // "fill" (layout-mode normalizeChildLayoutAliases) before any applier sees the bag.
   justifySelf?: "MIN" | "CENTER" | "MAX" | "AUTO" | "stretch";
   alignSelf?: "center" | "stretch" | "start" | "end" | "auto";
   zIndex?: number;
