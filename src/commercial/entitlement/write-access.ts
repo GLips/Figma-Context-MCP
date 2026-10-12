@@ -108,8 +108,9 @@ export class WriteAccess {
 
   /**
    * May this execution, attributed to this Authorizing User, start? Refusals also go to the plugin
-   * panel. An allowance authorization reserves a Write until recordWriteExecution or
-   * releaseWriteExecution settles it — every authorized execution must reach one of the two.
+   * panel. An allowance authorization reserves a Write until recordWriteExecution counts it or
+   * releaseWriteExecution frees it. Every authorized execution must end in releaseWriteExecution,
+   * counted or not: it also closes the execution's tracked run.
    */
   async authorizeWriteExecution(
     authorizingUser: AuthorizingUser | null,
@@ -145,22 +146,30 @@ export class WriteAccess {
   }
 
   /**
-   * The execution ended without a Write — as far as its caller knows. Frees its reservation; if it
-   * reached the plugin as `runId`, a change reported late under that id is still charged to it
-   * (recordLateDocumentChange). A no-op for an execution already recorded, or never reserved.
+   * The execution reached the plugin as `runId`. Called on submission, not on the reply: the
+   * plugin's RUN_SETTLED or RUN_CHANGED can follow its reply within the same socket read, before the
+   * caller has finished with the reply, and must still find the run. Open-ended until released.
    */
-  releaseWriteExecution(executionId: string, runId: string | null): void {
+  trackLateRun(executionId: string, runId: string): void {
     const figmaUserId = this.reservations.get(executionId);
     if (figmaUserId === undefined) return;
-    this.reservations.delete(executionId);
+    this.lateRuns.set(runId, { figmaUserId, executionId, expiresAt: Infinity });
+  }
+
+  /**
+   * The execution ended without a Write — as far as its caller knows. Frees its reservation; a
+   * change reported late under its tracked run is still charged to it (recordLateDocumentChange)
+   * until the ceiling. For an execution already recorded, only drops its tracked run.
+   */
+  releaseWriteExecution(executionId: string): void {
+    const reserved = this.reservations.delete(executionId);
     const now = this.now().getTime();
-    for (const [id, late] of this.lateRuns) if (late.expiresAt <= now) this.lateRuns.delete(id);
-    if (runId !== null)
-      this.lateRuns.set(runId, {
-        figmaUserId,
-        executionId,
-        expiresAt: now + LATE_DOCUMENT_CHANGE_MS,
-      });
+    for (const [id, late] of this.lateRuns) {
+      if (late.executionId === executionId) {
+        if (reserved) this.lateRuns.set(id, { ...late, expiresAt: now + LATE_DOCUMENT_CHANGE_MS });
+        else this.lateRuns.delete(id);
+      } else if (late.expiresAt <= now) this.lateRuns.delete(id);
+    }
   }
 
   /** Keep a short-lived relay alive until the run settles: RUN_SETTLED, a late change, or the ceiling. */

@@ -129,7 +129,7 @@ const ALLOWANCE_AUTHORIZATION = {
 async function gateAnswer(writeAccess: WriteAccess) {
   const executionId = randomUUID();
   const decision = await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, executionId);
-  writeAccess.releaseWriteExecution(executionId, null);
+  writeAccess.releaseWriteExecution(executionId);
   return decision;
 }
 
@@ -284,7 +284,7 @@ describe("write authorization", () => {
       ),
     );
     expect(decisions.map((d) => d.kind)).toEqual(["authorized", "authorized", "refused"]);
-    writeAccess.releaseWriteExecution("read-only", null);
+    writeAccess.releaseWriteExecution("read-only");
 
     // The state dir stops taking writes just as a Write lands: it still counts, and still reports.
     const stateDir = dirname(store.file);
@@ -306,7 +306,8 @@ describe("write authorization", () => {
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
     await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, "late-writer");
     // The reply said "no change", then the plugin saw one — and said so twice.
-    writeAccess.releaseWriteExecution("late-writer", "run-7");
+    writeAccess.trackLateRun("late-writer", "run-7");
+    writeAccess.releaseWriteExecution("late-writer");
     writeAccess.recordLateDocumentChange("run-7");
     writeAccess.recordLateDocumentChange("run-7");
     writeAccess.recordLateDocumentChange("a-run-this-server-never-issued");

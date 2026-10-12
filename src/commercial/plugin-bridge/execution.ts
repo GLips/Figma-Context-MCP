@@ -16,10 +16,9 @@ import {
   type WriteRefusal,
 } from "../entitlement/write-authorization.js";
 
-// Since protocol 2, images are fetched MID-RUN (PluginBridge.serveChannelRequest), so a script
-// executes exactly once and its reply is the whole story — no re-run signals, no second pass.
-// `documentChanged` is the server's to meter, never the agent's to read, so it never reaches the
-// tool result.
+// A script executes exactly once — images arrive mid-run (PluginBridge.serveChannelRequest) — and
+// its reply is the whole story. `documentChanged` is the server's to meter, never the agent's to
+// read, so it never reaches the tool result.
 
 export type ApprovalOptions = NonNullable<Parameters<typeof requestUntilApproved>[2]>;
 export type ExecutionOutcome =
@@ -47,7 +46,10 @@ export async function executePluginCode(
     runId: null,
   };
   try {
-    let raw: ExecuteCodeResult | PendingApprovalReply | WriteRefusal;
+    let raw:
+      | { kind: "refused"; refusal: WriteRefusal }
+      | { kind: "replied"; reply: ExecuteCodeResult }
+      | PendingApprovalReply;
     try {
       raw = await requestUntilApproved(
         (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
@@ -56,8 +58,9 @@ export async function executePluginCode(
             bridge.getAuthorizingUser(),
             executionId,
           );
-          if (gate.authorization.kind === "refused") return gate.authorization;
-          return bridge.request(
+          if (gate.authorization.kind === "refused")
+            return { kind: "refused", refusal: gate.authorization };
+          const reply = await bridge.request(
             {
               type: "EXECUTE_CODE",
               code,
@@ -67,9 +70,12 @@ export async function executePluginCode(
             signal,
             (runId) => {
               gate.runId = runId;
+              writeAccess.trackLateRun(executionId, runId);
             },
             runContext,
           );
+          // The plugin gates consent again on the submit itself, so it too may answer PENDING_APPROVAL.
+          return isPendingApproval(reply) ? reply : { kind: "replied", reply };
         },
         options,
       );
@@ -83,12 +89,16 @@ export async function executePluginCode(
         writeAccess.recordWriteExecution(gate.authorization, executionId);
       throw error;
     }
-    if ("kind" in raw)
-      return { kind: "refused", message: writeRefusalText(raw, writeAccess.framelinkApiUrl) };
     if (isPendingApproval(raw)) return { kind: "pending" };
-    const { documentChanged, console, errors } = raw;
+    if (raw.kind === "refused")
+      return {
+        kind: "refused",
+        message: writeRefusalText(raw.refusal, writeAccess.framelinkApiUrl),
+      };
+    const { documentChanged, console, errors } = raw.reply;
     // `result` stays absent when the run returned nothing: undefined isn't JSON.
-    const reply = "result" in raw ? { result: raw.result, console, errors } : { console, errors };
+    const reply =
+      "result" in raw.reply ? { result: raw.reply.result, console, errors } : { console, errors };
     if (documentChanged && gate.authorization)
       writeAccess.recordWriteExecution(gate.authorization, executionId);
     bridge.touchApproval();
@@ -103,7 +113,7 @@ export async function executePluginCode(
           : null,
     };
   } finally {
-    writeAccess.releaseWriteExecution(executionId, gate.runId);
+    writeAccess.releaseWriteExecution(executionId);
   }
 }
 

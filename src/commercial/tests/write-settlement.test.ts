@@ -14,7 +14,8 @@ it("settlement uses existing late-run expiry and abort cleans waiting without ch
   vi.useFakeTimers();
   const { writeAccess } = createTestWriteAccess();
   await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, "read");
-  writeAccess.releaseWriteExecution("read", "run");
+  writeAccess.trackLateRun("read", "run");
+  writeAccess.releaseWriteExecution("read");
   let remaining = 0;
   let settled = false;
   const done = writeAccess
@@ -31,7 +32,8 @@ it("settlement uses existing late-run expiry and abort cleans waiting without ch
   await done;
   expect(settled).toBe(true);
   await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, "cancelled");
-  writeAccess.releaseWriteExecution("cancelled", "cancelled-run");
+  writeAccess.trackLateRun("cancelled", "cancelled-run");
+  writeAccess.releaseWriteExecution("cancelled");
   const controller = new AbortController();
   const cancelled = writeAccess
     .waitForWriteSettlement("cancelled-run", controller.signal)
@@ -39,6 +41,20 @@ it("settlement uses existing late-run expiry and abort cleans waiting without ch
   controller.abort(new Error("stop"));
   expect((await cancelled).message).toBe("stop");
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("a RUN_SETTLED that beats the caller's release still ends the settlement wait at once", async () => {
+  const { writeAccess } = createTestWriteAccess();
+  await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, "quick");
+  writeAccess.trackLateRun("quick", "quick-run");
+  // ws hands over the reply and RUN_SETTLED in one read, ahead of the caller's `finally`.
+  writeAccess.settleLateRun("quick-run");
+  writeAccess.releaseWriteExecution("quick");
+  let waited = false;
+  await writeAccess.waitForWriteSettlement("quick-run", new AbortController().signal, () => {
+    waited = true;
+  });
+  expect(waited).toBe(false);
 });
 
 it("runtime shutdown interrupts device polling without another authentication request", async () => {
