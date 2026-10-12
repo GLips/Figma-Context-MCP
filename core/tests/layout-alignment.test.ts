@@ -825,9 +825,8 @@ describe("aspectRatio zero-height guard", () => {
   // A zero-height column child would divide width/0 and emit aspectRatio:Infinity
   // into the LLM-facing output. The guard drops the field rather than emit a
   // value no consumer can use.
-  // A non-auto-layout parent so the child's own column mode drives the axis.
   const parent = makeFrame({
-    layoutMode: "NONE",
+    layoutMode: "VERTICAL",
     absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
   });
   const columnChild = (height: number) =>
@@ -862,6 +861,24 @@ describe("aspectRatio zero-height guard", () => {
     });
     expect(geometryOf(rotated, parent).aspectRatio).toBe(2);
   });
+});
+
+test("stale layoutGrow/layoutAlign outside auto-layout keep the node's fixed size", () => {
+  // Figma ignores both flags off an auto-layout flow; a value left from an earlier parent must not
+  // drop the node's width/height as though it stretched.
+  const parent = makeFrame({
+    layoutMode: "NONE",
+    absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 300 },
+  });
+  const row = makeFrame({
+    layoutGrow: 1,
+    layoutAlign: "STRETCH",
+    layoutSizingHorizontal: "FIXED",
+    layoutSizingVertical: "FIXED",
+    absoluteBoundingBox: { x: 0, y: 0, width: 120, height: 40 },
+  });
+  const geometry = geometryOf(row, parent);
+  expect([geometry.width, geometry.height]).toEqual([120, 40]);
 });
 
 test("native baseline takes precedence over fill-child stretch inference", () => {

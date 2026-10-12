@@ -44,7 +44,7 @@ export function buildSimplifiedLayout(
   }
 
   // Flow layoutAlign's legacy alignment values do not render; STRETCH is captured by sizing.
-  return { layout, geometry: buildNodeGeometry(n, parent, layout.mode, !!parentGrid) };
+  return { layout, geometry: buildNodeGeometry(n, parent, !!parentGrid) };
 }
 
 function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
@@ -125,7 +125,6 @@ function setIfDefined<K extends keyof SimplifiedLayout>(
 function buildNodeGeometry(
   n: NodeSnapshot,
   parent: NodeSnapshot | undefined,
-  mode: SimplifiedLayout["mode"],
   parentIsGrid: boolean,
 ): NodeGeometry {
   // No bounding box (e.g. DOCUMENT/CANVAS, synthetic fixtures) → no geometry
@@ -149,7 +148,7 @@ function buildNodeGeometry(
   // stretching that axis and the sizing flag permits it. Stretch detection and
   // the "is FIXED?" rule both depend on whether the parent is flex, grid, or
   // non-auto-layout — see ./layout/common.ts for the per-axis vocabulary mapping.
-  const axis = resolveChildAxis(n, parent, mode, parentIsGrid);
+  const axis = resolveChildAxis(n, parent, parentIsGrid);
   const stretch = getChildStretch(n, axis);
   // The node's OWN size is what width/height mean (see NodeGeometry); the AABB is
   // the fallback for a producer that couldn't determine it (see NodeSnapshot.ownSize),

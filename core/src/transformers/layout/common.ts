@@ -172,22 +172,18 @@ export type StretchFlags = { horizontal: boolean; vertical: boolean };
  * *parent's* axis, not the child's own layout. A row child inside a column
  * parent has its main axis aligned with the column. Picking the wrong axis here
  * silently mis-emits dimensions (see fix #379).
+ *
+ * Out of an auto-layout flow (a free-form parent, absolute positioning, the root) the axis is
+ * "none": Figma ignores `layoutGrow`/`layoutAlign` there, and a value left behind from an earlier
+ * auto-layout parent must not read as a stretch.
  */
 export function resolveChildAxis(
   n: NodeSnapshot,
   parent: NodeSnapshot | undefined,
-  ownMode: SimplifiedLayout["mode"],
   parentIsGrid: boolean,
 ): ChildAxis {
   if (parentIsGrid) return "grid";
-  // When in an auto-layout parent, prefer the parent's axis (fix #379).
-  // Outside it, fall back to the node's own mode so a top-level row/column
-  // frame still threads through the row/column dimension logic. That lets a
-  // stale layoutGrow/layoutAlign on a non-auto-layout node (Figma ignores
-  // them there) still read as a stretch.
-  const parentAxis = isInAutoLayoutFlow(n, parent) ? getParentAutoLayoutMode(parent) : undefined;
-  if (parentAxis) return parentAxis;
-  return ownMode === "row" || ownMode === "column" ? ownMode : "none";
+  return (isInAutoLayoutFlow(n, parent) ? getParentAutoLayoutMode(parent) : undefined) ?? "none";
 }
 
 /**
