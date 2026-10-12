@@ -15,8 +15,8 @@ import { editMany } from "./edit-many.js";
 import { render, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace } from "./structure.js";
 import { page } from "./page.js";
 import { designTokens as listDesignTokens } from "./design-tokens.js";
-import { registerMarked } from "./host.js";
-import { TOKEN_ENTRY_MARK, type TokenEntryKind } from "./token-mark.js";
+import { registerTokenEntry } from "./egress.js";
+import type { TokenEntryKind } from "./token-mark.js";
 import type { Flcm } from "./schema.js";
 
 // Each listed entry is registered by identity, so it leaves the run marked for the server's token
@@ -27,7 +27,7 @@ const designTokens = (async (from?: unknown) => {
   // Every overload's listing has this shape; the cast spares re-deriving it from the overload set.
   const listing = (await listDesignTokens(from as never)) as { variables: object[]; styles?: object[] };
   const mark = (entries: object[] | undefined, kind: TokenEntryKind) => {
-    for (const entry of entries ?? []) registerMarked(entry, { [TOKEN_ENTRY_MARK]: kind });
+    for (const entry of entries ?? []) registerTokenEntry(entry, kind);
   };
   mark(listing.variables, "variable");
   mark(listing.styles, "style");

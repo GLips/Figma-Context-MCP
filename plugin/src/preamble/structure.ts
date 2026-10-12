@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { registerRead } from "./host.js";
+import { registerRead } from "./egress.js";
 import type { WarningRecord } from "./warnings.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { sceneFigma as figma } from "./scene-access.js";

@@ -14,11 +14,11 @@ import { type UnreadableSink, type SceneNodeLike, type SceneTokenResolver } from
 import { readSceneDesign, type CommentCounts } from "./scene-read.js";
 import { rejectUnknownKeys, showValue } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { registerRead } from "./host.js";
+import { registerRead } from "./egress.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
-import { FIND_MATERIALIZE_CAP } from "./find-cap.js";
+import { FIND_MATERIALIZE_CAP } from "../protocol.js";
 import { TokenLookups } from "./tokens.js";
 import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
 
@@ -192,10 +192,7 @@ async function simplifyScene(
   registerRead(full.components, () => project(full).components);
   return full;
   function registerNode(node: SimplifiedNode): void {
-    registerRead(node, () => {
-      const projected = projectReadNode(node, full);
-      return projected === node ? node : projectNames(projected);
-    });
+    registerRead(node, () => projectNames(projectReadNode(node, full)));
     for (const child of node.children ?? []) registerNode(child);
   }
 }
@@ -268,7 +265,7 @@ export async function get(target: Target): Promise<GetResult> {
   if (Object.keys(components).length > 0) result.components = components;
   registerRead(result, () => {
     const projected = project(full);
-    const output: GetResult = { node: projected === full ? result.node : projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full)) };
+    const output: GetResult = { node: projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full)) };
     if (Object.keys(projected.components).length) output.components = projected.components;
     return output;
   });

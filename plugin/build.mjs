@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import * as esbuild from "esbuild";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { copyDistributionLicenses, licenseBanner } from "../scripts/distribution-licenses.mjs";
 
@@ -21,6 +22,27 @@ await esbuild.build({
   banner: { js: licenseBanner },
   legalComments: "inline",
 });
+
+// A plugin's UI is one HTML document with no loadable siblings, so the relay iframe's script is bundled
+// and inlined into it. Its own bundle: it shares only types with the host, and the protocol's values.
+const ui = await esbuild.build({
+  entryPoints: ["src/ui.ts"],
+  bundle: true,
+  write: false,
+  platform: "browser",
+  format: "iife",
+  target: "es2017",
+  logLevel: "info",
+  legalComments: "inline",
+});
+const UI_SCRIPT = "<script>/* UI_SCRIPT: build.mjs inlines the ui.ts bundle here */</script>";
+const template = readFileSync(new URL("./src/ui.html", import.meta.url), "utf8");
+if (!template.includes(UI_SCRIPT)) throw new Error("src/ui.html lost its UI_SCRIPT marker");
+// A function replacement, so `$` sequences in the bundle are never read as replacement patterns.
+writeFileSync(
+  new URL("./dist/ui.html", import.meta.url),
+  template.replace(UI_SCRIPT, () => `<script>\n${ui.outputFiles[0].text}</script>`),
+);
 
 copyDistributionLicenses(
   fileURLToPath(new URL("../", import.meta.url)),

@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
-import { registerResult } from "./host.js";
+import { registerResult } from "./egress.js";
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 import { beginSizingDiagnostics, finishSizingDiagnostics, retargetSizingDiagnostics } from "./sizing-diagnostics.js";
 import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDiagnostics } from "./moved-out-diagnostics.js";
@@ -36,8 +36,8 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { hostDeadlinePassed, hostRunCancelled, hostRunFinished } from "./host.js";
-import { RUN_INACTIVITY_DEADLINE_MS } from "./server-deadline.js";
+import { hostDeadlinePassed, hostRunCancellation, hostRunFinished, type RunCancelCause } from "./host.js";
+import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -103,11 +103,18 @@ function refuseIfDevMode(verb: string): void {
   }
 }
 
+const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
+  server: "this run was cancelled by the server (its deadline passed)",
+  disconnected: "this run's server disconnected, so the run was cancelled",
+  revoked: "the human revoked this session's approval in Figma, so the run was cancelled",
+};
+
 function refuseIfCancelled(verb: string): void {
-  if (hostRunCancelled()) {
+  const cause = hostRunCancellation();
+  if (cause) {
     throw new Error(
-      "flcm." + verb + ": this run was cancelled by the server (its deadline passed) — no further " +
-        "mutating verbs start. The canvas holds what completed before the cancellation.",
+      "flcm." + verb + ": " + CANCELLED_BECAUSE[cause] + " — no further mutating verbs start. The " +
+        "canvas holds what completed before the cancellation.",
     );
   }
   // Worded apart from the CANCEL: with the thread held, the run can't know whether the server has

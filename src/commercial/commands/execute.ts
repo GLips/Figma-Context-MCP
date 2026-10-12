@@ -21,10 +21,8 @@ import {
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
 import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
-import {
-  MAX_SCREENSHOT_SCALE,
-  screenshotInputError,
-} from "~/commercial/plugin-bridge/screenshot-options.js";
+import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
+import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
   approvalPendingRerunAction,
   pluginDisconnectedAction,

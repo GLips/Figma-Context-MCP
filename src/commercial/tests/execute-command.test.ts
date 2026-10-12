@@ -18,12 +18,15 @@ import {
   writesUsedThisMonth,
 } from "~/commercial/entitlement/write-ledger.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
-import { MIN_PROTOCOL_VERSION } from "~/commercial/plugin-bridge/version.js";
+import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
 
 // Exercise production startup/handshake/images/execution on an ephemeral test port.
 // Figma only scans its fixed production block, so these tests cannot drive a live document.
 const ports = vi.hoisted(() => [] as number[]);
-vi.mock("~/commercial/plugin-bridge/ports.js", () => ({ WS_PORT_BLOCK: ports }));
+vi.mock("@framelink/plugin/protocol", async (actual) => ({
+  ...(await actual<typeof import("@framelink/plugin/protocol")>()),
+  WS_PORT_BLOCK: ports,
+}));
 
 type Frame = Record<string, unknown>;
 let dir: string;
@@ -77,13 +80,16 @@ async function plugin(handle: (frame: Frame, socket: WebSocket) => void, approva
       if (frame.type === "GET_VERSION") {
         socket.send(
           JSON.stringify({
+            type: "VERSION",
             id: frame.id,
-            protocolVersion: MIN_PROTOCOL_VERSION,
+            protocolVersion: PROTOCOL_VERSION,
             pluginVersion: "test",
           }),
         );
-      } else if (frame.type === "PING" || frame.type === "SESSION_INFO") {
-        socket.send(JSON.stringify({ id: frame.id }));
+      } else if (frame.type === "PING") {
+        socket.send(JSON.stringify({ type: "PONG", id: frame.id, echo: frame.payload }));
+      } else if (frame.type === "SESSION_INFO") {
+        socket.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: frame.id }));
       }
       if (frame.type === "SESSION_INFO" && approval)
         socket.send(
@@ -107,14 +113,13 @@ async function plugin(handle: (frame: Frame, socket: WebSocket) => void, approva
   throw new Error("CLI relay did not bind its test port");
 }
 
+// The reply type a request is owed; `value` may override it (PENDING_APPROVAL, APPROVAL_GRANTED).
+const REPLY_TYPE: Record<string, Frame> = {
+  EXECUTE_CODE: { type: "EXECUTE_CODE_RESULT", documentChanged: true },
+  SCREENSHOT: { type: "SCREENSHOT_RESULT" },
+};
 function reply(socket: WebSocket, frame: Frame, value: Frame) {
-  socket.send(
-    JSON.stringify({
-      id: frame.id,
-      ...(frame.type === "EXECUTE_CODE" ? { documentChanged: true } : {}),
-      ...value,
-    }),
-  );
+  socket.send(JSON.stringify({ id: frame.id, ...REPLY_TYPE[String(frame.type)], ...value }));
 }
 
 describe("saved-script CLI using production plugin services", () => {
@@ -398,7 +403,12 @@ describe("one-shot bridge lifecycle", () => {
       const request = new Promise((resolve, reject) => {
         bridge.start(ports, () => {
           bridge
-            .request({ type: "EXECUTE_CODE", code: "return 1", preamble: "test runtime" })
+            .request({
+              type: "EXECUTE_CODE",
+              code: "return 1",
+              preamble: "test runtime",
+              lateChangeWindowMs: 60_000,
+            })
             .then(resolve, reject);
         });
       });

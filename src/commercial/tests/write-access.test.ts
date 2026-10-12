@@ -16,9 +16,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer as createMcpServer } from "~/mcp/index.js";
-import { PluginBridge, type BridgeRequest } from "~/commercial/plugin-bridge/bridge.js";
+import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
-import type { WriteAccessNotice } from "~/commercial/entitlement/write-authorization.js";
+import type {
+  PluginReply,
+  ReplyFor,
+  ServerRequest,
+  WriteAccessNotice,
+} from "@framelink/plugin/protocol";
 import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
@@ -151,15 +156,20 @@ class MeteredBridge extends PluginBridge {
   override getAuthorizingUser() {
     return TEST_AUTHORIZING_USER;
   }
-  override async request(payload: BridgeRequest) {
-    if (payload.type === "APPROVAL_STATUS") return { type: "APPROVAL_GRANTED" };
-    this.executions++;
-    return {
-      result: "ok",
-      console: [],
-      errors: null,
-      documentChanged: this.documentChanged.shift(),
-    };
+  override async request<T extends ServerRequest>(payload: T): Promise<ReplyFor<T["type"]>> {
+    let reply: PluginReply;
+    if (payload.type === "APPROVAL_STATUS") reply = { type: "APPROVAL_GRANTED" };
+    else {
+      this.executions++;
+      reply = {
+        type: "EXECUTE_CODE_RESULT",
+        result: "ok",
+        console: [],
+        errors: null,
+        documentChanged: this.documentChanged.shift()!,
+      };
+    }
+    return reply as ReplyFor<T["type"]>;
   }
 }
 

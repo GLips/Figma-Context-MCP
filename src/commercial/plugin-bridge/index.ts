@@ -16,7 +16,7 @@ import {
   createImageSourceFetcher,
 } from "./image-requests.js";
 import { createCommentPinsCapability } from "./comment-pins.js";
-import { WS_PORT_BLOCK } from "./ports.js";
+import { WS_PORT_BLOCK } from "@framelink/plugin/protocol";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "~/commercial/state-dir.js";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
@@ -33,7 +33,7 @@ const WRITE_ACCESS_SYNC_TICK_MS = 10 * 60 * 1000;
  * tools are only advertised once a plugin proves the write path exists by connecting.
  *
  * The latch never resets: once a plugin has connected, the tools stay advertised for the process
- * lifetime. That is deliberately stronger than a disconnect grace period — the plugin's ui.html
+ * lifetime. That is deliberately stronger than a disconnect grace period — the plugin's relay (ui.ts)
  * reconnects on a ~1s cadence, and a latch cannot flap on blips at all. Do not "fix" this by
  * un-advertising on disconnect: list-caching MCP clients would strand the agent mid-task.
  */
@@ -107,6 +107,7 @@ export function startPluginBridge({
       onWriteAccessSignIn: () =>
         inBackground(writeAccess.startDeviceSignIn(bridge.getAuthorizingUser())),
       onRunDocumentChanged: (runId) => writeAccess.recordLateDocumentChange(runId),
+      onRunSettled: (runId) => writeAccess.settleLateRun(runId),
     },
     capabilities: new Map([
       [
@@ -133,7 +134,7 @@ export function startPluginBridge({
 
   bridge.start(WS_PORT_BLOCK, () => {
     // Connection smoke test: the instant a plugin connects, prove the full loop
-    //   server → WS → ui.html → postMessage → code.js → figma.* → back
+    //   server → WS → relay (ui.ts) → postMessage → code.ts → figma.* → back
     // works end to end. If the WS won't round-trip, no tool call can — so surface it loudly here.
     bridge
       .request({ type: "PING", payload: "ping from server" })

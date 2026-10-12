@@ -4,8 +4,8 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { requestUntilApproved } from "~/commercial/plugin-bridge/await-approval.js";
-const pending = { type: "PENDING_APPROVAL" };
-const granted = { type: "APPROVAL_GRANTED" };
+const pending = { type: "PENDING_APPROVAL" } as const;
+const granted = { type: "APPROVAL_GRANTED" } as const;
 
 function clock() {
   let time = 0;
@@ -46,7 +46,7 @@ describe("approval before single submission", () => {
     ).rejects.toThrow("unconfirmed");
     expect(commits).toBe(1);
   });
-  it.each(["APPROVAL_REJECTED", "disconnect"])(
+  it.each(["APPROVAL_REJECTED", "disconnect"] as const)(
     "%s while waiting submits nothing and stops progress",
     async (outcome) => {
       let polls = 0;

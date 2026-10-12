@@ -3,44 +3,29 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
+import type { ExecuteCodeResult, PendingApprovalReply } from "@framelink/plugin/protocol";
 import type { PluginBridgeRuntime } from "./index.js";
 import { BridgeRequestError, type ChannelRunContext } from "./bridge.js";
 import { requestUntilApproved, isPendingApproval } from "./await-approval.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
-import { writeRefusalText, type WriteAuthorization } from "../entitlement/write-authorization.js";
+import { LATE_CHANGE_WINDOW_MS } from "../entitlement/write-access.js";
+import {
+  writeRefusalText,
+  type WriteAuthorization,
+  type WriteRefusal,
+} from "../entitlement/write-authorization.js";
 
-// The plugin always replies to EXECUTE_CODE with this exact shape; parse it once so the handler
-// trusts the type instead of re-checking each field. `result` is absent when the code returns
-// nothing or throws: undefined isn't JSON, so it's dropped crossing the WS — optional, not
-// required (a missing key is the error/void path). Since protocol 2, images are fetched MID-RUN
-// (PluginBridge.serveChannelRequest), so a script executes exactly once and this reply is the
-// whole story — no re-run signals, no second pass.
-//
-// `documentChanged` is whether the document changed while the run executed — raw figma.* writes
-// included, and writes that landed after the agent's code returned. True is one Write against the
-// free allowance. False is provisional: a change Figma reports later arrives as RUN_CHANGED. It is
-// the server's to read, not the agent's, so it never reaches the tool result.
-const ExecuteCodeReply = z.object({
-  result: z.unknown().optional(),
-  console: z.array(z.string()),
-  errors: z.string().nullable(),
-  documentChanged: z.boolean(),
-});
-
-// The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
-// (base64 PNG) on success, `errors` on the failure path — never both, never neither.
-const ScreenshotReply = z.union([
-  z.object({ image: z.string() }),
-  z.object({ errors: z.string() }),
-]);
+// Since protocol 2, images are fetched MID-RUN (PluginBridge.serveChannelRequest), so a script
+// executes exactly once and its reply is the whole story — no re-run signals, no second pass.
+// `documentChanged` is the server's to meter, never the agent's to read, so it never reaches the
+// tool result.
 
 export type ApprovalOptions = NonNullable<Parameters<typeof requestUntilApproved>[2]>;
 export type ExecutionOutcome =
   | {
       kind: "executed";
-      reply: Omit<z.infer<typeof ExecuteCodeReply>, "documentChanged">;
+      reply: Omit<ExecuteCodeResult, "type" | "documentChanged">;
       settlementRunId: string | null;
     }
   | { kind: "pending" }
@@ -62,7 +47,7 @@ export async function executePluginCode(
     runId: null,
   };
   try {
-    let raw: unknown;
+    let raw: ExecuteCodeResult | PendingApprovalReply | WriteRefusal;
     try {
       raw = await requestUntilApproved(
         (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
@@ -71,9 +56,14 @@ export async function executePluginCode(
             bridge.getAuthorizingUser(),
             executionId,
           );
-          if (gate.authorization.kind === "refused") return null;
+          if (gate.authorization.kind === "refused") return gate.authorization;
           return bridge.request(
-            { type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() },
+            {
+              type: "EXECUTE_CODE",
+              code,
+              preamble: flcmSandboxPreamble(),
+              lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+            },
             signal,
             (runId) => {
               gate.runId = runId;
@@ -93,13 +83,12 @@ export async function executePluginCode(
         writeAccess.recordWriteExecution(gate.authorization, executionId);
       throw error;
     }
-    if (gate.authorization?.kind === "refused")
-      return {
-        kind: "refused",
-        message: writeRefusalText(gate.authorization, writeAccess.framelinkApiUrl),
-      };
+    if ("kind" in raw)
+      return { kind: "refused", message: writeRefusalText(raw, writeAccess.framelinkApiUrl) };
     if (isPendingApproval(raw)) return { kind: "pending" };
-    const { documentChanged, ...reply } = ExecuteCodeReply.parse(raw);
+    const { documentChanged, console, errors } = raw;
+    // `result` stays absent when the run returned nothing: undefined isn't JSON.
+    const reply = "result" in raw ? { result: raw.result, console, errors } : { console, errors };
     if (documentChanged && gate.authorization)
       writeAccess.recordWriteExecution(gate.authorization, executionId);
     bridge.touchApproval();
@@ -129,5 +118,5 @@ export async function capturePluginScreenshot(
     options,
   );
   if (isPendingApproval(raw)) return { kind: "pending" as const };
-  return { kind: "captured" as const, reply: ScreenshotReply.parse(raw) };
+  return { kind: "captured" as const, reply: raw };
 }

@@ -33,11 +33,9 @@ createFigmaMock();
 let agentSession;
 const host = {
   getSession: initialize => agentSession ??= initialize(),
-  // This diagnostic harness inspects full runtime data; execution-lifecycle tests cover host projection.
-  registerRead() {},
   callServer: async (_capability, urls) =>
     Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
-  isRunCancelled: () => false, isRunFinished: () => false,
+  runCancellation: () => null, isRunFinished: () => false,
 };
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");
 const log = [];

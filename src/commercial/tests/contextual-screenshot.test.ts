@@ -7,15 +7,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
-import type { BridgeRequest, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { ServerRequest } from "@framelink/plugin/protocol";
+import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 function connectedServer() {
   const request = vi
     .fn()
-    .mockImplementation(async (payload: BridgeRequest) =>
-      payload.type === "APPROVAL_STATUS" ? { type: "APPROVAL_GRANTED" } : { image: "AQ==" },
+    .mockImplementation(async (payload: ServerRequest) =>
+      payload.type === "APPROVAL_STATUS"
+        ? { type: "APPROVAL_GRANTED" }
+        : { type: "SCREENSHOT_RESULT", image: "AQ==" },
     );
   const bridge = {
     request,

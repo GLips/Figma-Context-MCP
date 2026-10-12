@@ -26,12 +26,11 @@ async function renderWithImages(
 ): Promise<{ out: Awaited<ReturnType<typeof render>>; batches: string[][] }> {
   const batches: string[][] = [];
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = { registerRead() {},
-    callServer: async (_capability: string, urls: string[]) => {
+  g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) => {
       batches.push(urls);
       return respond(urls);
     },
-    isRunCancelled: () => false, isRunFinished: () => false,
+    runCancellation: () => null, isRunFinished: () => false,
   };
   try {
     return { out: await render(tree), batches };

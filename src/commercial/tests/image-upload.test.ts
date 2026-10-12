@@ -25,11 +25,8 @@ import {
   type UploadEndpoint,
 } from "~/commercial/plugin-bridge/upload-endpoint.js";
 import { runUpload } from "~/commercial/commands/upload.js";
-import type {
-  BridgeRequest,
-  ChannelRunContext,
-  PluginBridge,
-} from "~/commercial/plugin-bridge/bridge.js";
+import type { ServerRequest } from "@framelink/plugin/protocol";
+import type { ChannelRunContext, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
 import { createImageSourceFetcher } from "~/commercial/plugin-bridge/image-requests.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
@@ -101,7 +98,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
   let fetched: Promise<string> | undefined;
   const bridge = {
     request: async (
-      payload: BridgeRequest,
+      payload: ServerRequest,
       _signal: unknown,
       _onSubmitted: unknown,
       run: ChannelRunContext,
@@ -109,7 +106,13 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       if (payload.type === "APPROVAL_STATUS") return { type: "APPROVAL_GRANTED" };
       fetched = fetchImage(source, run);
       await fetched.catch(() => {});
-      return { result: null, console: [], errors: null, documentChanged: false };
+      return {
+        type: "EXECUTE_CODE_RESULT",
+        result: null,
+        console: [],
+        errors: null,
+        documentChanged: false,
+      };
     },
     touchApproval: () => {},
     getAuthorizingUser: () => TEST_AUTHORIZING_USER,

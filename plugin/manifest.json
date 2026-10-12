@@ -3,7 +3,7 @@
   "id": "framelink-mcp",
   "api": "1.0.0",
   "main": "dist/code.js",
-  "ui": "ui.html",
+  "ui": "dist/ui.html",
   "editorType": ["figma", "dev"],
   "capabilities": ["inspect"],
   "documentAccess": "dynamic-page",
@@ -29,6 +29,6 @@
       "ws://localhost:9890",
       "ws://localhost:9891"
     ],
-    "reasoning": "Dev-mode only: connects to the local Framelink MCP server over WebSocket on a loopback port block (each session probe-binds the first free port; must mirror WS_PORT_BLOCK in src/commercial/plugin-bridge/ports.ts). Figma has no port wildcard, so every port is enumerated; the validator rejects raw IPs, so entries use `localhost`. No production network access."
+    "reasoning": "Dev-mode only: connects to the local Framelink MCP server over WebSocket on a loopback port block (each session probe-binds the first free port; must mirror WS_PORT_BLOCK in plugin/src/protocol.ts). Figma has no port wildcard, so every port is enumerated; the validator rejects raw IPs, so entries use `localhost`. No production network access."
   }
 }

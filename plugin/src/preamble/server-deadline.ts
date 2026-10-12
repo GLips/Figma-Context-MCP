@@ -21,8 +21,7 @@
 // the absolute run ceiling counts from submission, which the run can't see. It is not mirrored here,
 // so a run blocked past only the ceiling is still refused only once its CANCEL dispatches.
 
-/** The server's inactivity deadline. bridge.ts imports it, so the two sides read the same number. */
-export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
+import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 
 // Module state is per run: the preamble is eval'd fresh for each one. Null until the first server
 // call settles; before that the clock runs from the host's runStartedAt.

@@ -20,25 +20,6 @@
 
 export const SESSION_IDENTITY = process.cwd();
 
-/**
- * The Authorizing User: the human who clicked Allow for this session in the plugin, as `figma.currentUser`
- * reported them at that moment. Every write the session makes is attributed to this `figmaUserId`
- * (licensing/LICENSE-Framelink-Commercial.md, "Limit of the grant") — the free allowance is counted against it and a seat
- * is looked up for it. `name` is display-only.
- */
-export interface AuthorizingUser {
-  figmaUserId: string;
-  name: string;
-}
-
-/** Read an Authorizing User off untrusted plugin JSON; anything without a Figma user id is no Authorizing User. */
-export function parseAuthorizingUser(value: unknown): AuthorizingUser | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { figmaUserId, name } = value as { figmaUserId?: unknown; name?: unknown };
-  if (typeof figmaUserId !== "string" || figmaUserId.length === 0) return null;
-  return { figmaUserId, name: typeof name === "string" ? name : "" };
-}
-
 /** Mint a fresh 4-digit pairing code for one connection. */
 export function mintPairingCode(): string {
   return String(1000 + Math.floor(Math.random() * 9000));

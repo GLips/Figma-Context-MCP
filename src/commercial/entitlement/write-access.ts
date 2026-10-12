@@ -14,7 +14,7 @@
 // Write they may still become) and Writes the file couldn't take (a failed save). Both live in this
 // process's memory only, so they hold against its own parallel calls, not another server's.
 import { setTimeout as pause } from "node:timers/promises";
-import type { AuthorizingUser } from "~/commercial/plugin-bridge/approval.js";
+import type { AuthorizingUser, WriteAccessNotice } from "@framelink/plugin/protocol";
 import { Logger } from "~/utils/logger.js";
 import { FramelinkApiError, type FramelinkApiClient } from "./framelink-api.js";
 import type {
@@ -27,7 +27,6 @@ import {
   authorizeWriteExecution,
   isSeatRevalidationDue,
   type CachedSeat,
-  type WriteAccessNotice,
   type WriteAuthorization,
 } from "./write-authorization.js";
 import {
@@ -50,9 +49,14 @@ const REFUSAL_SEAT_RECHECK_MS = 30_000;
 const SLOW_DOWN_STEP_MS = 5_000;
 // How often to retry saving Writes the state file refused.
 const PERSIST_RETRY_MS = 30_000;
-// How long after its caller finished a run can still be charged for a late change. At least the
-// plugin's own watch (LATE_CHANGE_WINDOW_MS in plugin/src/code.ts), plus slack for the relay.
-const LATE_DOCUMENT_CHANGE_MS = 90_000;
+/**
+ * How long past a "no change" reply the plugin keeps watching the document for a change it would
+ * charge to that run. Sent with every EXECUTE_CODE: the plugin obeys it, so it can't drift from here.
+ */
+export const LATE_CHANGE_WINDOW_MS = 60_000;
+// The plugin reports the window's end itself (RUN_SETTLED). This ceiling only covers a socket that
+// dropped before it could: the window plus slack for the relay, then the run is settled regardless.
+const LATE_DOCUMENT_CHANGE_MS = LATE_CHANGE_WINDOW_MS + 30_000;
 
 export class WriteAccess {
   private readonly settlementWaiters = new Map<string, Set<() => void>>();
@@ -159,7 +163,7 @@ export class WriteAccess {
       });
   }
 
-  /** Keep a short-lived relay alive for the existing late-change accounting window. */
+  /** Keep a short-lived relay alive until the run settles: RUN_SETTLED, a late change, or the ceiling. */
   waitForWriteSettlement(
     runId: string,
     signal: AbortSignal,
@@ -201,6 +205,12 @@ export class WriteAccess {
     this.lateRuns.delete(runId);
     if (late.expiresAt <= this.now().getTime()) return;
     this.recordWrite(late.figmaUserId, late.executionId);
+    for (const done of this.settlementWaiters.get(runId) ?? []) done();
+  }
+
+  /** The plugin's late watch for a run closed clean: nothing more can be charged to it. */
+  settleLateRun(runId: string): void {
+    if (!this.lateRuns.delete(runId)) return;
     for (const done of this.settlementWaiters.get(runId) ?? []) done();
   }
 

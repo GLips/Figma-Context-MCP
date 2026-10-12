@@ -2,10 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import {
-  MAX_SCREENSHOT_SCALE,
-  screenshotInputError,
-} from "~/commercial/plugin-bridge/screenshot-options.js";
+import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
+import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import { OutsideAssetRootError } from "~/commercial/plugin-bridge/contained-file.js";
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { resolve as resolvePath } from "node:path";
@@ -13,7 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { APPROVAL_WAIT_MS, isPendingApproval } from "~/commercial/plugin-bridge/await-approval.js";
+import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
 import {
   approvalPendingAction,
   pluginDisconnectedNotSubmittedText,
@@ -101,8 +99,7 @@ export function registerCodeModeTools(
   }
 
   /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
-  function gateResult(reply: unknown): { content: { type: "text"; text: string }[] } | null {
-    if (!isPendingApproval(reply)) return null;
+  function pendingApprovalResult(): { content: { type: "text"; text: string }[] } {
     return {
       content: [
         {
@@ -171,7 +168,7 @@ export function registerCodeModeTools(
         });
         if (outcome.kind === "refused")
           return { content: [{ type: "text", text: outcome.message }], isError: true };
-        if (outcome.kind === "pending") return gateResult({ type: "PENDING_APPROVAL" })!;
+        if (outcome.kind === "pending") return pendingApprovalResult();
         return { content: [{ type: "text", text: formatExecuteCodeReply(outcome.reply) }] };
       },
     ),
@@ -277,7 +274,7 @@ Returns a PNG image.`,
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
         const outcome = await capturePluginScreenshot(bridge, target, approvalOptions(extra));
-        if (outcome.kind === "pending") return gateResult({ type: "PENDING_APPROVAL" })!;
+        if (outcome.kind === "pending") return pendingApprovalResult();
         const reply = outcome.reply;
         if ("errors" in reply) {
           return { content: [{ type: "text", text: reply.errors }], isError: true };

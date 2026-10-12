@@ -5,6 +5,7 @@
 // The write gate's decision, pure: given the Authorizing User, their cached seat, and how many Writes they
 // have spent this month, may an execution START? It can't be known to mutate before it runs, so the
 // gate refuses to start one once the allowance is spent and no seat covers the Authorizing User.
+import type { WriteAccessNotice } from "@framelink/plugin/protocol";
 import { FREE_WRITE_ALLOWANCE, allowanceResetsAt } from "./write-ledger.js";
 
 /**
@@ -70,17 +71,6 @@ export function isSeatRevalidationDue(seat: CachedSeat, now: Date): boolean {
     seat.validatedAt === null || now.getTime() - Date.parse(seat.validatedAt) >= SEAT_REVALIDATE_MS
   );
 }
-
-/**
- * What the Framelink panel in Figma shows about write access, pushed from the server. One shape for
- * both surfaces' facts: the refusal the agent reads and the card the human reads say the same thing.
- */
-export type WriteAccessNotice =
-  | { kind: "allowance-exhausted"; allowance: number; resetsAt: string; signedIn: boolean }
-  | { kind: "sign-in-pending"; userCode: string; verificationUri: string }
-  // `seat: null` — signed in, but the seat check that followed didn't get an answer yet.
-  | { kind: "signed-in"; seat: boolean | null }
-  | { kind: "sign-in-failed"; message: string };
 
 export function allowanceExhaustedNotice(
   refusal: Extract<WriteRefusal, { reason: "allowance-exhausted" }>,

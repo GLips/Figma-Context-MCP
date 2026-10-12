@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // The relay iframe is a browser document, not the Figma main thread: DOM, and no figma typings.
+    "lib": ["ES2019", "DOM"],
+    "types": []
+  },
+  "include": ["src/ui.ts"]
+}

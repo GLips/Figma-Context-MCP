@@ -2,16 +2,16 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import {
+  APPROVAL_POLL_MS,
+  type ApprovalStatusReply,
+  type PendingApprovalReply,
+} from "@framelink/plugin/protocol";
 import { pluginUnresponsiveText } from "./blocked-call-guidance.js";
 
 /** Only status requests repeat. Code remains local until approval and is submitted once. */
-export function isPendingApproval(reply: unknown): boolean {
-  return (
-    typeof reply === "object" &&
-    reply !== null &&
-    "type" in reply &&
-    reply.type === "PENDING_APPROVAL"
-  );
+export function isPendingApproval(reply: object): reply is PendingApprovalReply {
+  return "type" in reply && reply.type === "PENDING_APPROVAL";
 }
 
 // Human-scale wait. SDK 1.29 only resets idle timeouts if the CLIENT opts into
@@ -29,18 +29,18 @@ interface ApprovalWaitDeps {
   onWaiting?: () => () => Promise<void>;
 }
 
-export async function requestUntilApproved(
-  status: (signal: AbortSignal) => Promise<unknown>,
-  submit: (signal: AbortSignal) => Promise<unknown>,
+export async function requestUntilApproved<R>(
+  status: (signal: AbortSignal) => Promise<ApprovalStatusReply>,
+  submit: (signal: AbortSignal) => Promise<R>,
   {
     waitMs = APPROVAL_WAIT_MS,
-    pollMs = 750,
+    pollMs = APPROVAL_POLL_MS,
     now = Date.now,
     sleep,
     signal,
     onWaiting,
   }: ApprovalWaitDeps = {},
-): Promise<unknown> {
+): Promise<R | PendingApprovalReply> {
   const deadline = now() + waitMs;
   const local = new AbortController();
   const abort = () => local.abort(signal?.reason);
@@ -51,11 +51,11 @@ export async function requestUntilApproved(
   let stop: (() => Promise<void>) | undefined;
   // The timer can win the race against the deadline checks below (or cut a hung poll). Once a poll
   // has said PENDING, that expiry is still "approval pending" and must reach the caller as such.
-  let lastPending: unknown;
+  let lastPending: PendingApprovalReply | undefined;
   try {
     for (;;) {
       local.signal.throwIfAborted();
-      let reply: unknown;
+      let reply: ApprovalStatusReply;
       try {
         reply = await status(local.signal);
       } catch (error) {
@@ -66,9 +66,6 @@ export async function requestUntilApproved(
         );
       }
       local.signal.throwIfAborted();
-      if (typeof reply !== "object" || reply === null || !("type" in reply)) {
-        throw new Error("Invalid approval status; no code was submitted.");
-      }
       if (reply.type === "APPROVAL_REJECTED")
         throw new Error("Approval rejected; no code was submitted.");
       if (reply.type === "APPROVAL_GRANTED") {
@@ -79,8 +76,6 @@ export async function requestUntilApproved(
         local.signal.throwIfAborted();
         return await submit(local.signal);
       }
-      if (!isPendingApproval(reply))
-        throw new Error("Unexpected approval status; no code was submitted.");
       lastPending = reply;
       if (now() >= deadline) return reply;
       stop ??= onWaiting?.();

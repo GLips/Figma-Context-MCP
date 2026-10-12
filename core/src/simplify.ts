@@ -15,7 +15,7 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "./transformers/component.js";
-import { rememberRead, captureRead, type ReadContext } from "./read-context.js";
+import { rememberRead, type ReadContext } from "./read-context.js";
 import {
   createComponentNotes,
   componentCatalog,
@@ -100,7 +100,6 @@ export async function simplify(
   const components = componentCatalog(nodes, notes, context.definitions);
   describeInstanceChanges(nodes, components);
   const result = { nodes, styles: {}, templates: {}, components };
-  context.unchanged = captureRead(result);
   rememberRead(result, context);
   for (const node of context.snapshots.keys()) {
     rememberRead(node, context);

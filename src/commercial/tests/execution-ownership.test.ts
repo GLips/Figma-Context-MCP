@@ -5,10 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
-import {
-  RUN_INACTIVITY_DEADLINE_MS,
-  serverDeadlinePassed,
-} from "@framelink/plugin/server-deadline";
+import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 
 class Socket {
   readyState = 1;
@@ -67,7 +64,7 @@ describe("connection-owned execution", () => {
     const old = new Socket();
     install(bridge, old);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = old.frames[0].id as string;
@@ -92,11 +89,11 @@ describe("connection-owned execution", () => {
     const socket = new Socket();
     install(bridge, socket);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued" });
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued", at: Date.now() });
     // Five times the inactivity deadline: a run waiting behind another one is not silence.
     await vi.advanceTimersByTimeAsync(500);
     expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
@@ -114,12 +111,12 @@ describe("connection-owned execution", () => {
     const socket = new Socket();
     install(bridge, socket);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued" });
-    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "running" });
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued", at: Date.now() });
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
     await vi.advanceTimersByTimeAsync(100);
     expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
     receive(bridge, socket, { type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
@@ -136,7 +133,7 @@ describe("connection-owned execution", () => {
     const socket = new Socket();
     install(bridge, socket);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
@@ -146,10 +143,12 @@ describe("connection-owned execution", () => {
     receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued", at: runStartedAt });
     receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "running", at: runStartedAt });
     const cancelled = () => socket.frames.some((f) => f.type === "CANCEL");
+    // The run's own clock, with no server call in flight: the plugin refuses writes from here.
+    const runDeadlinePassed = () => Date.now() - runStartedAt >= RUN_INACTIVITY_DEADLINE_MS;
     await vi.advanceTimersByTimeAsync(RUN_INACTIVITY_DEADLINE_MS - heldThreadMs - 1);
-    expect([cancelled(), serverDeadlinePassed(runStartedAt)]).toEqual([false, false]);
+    expect([cancelled(), runDeadlinePassed()]).toEqual([false, false]);
     await vi.advanceTimersByTimeAsync(1);
-    expect([cancelled(), serverDeadlinePassed(runStartedAt)]).toEqual([true, true]);
+    expect([cancelled(), runDeadlinePassed()]).toEqual([true, true]);
     receive(bridge, socket, { type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
     expect(await call).toMatchObject({ phase: "running" });
   });
@@ -168,7 +167,10 @@ describe("connection-owned execution", () => {
     Reflect.set(bridge, "verdictSettled", new Promise(() => {}));
     const held = new AbortController();
     const hold = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" }, held.signal)
+      .request(
+        { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
+        held.signal,
+      )
       .catch((e: unknown) => e);
     held.abort(new Error("abandoned"));
     expect(String(await hold)).toContain("abandoned");
@@ -190,7 +192,7 @@ describe("connection-owned execution", () => {
     const old = new Socket();
     install(bridge, old);
     const oldCall = bridge
-      .request({ type: "EXECUTE_CODE", code: "old", preamble: "x" })
+      .request({ type: "EXECUTE_CODE", code: "old", preamble: "x", lateChangeWindowMs: 60_000 })
       .catch(() => {});
     await Promise.resolve();
     receive(bridge, old, {

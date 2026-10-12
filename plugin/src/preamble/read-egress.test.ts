@@ -5,15 +5,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock, seedVariables, seedStyle } from "../../harness/figma-mock.mjs";
-import { createReadEgress, safeSerialize } from "../serialize.js";
+import { safeSerialize } from "../serialize.js";
+import { projectForEgress } from "./egress.js";
 import * as flcm from "./runtime.js";
 import { TOKEN_ENTRY_MARK } from "./token-mark.js";
 
 function setup() {
   const figma = createFigmaMock();
-  const egress = createReadEgress();
-  (globalThis as any).__flcmHost = { registerRead: egress.registerRead, isRunCancelled: () => false, isRunFinished: () => false };
-  return { figma, wire: (value: unknown) => safeSerialize(egress.project(value)) as any };
+  (globalThis as any).__flcmHost = { runCancellation: () => null, isRunFinished: () => false };
+  return { figma, wire: (value: unknown) => safeSerialize(projectForEgress(value, "result")) as any };
 }
 
 test("read objects project wherever returned or logged; authored lookalikes and extracted path strings remain whole", async () => {

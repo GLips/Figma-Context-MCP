@@ -2,46 +2,35 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// __connKey identifies one socket generation, assigned by ui.html. Ports are reusable;
-// this identity is not. Old settlement can only release the old generation's run.
+import type { CancelDisposition, RunPhase } from "./protocol.js";
+import type { RunCancelCause } from "./preamble/host.js";
+
+// connKey identifies one socket generation, assigned by the relay iframe (ui.ts) and never reused,
+// so an old generation's settlement can only release its own run.
 export interface RunRef {
   id: string;
-  connKey: number | undefined;
+  connKey: number;
 }
 
-/**
- * Where an outstanding run stands in THIS plugin's queue. There is no third member for a finished
- * run: settlement deletes the row, and "no row" is what makes a cancel answer `unknown`.
- */
-type RunPhase = "queued" | "running";
-
-/**
- * What the plugin knew about a run the instant a CANCEL for it landed — the answer the server turns
- * into the caller's rejection, which is why it is definitive rather than hedged:
- *   • never-executed — still queued behind work ahead of it; the dequeue will skip it, canvas untouched.
- *   • was-running — executing, so verbs before the cancel already landed.
- *   • unknown — not tracked here: it settled before the CANCEL arrived, or was never a run at all
- *     (the server CANCELs any stalled request, including its own handshake ones).
- * Mirrored by CancelDisposition in the server's bridge.ts; the two are one wire word and move together.
- */
-export type CancelDisposition = "never-executed" | "was-running" | "unknown";
-
-function runKey(connKey: number | undefined, runId: string): string {
+function runKey(connKey: number, runId: string): string {
   return String(connKey) + ":" + runId;
 }
 
 /**
  * The cancellation policy, and the run phase it has to read to answer one. Cancellation is the only
- * consumer of the phase — the refusal points all ask "is this run cancelled?", and a CANCEL asks
- * "what was it doing?" — so both live here rather than as loose booleans across code.ts.
+ * consumer of the phase — the refusal points all ask "is this run cancelled, and why?", and a CANCEL
+ * asks "what was it doing?" — so both live here rather than as loose booleans across code.ts.
+ *
+ * There is no phase for a finished run: settlement deletes the row, and "no row" is what makes a
+ * cancel answer `unknown`.
  */
 export function createRunCancellationRegistry() {
   // One row per outstanding run, from acceptance to settlement — exactly the window in which a
-  // cancel answer can be anything but `unknown`.
-  const runs = new Map<string, { phase: RunPhase; cancelled: boolean }>();
+  // cancel answer can be anything but `unknown`. The first cause sticks: it is what happened first.
+  const runs = new Map<string, { phase: RunPhase; cancelled: RunCancelCause | null }>();
   return {
     enqueue(ref: RunRef): void {
-      runs.set(runKey(ref.connKey, ref.id), { phase: "queued", cancelled: false });
+      runs.set(runKey(ref.connKey, ref.id), { phase: "queued", cancelled: null });
     },
     /** The run reached the front of the queue. Recorded BEFORE its first verb, so a CANCEL racing
      * the start is answered "was running" — the safe side of that race. */
@@ -60,24 +49,20 @@ export function createRunCancellationRegistry() {
      * already settled. The latter is retained by nobody, which is what keeps the table from leaking
      * a row per socket generation.
      */
-    recordCancellation(connKey: number | undefined, runId: string): CancelDisposition {
+    recordCancellation(connKey: number, runId: string): CancelDisposition {
       const run = runs.get(runKey(connKey, runId));
       if (!run) return "unknown";
-      run.cancelled = true;
+      run.cancelled ??= "server";
       return run.phase === "queued" ? "never-executed" : "was-running";
     },
-    takeCancellation(ref: RunRef): boolean {
-      const run = runs.get(runKey(ref.connKey, ref.id));
-      if (!run?.cancelled) return false;
-      run.cancelled = false;
-      return true;
+    /** Why the run was cancelled, or null while it wasn't. */
+    cancellation(ref: RunRef): RunCancelCause | null {
+      return runs.get(runKey(ref.connKey, ref.id))?.cancelled ?? null;
     },
-    isCancelled(ref: RunRef): boolean {
-      return runs.get(runKey(ref.connKey, ref.id))?.cancelled === true;
-    },
-    cancelConnection(connKey: number): void {
+    /** Cancel every outstanding run of one connection: its socket closed, or the human revoked it. */
+    cancelConnection(connKey: number, cause: Exclude<RunCancelCause, "server">): void {
       const prefix = String(connKey) + ":";
-      for (const [key, run] of runs) if (key.startsWith(prefix)) run.cancelled = true;
+      for (const [key, run] of runs) if (key.startsWith(prefix)) run.cancelled ??= cause;
     },
   };
 }

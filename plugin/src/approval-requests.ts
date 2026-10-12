@@ -15,8 +15,7 @@
 // later SESSION_INFO. A matching project path or pairing code is a label, never a match. A claim is
 // spent by the one connection that presents it.
 
-/** How long after its last status poll a request still counts as waiting. Polls arrive every 750ms. */
-export const APPROVAL_WAITING_GRACE_MS = 3_000;
+import { APPROVAL_WAITING_GRACE_MS } from "./protocol.js";
 
 // Enough for a few projects' worth of ended runs; the oldest falls off first. Away requests live in
 // memory only, so closing the plugin drops them all.

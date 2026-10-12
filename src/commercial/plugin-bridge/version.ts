@@ -2,58 +2,13 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { z } from "zod";
+import { PROTOCOL_VERSION, type VersionReply } from "@framelink/plugin/protocol";
 
-// Version handshake + compatibility policy. On connect the plugin reports its versions over the
-// frozen envelope (see code.ts); the server gates them against the supported minimum here and, when
-// the plugin is too old, REFUSES to drive it and tells the human to re-import.
-//
-// Two versions travel together with different jobs:
-//   • protocolVersion — the wire-contract version (the frozen forward-compat envelope).
-//     This is what the server GATES on: a value below the minimum means the server speaks
-//     a contract the plugin can't. Integer, bumped only on a breaking envelope change.
-//   • pluginVersion — the plugin release string, shown to the human in the refusal. Purely
-//     informational; gating is by protocolVersion.
-
-// Lowest protocol the server will drive. Bump in the same change that makes a server feature
-// require a newer plugin envelope.
-//
-// What the compatibility boundary actually is, since v3: the envelope PLUS the FlcmHost interface
-// (plugin/src/preamble/host.ts) — the handful of capabilities the host passes into the eval'd
-// preamble. Everything else about the DSL ships from the server and needs no bump at all. An
-// incompatible change to either half is what earns a new number here.
-//
-// v2: the mid-run image protocol — plugin-issued image requests/replies reverse direction
-// and the run-scoped CANCEL frame, replacing the two-pass re-run. A v1 plugin genuinely cannot
-// speak this: its render() still throws the retired imagesNeeded sentinel and it drops CANCEL
-// frames.
-//
-// v3: EXECUTE_CODE carries the flcm std-lib and the plugin holds none of its own (ADR-0010), so a
-// v2 plugin handed a v3 request would silently ignore the field and run its OWN bundled runtime —
-// stale results with no error, which is why the gate must refuse rather than nudge. The same bump
-// covers collapsing the two host free identifiers into the single `__flcmHost` FlcmHost object.
-//
-// Nothing has ever shipped, at any version, so there is deliberately NO compat path — the fix is
-// always a re-import, and the refusal names it.
-// v4: separate APPROVAL_STATUS polling, Reject, and connection-owned run states.
-// v5: read registration projects egress; getSession retains preamble-owned data policy for one
-// plugin run. The preamble factory returns { flcm, session } for the agent wrapper.
-// v6: FlcmHost answers isRunFinished, so the runtime refuses a stale flcm kept across calls, and the
-// host drains the preamble's verb queue (mutationQueueIdle) before replying. A v5 plugin hands the
-// preamble no isRunFinished — every mutating verb would die on the missing method. The same version
-// answers every CANCEL with a CANCEL_RESULT naming what the run was doing, which is what lets a
-// cancelled caller be told "never executed" instead of the hedge (bridge.ts, cancelPending).
-// v7: FlcmHost.callServer and the opaque CHANNEL_REQUEST/CHANNEL_RESPONSE replace image-specific
-// transport. Older hosts lack callServer and must be re-imported.
-// v8: writes are metered. EXECUTE_CODE_RESULT carries documentChanged (a later RUN_CHANGED corrects a
-// "no"), the SESSION_TOKEN handover names the Authorizing User (figma.currentUser), SESSION_INFO names
-// the Framelink origin, and the panel exchanges WRITE_ACCESS / WRITE_ACCESS_SIGN_IN. A v7
-// plugin reports no document change and no Authorizing User, so its writes could be neither counted nor
-// attributed — refused, like every other gap in the contract.
-// v9: RUN_STATE carries `at`, the plugin's stamp for when the phase began, and FlcmHost hands the
-// preamble the same runStartedAt, so the inactivity deadline counts from one instant on both sides.
-// A v8 plugin's "running" counts from its arrival, which a run's opening synchronous work delays.
-export const MIN_PROTOCOL_VERSION = 9;
+// The compatibility policy for the version handshake. On connect the plugin reports its versions
+// (GET_VERSION → VERSION); the server gates them here and, when the plugin is too old, REFUSES to
+// drive it and tells the human to re-import. The protocol and its changelog live in the plugin's
+// protocol module, built into both sides from one file, so the server requires exactly the version it
+// was built with. pluginVersion is the release string, shown to the human; gating is by protocol.
 
 /**
  * Where a connection stands with the version handshake.
@@ -66,43 +21,24 @@ export const MIN_PROTOCOL_VERSION = 9;
  */
 export type ProtocolCompatibility = "checking" | "compatible" | "incompatible";
 
-export interface PeerVersion {
-  pluginVersion?: string;
-  protocolVersion?: number;
-}
-
-// The plugin answers GET_VERSION with this shape. Both fields are optional: a plugin predating the
-// handshake never sends them — it ERRORs (the request rejects → caller catches into `{}`) and a
-// malformed reply safeParses to `{}` — so the absence flows through as the protocol floor.
-const VersionReply = z.object({
-  pluginVersion: z.string().optional(),
-  protocolVersion: z.number().optional(),
-});
-
-/** Read a GET_VERSION reply (or a caught failure) as a peer version; anything unparseable is the floor. */
-export function parsePeerVersion(reply: unknown): PeerVersion {
-  return VersionReply.safeParse(reply).data ?? {};
-}
-
 /**
- * The refusal text for a plugin this server won't drive, or null when the plugin is current. One
- * string feeds BOTH channels — the figma.notify toast the human reads and the error every canvas
- * request rejects with — so the two can't drift.
+ * The refusal text for a plugin this server won't drive, or null when the plugin is current. `null`
+ * is a plugin that never answered GET_VERSION with a VERSION (one predating the handshake ERRORs,
+ * a silent one times out, a malformed answer parses to nothing).
  *
- * Missing fields are treated as the FLOOR (protocol 0) and refused like any other under-minimum
- * plugin: a runtime that can't name its wire contract is exactly the runtime agent code must not run
- * against. That is a deliberate reversal of the nudge-only policy this gate shipped with — a nudge
- * appended to a result the plugin already executed tells the human to update AFTER the wrong runtime
- * has touched their document.
+ * Every missing version is the FLOOR (protocol 0) and refused like any other under-minimum plugin: a
+ * runtime that can't name its wire contract is exactly the runtime agent code must not run against.
+ * A nudge appended to a result the plugin already executed would tell the human to update AFTER the
+ * wrong runtime touched their document.
  */
-export function refuseProtocolSkew(version: PeerVersion): string | null {
-  const protocol = version.protocolVersion ?? 0;
-  if (protocol >= MIN_PROTOCOL_VERSION) return null;
-  const reported = version.pluginVersion
+export function refuseProtocolSkew(version: VersionReply | null): string | null {
+  const protocol = version?.protocolVersion ?? 0;
+  if (protocol >= PROTOCOL_VERSION) return null;
+  const reported = version?.pluginVersion
     ? `plugin v${version.pluginVersion} (protocol v${protocol})`
     : `the connected plugin (protocol v${protocol})`;
   return (
-    `⚠️ Framelink won't drive this Figma plugin: the server speaks protocol v${MIN_PROTOCOL_VERSION} and ` +
+    `⚠️ Framelink won't drive this Figma plugin: the server speaks protocol v${PROTOCOL_VERSION} and ` +
     `${reported} is older, so nothing was run. Fix: in Figma desktop, re-import the latest Framelink ` +
     `plugin (Plugins → Development → Import plugin from manifest…), re-open it, then retry.`
   );

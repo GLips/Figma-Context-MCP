@@ -7,7 +7,7 @@
 // that lets the read verbs return deep canonical shapes across the bridge intact.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { safeSerialize, guardReturnValue, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
+import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { looksLikeNode } from "./preamble/live-node.js";
 
 // A live node is anything carrying id + type + `removed` (present on every BaseNode). We fake the SHAPE the
@@ -71,36 +71,4 @@ test("deep returned live nodes fail with their path rather than silently collaps
   let value: unknown = liveNode;
   for (let i = 0; i < 12; i++) value = { child: value };
   assert.throws(() => guardReturnValue(value), /live Figma node.*child/s);
-});
-
-function undefinedFieldsOf(egress: ReturnType<typeof createReadEgress>, raw: unknown): string | null {
-  const paths: string[] = [];
-  egress.project(raw, undefined, { at: "", paths });
-  return undefinedFieldsWarning(paths);
-}
-
-test("undefined-valued fields of the agent's own return are named by path; a read's own are not", () => {
-  const egress = createReadEgress();
-  const read = { id: "1:2", fill: { scalingFactor: undefined } };
-  egress.registerRead(read, () => read);
-  const raw = { cardId: "1:2", slotId: undefined, slot: { name: undefined }, items: [{ ref: undefined }, undefined], read, fill: read.fill };
-  assert.equal(
-    undefinedFieldsOf(egress, raw),
-    "3 returned field(s) were undefined and dropped from the result: slotId, slot.name, items[0].ref.",
-  );
-});
-
-test("a field the agent sets undefined on a read it returns is named", () => {
-  const egress = createReadEgress();
-  const read: Record<string, unknown> = { id: "1:2", name: "Card" };
-  egress.registerRead(read, () => read);
-  read.slotId = undefined;
-  read.name = undefined;
-  assert.equal(undefinedFieldsOf(egress, { read }), "2 returned field(s) were undefined and dropped from the result: read.name, read.slotId.");
-});
-
-test("a return with nothing undefined — or nothing at all — warns nothing", () => {
-  const egress = createReadEgress();
-  assert.equal(undefinedFieldsOf(egress, undefined), null);
-  assert.equal(undefinedFieldsOf(egress, { a: 1, b: null }), null);
 });

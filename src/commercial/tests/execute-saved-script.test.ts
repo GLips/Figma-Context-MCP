@@ -12,7 +12,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
-import type { BridgeRequest, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { ServerRequest } from "@framelink/plugin/protocol";
+import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createContainedFileReader } from "~/commercial/plugin-bridge/contained-file.js";
 import { createSavedScriptReader } from "~/commercial/plugin-bridge/saved-script.js";
@@ -32,13 +33,17 @@ afterEach(async () => {
 });
 
 function connectedServer() {
-  const request = vi
-    .fn()
-    .mockImplementation(async (payload: BridgeRequest) =>
-      payload.type === "APPROVAL_STATUS"
-        ? { type: "APPROVAL_GRANTED" }
-        : { result: "ran", console: [], errors: null, documentChanged: false },
-    );
+  const request = vi.fn().mockImplementation(async (payload: ServerRequest) =>
+    payload.type === "APPROVAL_STATUS"
+      ? { type: "APPROVAL_GRANTED" }
+      : {
+          type: "EXECUTE_CODE_RESULT",
+          result: "ran",
+          console: [],
+          errors: null,
+          documentChanged: false,
+        },
+  );
   const bridge = {
     request,
     getPairingCode: () => "1234",
@@ -71,7 +76,7 @@ function connectedServer() {
   };
   const submitted = () =>
     request.mock.calls
-      .map(([payload]) => payload as BridgeRequest)
+      .map(([payload]) => payload as ServerRequest)
       .filter((payload) => payload.type === "EXECUTE_CODE");
   return { call, submitted, close: () => Promise.all([client.close(), server.close()]) };
 }

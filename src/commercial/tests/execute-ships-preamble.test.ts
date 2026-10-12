@@ -19,18 +19,23 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
-import type { BridgeRequest, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { ServerRequest } from "@framelink/plugin/protocol";
+import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 function connectedServer() {
-  const request = vi
-    .fn()
-    .mockImplementation(async (payload: BridgeRequest) =>
-      payload.type === "APPROVAL_STATUS"
-        ? { type: "APPROVAL_GRANTED" }
-        : { result: "ok", console: [], errors: null, documentChanged: false },
-    );
+  const request = vi.fn().mockImplementation(async (payload: ServerRequest) =>
+    payload.type === "APPROVAL_STATUS"
+      ? { type: "APPROVAL_GRANTED" }
+      : {
+          type: "EXECUTE_CODE_RESULT",
+          result: "ok",
+          console: [],
+          errors: null,
+          documentChanged: false,
+        },
+  );
   const bridge = {
     request,
     getPairingCode: () => "1234",
@@ -71,8 +76,8 @@ describe("figma_execute_code ships the flcm std-lib", () => {
 
       expect(request.mock.calls.filter(([p]) => p.type === "EXECUTE_CODE")).toHaveLength(1);
       // Named against the real union member, not a hand-written shape: drop `preamble` from
-      // BridgeRequest and this file stops compiling rather than quietly asserting on `undefined`.
-      const sent = request.mock.calls[1][0] as Extract<BridgeRequest, { type: "EXECUTE_CODE" }>;
+      // ServerRequest and this file stops compiling rather than quietly asserting on `undefined`.
+      const sent = request.mock.calls[1][0] as Extract<ServerRequest, { type: "EXECUTE_CODE" }>;
       expect(sent.type).toBe("EXECUTE_CODE");
       expect(sent.code).toBe("return 1");
 

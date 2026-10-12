@@ -57,7 +57,9 @@
 //     scenario here — add one when this probe is next re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-access.ts";
+import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
 import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
@@ -192,7 +194,7 @@ async function exec(code) {
   // scenario would run repeatedly and then read its own run's reply as an unexpected approval status.
   const reply = await requestUntilApproved(
     (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-    () => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE }),
+    () => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
     { waitMs: APPROVAL_WINDOW_MS },
   );
   if (reply?.type === "PENDING_APPROVAL") {
@@ -215,6 +217,7 @@ async function introduceSession() {
     identity: SESSION_IDENTITY,
     pairingCode: bridge.getPairingCode(),
     sessionToken: bridge.getSessionToken(),
+    framelinkOrigin: DEFAULT_FRAMELINK_API_URL,
   });
   log(`if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
 }

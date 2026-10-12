@@ -3,19 +3,16 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { createWarningRegistry } from "./preamble/warnings.js";
-import { TOKEN_ENTRY_MARK } from "./preamble/token-mark.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
-import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const code = buildSync({
-  entryPoints: [new URL("./code.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-}).outputFiles[0].text;
+const bundle = (entry: string) =>
+  buildSync({ entryPoints: [new URL(entry, import.meta.url).pathname], bundle: true, write: false, format: "iife" })
+    .outputFiles[0].text;
+const code = bundle("./code.ts");
+const uiScript = bundle("./ui.ts");
 type Frame = Record<string, unknown>;
 // Tests wait on what the plugin SAYS, never on elapsed time or a count of event-loop turns: the host's
 // reply path crosses real timers (document-changes.ts settles one task), so "N turns later" is a race.
@@ -24,7 +21,12 @@ const FRAME_DEADLINE_MS = 5_000;
 function host(native: Record<string, unknown> = {}) {
   const frames: Frame[] = [];
   const waiters = new Set<{ match: (f: Frame) => boolean; resolve: (f: Frame) => void }>();
-  const record = (msg: Frame) => {
+  // Flattened to the shape tests read: a server frame with the connection it went out on, or a render.
+  const record = (outbound: Frame) => {
+    const msg: Frame =
+      outbound.to === "server"
+        ? { ...(outbound.frame as Frame), __connKey: outbound.connKey }
+        : { type: "RENDER", ...(outbound.render as Frame) };
     frames.push(msg);
     for (const waiter of waiters) {
       if (!waiter.match(msg)) continue;
@@ -84,16 +86,23 @@ function host(native: Record<string, unknown> = {}) {
   const hostSetTimeout = (callback: () => void, ms?: number) => setTimeout(callback, ms).unref();
   const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout });
   vm.runInContext(code, context);
-  // Stands in for ui.html, which posts the panel's input and server frames in separate envelopes.
+  // Stands in for the relay (ui.ts), which posts the panel's input and server frames in separate
+  // envelopes. Every EXECUTE_CODE carries the server's late-change window.
   const send = ({ __connKey, ...msg }: Record<string, unknown>) =>
     /^(UI|WS)_/.test(String(msg.type))
       ? figma.ui.onmessage({ from: "panel", control: { ...msg, connKey: __connKey } })
-      : figma.ui.onmessage({ from: "server", connKey: __connKey, frame: msg });
+      : figma.ui.onmessage({
+          from: "server",
+          connKey: __connKey,
+          frame: msg.type === "EXECUTE_CODE" ? { lateChangeWindowMs: 60_000, ...msg } : msg,
+        });
+  const sessionInfo = (key: number, id: string, fields: Record<string, unknown> = {}) =>
+    send({ type: "SESSION_INFO", id, __connKey: key, identity: "test", framelinkOrigin: "https://app.framelink.ai", ...fields });
   const approved = (key: number) =>
     frame((f) => f.type === "SESSION_TOKEN" && f.__connKey === key, `the Allow handover for ${key}`);
   const connect = async (key: number) => {
     send({ type: "WS_CONNECTED", __connKey: key });
-    send({ type: "SESSION_INFO", id: `session-${key}`, __connKey: key, identity: "test" });
+    sessionInfo(key, `session-${key}`);
     send({ type: "UI_DECISION", approve: true, __connKey: key });
     await approved(key);
   };
@@ -104,7 +113,7 @@ function host(native: Record<string, unknown> = {}) {
     ) as Promise<any>;
   const running = (id: string, key: number) =>
     frame((f) => f.type === "RUN_STATE" && f.runId === id && f.__connKey === key && f.phase === "running", `${id} running`);
-  return { frames, context, send, connect, approved, frame, result, running, deliverChanges };
+  return { frames, context, send, sessionInfo, connect, approved, frame, result, running, deliverChanges };
 }
 
 test("queued cancellation never executes, old settlement cannot cancel or erase replacement run", async () => {
@@ -116,7 +125,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })", code: body });
+    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
   await h.running("same-id", 1);
   h.send({ type: "WS_CLOSED", __connKey: 1 });
@@ -148,7 +157,7 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   await h.connect(1);
   let release!: () => void;
   h.context.hold = new Promise<void>((resolve) => { release = resolve; });
-  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })";
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
   const run = (id: string, body: string) =>
     h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code: body });
   run("executing", "await hold; return 1;");
@@ -176,7 +185,7 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
   // The first paint follows the stored approvals loading; only then is "unknown" known to be unknown.
   await h.frame((f) => f.type === "RENDER", "the first paint");
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
-  h.send({ type: "SESSION_INFO", id: "session", __connKey: 1, sessionToken: "unknown" });
+  h.sessionInfo(1, "session", { sessionToken: "unknown" });
   h.send({ type: "UI_DECISION", approve: false, __connKey: 1 });
   h.send({ type: "APPROVAL_STATUS", id: "status", __connKey: 1 });
   assert(h.frames.some((f) => f.id === "status" && f.type === "APPROVAL_REJECTED"));
@@ -185,7 +194,7 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
     type: "EXECUTE_CODE",
     id: "run",
     __connKey: 1,
-    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })",
+    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })",
     code: "writes.push('bad');",
   });
   // Refused at the gate, synchronously, with the one reply the request is owed.
@@ -202,7 +211,7 @@ test("an Allow given while a session is away reaches only the connection present
     return h.frames.find((f) => f.id === id)?.type;
   };
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
-  h.send({ type: "SESSION_INFO", id: "session-1", __connKey: 1, identity: "/proj", pairingCode: "1111" });
+  h.sessionInfo(1, "session-1", { identity: "/proj", pairingCode: "1111" });
   assert.equal(statusFor(1, "ask"), "PENDING_APPROVAL");
   const claim = (await h.frame((f) => f.type === "SESSION_CLAIM" && f.__connKey === 1, "a session claim")).sessionClaim;
   // The waiting call gives up and its session disconnects; the human allows the request afterwards.
@@ -213,14 +222,14 @@ test("an Allow given while a session is away reaches only the connection present
   // Same project path, but not the session that asked: one presents another claim, one presents
   // none, one presents the claim under another project.
   h.send({ type: "WS_CONNECTED", __connKey: 2 });
-  h.send({ type: "SESSION_INFO", id: "session-2", __connKey: 2, identity: "/proj", sessionClaim: "someoneelse0000000000" });
+  h.sessionInfo(2, "session-2", { identity: "/proj", sessionClaim: "someoneelse0000000000" });
   h.send({ type: "WS_CONNECTED", __connKey: 3 });
-  h.send({ type: "SESSION_INFO", id: "session-3", __connKey: 3, identity: "/proj" });
+  h.sessionInfo(3, "session-3", { identity: "/proj" });
   h.send({ type: "WS_CONNECTED", __connKey: 4 });
-  h.send({ type: "SESSION_INFO", id: "session-4", __connKey: 4, identity: "/other", sessionClaim: claim });
+  h.sessionInfo(4, "session-4", { identity: "/other", sessionClaim: claim });
   // The session that asked comes back with its claim and collects the Allow.
   h.send({ type: "WS_CONNECTED", __connKey: 5 });
-  h.send({ type: "SESSION_INFO", id: "session-5", __connKey: 5, identity: "/proj", sessionClaim: claim });
+  h.sessionInfo(5, "session-5", { identity: "/proj", sessionClaim: claim });
   // Its first poll lands before the handover settles, and must not be told to wait for a second Allow.
   h.send({ type: "APPROVAL_STATUS", id: "next", __connKey: 5 });
   assert.equal((await h.frame((f) => f.id === "next", "the first poll's answer")).type, "APPROVAL_GRANTED");
@@ -232,7 +241,7 @@ test("an Allow given while a session is away reaches only the connection present
   }
   // The claim is spent: presenting it again approves nothing.
   h.send({ type: "WS_CONNECTED", __connKey: 6 });
-  h.send({ type: "SESSION_INFO", id: "session-6", __connKey: 6, identity: "/proj", sessionClaim: claim });
+  h.sessionInfo(6, "session-6", { identity: "/proj", sessionClaim: claim });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert(!tokenFor(6));
   // Nothing ran on the Allow: the only code any session sent was never sent.
@@ -245,11 +254,11 @@ test("an approved session's write waits out another session's pending Allow inst
   await h.connect(1);
   // Session 2 asks, and the human's Allow for it is still being written when session 1 writes.
   h.send({ type: "WS_CONNECTED", __connKey: 2 });
-  h.send({ type: "SESSION_INFO", id: "session-2", __connKey: 2, identity: "other" });
+  h.sessionInfo(2, "session-2", { identity: "other" });
   let landed!: () => void;
   saving = new Promise((resolve) => { landed = resolve; });
   h.send({ type: "UI_DECISION", approve: true, __connKey: 2 });
-  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })";
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
   h.send({ type: "EXECUTE_CODE", id: "run", __connKey: 1, preamble, code: "return 'ran';" });
   h.send({ type: "APPROVAL_STATUS", id: "status", __connKey: 1 });
   assert(!h.frames.some((f) => f.__connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
@@ -267,7 +276,7 @@ test("SESSION_INFO keeps what the connection already holds: its claim and an All
   // A write that beats the handshake is refused and gives this socket a claim.
   h.send({ type: "SCREENSHOT", id: "early", __connKey: 1 });
   const claim = (await h.frame((f) => f.type === "SESSION_CLAIM", "a session claim")).sessionClaim;
-  h.send({ type: "SESSION_INFO", id: "session-1", __connKey: 1, identity: "/proj" });
+  h.sessionInfo(1, "session-1", { identity: "/proj" });
   // Its next ask goes on under the claim it already holds; a second would orphan the first.
   h.send({ type: "APPROVAL_STATUS", id: "ask", __connKey: 1 });
   assert.deepEqual(h.frames.filter((f) => f.type === "SESSION_CLAIM").map((f) => f.sessionClaim), [claim]);
@@ -275,7 +284,7 @@ test("SESSION_INFO keeps what the connection already holds: its claim and an All
   saving = new Promise((resolve) => { landed = resolve; });
   h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
   // The server introduces itself again while the Allow is being written.
-  h.send({ type: "SESSION_INFO", id: "session-1b", __connKey: 1, identity: "/proj" });
+  h.sessionInfo(1, "session-1b", { identity: "/proj" });
   landed();
   await h.approved(1);
 });
@@ -285,7 +294,7 @@ test("a peer that has not been approved learns nothing from PING and can't autho
   const h = host({ notify: (message: string) => toasts.push(message) });
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
   h.send({ type: "PING", id: "ping", __connKey: 1, payload: "x" });
-  h.send({ type: "NOTIFY", id: "notify", __connKey: 1, message: "Your file is corrupt — visit evil.example" });
+  h.send({ type: "NOTIFY", id: "notify", __connKey: 1, minProtocol: 99, message: "Your file is corrupt — visit evil.example" });
   assert.deepEqual({ ...h.frames.find((f) => f.id === "ping") }, { type: "PONG", echo: "x", id: "ping", __connKey: 1 });
   assert.equal(toasts.length, 1);
   assert(!toasts[0].includes("evil.example"));
@@ -298,7 +307,7 @@ test("the panel tells a waiting request from an expired one, connected or away",
   const row = (match: (r: Row) => boolean, what: string) =>
     h.frame((f) => f.type === "RENDER" && (f.sessions as Row[]).some((r) => r.key === 1 && match(r)), what);
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
-  h.send({ type: "SESSION_INFO", id: "session-1", __connKey: 1, identity: "/proj", pairingCode: "1111" });
+  h.sessionInfo(1, "session-1", { identity: "/proj", pairingCode: "1111" });
   h.send({ type: "APPROVAL_STATUS", id: "ask", __connKey: 1 });
   await row((r) => r.request === "waiting", "a waiting row");
   // The polls stop: the request expires on its own, with nothing waiting to run.
@@ -309,97 +318,90 @@ test("the panel tells a waiting request from an expired one, connected or away",
   await row((r) => r.allowedWhileAway, "an away row allowed");
 });
 
-test("actual UI routes old results and image requests only to their original connection", () => {
-  const forwarded: Array<{ pluginMessage: Record<string, unknown> }> = [];
+/**
+ * The real relay (ui.ts) in a vm, dialing fake sockets. `opened(port)` is the socket the relay last
+ * dialed on that port; `reconnect` runs the relay's pending redials, which a real timer would.
+ */
+function relay(toHost: (inbound: unknown) => void) {
   class Socket {
     static OPEN = 1;
     readyState = 1;
     frames: string[] = [];
+    port: number;
     onopen = () => {};
     onclose = () => {};
     onmessage = (_event: { data: string }) => {};
+    constructor(url: string) {
+      this.port = Number(url.split(":").at(-1));
+      dialed.push(this);
+    }
     send(raw: string) {
       this.frames.push(raw);
     }
   }
-  const script = readFileSync(new URL("../ui.html", import.meta.url), "utf8")
-    .split("<script>")[1]
-    .split("</script>")[0];
+  const dialed: Socket[] = [];
+  const redials: (() => void)[] = [];
+  const element = () => ({ setAttribute() {}, appendChild() {}, style: {} });
   const context = vm.createContext({
     WebSocket: Socket,
-    parent: {
-      postMessage: (msg: { pluginMessage: Record<string, unknown> }) => forwarded.push(msg),
-    },
+    parent: { postMessage: (msg: { pluginMessage: unknown }) => toHost(msg.pluginMessage) },
     window: {},
-    document: { getElementById: () => ({}) },
-    setTimeout() {},
+    document: { getElementById: element, createElement: element },
+    setTimeout: (callback: () => void) => redials.push(callback),
     requestAnimationFrame() {},
     console,
   });
-  vm.runInContext(script, context);
-  const old: Socket = context.sockets[9876];
+  vm.runInContext(uiScript, context);
+  return {
+    opened: (port: number) => dialed.filter((socket) => socket.port === port).at(-1)!,
+    reconnect: () => redials.splice(0).forEach((callback) => callback()),
+    fromHost: (outbound: unknown) => context.window.onmessage({ data: { pluginMessage: outbound } }),
+  };
+}
+
+test("the relay routes a frame only to the socket generation it belongs to", () => {
+  const forwarded: Array<{ from: string; connKey?: number; control?: { connKey?: number }; frame?: { type?: string } }> = [];
+  const ui = relay((inbound) => forwarded.push(inbound as (typeof forwarded)[number]));
+  const old = ui.opened(9876);
   old.onopen();
-  const oldKey = (forwarded.at(-1)!.pluginMessage.control as { connKey: number }).connKey;
-  context.connect(9876);
-  const next: Socket = context.sockets[9876];
-  next.onopen();
-  const newKey = (forwarded.at(-1)!.pluginMessage.control as { connKey: number }).connKey;
-  assert.notEqual(oldKey, newKey);
-  for (const type of ["EXECUTE_CODE_RESULT", "CHANNEL_REQUEST", "SESSION_TOKEN", "REVOKE_SESSION"]) {
-    context.window.onmessage({ data: { pluginMessage: { type, __connKey: oldKey } } });
-  }
-  old.onmessage({ data: JSON.stringify({ type: "CANCEL", runId: "same-id" }) });
+  const oldKey = forwarded.at(-1)!.control!.connKey!;
   old.onclose();
+  ui.reconnect();
+  const next = ui.opened(9876);
+  assert.notEqual(next, old);
+  next.onopen();
+  const newKey = forwarded.at(-1)!.control!.connKey!;
+  assert.notEqual(oldKey, newKey);
+  // A late reply for the closed generation is dropped, never sent on whatever replaced it.
+  ui.fromHost({ to: "server", connKey: oldKey, frame: { type: "EXECUTE_CODE_RESULT", id: "same-id" } });
+  old.onmessage({ data: JSON.stringify({ type: "CANCEL", runId: "same-id" }) });
   assert.equal(next.frames.length, 0);
-  assert.equal(context.sockets[9876], next);
-  context.window.onmessage({
-    data: { pluginMessage: { type: "EXECUTE_CODE_RESULT", __connKey: newKey, result: "new" } },
-  });
-  assert.equal(JSON.parse(next.frames[0]).result, "new");
-  assert(!forwarded.some((f) => (f.pluginMessage.frame as { type?: string } | undefined)?.type === "CANCEL"));
+  assert(!forwarded.some((f) => f.frame?.type === "CANCEL"));
+  ui.fromHost({ to: "server", connKey: newKey, frame: { type: "EXECUTE_CODE_RESULT", id: "same-id", result: "new" } });
+  assert.deepEqual(JSON.parse(next.frames[0]), { type: "EXECUTE_CODE_RESULT", id: "same-id", result: "new" });
 });
 
 test("a server frame can never act as the human's panel input", async () => {
   const h = host({ openExternal: () => { throw new Error("a server opened the browser"); } });
-  class Socket {
-    static OPEN = 1;
-    readyState = 1;
-    onopen = () => {};
-    onmessage = (_event: { data: string }) => {};
-    onclose = () => {};
-    send() {}
-  }
-  const script = readFileSync(new URL("../ui.html", import.meta.url), "utf8")
-    .split("<script>")[1]
-    .split("</script>")[0];
-  const ui = vm.createContext({
-    WebSocket: Socket,
-    // The real relay, feeding the real host: whatever ui.html posts is what code.ts dispatches on.
-    parent: { postMessage: (msg: { pluginMessage: unknown }) => h.context.figma.ui.onmessage(msg.pluginMessage) },
-    window: {},
-    document: { getElementById: () => ({}) },
-    setTimeout() {},
-    requestAnimationFrame() {},
-    console,
-  });
-  vm.runInContext(script, ui);
-  // ui.html numbers socket generations in dial order, from 1: 9876 is 1, 9877 is 2.
-  const socket: Socket = ui.sockets[9876];
+  // The real relay, feeding the real host: whatever ui.ts posts is what code.ts dispatches on.
+  const ui = relay((inbound) => h.context.figma.ui.onmessage(inbound));
+  // The relay numbers socket generations in open order, from 1.
+  const socket = ui.opened(9876);
   socket.onopen();
   const fromServer = (frame: Record<string, unknown>) => socket.onmessage({ data: JSON.stringify(frame) });
   fromServer({ type: "SESSION_INFO", id: "session", identity: "rogue", framelinkOrigin: "https://evil.example" });
-  // Everything a panel click would say, spoken by the server instead — in both envelope spellings.
+  // Everything a panel click would say, spoken by the server instead — in every envelope spelling.
   fromServer({ type: "UI_DECISION", approve: true });
-  fromServer({ type: "UI_DECISION", approve: true, connKey: 1, __connKey: 1 });
+  fromServer({ type: "UI_DECISION", approve: true, connKey: 1 });
   fromServer({ from: "panel", control: { type: "UI_DECISION", approve: true, connKey: 1 } });
   fromServer({ type: "UI_SIGN_IN" });
   fromServer({ type: "UI_OPEN_SIGN_IN" });
   // A barrier: a genuine Allow on a second session. Approval changes land in order, so once its
   // handover is out, any Allow a forged frame had started would have landed before it.
-  const second: Socket = ui.sockets[9877];
+  const second = ui.opened(9877);
   second.onopen();
-  second.onmessage({ data: JSON.stringify({ type: "SESSION_INFO", id: "second", identity: "real" }) });
-  ui.decide(true, 2);
+  second.onmessage({ data: JSON.stringify({ type: "SESSION_INFO", id: "second", identity: "real", framelinkOrigin: "https://app.framelink.ai" }) });
+  h.context.figma.ui.onmessage({ from: "panel", control: { type: "UI_DECISION", approve: true, connKey: 2 } });
   await h.approved(2);
   fromServer({ type: "APPROVAL_STATUS", id: "status" });
   assert.equal(h.frames.find((f) => f.id === "status")?.type, "PENDING_APPROVAL");
@@ -413,7 +415,7 @@ test("the browser opens a sign-in page only on the Framelink origin the server a
   const opened: string[] = [];
   const h = host({ openExternal: (url: string) => opened.push(url) });
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
-  h.send({ type: "SESSION_INFO", id: "session", __connKey: 1, identity: "test", framelinkOrigin: "https://app.framelink.ai" });
+  h.sessionInfo(1, "session", { identity: "test", framelinkOrigin: "https://app.framelink.ai" });
   h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
   await h.approved(1);
   const signIn = (verificationUri: string) => {
@@ -427,49 +429,29 @@ test("the browser opens a sign-in page only on the Framelink origin the server a
   assert.deepEqual(opened, ["https://app.framelink.ai/device?user_code=ABCD"]);
 });
 
-test("execute projects registered reads in nested results and console lines exactly once", async () => {
+test("the result and each console line leave the run through the preamble's egress, once each", async () => {
   const h = host();
   await h.connect(1);
   h.send({
     type: "EXECUTE_CODE", id: "projection", __connKey: 1,
-    preamble: `(host) => {
-      const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
-      host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
-      return { flcm: { read }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 };
-    }`,
-    code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
+    preamble: `(host) => ({
+      flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(),
+      mutationQueueIdle: async () => 0, committedVerbCount: () => 0,
+      projectForEgress: (value, channel) => channel === "console" ? value.map((arg) => "egress:" + arg) : { egress: value },
+    })`,
+    code: `console.log("a", "b"); return "returned";`,
   });
   const reply = await h.result("projection");
   assert.equal(reply.errors, null);
-  assert.equal(reply.result.nested[0].type, "IMAGE-SVG");
-  assert.equal(JSON.stringify(reply.result.nested[0].elided), '{"d":10}');
-  assert.equal(reply.result.computed.d, "mine");
-  assert.equal(reply.console[0].includes('"type":"IMAGE-SVG"'), true);
-  assert.equal(reply.console[0].includes('"d":"M0'), false);
-});
-
-test("a marked designTokens entry keeps its mark in the result but not in a console line", async () => {
-  const h = host();
-  await h.connect(1);
-  h.send({
-    type: "EXECUTE_CODE", id: "token-mark", __connKey: 1,
-    preamble: `(host) => {
-      const entry = { reference: { variable: "color/bg" }, type: "COLOR" };
-      host.registerRead(entry, () => entry, (out) => ({ ...out, ${JSON.stringify(TOKEN_ENTRY_MARK)}: "variable" }));
-      return { flcm: { entry }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 };
-    }`,
-    code: `console.log(flcm.entry); return flcm.entry;`,
-  });
-  const reply = await h.result("token-mark");
-  assert.equal(reply.result[TOKEN_ENTRY_MARK], "variable");
-  assert.equal(reply.console[0], '[log] {"reference":{"variable":"color/bg"},"type":"COLOR"}');
+  assert.deepEqual({ ...reply.result }, { egress: "returned" });
+  assert.deepEqual([...reply.console], ["[log] egress:a egress:b"]);
 });
 
 const realPreamble = import("./preamble/index.mjs").then(m => m.buildSandboxPreamble());
 async function execute(h: ReturnType<typeof host>, body: string, key = 1) {
   const id = `execute-${h.frames.length}`;
   h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: await realPreamble, code: body });
-  return (await h.result(id)) as { id: string; result: any; errors: string | null };
+  return (await h.result(id)) as { id: string; result: any; errors: string | null; console: string[] };
 }
 
 test("session identity, snapshots and last survive fresh calls, reconnects and pages but not plugin runs", async () => {
@@ -535,26 +517,19 @@ test("session rejects request plumbing and alias attacks at every write boundary
   });
 });
 
-test("last retains full read data before wire projection", async () => {
+test("last retains the value the code returned, not its egress copy", async () => {
   const h = host();
   await h.connect(1);
-  const preamble = await realPreamble;
-  h.send({
-    type: "EXECUTE_CODE", id: "full-read", __connKey: 1,
-    preamble: `(host) => {
-      const bindings = (${preamble}\n)(host);
-      const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
-      host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
-      return { ...bindings, flcm: { read } };
-    }`,
-    code: `return { nested: [flcm.read] };`,
-  });
-  const first = await h.result("full-read");
-  assert.equal(first.errors, null);
-  assert.equal(first.result.nested[0].type, "IMAGE-SVG");
-  const next = await execute(h, `return session.last.nested[0].d;`);
-  assert.equal(next.errors, null);
-  assert.equal(next.result, "M0 0 L1 1");
+  const preamble = `(host) => ({
+    flcm: { read: { id: "v", type: "VECTOR", d: "M0 0 L1 1" } }, session: host.getSession(() => ({})),
+    warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0,
+    projectForEgress: (value, channel) => channel === "console" ? value : { projected: true },
+  })`;
+  h.send({ type: "EXECUTE_CODE", id: "first", __connKey: 1, preamble, code: `return { nested: [flcm.read] };` });
+  assert.deepEqual({ ...(await h.result("first")).result }, { projected: true });
+  h.send({ type: "EXECUTE_CODE", id: "next", __connKey: 1, preamble, code: `console.log(session.last.nested[0].d);` });
+  assert.equal((await h.result("next")).errors, null);
+  assert.deepEqual([...h.frames.find((f) => f.id === "next")!.console as string[]], ["[log] M0 0 L1 1"]);
 });
 
 test("two calls reorder and re-append a stored tree while preserving live ids", async () => {
@@ -612,6 +587,24 @@ test("a raw figma write counts even when its change event lands after the reply,
   h.deliverChanges();
   assert.equal(changedLate(raw.id), true);
   assert.equal(changedLate(read.id), false);
+  // A watch that closed clean says so, ending the server's wait; the next run's start closes it.
+  const settled = (id: string) => h.frames.some(f => f.type === "RUN_SETTLED" && f.runId === id);
+  assert.equal(settled(read.id), true);
+  assert.equal(settled(raw.id), false);
+});
+
+test("revoking a session cancels its runs: a queued one never starts, a suspended server call is abandoned", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const running = execute(h, `await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") }); globalThis.resumed = true;`);
+  await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
+  h.send({ type: "EXECUTE_CODE", id: "queued", __connKey: 1, preamble: await realPreamble, code: "globalThis.queuedRan = true;" });
+  h.send({ type: "UI_REVOKE", __connKey: 1 });
+  assert.match((await running).errors!, /revoked this session's approval/);
+  assert.match((await h.result("queued")).errors, /revoked this session's approval .* no code was executed/);
+  assert.equal(h.context.resumed, undefined);
+  assert.equal(h.context.queuedRan, undefined);
 });
 
 test("a verb that lands after the code returns still changes the document", async () => {
@@ -678,7 +671,7 @@ test("a write queued behind a rejected batch lands before the reply, and the rep
   let survivorAtReply: boolean | undefined;
   const post = h.context.figma.ui.postMessage;
   h.context.figma.ui.postMessage = (msg: Record<string, unknown>) => {
-    if (msg.type === "EXECUTE_CODE_RESULT" && survivorAtReply === undefined) {
+    if ((msg.frame as Frame | undefined)?.type === "EXECUTE_CODE_RESULT" && survivorAtReply === undefined) {
       survivorAtReply = h.context.figma.currentPage.children.some(
         (n: { name: string }) => n.name === "QUEUED-SURVIVOR",
       );

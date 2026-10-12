@@ -9,14 +9,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock, seedVariables } from "../../harness/figma-mock.mjs";
-import { createReadEgress, safeSerialize } from "../serialize.js";
+import { safeSerialize } from "../serialize.js";
+import { projectForEgress } from "./egress.js";
 import { stableStringify } from "@framelink/core";
 import * as flcm from "./runtime.js";
 
 async function chipOnHolder() {
   const figma = createFigmaMock();
-  const egress = createReadEgress();
-  (globalThis as any).__flcmHost = { registerRead: egress.registerRead, isRunCancelled: () => false, isRunFinished: () => false };
+  (globalThis as any).__flcmHost = { runCancellation: () => null, isRunFinished: () => false };
   seedVariables({ collection: "Brand", variables: [{ name: "color/brand", type: "COLOR", values: { Default: { r: 0, g: 0, b: 1, a: 1 } } }] });
   const holder = await flcm.render({ type: "FRAME", width: 400, height: 400 });
   const comp = await flcm.component(
@@ -48,7 +48,7 @@ async function chipOnHolder() {
     definitions: (await live(comp)).componentPropertyDefinitions,
     references: (await live(comp)).children.map((child: any) => child.componentPropertyReferences),
   });
-  return { comp, inst, holder, live, state, wire: (value: unknown) => JSON.parse(JSON.stringify(safeSerialize(egress.project(value)))) };
+  return { comp, inst, holder, live, state, wire: (value: unknown) => JSON.parse(JSON.stringify(safeSerialize(projectForEgress(value, "result")))) };
 }
 
 test("a component, an instance and a slot pasted back from their own reads are no-ops", async () => {

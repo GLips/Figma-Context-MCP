@@ -64,16 +64,6 @@ test("disabled paint/effect stacks, exact geometry and named-style identities re
   expect(wire.nodes[0].elided).toEqual({ d: JSON.stringify(path.vectorPaths![0].data).length });
 });
 
-test("agent edits turn read objects into computed data, including edits within shared nested values", async () => {
-  const full = await simplify([path]);
-  full.nodes[0].d = "M0 0 L500 500";
-  expect(project(full)).toBe(full);
-  expect(projectReadNode(full.nodes[0], full)).toBe(full.nodes[0]);
-  const nested = await simplify([path]);
-  nested.nodes[0].readOnlySource!.vectorPaths![0].data = "M0 0 L1 1";
-  expect(project(nested)).toBe(nested);
-});
-
 test("instance and definition children stay live in runtime; wire references retain their content in the component sidecar", async () => {
   const full = await simplify([
     {

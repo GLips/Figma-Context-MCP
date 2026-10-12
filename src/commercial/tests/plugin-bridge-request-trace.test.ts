@@ -31,10 +31,15 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, sent, socket, receive } = connectedBridge();
   const result = bridge
-    .request({ type: "EXECUTE_CODE", code: "private code", preamble: "private preamble" })
+    .request({
+      type: "EXECUTE_CODE",
+      code: "private code",
+      preamble: "private preamble",
+      lateChangeWindowMs: 60_000,
+    })
     .catch((error) => error);
   const id = sent[0].id!;
-  receive({ type: "RUN_STATE", runId: id, phase: "running" });
+  receive({ type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
   for (let i = 0; i < 4; i++) {
     await vi.advanceTimersByTimeAsync(20);
     receive({
@@ -67,13 +72,13 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, sent, receive } = connectedBridge(100, 150);
   const result = bridge
-    .request({ type: "EXECUTE_CODE", code: "", preamble: "" })
+    .request({ type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 })
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
-  receive({ type: "RUN_STATE", runId: id, phase: "running" });
-  receive({ type: "RUN_TRACE", runId: id, stage: "native-start" }, {} as WebSocket);
-  receive({ type: "RUN_TRACE", runId: id, stage: "eval-start" });
+  receive({ type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
+  receive({ type: "RUN_TRACE", runId: id, stage: "native-start", elapsedMs: 0 }, {} as WebSocket);
+  receive({ type: "RUN_TRACE", runId: id, stage: "eval-start", elapsedMs: 0 });
   await vi.advanceTimersByTimeAsync(70);
   receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
   const error = await result;
@@ -92,8 +97,8 @@ test("trace is bounded, stage-only, expires terminal entries, and keeps timeout 
     () => now,
   );
   trace.start("run", owner);
-  trace.record("run", owner, "host", "user secret");
-  for (let i = 0; i < 1000; i++) trace.record("run", owner, "host", "native-start");
+  for (let i = 0; i < 1000; i++)
+    trace.recordHost("run", owner, { stage: "native-start", elapsedMs: i });
   trace.record("run", owner, "timeout-inactivity");
   trace.record("run", owner, "late-reply");
   trace.record("run", owner, "late-reply");
@@ -115,12 +120,29 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
     const { bridge, sent, receive } = connectedBridge();
     const controller = new AbortController();
     const result = bridge
-      .request({ type: "EXECUTE_CODE", code: "", preamble: "" }, controller.signal)
+      .request(
+        { type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 },
+        controller.signal,
+      )
       .catch((error) => error);
     const id = sent[0].id!;
-    receive({ type: "RUN_STATE", runId: id, phase: "queued" });
-    receive({ type: "RUN_TRACE", runId: id, stage: "native-start", operation: "page-switch" });
-    if (stage === "result") receive({ id, result: "secret" });
+    receive({ type: "RUN_STATE", runId: id, phase: "queued", at: Date.now() });
+    receive({
+      type: "RUN_TRACE",
+      runId: id,
+      stage: "native-start",
+      elapsedMs: 0,
+      operation: "page-switch",
+    });
+    if (stage === "result")
+      receive({
+        id,
+        type: "EXECUTE_CODE_RESULT",
+        result: "secret",
+        console: [],
+        errors: null,
+        documentChanged: false,
+      });
     if (stage === "error") receive({ id, type: "ERROR", error: "private native error" });
     if (stage === "caller-cancelled") controller.abort();
     if (stage === "disconnected") bridge["failPending"]("disconnected");
@@ -142,16 +164,22 @@ test("execution error result is traced as error without changing successful enve
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, sent, receive } = connectedBridge();
-  const result = bridge.request({ type: "EXECUTE_CODE", code: "", preamble: "" });
+  const result = bridge.request({
+    type: "EXECUTE_CODE",
+    code: "",
+    preamble: "",
+    lateChangeWindowMs: 60_000,
+  });
   const id = sent[0].id!;
-  const envelope = {
-    id,
+  const reply = {
     type: "EXECUTE_CODE_RESULT",
     errors: "private execution detail",
     result: null,
+    console: [],
+    documentChanged: false,
   };
-  receive(envelope);
-  expect(await result).toEqual(envelope);
+  receive({ id, ...reply });
+  expect(await result).toEqual(reply);
   expect(bridge["trace"].snapshot(id).at(-1)?.stage).toBe("error");
   expect(JSON.stringify(bridge["trace"].snapshot(id))).not.toContain("private execution detail");
 });

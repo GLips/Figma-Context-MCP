@@ -15,15 +15,11 @@ export interface ProjectOptions {
 
 /** Project copies the runtime tree; cuts never mutate data an agent is still using. */
 export function project(full: SimplifyResult, options: ProjectOptions = {}): SimplifyResult {
-  const context = readContext(full);
-  if (context.unchanged && !context.unchanged(full)) return full;
-  return projectTrees(full.nodes, context, options);
+  return projectTrees(full.nodes, readContext(full), options);
 }
 
 export function projectReadNode(node: SimplifiedNode, full: SimplifyResult): SimplifiedNode {
-  const context = readContext(full);
-  if (context.unchanged && !context.unchanged(node)) return node;
-  const result = projectTrees([node], context, {});
+  const result = projectTrees([node], readContext(full), {});
   return (
     result.nodes[0] ?? {
       id: node.id,

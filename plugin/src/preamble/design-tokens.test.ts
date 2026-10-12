@@ -13,7 +13,7 @@ import * as flcm from "./runtime.js";
 
 function setup() {
   const figma = createFigmaMock();
-  (globalThis as any).__flcmHost = { registerRead: () => {}, isRunCancelled: () => false, isRunFinished: () => false };
+  (globalThis as any).__flcmHost = { runCancellation: () => null, isRunFinished: () => false };
   return figma;
 }
 

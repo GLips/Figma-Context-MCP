@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
 import { Logger } from "~/utils/logger.js";
-import { parseAuthorizingUser, type AuthorizingUser } from "./approval.js";
+import { parseAuthorizingUser, type AuthorizingUser } from "@framelink/plugin/protocol";
 
 // A working session lasts a day, refreshed on use (see `touch`). Long enough that an active human is
 // never re-prompted mid-session; short enough that a forgotten on-disk token can't silently re-approve

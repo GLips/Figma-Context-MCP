@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { MAX_SCREENSHOT_SCALE } from "./protocol.js";
+
 /** Opt-in prototype policy; pixel fidelity and undo/selection behavior need live verification. */
 export interface CaptureOptions { scale?: number; context?: boolean; margin?: number }
 export const CONTEXT_MARGIN_PROTOTYPE = { proportion: 0.1, min: 80, max: 160 } as const;
@@ -17,7 +19,7 @@ export function contextualBounds(bounds: Rect, margin?: number): Rect {
 
 export async function captureScreenshot(node: BaseNode, options: CaptureOptions, cancelled: () => boolean = () => false): Promise<Uint8Array> {
   const checkCancellation = () => { if (cancelled()) throw new Error("Screenshot cancelled; temporary capture region removed."); };
-  if (options.scale !== undefined && (!Number.isFinite(options.scale) || options.scale <= 0 || options.scale > 4)) throw new Error("Screenshot scale must be greater than 0 and at most 4.");
+  if (options.scale !== undefined && (!Number.isFinite(options.scale) || options.scale <= 0 || options.scale > MAX_SCREENSHOT_SCALE)) throw new Error(`Screenshot scale must be greater than 0 and at most ${MAX_SCREENSHOT_SCALE}.`);
   if (options.margin !== undefined && options.context !== true) throw new Error("Screenshot margin requires context:true.");
   checkCancellation();
   const settings: ExportSettingsImage = { format: "PNG", constraint: { type: "SCALE", value: options.scale ?? 1 } };

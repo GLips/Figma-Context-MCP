@@ -26,10 +26,11 @@
 // The probe creates one small frame, reads it back, and deletes it again. Safe to re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-access.ts";
+import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
 import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The plugin holds no runtime of its own (ADR-0010), so the probe ships the real std-lib — the same
@@ -46,7 +47,7 @@ const bridge = new PluginBridge(undefined, {
   capabilities: new Map([["images.fetch", async () => ({})]]),
 });
 
-const run = (code) => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE });
+const run = (code) => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS });
 
 // The agent's shape from the DX notes, verbatim in spirit: a batch that rejects fast while its
 // sibling's slot is already reserved. `0:0` is the document node, which no edit can touch.
@@ -85,13 +86,14 @@ async function runProbe() {
       identity: SESSION_IDENTITY,
       pairingCode: bridge.getPairingCode(),
       sessionToken: bridge.getSessionToken(),
+      framelinkOrigin: DEFAULT_FRAMELINK_API_URL,
     });
 
     const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
-    if (version.protocolVersion !== MIN_PROTOCOL_VERSION) {
+    if (version.protocolVersion !== PROTOCOL_VERSION) {
       fail(
         `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
-          `${MIN_PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
+          `${PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
           `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
       );
     }

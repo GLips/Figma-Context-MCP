@@ -2,20 +2,9 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import type { HostTraceStage, NativeOperation } from "@framelink/plugin/protocol";
+
 /** Bounded diagnostic metadata, deliberately independent of request promises, clocks and sockets. */
-export const HOST_TRACE_STAGES = new Set([
-  "received",
-  "eval-start",
-  "eval-end",
-  "operation-start",
-  "operation-end",
-  "native-start",
-  "native-end",
-  "native-error",
-  "cancel-received",
-  "result-sent",
-]);
-const OPERATIONS = new Set(["page-create", "page-switch", "font-load", "font-list"]);
 type Stage =
   | "submitted"
   | "queued"
@@ -32,10 +21,16 @@ export interface TraceEvent {
   requestId: string;
   stage: Stage;
   elapsedMs: number;
-  hostStage?: string;
-  lastHostStage?: string;
+  hostStage?: HostTraceStage;
+  lastHostStage?: HostTraceStage;
   hostElapsedMs?: number;
-  operation?: string;
+  operation?: NativeOperation;
+}
+/** A RUN_TRACE as the protocol admitted it — only a known stage and a bounded elapsed time. */
+export interface HostTrace {
+  stage: HostTraceStage;
+  elapsedMs: number;
+  operation?: NativeOperation;
 }
 interface RecordEntry {
   owner: object;
@@ -43,8 +38,8 @@ interface RecordEntry {
   ended?: number;
   events: TraceEvent[];
   emitted: number;
-  lastHostStage?: string;
-  lastOperation?: string;
+  lastHostStage?: HostTraceStage;
+  lastOperation?: NativeOperation;
   late: boolean;
 }
 const REQUEST_LIMIT = 128;
@@ -63,24 +58,21 @@ export class RequestTrace {
     this.entries.set(id, { owner, started: this.now(), events: [], emitted: 0, late: false });
     this.record(id, owner, "submitted");
   }
-  record(
-    id: string,
-    owner: object,
-    stage: Stage,
-    hostStage?: unknown,
-    hostElapsedMs?: unknown,
-    operation?: unknown,
-  ): void {
+  record(id: string, owner: object, stage: Exclude<Stage, "host">): void {
+    this.append(id, owner, stage);
+  }
+  recordHost(id: string, owner: object, host: HostTrace): void {
+    this.append(id, owner, "host", host);
+  }
+  private append(id: string, owner: object, stage: Stage, host?: HostTrace): void {
     this.prune();
     const entry = this.entries.get(id);
     if (!entry || entry.owner !== owner) return;
-    if (stage === "host" && (typeof hostStage !== "string" || !HOST_TRACE_STAGES.has(hostStage)))
-      return;
     if (stage === "late-reply") {
       if (entry.ended === undefined || entry.late) return;
       entry.late = true;
-    } else if (entry.ended !== undefined && stage !== "host") return;
-    if (stage === "host") entry.lastHostStage = hostStage as string;
+    } else if (entry.ended !== undefined && !host) return;
+    if (host) entry.lastHostStage = host.stage;
     const terminal = [
       "timeout-inactivity",
       "timeout-ceiling",
@@ -90,17 +82,11 @@ export class RequestTrace {
       "error",
     ].includes(stage);
     const event: TraceEvent = { requestId: id, stage, elapsedMs: this.now() - entry.started };
-    if (stage === "host") {
-      event.hostStage = hostStage as string;
-      if (typeof operation === "string" && OPERATIONS.has(operation)) event.operation = operation;
-      entry.lastOperation = event.operation;
-      if (
-        typeof hostElapsedMs === "number" &&
-        Number.isFinite(hostElapsedMs) &&
-        hostElapsedMs >= 0 &&
-        hostElapsedMs <= 3_600_000
-      )
-        event.hostElapsedMs = hostElapsedMs;
+    if (host) {
+      event.hostStage = host.stage;
+      event.hostElapsedMs = host.elapsedMs;
+      if (host.operation) event.operation = host.operation;
+      entry.lastOperation = host.operation;
     }
     if (terminal && entry.lastHostStage) event.lastHostStage = entry.lastHostStage;
     if (terminal && entry.lastOperation) event.operation = entry.lastOperation;

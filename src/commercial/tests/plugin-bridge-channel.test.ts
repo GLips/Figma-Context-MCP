@@ -57,7 +57,9 @@ async function running(
   });
   const socket = new Socket();
   install(bridge, socket);
-  const result = bridge.request({ type: "EXECUTE_CODE", code: "x", preamble: "x" }).catch((e) => e);
+  const result = bridge
+    .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
+    .catch((e) => e);
   await Promise.resolve();
   const runId = socket.frames[0].id;
   const request = (id: string, capability = "test.only", payload: unknown = null) =>
@@ -95,7 +97,12 @@ it("suspends until the last service settles, then rearms inactivity; limits conc
     error: { message: expect.stringContaining("in flight") },
   });
   // Run-state traffic must not accidentally rearm a suspended clock.
-  receive(h.bridge, h.socket, { type: "RUN_STATE", runId: h.runId, phase: "running" });
+  receive(h.bridge, h.socket, {
+    type: "RUN_STATE",
+    runId: h.runId,
+    phase: "running",
+    at: Date.now(),
+  });
   releases.slice(0, 3).forEach((resolve) => resolve({ arbitrary: [1, true, null] }));
   await vi.advanceTimersByTimeAsync(200);
   expect(h.socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
@@ -297,9 +304,10 @@ it.each([false, true])(
       ui: {
         resize() {},
         onmessage: (_msg: Record<string, unknown>) => {},
-        postMessage: (msg: Record<string, unknown>) => {
-          receive(bridge, socket, msg);
-          if (msg.type === "SESSION_TOKEN") handedOver();
+        postMessage: (msg: { to: string; frame?: Record<string, unknown> }) => {
+          if (msg.to !== "server" || !msg.frame) return;
+          receive(bridge, socket, msg.frame);
+          if (msg.frame.type === "SESSION_TOKEN") handedOver();
         },
       },
     };
@@ -321,18 +329,24 @@ it.each([false, true])(
         clearTimeout,
       }),
     );
-    // ui.html's two envelopes: server frames (after a JSON round trip in Socket.send) and panel input.
+    // The relay's two envelopes: server frames (after a JSON round trip in Socket.send) and panel input.
     socket.forward = (frame) => figma.ui.onmessage({ from: "server", connKey: 1, frame });
     const panel = (control: Record<string, unknown>) =>
       figma.ui.onmessage({ from: "panel", control: { ...control, connKey: 1 } });
     panel({ type: "WS_CONNECTED" });
-    socket.forward({ type: "SESSION_INFO", id: "session", identity: "test" });
+    socket.forward({
+      type: "SESSION_INFO",
+      id: "session",
+      identity: "test",
+      framelinkOrigin: "https://app.framelink.ai",
+    });
     panel({ type: "UI_DECISION", approve: true });
     await allowed;
     const result = (await bridge.request({
       type: "EXECUTE_CODE",
+      lateChangeWindowMs: 60_000,
       // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
-      preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })`,
+      preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })`,
       code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
     })) as { result: string; errors: string | null };
     expect(result.errors).toBeNull();
@@ -486,10 +500,15 @@ it("hands each channel request the credentials of the request that started its r
   const bob = { user: "bob" } as unknown as FigmaService;
   const runs = [alice, bob].map((figma) =>
     bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" }, undefined, undefined, {
-        figma,
-        uploadHandles: new Set(),
-      })
+      .request(
+        { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
+        undefined,
+        undefined,
+        {
+          figma,
+          uploadHandles: new Set(),
+        },
+      )
       .catch((e) => e),
   );
   await Promise.resolve();

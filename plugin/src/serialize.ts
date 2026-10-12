@@ -5,6 +5,7 @@
 // Host-side wire serialization for the sandbox eval result and its console output. This is TS HOST code
 // (bundled into code.ts's IIFE), NOT sandbox-preamble source — it runs on the plugin main thread and never
 // touches figma.*, so it stays a pure, unit-testable module distinct from code.ts's messaging/approval shell.
+// What a read looks like on the way out is the preamble's policy (preamble/egress.ts), applied first.
 //
 // The bridge JSON-serializes every outbound message, and a live Figma node is NOT plain JSON (sending one
 // yields opaque failures). So the return path does two things here: guardReturnValue REJECTS a returned live
@@ -74,68 +75,4 @@ export function safeSerialize(value: unknown, ancestors = new Set<object>()): un
     if (Array.isArray(value)) return value.map(item => safeSerialize(item, ancestors));
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, safeSerialize(item, ancestors)]));
   } finally { ancestors.delete(value); }
-}
-
-/** One registry per execution; callbacks use the server-shipped projection policy. */
-export function createReadEgress() {
-  const reads = new WeakMap<object, { project: () => unknown; entries: [string, unknown][]; decorate: (value: unknown) => unknown }>();
-  // Everything reachable from a read at registration is flcm's shape, not the agent's: a read's own
-  // undefined field (core emits some) must never be reported as one the agent returned.
-  const readOwned = new WeakSet<object>();
-  function claimReadOwned(value: unknown): void {
-    if (value === null || typeof value !== "object" || looksLikeNode(value) || readOwned.has(value)) return;
-    readOwned.add(value);
-    Object.values(value).forEach(claimReadOwned);
-  }
-  // `dropped` collects the paths of the agent's own undefined-valued fields, which JSON omits so the agent
-  // sees `{ a }` with no sign `b` was returned. It rides this one pass so each getter is read once. Undefined
-  // array items are out of scope — JSON turns them into null, not a missing key.
-  function project(value: unknown, ancestors = new Set<object>(), dropped?: { at: string; paths: string[] }): unknown {
-    if (value === null || typeof value !== "object" || looksLikeNode(value)) return value;
-    if (ancestors.has(value)) throw new Error("Cannot serialize cyclic return or console data.");
-    ancestors.add(value);
-    const pathOf = (key: string | number) =>
-      typeof key === "number" ? `${dropped!.at}[${key}]` : dropped!.at ? `${dropped!.at}.${key}` : key;
-    try {
-      const projection = reads.get(value);
-      if (projection) {
-        const entries = readEntries(value);
-        if (entries.length !== projection.entries.length || entries.some(([key, item], i) => key !== projection.entries[i][0] || !Object.is(item, projection.entries[i][1]))) {
-          // Only the keys the agent set on the read are its own; nested data under them is not walked.
-          const registered = new Map(projection.entries);
-          if (dropped) for (const [key, item] of entries) if (item === undefined && (!registered.has(key) || registered.get(key) !== undefined)) dropped.paths.push(pathOf(key));
-          return projection.decorate(value);
-        }
-        return projection.decorate(projection.project());
-      }
-      const own = dropped && !readOwned.has(value) ? dropped : undefined;
-      if (Array.isArray(value)) return value.map((item, i) => project(item, ancestors, own && { at: pathOf(i), paths: own.paths }));
-      return Object.fromEntries(Object.entries(value).map(([key, item]) => {
-        if (own && item === undefined) own.paths.push(pathOf(key));
-        return [key, project(item, ancestors, own && { at: pathOf(key), paths: own.paths })];
-      }));
-    } finally { ancestors.delete(value); }
-  }
-  return {
-    registerRead(value: object, projection: () => unknown, decorate: (value: unknown) => unknown = value => value) {
-      reads.set(value, { project: projection, entries: readEntries(value), decorate });
-      claimReadOwned(value);
-    },
-    project,
-  };
-}
-
-const UNDEFINED_FIELDS_NAMED = 10;
-
-/** The one warning for a successful return whose own fields JSON will drop; null when there are none. */
-export function undefinedFieldsWarning(paths: string[]): string | null {
-  if (paths.length === 0) return null;
-  const named = paths.slice(0, UNDEFINED_FIELDS_NAMED).join(", ");
-  const more = paths.length > UNDEFINED_FIELDS_NAMED ? ` and ${paths.length - UNDEFINED_FIELDS_NAMED} more` : "";
-  return `${paths.length} returned field(s) were undefined and dropped from the result: ${named}${more}.`;
-}
-
-// Diagnostics may arrive after a handle is minted, without changing its authored data.
-function readEntries(value: object): [string, unknown][] {
-  return Object.entries(value).filter(([key]) => key !== "warnings");
 }

@@ -107,10 +107,9 @@ test("an image fill in a delta fetches bytes through the host channel and stamps
   const node = await renderKeyedRowFrame();
   const url = "https://cdn.example.com/a.jpg";
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = { registerRead() {},
-    callServer: async (_capability: string, urls: string[]) =>
+  g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
-    isRunCancelled: () => false, isRunFinished: () => false,
+    runCancellation: () => null, isRunFinished: () => false,
   };
   try {
     await edit("card", { fill: image(url) });
@@ -154,10 +153,9 @@ test('"none" is the removal word: fill/stroke/effects clear with a real write, n
 test('clearing an image fill with "none" wipes the flcm/image provenance too', async () => {
   const node = await renderKeyedRowFrame();
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = { registerRead() {},
-    callServer: async (_capability: string, urls: string[]) =>
+  g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
-    isRunCancelled: () => false, isRunFinished: () => false,
+    runCancellation: () => null, isRunFinished: () => false,
   };
   try {
     await edit("card", { fill: image("https://cdn.example.com/b.jpg") });
@@ -938,12 +936,11 @@ function imageChannelThatRetypes(
   fontName: { family: string; style: string },
 ): () => void {
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = { registerRead() {},
-    callServer: async (_capability: string, urls: string[]) => {
+  g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) => {
       node.fontName = fontName;
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    isRunCancelled: () => false, isRunFinished: () => false,
+    runCancellation: () => null, isRunFinished: () => false,
   };
   return () => {
     delete g.__flcmHost;

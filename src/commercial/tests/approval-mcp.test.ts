@@ -7,12 +7,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
-import { PluginBridge, type BridgeRequest } from "~/commercial/plugin-bridge/bridge.js";
+import type {
+  ApprovalStatusReply,
+  PluginReply,
+  ReplyFor,
+  ServerRequest,
+} from "@framelink/plugin/protocol";
+import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 class Bridge extends PluginBridge {
-  decision = "PENDING_APPROVAL";
+  decision: ApprovalStatusReply["type"] = "PENDING_APPROVAL";
   executions = 0;
   signal?: AbortSignal;
   connected = true;
@@ -29,11 +35,24 @@ class Bridge extends PluginBridge {
   override getPairingCode() {
     return "1234";
   }
-  override async request(payload: BridgeRequest, signal?: AbortSignal) {
+  override async request<T extends ServerRequest>(
+    payload: T,
+    signal?: AbortSignal,
+  ): Promise<ReplyFor<T["type"]>> {
     this.signal = signal;
-    if (payload.type === "APPROVAL_STATUS") return { type: this.decision };
-    this.executions++;
-    return { result: "done", console: [], errors: null, documentChanged: false };
+    let reply: PluginReply;
+    if (payload.type === "APPROVAL_STATUS") reply = { type: this.decision };
+    else {
+      this.executions++;
+      reply = {
+        type: "EXECUTE_CODE_RESULT",
+        result: "done",
+        console: [],
+        errors: null,
+        documentChanged: false,
+      };
+    }
+    return reply as ReplyFor<T["type"]>;
   }
 }
 const flush = async () => {

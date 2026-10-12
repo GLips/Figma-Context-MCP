@@ -18,7 +18,7 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { enterMutatingVerb, committedVerbCount, mutationQueueIdle } from "./mutation-lock.js";
 import { image } from "./flcm.js";
 import { render } from "./structure.js";
-import { RUN_INACTIVITY_DEADLINE_MS } from "./server-deadline.js";
+import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 
 let figma = createFigmaMock();
 
@@ -33,13 +33,13 @@ beforeEach(() => {
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
   if (!g.__flcmHost) {
-    g.__flcmHost = { registerRead() {}, callServer: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false, runStartedAt: Date.now() };
+    g.__flcmHost = { callServer: async () => ({}), runCancellation: () => null, isRunFinished: () => false, runStartedAt: Date.now() };
   }
   return g.__flcmHost as Record<string, unknown>;
 };
 
 const installCancelFlag = (check: () => boolean): void => {
-  hostSlot().isRunCancelled = check;
+  hostSlot().runCancellation = () => (check() ? "server" : null);
 };
 
 afterEach(() => {

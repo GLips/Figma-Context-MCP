@@ -15,7 +15,7 @@ import { afterEach, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
-import { MIN_PROTOCOL_VERSION } from "~/commercial/plugin-bridge/version.js";
+import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
 
 const SEEDED = "seededsessiontoken0000000";
 const PLANTED = "plantedsessiontoken000000";
@@ -53,7 +53,12 @@ async function connect(url: string, answerVersion: boolean): Promise<WebSocket> 
     const frame = JSON.parse(raw.toString()) as { id?: string; type?: string };
     if (!answerVersion || frame.type !== "GET_VERSION") return;
     ws.send(
-      JSON.stringify({ id: frame.id, protocolVersion: MIN_PROTOCOL_VERSION, pluginVersion: "t" }),
+      JSON.stringify({
+        type: "VERSION",
+        id: frame.id,
+        protocolVersion: PROTOCOL_VERSION,
+        pluginVersion: "t",
+      }),
     );
     // Back-to-back with the reply, before the bridge can have settled its verdict.
     ws.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: PLANTED }));

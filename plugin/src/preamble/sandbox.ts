@@ -14,3 +14,5 @@ export const session = hostSession(createSession);
 export { mutationQueueIdle, committedVerbCount } from "./mutation-lock.js";
 
 export { warnings } from "./warnings.js";
+// The host's too: every result and console line leaves the run through it (egress.ts).
+export { projectForEgress } from "./egress.js";

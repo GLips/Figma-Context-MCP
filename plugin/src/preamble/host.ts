@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { warnings } from "./warnings.js";
+import type { HostTraceStage, NativeOperation } from "../protocol.js";
 import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
@@ -13,7 +13,8 @@ import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // re-import. So it stays deliberately tiny, and an incompatible change to it bumps PROTOCOL_VERSION.
 //
 // What earns a place here: only a service that needs plugin-owned state the sandbox can't see — the
-// reverse bridge, run cancellation, or plugin-run storage.
+// reverse bridge, run cancellation, or plugin-run storage. Read egress is NOT one: its policy is the
+// preamble's (egress.ts), and the host reaches it as the factory's projectForEgress.
 // Helpers, policy and anything derivable from `figma.*` stay in the shipped preamble, where they
 // cost nothing to change.
 //
@@ -21,23 +22,28 @@ import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // sides. Only the binding name `__flcmHost` crosses the eval boundary no compiler can see — and its
 // other end is the factory wrapper index.mjs writes around this bundle, which refuses to emit one
 // that doesn't reference the name. Rename it here alone and the generator throws.
-// Execution services are required. Diagnostic reporting is optional so a newer preamble can
-// still run on an older host; diagnostics never affect execution or deadlines.
-type NativeOperation = "page-create" | "page-switch" | "font-load" | "font-list";
-type NativeTraceStage = "native-start" | "native-end" | "native-error";
+// Execution services are required. Diagnostic reporting is optional; diagnostics never affect
+// execution or deadlines.
+type NativeTraceStage = Extract<HostTraceStage, `native-${string}`>;
+
+/**
+ * Why a run was cancelled, which the refusal words for the agent: the server gave up on it (its
+ * deadline passed), its server disconnected, or the human revoked the session's approval.
+ */
+export type RunCancelCause = "server" | "disconnected" | "revoked";
 
 export interface FlcmHost {
   /** Retain one preamble-initialized object for this plugin run; never retain the initializer. */
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
-  registerRead(value: object, project: () => unknown, decorate: (value: unknown) => unknown): void;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /**
    * Private transport for server-shipped verbs. Never expose this on flcm or session. Every call
    * goes through withServerCall (server-deadline.ts), or the run's clock counts server work as silence.
    */
   callServer(capability: string, payload: unknown): Promise<unknown>;
-  /** Has the server cancelled this run? Only the host sees the CANCEL frame arrive. */
-  isRunCancelled(): boolean;
+  /** Why this run was cancelled, or null while it wasn't. Only the host sees a CANCEL, a disconnect
+   * or a revoke arrive. */
+  runCancellation(): RunCancelCause | null;
   /**
    * Has the run this runtime was built FOR already replied? A runtime is per request, but agent code
    * can outlive it — stash `flcm` on globalThis in one call and it is still callable in the next,
@@ -117,12 +123,11 @@ export async function requestHostCommentPins(fileKey: string): Promise<HostComme
 }
 
 /**
- * Whether the server has cancelled this run. Fails OPEN — no host means no cancellation, which is
- * what keeps the harness and unit tests (which never install one) running verbs normally.
+ * Why this run was cancelled, or null. Fails OPEN — no host means no cancellation, which is what
+ * keeps the harness and unit tests (which never install one) running verbs normally.
  */
-export function hostRunCancelled(): boolean {
-  const host = currentHost();
-  return host ? host.isRunCancelled() : false;
+export function hostRunCancellation(): RunCancelCause | null {
+  return currentHost()?.runCancellation() ?? null;
 }
 
 /**
@@ -161,28 +166,7 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
   }
 }
 
-/** Identity registration keeps authored/computed objects out of the lossy egress path. */
-export function registerRead(value: object, project: () => unknown, nodeId?: string): void {
-  warnings.observe(value, nodeId);
-  currentHost()?.registerRead(value, project, warnings.project);
-}
-
-/**
- * Register an object that egress passes through as itself plus `mark`, whether or not the agent edited
- * it in place: decorate runs on both of egress's branches, where a projection runs only on the untouched one.
- */
-export function registerMarked(value: object, mark: Record<string, unknown>): void {
-  currentHost()?.registerRead(value, () => value, (out) => ({ ...(warnings.project(out) as object), ...mark }));
-}
-
 /** Host ownership supplies lifetime; the server-shipped initializer supplies data policy. */
 export function hostSession(initialize: () => Record<string, unknown>): Record<string, unknown> {
   return currentHost()?.getSession(initialize) ?? initialize();
-}
-
-/** Register each returned node so extracting a child keeps its diagnostics at egress. */
-export function registerResult(value: unknown): void {
-  if (!value || typeof value !== "object") return;
-  if ("id" in value && typeof value.id === "string") registerRead(value, () => value);
-  for (const [key, item] of Object.entries(value)) if (key !== "warnings") registerResult(item);
 }

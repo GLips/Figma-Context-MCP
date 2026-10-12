@@ -7,7 +7,7 @@
 // image await, or the plugin's WS dispatch changes shape, since no headless harness can answer this.
 //
 // The assumption everything in protocol 2 rests on: the QuickJS sandbox can SUSPEND on an await
-// while the plugin main thread round-trips the WS bridge (postMessage → ui.html → server) and
+// while the plugin main thread round-trips the WS bridge (postMessage → ui.ts relay → server) and
 // resumes when the reply arrives — including a deliberately SLOW (multi-second) reply. This script
 // drives exactly that against the REAL plugin and prints a clear PASS/FAIL. It fetches no network
 // images: the server-side image handler is stubbed to wait 4s and answer with an inline 1×1 PNG,
@@ -30,10 +30,11 @@
 // dispatch broke the suspension the whole protocol rests on — that change must be revisited.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-access.ts";
+import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
 import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must
@@ -83,15 +84,16 @@ async function runProbe() {
       identity: SESSION_IDENTITY,
       pairingCode: bridge.getPairingCode(),
       sessionToken: bridge.getSessionToken(),
+      framelinkOrigin: DEFAULT_FRAMELINK_API_URL,
     });
 
     const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
     // Gate on the server's own minimum rather than a literal, so a protocol bump doesn't silently
     // leave this probe asserting a version nobody speaks anymore.
-    if (version.protocolVersion !== MIN_PROTOCOL_VERSION) {
+    if (version.protocolVersion !== PROTOCOL_VERSION) {
       fail(
         `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
-          `${MIN_PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
+          `${PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
           `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
       );
     }
@@ -104,7 +106,7 @@ async function runProbe() {
     // would execute repeatedly and then read its own run's reply as an unexpected approval status.
     const reply = await requestUntilApproved(
       (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-      () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE }),
+      () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
     );
     if (reply?.type === "PENDING_APPROVAL") {
       fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
@@ -134,6 +136,7 @@ async function runProbe() {
       type: "EXECUTE_CODE",
       code: `const n = await figma.getNodeByIdAsync(${JSON.stringify(rootId)}); if (n) n.remove(); return "cleaned";`,
       preamble: PREAMBLE,
+      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
     });
     if (cleanup?.result !== "cleaned") {
       log(`⚠️ cleanup run returned ${JSON.stringify(cleanup?.result)} — delete the small "flcm-probe" frame by hand.`);

@@ -12,9 +12,8 @@
 // blur-×2 note (the code applies it) and NO alignItems:"stretch" no-op warning (the bridge now synthesizes
 // container stretch per-child, so it just works). What stays documented is the fail-loud boundary: what
 // we reject rather than approximate, and the few departures that render anyway (FIDELITY_AND_SCOPE).
-import { FIND_MATERIALIZE_CAP } from "@framelink/plugin/find-cap";
+import { FIND_MATERIALIZE_CAP, MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 import { UPLOAD_TTL_MS } from "~/commercial/plugin-bridge/image-intake.js";
-import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
 
 export const MENTAL_MODEL = `Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE, and children is an ordinary array of node specs. A spec is a value, not a node: every placement verb returns a deep copy with ids filled in and never changes its input, so rendering one template twice makes two independent trees.

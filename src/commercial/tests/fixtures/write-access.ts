@@ -8,8 +8,7 @@ import { join } from "node:path";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
-import type { AuthorizingUser } from "~/commercial/plugin-bridge/approval.js";
-import type { WriteAccessNotice } from "~/commercial/entitlement/write-authorization.js";
+import type { AuthorizingUser, WriteAccessNotice } from "@framelink/plugin/protocol";
 
 export const TEST_AUTHORIZING_USER: AuthorizingUser = {
   figmaUserId: "figma-user-1",

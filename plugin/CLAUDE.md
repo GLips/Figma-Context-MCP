@@ -3,8 +3,10 @@
 The Framelink Figma plugin — hosts **flcm**, the authoring DSL for the "code mode" write path. Private workspace member; never published to npm.
 
 - `src/preamble/` — the flcm runtime, bundled by esbuild (`index.mjs`, the one seam, which also gates zod out of the graph) into an IIFE preamble. The **server** builds it and ships it with every execute request (ADR-0010); the plugin evals it ahead of the agent's code in the QuickJS sandbox. `host.ts` is the whole host↔preamble interface — the `FlcmHost` object arriving as the parameter of the factory `index.mjs` wraps the bundle in (`eval(preamble)(host)`), so the free identifier `__flcmHost` never leaves this directory. `schema.ts` is the single source of the authoring surface (the write edge of the canonical vocabulary); types, validation, and the generated authoring doc all derive from it.
-- `src/code.ts` — the plugin host (Figma main thread): sandbox setup and approval gating; it never touches the network itself, talking to the server's WS relay (`src/commercial/plugin-bridge/` in the repo root) via postMessage to the headless `ui.html`, which owns the WS connection.
-- `build.mjs` — esbuild build of the host shell only; the preamble is not bundled here, and nothing is asserted about the output (`index.mjs` owns both ends of the one unpinnable name). Run as `pnpm build:plugin` from the repo root.
+- `src/protocol.ts` — the wire both sides build from (`@framelink/plugin/protocol`): the protocol version and changelog, every frame type with its parser, the reply each request is owed, the port block, and shared timing. Leaf-only and zod-free; a protocol change bumps `PROTOCOL_VERSION` here and nowhere else.
+- `src/code.ts` — the plugin host (Figma main thread): sandbox setup and approval gating; it never touches the network itself, talking to the server's WS relay (`src/commercial/plugin-bridge/` in the repo root) via postMessage to the relay iframe.
+- `src/ui.ts` — the relay iframe: owns the WS connections, relays frames without reading them, and draws the panel. `build.mjs` bundles it into the `src/ui.html` template as `dist/ui.html` (the manifest's `ui`). `src/panel.ts` types the postMessage envelopes between it and `code.ts`.
+- `build.mjs` — esbuild build of the host (`dist/code.js`) and the relay (`dist/ui.html`); the preamble is not bundled here, and nothing is asserted about the output (`index.mjs` owns both ends of the one unpinnable name). Run as `pnpm build:plugin` from the repo root.
 - `harness/` — live-Figma ergonomics flows (`pnpm --filter @framelink/plugin dogfood`); not part of CI.
 - `docs/authoring/flcm.md` — **generated** from the schema by the repo-root `scripts/gen-flcm-doc.ts`; never hand-edit (`pnpm docs:check` gates drift).
 
@@ -19,7 +21,7 @@ cannot capture the plugin's local host or transport functions.
 The wire uses `{ type: "CHANNEL_REQUEST", id, runId, capability, payload }` and one response type:
 `{ type: "CHANNEL_RESPONSE", id, ok: true, payload }` or
 `{ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message, details?, ...extensions } }`. The UI routes these through its existing
-connection envelope without interpreting them. Keep capability-specific fields out of the frame.
+server envelope without interpreting them. Keep capability-specific fields out of the frame.
 
 Failures use an open JSON object with string `code` and `message`, optional JSON `details`, and
 capability-owned JSON extension fields. Object throws retain their fields; ordinary throws receive

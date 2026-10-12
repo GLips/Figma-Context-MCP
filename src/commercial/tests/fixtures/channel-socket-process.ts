@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { WebSocket, type WebSocketServer } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
 import { ApprovalStore } from "../../plugin-bridge/approval-store.js";
-import { MIN_PROTOCOL_VERSION } from "../../plugin-bridge/version.js";
+import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
 
 const mode = process.argv[2];
 const directory = await mkdtemp(join(tmpdir(), "fig70-socket-"));
@@ -68,9 +68,10 @@ async function peer() {
     const message = JSON.parse(raw.toString());
     if (message.type === "GET_VERSION")
       ws.send(
-        JSON.stringify({ type: "VERSION", id: message.id, protocolVersion: MIN_PROTOCOL_VERSION }),
+        JSON.stringify({ type: "VERSION", id: message.id, protocolVersion: PROTOCOL_VERSION }),
       );
-    if (message.type === "PING") ws.send(JSON.stringify({ type: "PONG", id: message.id }));
+    if (message.type === "PING")
+      ws.send(JSON.stringify({ type: "PONG", id: message.id, echo: message.payload }));
     if (message.type === "EXECUTE_CODE")
       ws.send(
         JSON.stringify({
@@ -114,7 +115,12 @@ try {
   } else {
     const ws = await peer();
     const result = bridge
-      .request({ type: "EXECUTE_CODE", code: "unused", preamble: "unused" })
+      .request({
+        type: "EXECUTE_CODE",
+        code: "unused",
+        preamble: "unused",
+        lateChangeWindowMs: 60_000,
+      })
       .catch((error) => error);
     await serviceStarted;
     const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));

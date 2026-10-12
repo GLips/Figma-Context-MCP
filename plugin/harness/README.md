@@ -2,7 +2,7 @@
 
 Runs code-mode DSL files against an in-memory `figma` mock in pure Node — **no plugin, no WS port** —
 so any session can validate the DSL while another session holds the live connection (we have a
-single-live-session constraint: the MCP server binds one WS port from the block (see `src/commercial/plugin-bridge/ports.ts`) per process).
+single-live-session constraint: the MCP server binds one WS port from the block (see `WS_PORT_BLOCK` in `plugin/src/protocol.ts`) per process).
 
 ```
 node plugin/harness/dogfood.mjs <file.js>

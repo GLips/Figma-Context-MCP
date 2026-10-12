@@ -6,17 +6,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
 
-test("cancel refuses a queued run once and releases all tracking on settlement", () => {
+test("a cancel names its cause, the first cause sticks, and settlement releases all tracking", () => {
   const runs = createRunCancellationRegistry();
   const ref = { connKey: 1, id: "run" };
   runs.enqueue(ref);
+  runs.cancelConnection(1, "revoked");
   assert.equal(runs.recordCancellation(1, "run"), "never-executed");
-  assert.equal(runs.isCancelled(ref), true);
-  assert.equal(runs.takeCancellation(ref), true);
-  assert.equal(runs.takeCancellation(ref), false);
+  assert.equal(runs.cancellation(ref), "revoked");
   runs.settle(ref);
   assert.equal(runs.recordCancellation(1, "run"), "unknown");
-  assert.equal(runs.isCancelled(ref), false);
+  assert.equal(runs.cancellation(ref), null);
 });
 
 test("the cancel answer names the phase the run had actually reached", () => {
@@ -27,7 +26,7 @@ test("the cancel answer names the phase the run had actually reached", () => {
   runs.markRunning(ref);
   assert.equal(runs.recordCancellation(1, "run"), "was-running");
   // Answering a cancel does not consume it: the mutation lock reads this to refuse the next verb.
-  assert.equal(runs.isCancelled(ref), true);
+  assert.equal(runs.cancellation(ref), "server");
 });
 
 test("old settlement cannot erase replacement tracking with the same request id", () => {
@@ -35,11 +34,11 @@ test("old settlement cannot erase replacement tracking with the same request id"
   const old = { connKey: 1, id: "same" };
   const next = { connKey: 2, id: "same" };
   const other = { connKey: 3, id: "same" };
-  runs.enqueue(old); runs.cancelConnection(1);
+  runs.enqueue(old); runs.cancelConnection(1, "disconnected");
   runs.enqueue(next); runs.enqueue(other);
-  assert.equal(runs.isCancelled(old), true);
-  assert.equal(runs.isCancelled(next), false);
-  runs.settle(old); runs.cancelConnection(2);
-  assert.equal(runs.isCancelled(next), true);
-  assert.equal(runs.isCancelled(other), false);
+  assert.equal(runs.cancellation(old), "disconnected");
+  assert.equal(runs.cancellation(next), null);
+  runs.settle(old); runs.cancelConnection(2, "disconnected");
+  assert.equal(runs.cancellation(next), "disconnected");
+  assert.equal(runs.cancellation(other), null);
 });

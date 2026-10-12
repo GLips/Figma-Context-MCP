@@ -4,7 +4,7 @@
  */
 // The one owner of the screenshot input rules for the MCP tool and the CLI; each caller chooses how to
 // present the retryable error. The plugin re-checks scale and margin as untrusted input.
-export const MAX_SCREENSHOT_SCALE = 4;
+import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 
 export interface ScreenshotOptions {
   nodeId?: string;
