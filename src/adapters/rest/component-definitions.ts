@@ -3,7 +3,11 @@ import { offTreeComponentIds } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 import { limitConcurrency } from "~/utils/concurrency.js";
 import { Logger } from "~/utils/logger.js";
-import { mainComponentOf, type RestComponentTables } from "./decode/component-tables.js";
+import {
+  componentTablesOf,
+  mainComponentOf,
+  type RestComponentTables,
+} from "./decode/component-tables.js";
 import { restNodeToSnapshot } from "./decode/node-to-snapshot.js";
 import type { ParsedRestResponse } from "./decode/response.js";
 import type { RestDesignSource } from "./read-rest-design.js";
@@ -111,6 +115,8 @@ async function locateRemote(
           const site = await source.getPublishedComponentSite(component.key);
           return { localId, key: component.key, ...site };
         } catch (error) {
+          // A cancelled call is not an access failure: stop rather than fall back.
+          source.signal?.throwIfAborted();
           Logger.log(
             `Component definition for ${component.name} (key ${component.key}) is unreachable — ` +
               `falling back to a donated instance: ${error instanceof Error ? error.message : String(error)}`,
@@ -153,7 +159,9 @@ async function fetchDefinitionNodes(
   try {
     response = await source.getRawNodes(fileKey, [...wanted.keys()]);
   } catch (error) {
-    // Access, rate limit, network. Expected enough to be a fallback rather than a failure.
+    // Access, rate limit, network. Expected enough to be a fallback rather than a failure — unless
+    // the call was cancelled, which is no access failure and has nobody left to fall back for.
+    source.signal?.throwIfAborted();
     Logger.log(
       `Component definitions in ${fileKey} are unreachable — falling back to donated instances: ` +
         `${error instanceof Error ? error.message : String(error)}`,
@@ -173,19 +181,9 @@ async function fetchDefinitionNodes(
       continue;
     }
     try {
-      const snapshot = restNodeToSnapshot(entry.document, entry.styles ?? {}, {
-        components: entry.components,
-        componentSets: entry.componentSets,
-      });
-      snapshots.push(
-        localize(
-          snapshot,
-          target?.id ?? nodeId,
-          { components: entry.components ?? {}, componentSets: entry.componentSets ?? {} },
-          consuming,
-          fromLibrary,
-        ),
-      );
+      const library = componentTablesOf(entry);
+      const snapshot = restNodeToSnapshot(entry.document, entry.styles ?? {}, library);
+      snapshots.push(localize(snapshot, target?.id ?? nodeId, library, consuming, fromLibrary));
     } catch (error) {
       Logger.log(
         `Component definition ${nodeId} in ${fileKey} failed to decode — donor instead: ` +
@@ -223,8 +221,6 @@ function localize(
   for (const [id, component] of Object.entries(consuming.components)) {
     componentIdByKey.set(component.key, id);
   }
-  const setIdByKey = new Map<string, string>();
-  for (const [id, set] of Object.entries(consuming.componentSets)) setIdByKey.set(set.key, id);
 
   // `mainComponent` was read out of the LIBRARY's tables, so its set id is a library id too. Rebuild
   // the whole reference from the consuming file's tables rather than patching the id: the name and

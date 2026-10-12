@@ -7,7 +7,7 @@ import type {
 import type { PlacementContext } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 import { tagError } from "~/utils/error-meta.js";
-import type { RestComponentTables } from "./component-tables.js";
+import { componentTablesOf, type RestComponentTables } from "./component-tables.js";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
 
 /**
@@ -38,10 +38,7 @@ export function parseRestResponse(
   if ("nodes" in response) {
     const [id, entry] = Object.entries(response.nodes)[0];
     if (entry === null) throwNodeNotFound(id);
-    const tables = {
-      components: entry.components ?? {},
-      componentSets: entry.componentSets ?? {},
-    };
+    const tables = componentTablesOf(entry);
     return {
       name: response.name,
       snapshots: [restNodeToSnapshot(entry.document, entry.styles ?? {}, tables)],
@@ -49,10 +46,7 @@ export function parseRestResponse(
     };
   }
 
-  const tables = {
-    components: response.components ?? {},
-    componentSets: response.componentSets ?? {},
-  };
+  const tables = componentTablesOf(response);
   const styles = response.styles ?? {};
   if (!nodeId) {
     return {

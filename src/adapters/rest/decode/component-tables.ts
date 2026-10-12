@@ -12,6 +12,11 @@ export interface RestComponentTables {
   componentSets?: Record<string, ComponentSet>;
 }
 
+/** A response envelope's (or a `?ids=` entry's) tables, with an absent table read as empty. */
+export function componentTablesOf(envelope: RestComponentTables): Required<RestComponentTables> {
+  return { components: envelope.components ?? {}, componentSets: envelope.componentSets ?? {} };
+}
+
 /** A definition node's own table entry — a COMPONENT's, or a COMPONENT_SET's. */
 export function definitionEntry(
   node: FigmaDocumentNode,
