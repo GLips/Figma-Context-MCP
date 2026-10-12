@@ -18,6 +18,7 @@
       "@framelink/plugin/node-to-snapshot": ["./plugin/src/preamble/node-to-snapshot.ts"],
       "@framelink/plugin/scene-read": ["./plugin/src/preamble/scene-read.ts"],
       "@framelink/plugin/protocol": ["./plugin/src/protocol.ts"],
+      "@framelink/plugin/panel": ["./plugin/src/panel.ts"],
       "@framelink/plugin/token-mark": ["./plugin/src/preamble/token-mark.ts"]
     },
 

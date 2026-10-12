@@ -13,6 +13,7 @@
     "./schema": "./src/preamble/schema.ts",
     "./node-to-snapshot": "./src/preamble/node-to-snapshot.ts",
     "./protocol": "./src/protocol.ts",
+    "./panel": "./src/panel.ts",
     "./token-mark": "./src/preamble/token-mark.ts",
     "./scene-read": "./src/preamble/scene-read.ts"
   },

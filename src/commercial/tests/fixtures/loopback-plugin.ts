@@ -12,18 +12,7 @@
 import vm from "node:vm";
 import { buildSync } from "esbuild";
 import { WebSocket } from "ws";
-
-// The slice of plugin/src/panel.ts this harness reads: what the relay carries, and the session rows.
-type HostInbound = { from: string; control?: unknown };
-type HostOutbound =
-  | { to: "server"; frame: { type: string } }
-  | {
-      to: "panel";
-      render: {
-        sessions: { key: number; connected: boolean; approved: boolean }[];
-      };
-    };
-type PanelRender = Extract<HostOutbound, { to: "panel" }>["render"];
+import type { HostInbound, HostOutbound, PanelControl, PanelRender } from "@framelink/plugin/panel";
 
 const bundle = (entry: string) =>
   buildSync({
@@ -182,8 +171,7 @@ export function startLoopbackPlugin(
   vm.runInContext(bundle("ui.ts"), relay);
 
   // What the panel's buttons post (ui.ts): a "panel" envelope, which only the relay itself builds.
-  const click = (control: Record<string, unknown>) =>
-    figma.ui.onmessage({ from: "panel", control });
+  const click = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   const session = (approved: boolean) =>
     lastRender?.sessions.filter((s) => s.connected && s.approved === approved).at(-1);
   return {

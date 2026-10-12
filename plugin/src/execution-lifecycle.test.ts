@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 import vm from "node:vm";
+import type { ConnKey, HostInbound, HostOutbound, PanelControl, PanelRender, PanelSession } from "./panel.js";
 
 const bundle = (entry: string) =>
   buildSync({ entryPoints: [new URL(entry, import.meta.url).pathname], bundle: true, write: false, format: "iife" })
@@ -14,35 +15,42 @@ const bundle = (entry: string) =>
 const code = bundle("./code.ts");
 const uiScript = bundle("./ui.ts");
 type Frame = Record<string, unknown>;
+/** A frame the host addressed to a server, with the socket generation it named beside it (panel.ts). */
+type Sent = { connKey: ConnKey; frame: Frame };
 // Tests wait on what the plugin SAYS, never on elapsed time or a count of event-loop turns: the host's
 // reply path crosses real timers (document-changes.ts settles one task), so "N turns later" is a race.
 // The deadline only turns a missing frame into a readable failure instead of a hung run.
 const FRAME_DEADLINE_MS = 5_000;
 function host(native: Record<string, unknown> = {}) {
-  const frames: Frame[] = [];
-  const waiters = new Set<{ match: (f: Frame) => boolean; resolve: (f: Frame) => void }>();
-  // Flattened to the shape tests read: a server frame with the connection it went out on, or a render.
-  const record = (outbound: Frame) => {
-    const msg: Frame =
-      outbound.to === "server"
-        ? { ...(outbound.frame as Frame), __connKey: outbound.connKey }
-        : { type: "RENDER", ...(outbound.render as Frame) };
-    frames.push(msg);
-    for (const waiter of waiters) {
-      if (!waiter.match(msg)) continue;
-      waiters.delete(waiter);
-      waiter.resolve(msg);
-    }
+  // Kept as the host's two envelopes: server frames with their routing key, and panel renders.
+  const sent: Sent[] = [];
+  const renders: PanelRender[] = [];
+  const waiters = new Set<() => boolean>();
+  const record = (outbound: HostOutbound) => {
+    if (outbound.to === "server") sent.push({ connKey: outbound.connKey, frame: outbound.frame as unknown as Frame });
+    else renders.push(outbound.render);
+    for (const waiter of waiters) if (waiter()) waiters.delete(waiter);
   };
-  /** The first frame, already sent or still to come, that matches. */
-  const frame = (match: (f: Frame) => boolean, what = "an expected frame"): Promise<Frame> => {
-    const seen = frames.find(match);
-    if (seen) return Promise.resolve(seen);
+  const waitFor = <T>(find: () => T | undefined, what: string): Promise<T> => {
+    const seen = find();
+    if (seen !== undefined) return Promise.resolve(seen);
     return new Promise((resolve, reject) => {
       const deadline = setTimeout(() => reject(new Error(`the plugin never sent ${what}`)), FRAME_DEADLINE_MS).unref();
-      waiters.add({ match, resolve: (f) => { clearTimeout(deadline); resolve(f); } });
+      waiters.add(() => {
+        const found = find();
+        if (found === undefined) return false;
+        clearTimeout(deadline);
+        resolve(found);
+        return true;
+      });
     });
   };
+  /** The first server frame, already sent or still to come, that matches. */
+  const frame = (match: (f: Frame, connKey: ConnKey) => boolean, what = "an expected frame"): Promise<Frame> =>
+    waitFor(() => sent.find((s) => match(s.frame, s.connKey))?.frame, what);
+  /** The first panel render, already painted or still to come, that matches. */
+  const render = (match: (r: PanelRender) => boolean, what: string): Promise<PanelRender> =>
+    waitFor(() => renders.find(match), what);
   // One page and the change events the host meters by. Live Figma delivers a raw write's nodechange
   // "periodically", with no deadline; here it waits until the test delivers it (deliverChanges), so
   // "after the reply" is a fact the test arranges rather than a delay it hopes for.
@@ -78,7 +86,7 @@ function host(native: Record<string, unknown> = {}) {
     ...native,
     ui: {
       postMessage: record,
-      onmessage: (_inbound: Record<string, unknown>) => {},
+      onmessage: (_inbound: HostInbound) => {},
       resize() {},
     },
   };
@@ -86,34 +94,33 @@ function host(native: Record<string, unknown> = {}) {
   const hostSetTimeout = (callback: () => void, ms?: number) => setTimeout(callback, ms).unref();
   const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout });
   vm.runInContext(code, context);
-  // Stands in for the relay (ui.ts), which posts the panel's input and server frames in separate
-  // envelopes. Every EXECUTE_CODE carries the server's late-change window.
-  const send = ({ __connKey, ...msg }: Record<string, unknown>) =>
-    /^(UI|WS)_/.test(String(msg.type))
-      ? figma.ui.onmessage({ from: "panel", control: { ...msg, connKey: __connKey } })
-      : figma.ui.onmessage({
-          from: "server",
-          connKey: __connKey,
-          frame: msg.type === "EXECUTE_CODE" ? { lateChangeWindowMs: 60_000, ...msg } : msg,
-        });
-  const sessionInfo = (key: number, id: string, fields: Record<string, unknown> = {}) =>
-    send({ type: "SESSION_INFO", id, __connKey: key, identity: "test", framelinkOrigin: "https://app.framelink.ai", ...fields });
-  const approved = (key: number) =>
-    frame((f) => f.type === "SESSION_TOKEN" && f.__connKey === key, `the Allow handover for ${key}`);
-  const connect = async (key: number) => {
-    send({ type: "WS_CONNECTED", __connKey: key });
+  // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
+  // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window.
+  const sendFrame = (connKey: ConnKey, frame: Frame) =>
+    figma.ui.onmessage({
+      from: "server",
+      connKey,
+      frame: frame.type === "EXECUTE_CODE" ? { lateChangeWindowMs: 60_000, ...frame } : frame,
+    });
+  const sendControl = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
+  const sessionInfo = (key: ConnKey, id: string, fields: Record<string, unknown> = {}) =>
+    sendFrame(key, { type: "SESSION_INFO", id, identity: "test", framelinkOrigin: "https://app.framelink.ai", ...fields });
+  const approved = (key: ConnKey) =>
+    frame((f, connKey) => f.type === "SESSION_TOKEN" && connKey === key, `the Allow handover for ${key}`);
+  const connect = async (key: ConnKey) => {
+    sendControl({ type: "WS_CONNECTED", connKey: key });
     sessionInfo(key, `session-${key}`);
-    send({ type: "UI_DECISION", approve: true, __connKey: key });
+    sendControl({ type: "UI_DECISION", approve: true, connKey: key });
     await approved(key);
   };
-  const result = (id: string, key?: number) =>
+  const result = (id: string, key?: ConnKey) =>
     frame(
-      (f) => f.id === id && f.type === "EXECUTE_CODE_RESULT" && (key === undefined || f.__connKey === key),
+      (f, connKey) => f.id === id && f.type === "EXECUTE_CODE_RESULT" && (key === undefined || connKey === key),
       `a result for ${id}`,
     ) as Promise<any>;
-  const running = (id: string, key: number) =>
-    frame((f) => f.type === "RUN_STATE" && f.runId === id && f.__connKey === key && f.phase === "running", `${id} running`);
-  return { frames, context, send, sessionInfo, connect, approved, frame, result, running, deliverChanges };
+  const running = (id: string, key: ConnKey) =>
+    frame((f, connKey) => f.type === "RUN_STATE" && f.runId === id && connKey === key && f.phase === "running", `${id} running`);
+  return { sent, context, sendFrame, sendControl, sessionInfo, connect, approved, frame, render, result, running, deliverChanges };
 }
 
 test("queued cancellation never executes, old settlement cannot cancel or erase replacement run", async () => {
@@ -125,30 +132,30 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })", code: body });
+    h.sendFrame(key, { type: "EXECUTE_CODE", id, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
   await h.running("same-id", 1);
-  h.send({ type: "WS_CLOSED", __connKey: 1 });
+  h.sendControl({ type: "WS_CLOSED", connKey: 1 });
   await h.connect(2);
   run(2, "same-id", "writes.push('new'); return 'new';");
   run(2, "queued", "writes.push('must never run');");
-  h.send({ type: "CANCEL", runId: "queued", __connKey: 2 });
+  h.sendFrame(2, { type: "CANCEL", runId: "queued" });
   release();
   // Runs dequeue in order, so the cancelled one answering means everything before it has run.
   await h.result("same-id", 2);
   await h.result("queued", 2);
   assert.deepEqual(Array.from(h.context.writes), ["old completed", "new"]);
   assert(
-    h.frames.some(
-      (f) =>
+    h.sent.some(
+      ({ connKey, frame: f }) =>
         f.type === "RUN_STATE" &&
         f.runId === "same-id" &&
-        f.__connKey === 2 &&
+        connKey === 2 &&
         f.phase === "running",
     ),
   );
   assert(
-    h.frames.some((f) => f.id === "queued" && String(f.errors).includes("no code was executed")),
+    h.sent.some(({ frame: f }) => f.id === "queued" && String(f.errors).includes("no code was executed")),
   );
 });
 
@@ -159,17 +166,17 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   h.context.hold = new Promise<void>((resolve) => { release = resolve; });
   const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
   const run = (id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code: body });
+    h.sendFrame(1, { type: "EXECUTE_CODE", id, preamble, code: body });
   run("executing", "await hold; return 1;");
   run("waiting", "return 2;");
   await h.running("executing", 1);
   // No flush between these and the assertion: the answer must come from state the plugin already
   // holds. The queued run's own refusal can only speak once "executing" finishes — far too late.
-  h.send({ type: "CANCEL", runId: "waiting", __connKey: 1 });
-  h.send({ type: "CANCEL", runId: "executing", __connKey: 1 });
-  h.send({ type: "CANCEL", runId: "never-heard-of", __connKey: 1 });
+  h.sendFrame(1, { type: "CANCEL", runId: "waiting" });
+  h.sendFrame(1, { type: "CANCEL", runId: "executing" });
+  h.sendFrame(1, { type: "CANCEL", runId: "never-heard-of" });
   assert.deepEqual(
-    h.frames.filter((f) => f.type === "CANCEL_RESULT").map((f) => [f.runId, f.disposition, f.__connKey]),
+    h.sent.filter(({ frame: f }) => f.type === "CANCEL_RESULT").map(({ connKey, frame: f }) => [f.runId, f.disposition, connKey]),
     [
       ["waiting", "never-executed", 1],
       ["executing", "was-running", 1],
@@ -183,69 +190,68 @@ test("a cancel is answered at once from the phase the run had reached", async ()
 test("Reject is explicit and unknown tokens cannot bypass approval status or execution", async () => {
   const h = host();
   // The first paint follows the stored approvals loading; only then is "unknown" known to be unknown.
-  await h.frame((f) => f.type === "RENDER", "the first paint");
-  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  await h.render(() => true, "the first paint");
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
   h.sessionInfo(1, "session", { sessionToken: "unknown" });
-  h.send({ type: "UI_DECISION", approve: false, __connKey: 1 });
-  h.send({ type: "APPROVAL_STATUS", id: "status", __connKey: 1 });
-  assert(h.frames.some((f) => f.id === "status" && f.type === "APPROVAL_REJECTED"));
+  h.sendControl({ type: "UI_DECISION", approve: false, connKey: 1 });
+  h.sendFrame(1, { type: "APPROVAL_STATUS", id: "status" });
+  assert(h.sent.some(({ frame: f }) => f.id === "status" && f.type === "APPROVAL_REJECTED"));
   h.context.writes = [];
-  h.send({
+  h.sendFrame(1, {
     type: "EXECUTE_CODE",
     id: "run",
-    __connKey: 1,
     preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })",
     code: "writes.push('bad');",
   });
   // Refused at the gate, synchronously, with the one reply the request is owed.
-  assert.equal(h.frames.find((f) => f.id === "run")?.type, "PENDING_APPROVAL");
+  assert.equal(h.sent.find(({ frame: f }) => f.id === "run")?.frame.type, "PENDING_APPROVAL");
   assert.equal(h.context.writes.length, 0);
 });
 
 test("an Allow given while a session is away reaches only the connection presenting its claim, and runs nothing", async () => {
   const h = host();
-  await h.frame((f) => f.type === "RENDER", "the first paint");
-  const tokenFor = (key: number) => h.frames.some((f) => f.type === "SESSION_TOKEN" && f.__connKey === key);
+  await h.render(() => true, "the first paint");
+  const tokenFor = (key: number) => h.sent.some(({ frame: f, connKey }) => f.type === "SESSION_TOKEN" && connKey === key);
   const statusFor = (key: number, id: string) => {
-    h.send({ type: "APPROVAL_STATUS", id, __connKey: key });
-    return h.frames.find((f) => f.id === id)?.type;
+    h.sendFrame(key, { type: "APPROVAL_STATUS", id });
+    return h.sent.find(({ frame: f }) => f.id === id)?.frame.type;
   };
-  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
   h.sessionInfo(1, "session-1", { identity: "/proj", pairingCode: "1111" });
   assert.equal(statusFor(1, "ask"), "PENDING_APPROVAL");
-  const claim = (await h.frame((f) => f.type === "SESSION_CLAIM" && f.__connKey === 1, "a session claim")).sessionClaim;
+  const claim = (await h.frame((f, connKey) => f.type === "SESSION_CLAIM" && connKey === 1, "a session claim")).sessionClaim;
   // The waiting call gives up and its session disconnects; the human allows the request afterwards.
-  h.send({ type: "WS_CLOSED", __connKey: 1 });
-  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
-  assert(!h.frames.some((f) => f.type === "SESSION_TOKEN"));
+  h.sendControl({ type: "WS_CLOSED", connKey: 1 });
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 1 });
+  assert(!h.sent.some(({ frame: f }) => f.type === "SESSION_TOKEN"));
 
   // Same project path, but not the session that asked: one presents another claim, one presents
   // none, one presents the claim under another project.
-  h.send({ type: "WS_CONNECTED", __connKey: 2 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 2 });
   h.sessionInfo(2, "session-2", { identity: "/proj", sessionClaim: "someoneelse0000000000" });
-  h.send({ type: "WS_CONNECTED", __connKey: 3 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 3 });
   h.sessionInfo(3, "session-3", { identity: "/proj" });
-  h.send({ type: "WS_CONNECTED", __connKey: 4 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 4 });
   h.sessionInfo(4, "session-4", { identity: "/other", sessionClaim: claim });
   // The session that asked comes back with its claim and collects the Allow.
-  h.send({ type: "WS_CONNECTED", __connKey: 5 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 5 });
   h.sessionInfo(5, "session-5", { identity: "/proj", sessionClaim: claim });
   // Its first poll lands before the handover settles, and must not be told to wait for a second Allow.
-  h.send({ type: "APPROVAL_STATUS", id: "next", __connKey: 5 });
+  h.sendFrame(5, { type: "APPROVAL_STATUS", id: "next" });
   assert.equal((await h.frame((f) => f.id === "next", "the first poll's answer")).type, "APPROVAL_GRANTED");
   assert(tokenFor(5));
-  assert(!h.frames.some((f) => f.type === "SESSION_CLAIM" && f.__connKey === 5));
+  assert(!h.sent.some(({ frame: f, connKey }) => f.type === "SESSION_CLAIM" && connKey === 5));
   for (const key of [2, 3, 4]) {
     assert(!tokenFor(key), `connection ${key} must not be approved`);
     assert.equal(statusFor(key, `other-${key}`), "PENDING_APPROVAL");
   }
   // The claim is spent: presenting it again approves nothing.
-  h.send({ type: "WS_CONNECTED", __connKey: 6 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 6 });
   h.sessionInfo(6, "session-6", { identity: "/proj", sessionClaim: claim });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert(!tokenFor(6));
   // Nothing ran on the Allow: the only code any session sent was never sent.
-  assert(!h.frames.some((f) => f.type === "EXECUTE_CODE_RESULT"));
+  assert(!h.sent.some(({ frame: f }) => f.type === "EXECUTE_CODE_RESULT"));
 });
 
 test("an approved session's write waits out another session's pending Allow instead of re-prompting", async () => {
@@ -253,36 +259,36 @@ test("an approved session's write waits out another session's pending Allow inst
   const h = host({ clientStorage: { getAsync: async () => [], setAsync: () => saving } });
   await h.connect(1);
   // Session 2 asks, and the human's Allow for it is still being written when session 1 writes.
-  h.send({ type: "WS_CONNECTED", __connKey: 2 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 2 });
   h.sessionInfo(2, "session-2", { identity: "other" });
   let landed!: () => void;
   saving = new Promise((resolve) => { landed = resolve; });
-  h.send({ type: "UI_DECISION", approve: true, __connKey: 2 });
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2 });
   const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
-  h.send({ type: "EXECUTE_CODE", id: "run", __connKey: 1, preamble, code: "return 'ran';" });
-  h.send({ type: "APPROVAL_STATUS", id: "status", __connKey: 1 });
-  assert(!h.frames.some((f) => f.__connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "run", preamble, code: "return 'ran';" });
+  h.sendFrame(1, { type: "APPROVAL_STATUS", id: "status" });
+  assert(!h.sent.some(({ frame: f, connKey }) => connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
   landed();
   assert.equal((await h.result("run", 1)).result, "ran");
   assert.equal((await h.frame((f) => f.id === "status", "the status answer")).type, "APPROVAL_GRANTED");
-  assert(!h.frames.some((f) => f.__connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
+  assert(!h.sent.some(({ frame: f, connKey }) => connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
 });
 
 test("SESSION_INFO keeps what the connection already holds: its claim and an Allow in flight", async () => {
   let saving: Promise<void> = Promise.resolve();
   const h = host({ clientStorage: { getAsync: async () => [], setAsync: () => saving } });
-  await h.frame((f) => f.type === "RENDER", "the first paint");
-  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  await h.render(() => true, "the first paint");
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
   // A write that beats the handshake is refused and gives this socket a claim.
-  h.send({ type: "SCREENSHOT", id: "early", __connKey: 1 });
+  h.sendFrame(1, { type: "SCREENSHOT", id: "early" });
   const claim = (await h.frame((f) => f.type === "SESSION_CLAIM", "a session claim")).sessionClaim;
   h.sessionInfo(1, "session-1", { identity: "/proj" });
   // Its next ask goes on under the claim it already holds; a second would orphan the first.
-  h.send({ type: "APPROVAL_STATUS", id: "ask", __connKey: 1 });
-  assert.deepEqual(h.frames.filter((f) => f.type === "SESSION_CLAIM").map((f) => f.sessionClaim), [claim]);
+  h.sendFrame(1, { type: "APPROVAL_STATUS", id: "ask" });
+  assert.deepEqual(h.sent.filter(({ frame: f }) => f.type === "SESSION_CLAIM").map(({ frame: f }) => f.sessionClaim), [claim]);
   let landed!: () => void;
   saving = new Promise((resolve) => { landed = resolve; });
-  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 1 });
   // The server introduces itself again while the Allow is being written.
   h.sessionInfo(1, "session-1b", { identity: "/proj" });
   landed();
@@ -292,29 +298,30 @@ test("SESSION_INFO keeps what the connection already holds: its claim and an All
 test("a peer that has not been approved learns nothing from PING and can't author a toast", async () => {
   const toasts: string[] = [];
   const h = host({ notify: (message: string) => toasts.push(message) });
-  h.send({ type: "WS_CONNECTED", __connKey: 1 });
-  h.send({ type: "PING", id: "ping", __connKey: 1, payload: "x" });
-  h.send({ type: "NOTIFY", id: "notify", __connKey: 1, serverProtocol: 99, message: "Your file is corrupt — visit evil.example" });
-  assert.deepEqual({ ...h.frames.find((f) => f.id === "ping") }, { type: "PONG", echo: "x", id: "ping", __connKey: 1 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
+  h.sendFrame(1, { type: "PING", id: "ping", payload: "x" });
+  h.sendFrame(1, { type: "NOTIFY", id: "notify", serverProtocol: 99, message: "Your file is corrupt — visit evil.example" });
+  const pong = h.sent.find(({ frame: f }) => f.id === "ping")!;
+  assert.equal(pong.connKey, 1);
+  assert.deepEqual({ ...pong.frame }, { type: "PONG", echo: "x", id: "ping" });
   assert.equal(toasts.length, 1);
   assert(!toasts[0].includes("evil.example"));
 });
 
 test("the panel tells a waiting request from an expired one, connected or away", async () => {
   const h = host();
-  await h.frame((f) => f.type === "RENDER", "the first paint");
-  type Row = { key: number; request: string | null; connected: boolean; allowedWhileAway: boolean };
-  const row = (match: (r: Row) => boolean, what: string) =>
-    h.frame((f) => f.type === "RENDER" && (f.sessions as Row[]).some((r) => r.key === 1 && match(r)), what);
-  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  await h.render(() => true, "the first paint");
+  const row = (match: (r: PanelSession) => boolean, what: string) =>
+    h.render((render) => render.sessions.some((r) => r.key === 1 && match(r)), what);
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
   h.sessionInfo(1, "session-1", { identity: "/proj", pairingCode: "1111" });
-  h.send({ type: "APPROVAL_STATUS", id: "ask", __connKey: 1 });
+  h.sendFrame(1, { type: "APPROVAL_STATUS", id: "ask" });
   await row((r) => r.request === "waiting", "a waiting row");
   // The polls stop: the request expires on its own, with nothing waiting to run.
   await row((r) => r.request === "expired" && r.connected, "an expired, connected row");
-  h.send({ type: "WS_CLOSED", __connKey: 1 });
+  h.sendControl({ type: "WS_CLOSED", connKey: 1 });
   await row((r) => r.request === "expired" && !r.connected && !r.allowedWhileAway, "an away row");
-  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 1 });
   await row((r) => r.allowedWhileAway, "an away row allowed");
 });
 
@@ -404,9 +411,9 @@ test("a server frame can never act as the human's panel input", async () => {
   h.context.figma.ui.onmessage({ from: "panel", control: { type: "UI_DECISION", approve: true, connKey: 2 } });
   await h.approved(2);
   fromServer({ type: "APPROVAL_STATUS", id: "status" });
-  assert.equal(h.frames.find((f) => f.id === "status")?.type, "PENDING_APPROVAL");
+  assert.equal(h.sent.find(({ frame: f }) => f.id === "status")?.frame.type, "PENDING_APPROVAL");
   assert.equal(
-    h.frames.some((f) => (f.type === "SESSION_TOKEN" && f.__connKey === 1) || f.type === "WRITE_ACCESS_SIGN_IN"),
+    h.sent.some(({ frame: f, connKey }) => (f.type === "SESSION_TOKEN" && connKey === 1) || f.type === "WRITE_ACCESS_SIGN_IN"),
     false,
   );
 });
@@ -414,13 +421,13 @@ test("a server frame can never act as the human's panel input", async () => {
 test("the browser opens a sign-in page only on the Framelink origin the server announced", async () => {
   const opened: string[] = [];
   const h = host({ openExternal: (url: string) => opened.push(url) });
-  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
   h.sessionInfo(1, "session", { identity: "test", framelinkOrigin: "https://app.framelink.ai" });
-  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 1 });
   await h.approved(1);
   const signIn = (verificationUri: string) => {
-    h.send({ type: "UI_SIGN_IN", __connKey: 1 });
-    h.send({ type: "WRITE_ACCESS", id: `notice-${verificationUri}`, __connKey: 1, notice: { kind: "sign-in-pending", userCode: "ABCD", verificationUri } });
+    h.sendControl({ type: "UI_SIGN_IN", connKey: 1 });
+    h.sendFrame(1, { type: "WRITE_ACCESS", id: `notice-${verificationUri}`, notice: { kind: "sign-in-pending", userCode: "ABCD", verificationUri } });
   };
   signIn("https://app.framelink.ai.evil.example/device");
   signIn("https://evil.example/?https://app.framelink.ai/");
@@ -432,8 +439,8 @@ test("the browser opens a sign-in page only on the Framelink origin the server a
 test("the result and each console line leave the run through the preamble's egress, once each", async () => {
   const h = host();
   await h.connect(1);
-  h.send({
-    type: "EXECUTE_CODE", id: "projection", __connKey: 1,
+  h.sendFrame(1, {
+    type: "EXECUTE_CODE", id: "projection",
     preamble: `(host) => ({
       flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(),
       mutationQueueIdle: async () => 0, committedVerbCount: () => 0,
@@ -449,8 +456,8 @@ test("the result and each console line leave the run through the preamble's egre
 
 const realPreamble = import("./preamble/index.mjs").then(m => m.buildSandboxPreamble());
 async function execute(h: ReturnType<typeof host>, body: string, key = 1) {
-  const id = `execute-${h.frames.length}`;
-  h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: await realPreamble, code: body });
+  const id = `execute-${h.sent.length}`;
+  h.sendFrame(key, { type: "EXECUTE_CODE", id, preamble: await realPreamble, code: body });
   return (await h.result(id)) as { id: string; result: any; errors: string | null; console: string[] };
 }
 
@@ -465,7 +472,7 @@ test("session identity, snapshots and last survive fresh calls, reconnects and p
     return { large: session.screen };
   `);
   assert.equal(result.errors, null);
-  h.send({ type: "WS_CLOSED", __connKey: 1 });
+  h.sendControl({ type: "WS_CLOSED", connKey: 1 });
   await h.connect(2);
   h.context.figma.currentPage = { name: "another page" };
   result = await execute(h, `
@@ -525,11 +532,11 @@ test("last retains the value the code returned, not its egress copy", async () =
     warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0,
     projectForEgress: (value, channel) => channel === "console" ? value : { projected: true },
   })`;
-  h.send({ type: "EXECUTE_CODE", id: "first", __connKey: 1, preamble, code: `return { nested: [flcm.read] };` });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "first", preamble, code: `return { nested: [flcm.read] };` });
   assert.deepEqual({ ...(await h.result("first")).result }, { projected: true });
-  h.send({ type: "EXECUTE_CODE", id: "next", __connKey: 1, preamble, code: `console.log(session.last.nested[0].d);` });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "next", preamble, code: `console.log(session.last.nested[0].d);` });
   assert.equal((await h.result("next")).errors, null);
-  assert.deepEqual([...h.frames.find((f) => f.id === "next")!.console as string[]], ["[log] M0 0 L1 1"]);
+  assert.deepEqual([...h.sent.find(({ frame: f }) => f.id === "next")!.frame.console as string[]], ["[log] M0 0 L1 1"]);
 });
 
 test("two calls reorder and re-append a stored tree while preserving live ids", async () => {
@@ -569,9 +576,9 @@ test("two calls reorder and re-append a stored tree while preserving live ids", 
 test("a raw figma write counts even when its change event lands after the reply, and Allow names the Authorizing User", async () => {
   const h = host({ currentUser: { id: "figma-user-7", name: "Ada" } });
   await h.connect(1);
-  const handover = h.frames.find(f => f.type === "SESSION_TOKEN") as any;
+  const handover = h.sent.find(({ frame: f }) => f.type === "SESSION_TOKEN")?.frame as any;
   assert.deepEqual(JSON.parse(JSON.stringify(handover.authorizingUser)), { figmaUserId: "figma-user-7", name: "Ada" });
-  const changedLate = (id: string) => h.frames.some(f => f.type === "RUN_CHANGED" && f.runId === id);
+  const changedLate = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_CHANGED" && f.runId === id);
   const read = await execute(h, `return 1;`) as any;
   assert.equal(read.documentChanged, false);
   // Someone else in the file edits while this run is being watched: not this run's Write.
@@ -588,7 +595,7 @@ test("a raw figma write counts even when its change event lands after the reply,
   assert.equal(changedLate(raw.id), true);
   assert.equal(changedLate(read.id), false);
   // A watch that closed clean says so, ending the server's wait; the next run's start closes it.
-  const settled = (id: string) => h.frames.some(f => f.type === "RUN_SETTLED" && f.runId === id);
+  const settled = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_SETTLED" && f.runId === id);
   assert.equal(settled(read.id), true);
   assert.equal(settled(raw.id), false);
 });
@@ -599,8 +606,8 @@ test("revoking a session cancels its runs: a queued one never starts, a suspende
   await h.connect(1);
   const running = execute(h, `await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") }); globalThis.resumed = true;`);
   await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
-  h.send({ type: "EXECUTE_CODE", id: "queued", __connKey: 1, preamble: await realPreamble, code: "globalThis.queuedRan = true;" });
-  h.send({ type: "UI_REVOKE", __connKey: 1 });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "queued", preamble: await realPreamble, code: "globalThis.queuedRan = true;" });
+  h.sendControl({ type: "UI_REVOKE", connKey: 1 });
   assert.match((await running).errors!, /revoked this session's approval/);
   assert.match((await h.result("queued")).errors, /revoked this session's approval .* no code was executed/);
   assert.equal(h.context.resumed, undefined);
@@ -623,10 +630,10 @@ test("queued calls observe completed session writes and cancelled queued calls c
   let release!: () => void;
   h.context.hold = new Promise<void>(resolve => { release = resolve; });
   const preamble = await realPreamble;
-  const send = (id: string, code: string) => h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code });
+  const send = (id: string, code: string) => h.sendFrame(1, { type: "EXECUTE_CODE", id, preamble, code });
   send("first", `session.count = 1; await hold; session.count++; return session.count;`);
   send("cancelled", `session.count = 100; return 100;`);
-  h.send({ type: "CANCEL", runId: "cancelled", __connKey: 1 });
+  h.sendFrame(1, { type: "CANCEL", runId: "cancelled" });
   const next = execute(h, `return [session.count, session.last];`);
   release();
   const result = await next;
@@ -860,8 +867,8 @@ test("image adapter round-trips over the opaque channel and refuses wrong-connec
   assert.equal(JSON.stringify(request.payload), '["asset.png"]');
   // Had the wrong connection's failure been taken, the run would reject with it; that the right
   // connection's answer still completes it cleanly is the proof it was refused.
-  h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "wrong connection", __connKey: 2 });
-  h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: true, payload: { "asset.png": "Ynl0ZXM=" }, __connKey: 1 });
+  h.sendFrame(2, { type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "wrong connection" });
+  h.sendFrame(1, { type: "CHANNEL_RESPONSE", id: request.id, ok: true, payload: { "asset.png": "Ynl0ZXM=" } });
   assert.equal((await result).errors, null);
 });
 
@@ -871,7 +878,7 @@ test("server refusals reject the suspended image await", async () => {
   await h.connect(1);
   const result = execute(h, `await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") }); globalThis.resumed = true;`);
   const request = await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
-  h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "run no longer active", __connKey: 1 });
+  h.sendFrame(1, { type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "run no longer active" });
   assert.match((await result).errors!, /run no longer active/);
   assert.equal(h.context.resumed, undefined);
 });
