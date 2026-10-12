@@ -11,12 +11,9 @@ import {
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import {
-  captureGetFigmaDataCall,
-  type AuthMode,
-  type ClientInfo,
-  type Transport,
-} from "~/telemetry/index.js";
-import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
+  getFigmaData as runGetFigmaData,
+  type GetFigmaDataOutcome,
+} from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 
 const parameters = {
@@ -55,12 +52,17 @@ export type DescribeReadRecovery = (error: unknown, request: { nodeId?: string }
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
-  outputFormat: OutputFormat,
-  transport: Transport,
-  authMode: AuthMode,
-  clientInfo: ClientInfo | undefined,
-  describeRecovery: DescribeReadRecovery | undefined,
-  extra: ToolExtra,
+  {
+    outputFormat,
+    describeRecovery,
+    onComplete,
+    extra,
+  }: {
+    outputFormat: OutputFormat;
+    describeRecovery: DescribeReadRecovery | undefined;
+    onComplete: (outcome: GetFigmaDataOutcome) => void;
+    extra: ToolExtra;
+  },
 ) {
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
@@ -97,8 +99,7 @@ async function getFigmaData(
       onSerializeStart: async () => {
         await sendProgress(extra, 2, 3, "Simplified design, serializing response");
       },
-      onComplete: (outcome) =>
-        captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
+      onComplete,
     });
 
     Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);

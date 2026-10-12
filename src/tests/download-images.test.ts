@@ -5,7 +5,7 @@ import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
-import { FigmaService } from "~/services/figma.js";
+import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import type { ToolExtra } from "~/mcp/progress.js";
 
 const Jimp = createJimp({ formats: [png] });
@@ -60,11 +60,9 @@ describe("download_figma_images", () => {
   });
 
   it("attaches each file's aliases and outcome to that file, whatever order Figma resolves them in", async () => {
-    const service = new FigmaService({
-      figmaApiKey: "figd_test",
-      figmaOAuthToken: "",
-      useOAuth: false,
-    });
+    const service = new FigmaService(
+      staticCredentialSource({ figmaApiKey: "figd_test", figmaOAuthToken: "", useOAuth: false }),
+    );
 
     // Render nodes and fills interleaved, so input order differs from fetch grouping.
     const result = await downloadFigmaImagesTool.handler(
@@ -80,11 +78,7 @@ describe("download_figma_images", () => {
         ],
       },
       service,
-      imageDir,
-      "stdio",
-      "api_key",
-      undefined,
-      stubExtra,
+      { imageDir, extra: stubExtra, onComplete: vi.fn(), onReject: vi.fn() },
     );
 
     expect(result.isError).toBeUndefined();

@@ -1,7 +1,7 @@
 import { type Command, command } from "cleye";
 import { parseOutputFormat, resolveTelemetryEnabled, UsageError } from "~/config.js";
 import { getFigmaDataTool } from "~/mcp/tools/get-figma-data-tool.js";
-import { FigmaService } from "~/services/figma.js";
+import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
@@ -102,7 +102,7 @@ async function run(
     parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 
   const result = await getFigmaData(
-    new FigmaService(auth),
+    new FigmaService(staticCredentialSource(auth)),
     { fileKey, nodeId, depth },
     outputFormat,
     {

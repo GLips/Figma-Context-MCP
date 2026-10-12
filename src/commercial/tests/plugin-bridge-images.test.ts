@@ -84,6 +84,7 @@ test("processImageBytes rejects a decompression bomb by header dimensions before
   // raster — we forge a valid 8-byte signature + IHDR width/height and assert the header check fires first.
   const bomb = new Uint8Array(24);
   bomb.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0); // PNG signature
+  bomb.set([0x49, 0x48, 0x44, 0x52], 12); // "IHDR", the first chunk's type
   new DataView(bomb.buffer).setUint32(16, 8000); // IHDR width
   new DataView(bomb.buffer).setUint32(20, 8000); // IHDR height
   await assert.rejects(() => processImageBytes(bomb), /over the 30MP decode cap/);

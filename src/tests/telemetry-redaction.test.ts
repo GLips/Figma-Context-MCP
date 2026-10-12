@@ -154,13 +154,11 @@ describe("figma identifier redaction in telemetry error_message", () => {
       ),
     );
 
-    const { FigmaService } = await import("~/services/figma.js");
+    const { FigmaService, staticCredentialSource } = await import("~/services/figma.js");
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
-    const service = new FigmaService({
-      figmaApiKey: "figd_test",
-      figmaOAuthToken: "",
-      useOAuth: false,
-    });
+    const service = new FigmaService(
+      staticCredentialSource({ figmaApiKey: "figd_test", figmaOAuthToken: "", useOAuth: false }),
+    );
 
     const error = await captureThrown(() => service.getRawNodeInContext(FILE_KEY, NODE_ID));
 
@@ -227,13 +225,11 @@ describe("figma identifier redaction in telemetry error_message", () => {
       ),
     );
 
-    const { FigmaService } = await import("~/services/figma.js");
+    const { FigmaService, staticCredentialSource } = await import("~/services/figma.js");
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
-    const service = new FigmaService({
-      figmaApiKey: "figd_test",
-      figmaOAuthToken: "",
-      useOAuth: false,
-    });
+    const service = new FigmaService(
+      staticCredentialSource({ figmaApiKey: "figd_test", figmaOAuthToken: "", useOAuth: false }),
+    );
     const error = await captureThrown(() => service.getRawFile(FILE_KEY));
     expect(String((error as Error).message)).toContain("jane.doe@acme-corp.com");
 

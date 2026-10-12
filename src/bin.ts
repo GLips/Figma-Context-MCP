@@ -5,6 +5,10 @@ import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, getServerConfig, UsageError } fro
 import { CLI_NAME } from "./utils/cli-help.js";
 import { startServer } from "./server.js";
 import { CLI_COMMANDS } from "./commands/index.js";
+import { enableLogging } from "./utils/logger.js";
+
+// stderr until the server starts: the commands and stdio mode keep stdout for their output.
+enableLogging({ http: false });
 
 // Defaults live in the descriptions, not cleye's `default`: a parsed default would outrank the env
 // var in getServerConfig's flag → env → default resolution.

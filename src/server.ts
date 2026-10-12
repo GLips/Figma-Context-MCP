@@ -3,8 +3,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Logger } from "./utils/logger.js";
-import { installFigmaProxyDispatcher } from "./utils/proxy-env.js";
+import { enableLogging, Logger } from "./utils/logger.js";
+import { withRequestSecrets } from "./utils/request-secrets.js";
+import { installFigmaProxyDispatcher } from "./utils/figma-proxy-dispatcher.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
 import { requireGlobalCredentials, type ServerConfig } from "./config.js";
@@ -25,6 +26,7 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
+  enableLogging({ http: !config.isStdioMode });
   // Stdio has no per-request credential channel, so the server is unusable
   // without something resolved at startup. Fail fast BEFORE any side effects
   // (proxy install, telemetry init) — preserves the pre-PR behavior where
@@ -34,8 +36,6 @@ export async function startServer(config: ServerConfig): Promise<void> {
   }
 
   installFigmaProxyDispatcher(config.proxy);
-  // A process property, known before any server exists: createServer runs once per HTTP request.
-  Logger.isHTTP = !config.isStdioMode;
 
   const telemetryEnabled = telemetry.initTelemetry({
     enabled: config.telemetryEnabled,
@@ -143,6 +143,7 @@ export async function startHttpServer(
   if (httpServer) {
     throw new Error("HTTP server is already running");
   }
+  enableLogging({ http: true });
 
   const app = createMcpExpressApp({ host });
 
@@ -157,7 +158,7 @@ export async function startHttpServer(
 
     // Request-level credentials are not known to telemetry's init-time
     // redaction list, so make them available only for this request scope.
-    await telemetry.withRequestSecrets(requestSecrets, async () => {
+    await withRequestSecrets(requestSecrets, async () => {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       const mcpServer = createServer(auth, { ...serverOptions, transport: "http" });
       const conn: ActiveConnection = { transport, server: mcpServer };

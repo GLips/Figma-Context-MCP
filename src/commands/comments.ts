@@ -1,7 +1,7 @@
 import { type Command, command } from "cleye";
 import { z } from "zod";
 import { UsageError } from "~/config.js";
-import { FigmaService } from "~/services/figma.js";
+import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import { getFigmaComments } from "~/services/get-figma-comments.js";
 import { parseGetFigmaCommentsParams } from "~/mcp/tools/get-figma-comments-tool.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
@@ -78,7 +78,11 @@ export async function runComments(flags: CommentsFlags, positionals: string[]): 
     since: flags.since,
   });
   const auth = prepareRestCommand(flags);
-  const result = await getFigmaComments(new FigmaService(auth), fileKey, options);
+  const result = await getFigmaComments(
+    new FigmaService(staticCredentialSource(auth)),
+    fileKey,
+    options,
+  );
   console.log(JSON.stringify(result, null, 2));
 }
 

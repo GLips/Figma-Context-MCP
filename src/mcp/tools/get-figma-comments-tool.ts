@@ -43,6 +43,8 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaCommentsParams = z.input<typeof parametersSchema>;
 
+export type GetFigmaCommentsOutcome = { durationMs: number; error?: unknown };
+
 /** Validates raw params, from the MCP tool or the `comments` CLI command, into the service's arguments. */
 export function parseGetFigmaCommentsParams(params: GetFigmaCommentsParams): {
   fileKey: string;
@@ -53,12 +55,19 @@ export function parseGetFigmaCommentsParams(params: GetFigmaCommentsParams): {
   return { fileKey, options: { scope: scopeIds, include, status, since } };
 }
 
-async function handleGetFigmaComments(params: GetFigmaCommentsParams, figmaService: FigmaService) {
+async function handleGetFigmaComments(
+  params: GetFigmaCommentsParams,
+  figmaService: FigmaService,
+  { onComplete }: { onComplete: (outcome: GetFigmaCommentsOutcome) => void },
+) {
+  const startedAt = Date.now();
   try {
     const { fileKey, options } = parseGetFigmaCommentsParams(params);
     const result = await getFigmaComments(figmaService, fileKey, options);
+    onComplete({ durationMs: Date.now() - startedAt });
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   } catch (error) {
+    onComplete({ durationMs: Date.now() - startedAt, error });
     // Loud on purpose: this is the one place an agent asked for comments, so a missing
     // `file_comments:read` scope must surface here with its fix (the 403 text names it).
     const message = error instanceof Error ? error.message : JSON.stringify(error);

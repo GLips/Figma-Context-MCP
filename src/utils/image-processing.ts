@@ -4,24 +4,30 @@ import jpeg from "@jimp/js-jpeg";
 import gif from "@jimp/js-gif";
 import * as crop from "@jimp/plugin-crop";
 import type { Transform } from "@figma/rest-api-spec";
-import { readFile } from "node:fs/promises";
-import { downloadFigmaImage } from "~/utils/download-figma-image.js";
-import { Logger } from "~/utils/logger.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { readBodyWithLimit } from "./read-body.js";
+import { readRasterDimensions } from "./raster-header.js";
+import { tagError } from "./error-meta.js";
+import { isWithin } from "./local-path.js";
+import { Logger } from "./logger.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [crop.methods] });
 
-export type CropRegion = { left: number; top: number; width: number; height: number };
+// Generous because large PNG exports at high scale are slow to stream.
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /**
- * The visible rectangle of an image under Figma's crop transform, or null when the transform
- * leaves nothing visible. The matrix is [[scaleX, skewX, translateX], [skewY, scaleY, translateY]]:
- * scale is the visible fraction of the image (0-1), translate the offset of that window, also as
- * a fraction of the image size. Skew is not applied.
+ * The visible region of an image under a Figma image-fill transform, or null when the transform
+ * leaves nothing visible. Skew is intentionally ignored.
+ *
+ * The matrix is [[scaleX, skewX, translateX], [skewY, scaleY, translateY]]: scale is how much of
+ * the image is visible (0-1), translate is the visible area's offset (0-1, relative to image size).
  */
-export function computeCropRegion(
-  cropTransform: Transform,
+export function cropRegionFor(
   { width, height }: { width: number; height: number },
-): CropRegion | null {
+  cropTransform: Transform,
+): { left: number; top: number; width: number; height: number } | null {
   const scaleX = cropTransform[0]?.[0] ?? 1;
   const translateX = cropTransform[0]?.[2] ?? 0;
   const scaleY = cropTransform[1]?.[1] ?? 1;
@@ -31,41 +37,8 @@ export function computeCropRegion(
   const top = Math.max(0, Math.round(translateY * height));
   const cropWidth = Math.min(width - left, Math.round(scaleX * width));
   const cropHeight = Math.min(height - top, Math.round(scaleY * height));
-
-  return cropWidth > 0 && cropHeight > 0
-    ? { left, top, width: cropWidth, height: cropHeight }
-    : null;
-}
-
-/**
- * Crop the image file in place to its Figma crop transform. Returns the region it cropped to, or
- * null when the transform leaves nothing visible and the file is left as is. Read and write
- * failures propagate: a caller must never report a crop that didn't happen.
- */
-export async function applyCropTransform(
-  imagePath: string,
-  cropTransform: Transform,
-): Promise<CropRegion | null> {
-  const image = await Jimp.read(imagePath);
-  const region = computeCropRegion(cropTransform, image);
-  if (!region) return null;
-
-  image.crop({ x: region.left, y: region.top, w: region.width, h: region.height });
-  await image.write(imagePath as `${string}.${string}`);
-  return region;
-}
-
-/**
- * Get image dimensions from a file
- * @param imagePath - Path to the image file
- * @returns Promise<{width: number, height: number}>
- */
-export async function getImageDimensions(imagePath: string): Promise<{
-  width: number;
-  height: number;
-}> {
-  const image = await Jimp.read(imagePath);
-  return { width: image.width, height: image.height };
+  if (cropWidth <= 0 || cropHeight <= 0) return null;
+  return { left, top, width: cropWidth, height: cropHeight };
 }
 
 /**
@@ -112,43 +85,143 @@ export function parseSvgDimensions(svg: string): { width: number; height: number
   return { width: 0, height: 0 };
 }
 
+/** Where a stored image landed, as reported to the agent: a file on disk, or a link. */
+export type ImageLocation = { kind: "file"; path: string } | { kind: "url"; url: string };
+
 export type ImageProcessingResult = {
-  filePath: string;
+  location: ImageLocation;
   originalDimensions: { width: number; height: number };
   finalDimensions: { width: number; height: number };
   wasCropped: boolean;
-  cropRegion?: CropRegion;
+  cropRegion?: { left: number; top: number; width: number; height: number };
   cssVariables?: string;
 };
 
+/** Where processed images are stored. */
+export type ImageDestination = {
+  write(
+    file: { fileName: string; bytes: Uint8Array; contentType: string },
+    options: { signal?: AbortSignal },
+  ): Promise<ImageLocation>;
+};
+
 /**
- * Enhanced image download with post-processing
- * @param fileName - The filename to save as
- * @param localPath - The local path to save to
- * @param imageUrl - Image URL
+ * Resource bounds for image downloads; all optional. A server shared by many users wants all
+ * three, since one large render multiplies through download, decode and store.
+ */
+export type ImageLimits = {
+  /** Refuse an image whose download is larger than this, counted while streaming. */
+  maxBytes?: number;
+  /** Refuse a raster whose header declares more pixels than this, before it is decoded. */
+  maxPixels?: number;
+  /** How many images one call downloads, decodes and stores at once. */
+  maxConcurrent?: number;
+};
+
+function assertDecodable(bytes: Uint8Array, maxPixels: number | undefined): void {
+  if (maxPixels === undefined) return;
+  const dimensions = readRasterDimensions(bytes);
+  if (!dimensions) {
+    tagError(
+      new Error(
+        "Image header declares no readable size, so it can't be checked against the pixel limit.",
+      ),
+      {
+        category: "image_download",
+      },
+    );
+  }
+  if (dimensions.width * dimensions.height > maxPixels) {
+    tagError(
+      new Error(
+        `Image is ${dimensions.width}x${dimensions.height}, more pixels than this server decodes. Request it at a smaller pngScale.`,
+      ),
+      { category: "size_limit" },
+    );
+  }
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  png: "image/png",
+  gif: "image/gif",
+  svg: "image/svg+xml",
+};
+
+function contentTypeFor(fileName: string): string {
+  return CONTENT_TYPES[fileName.split(".").pop()!.toLowerCase()] ?? "application/octet-stream";
+}
+
+/** Writes images into one local directory. */
+export function createDiskImageDestination(directory: string): ImageDestination {
+  return {
+    async write({ fileName, bytes }) {
+      const fullPath = path.resolve(path.join(directory, fileName));
+      if (!isWithin(directory, fullPath)) {
+        tagError(new Error(`File path escapes target directory: ${fileName}`), {
+          category: "invalid_input",
+        });
+      }
+      await mkdir(directory, { recursive: true });
+      await writeFile(fullPath, bytes);
+      return { kind: "file", path: fullPath };
+    },
+  };
+}
+
+async function fetchImageBytes(
+  imageUrl: string,
+  { maxBytes, signal }: { maxBytes?: number; signal?: AbortSignal },
+): Promise<Buffer> {
+  // The timeout covers the body too: a stalled CDN transfer must fail the item, not hang the call.
+  const deadline = AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(imageUrl, {
+      signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      tagError(
+        new Error(`Failed to download image: HTTP ${response.status} ${response.statusText}`),
+        { category: "image_download", http_status: response.status },
+      );
+    }
+    return maxBytes === undefined
+      ? Buffer.from(await response.arrayBuffer())
+      : await readBodyWithLimit(response, maxBytes);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Error downloading image: ${errorMessage}`, { cause: error });
+  }
+}
+
+/**
+ * Download one image, crop it to its fill transform and measure it, then store the result.
  * @param needsCropping - Whether to apply crop transform
  * @param cropTransform - Transform matrix for cropping
  * @param requiresImageDimensions - Whether to generate dimension metadata
- * @returns Promise<ImageProcessingResult> - Detailed processing information
  */
 export async function downloadAndProcessImage(
   fileName: string,
-  localPath: string,
+  destination: ImageDestination,
   imageUrl: string,
   needsCropping: boolean = false,
-  cropTransform?: Transform,
+  cropTransform: Transform | undefined,
   requiresImageDimensions: boolean = false,
+  { limits = {}, signal }: { limits?: ImageLimits; signal?: AbortSignal } = {},
 ): Promise<ImageProcessingResult> {
-  const filePath = await downloadFigmaImage(fileName, localPath, imageUrl);
-  Logger.log(`Downloaded original image: ${filePath}`);
+  const bytes = await fetchImageBytes(imageUrl, { maxBytes: limits.maxBytes, signal });
+  const contentType = contentTypeFor(fileName);
+  const store = (output: Buffer) =>
+    destination.write({ fileName, bytes: output, contentType }, { signal });
 
   // SVGs are vector — jimp can't read them and cropping doesn't apply. Their
   // intrinsic size is declared in the markup, so read it from there rather than
   // reporting a misleading 0x0 (which reads like a download failure).
-  if (fileName.toLowerCase().endsWith(".svg")) {
-    const dimensions = parseSvgDimensions(await readFile(filePath, "utf-8"));
+  if (contentType === "image/svg+xml") {
+    const dimensions = parseSvgDimensions(bytes.toString("utf-8"));
+    Logger.log(`SVG dimensions: ${dimensions.width}x${dimensions.height}`);
     return {
-      filePath,
+      location: await store(bytes),
       originalDimensions: dimensions,
       finalDimensions: dimensions,
       wasCropped: false,
@@ -156,29 +229,38 @@ export async function downloadAndProcessImage(
     };
   }
 
-  const originalDimensions = await getImageDimensions(filePath);
+  assertDecodable(bytes, limits.maxPixels);
+  const image = await Jimp.fromBuffer(bytes);
+  const originalDimensions = { width: image.width, height: image.height };
+  Logger.log(`Original dimensions: ${originalDimensions.width}x${originalDimensions.height}`);
 
-  // Skip GIFs: cropping destroys animation frames.
+  // Skip GIFs — cropping destroys animation frames.
   const cropRegion =
-    needsCropping && cropTransform && !fileName.toLowerCase().endsWith(".gif")
-      ? await applyCropTransform(filePath, cropTransform)
-      : null;
+    needsCropping && cropTransform && contentType !== "image/gif"
+      ? (cropRegionFor(originalDimensions, cropTransform) ?? undefined)
+      : undefined;
+
+  let output = bytes;
   if (cropRegion) {
+    image.crop({
+      x: cropRegion.left,
+      y: cropRegion.top,
+      w: cropRegion.width,
+      h: cropRegion.height,
+    });
+    output = await image.getBuffer(contentType as "image/png");
     Logger.log(
-      `Cropped ${filePath} to ${cropRegion.left}, ${cropRegion.top}, ${cropRegion.width}x${cropRegion.height}`,
+      `Cropped to region: ${cropRegion.left}, ${cropRegion.top}, ${cropRegion.width}x${cropRegion.height}`,
     );
   }
-  const finalDimensions = cropRegion
-    ? { width: cropRegion.width, height: cropRegion.height }
-    : originalDimensions;
 
+  const finalDimensions = { width: image.width, height: image.height };
   return {
-    filePath,
+    location: await store(output),
     originalDimensions,
     finalDimensions,
-    wasCropped: cropRegion !== null,
-    cropRegion: cropRegion ?? undefined,
-    // Generated for TILE-mode fills, which size the tile from the image.
+    wasCropped: cropRegion !== undefined,
+    cropRegion,
     cssVariables: requiresImageDimensions ? generateImageCSSVariables(finalDimensions) : undefined,
   };
 }

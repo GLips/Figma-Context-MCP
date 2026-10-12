@@ -26,6 +26,7 @@ export type ErrorCategory =
   | "network"
   | "figma_api"
   | "image_download"
+  | "size_limit"
   | "internal";
 
 export type ErrorMeta = {

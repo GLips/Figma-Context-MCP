@@ -1,4 +1,5 @@
 import { tagError, type ErrorCategory } from "~/utils/error-meta.js";
+import { readBodyPrefix, readBodyWithLimit } from "~/utils/read-body.js";
 
 type RequestOptions = RequestInit & {
   /**
@@ -14,6 +15,8 @@ type RequestOptions = RequestInit & {
    * request metadata into error pages.
    */
   redactFromResponseBody?: string[];
+  /** Refuse a success body larger than this many bytes, before it is buffered whole. */
+  maxBytes?: number;
 };
 
 /**
@@ -55,12 +58,15 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 // Cap the attached response body. Corp-firewall HTML blocks can be 50KB+;
 // we only need enough to identify the origin ("Blocked by Zscaler", etc.).
 const MAX_RESPONSE_BODY_CHARS = 500;
+// Error bodies are only ever quoted (to the length above), so never buffer more than this of one,
+// whatever `maxBytes` allows a success body.
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 export async function fetchJSON<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<{ data: T; rawSize: number }> {
-  const { redactFromResponseBody = [], ...fetchOptions } = options;
+  const { redactFromResponseBody = [], maxBytes, ...fetchOptions } = options;
   try {
     const response = await fetch(url, fetchOptions);
 
@@ -81,13 +87,15 @@ export async function fetchJSON<T>(
         is_retryable: RETRYABLE_STATUSES.has(response.status),
       });
     }
-    // Read as text first so we can measure the raw body size for telemetry,
+    // Read the bytes first so we can measure the raw body size for telemetry,
     // then parse. This is the same work response.json() does internally, just
     // split so we can observe the byte count before parsing.
-    const text = await response.text();
-    const rawSize = Buffer.byteLength(text, "utf8");
-    const data = JSON.parse(text) as T;
-    return { data, rawSize };
+    const body =
+      maxBytes === undefined
+        ? Buffer.from(await response.arrayBuffer())
+        : await readBodyWithLimit(response, maxBytes);
+    const data = JSON.parse(body.toString("utf8")) as T;
+    return { data, rawSize: body.byteLength };
   } catch (error: unknown) {
     const networkCode = getConnectionErrorCode(error);
     if (networkCode) {
@@ -126,7 +134,7 @@ async function readResponseBody(
   // error.
   let text: string;
   try {
-    text = await response.text();
+    text = (await readBodyPrefix(response, MAX_ERROR_BODY_BYTES)).toString("utf8");
   } catch {
     return undefined;
   }

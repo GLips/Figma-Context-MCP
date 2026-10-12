@@ -1,30 +1,25 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
-import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import { getFigmaDataTool } from "./tools/index.js";
+import { FigmaService, staticCredentialSource, type FigmaAuthOptions } from "../services/figma.js";
+import {
+  authMode,
+  captureDownloadImagesCall,
+  captureGetFigmaDataCall,
+  captureValidationReject,
+  type ClientInfo,
+  type ToolCallContext,
+  type Transport,
+} from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
-import type { ToolExtra } from "./progress.js";
+import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
+import { serverInfo } from "./server-info.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { registerCodeModeTools } from "~/commercial/tools/code-mode-tools.js";
 import {
   advertisePluginReadRoute,
   describePluginReadRecovery,
 } from "~/commercial/tools/plugin-read-route.js";
-import {
-  downloadFigmaImagesTool,
-  getFigmaCommentsTool,
-  getFigmaDataTool,
-  type DownloadImagesParams,
-  type GetFigmaCommentsParams,
-  type GetFigmaDataParams,
-} from "./tools/index.js";
-
-const serverInfo = {
-  name: "Figma MCP Server",
-  version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
-  description:
-    "Gives AI coding agents access to Figma design data, providing layout, styling, and content information for implementing designs.",
-};
 
 export type ServerTransport = Extract<Transport, "stdio" | "http">;
 
@@ -56,26 +51,30 @@ function createServer(
   }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(authOptions);
+  const figmaService = new FigmaService(staticCredentialSource(authOptions));
   const mode = authMode(authOptions);
 
-  const getClientInfo = (): ClientInfo | undefined => {
-    const info = server.server.getClientVersion();
-    if (!info) return undefined;
-    return { name: info.name, version: info.version };
-  };
-
-  registerTools(server, figmaService, {
+  const getClientInfo = clientInfoReader(server);
+  const callContext = (): ToolCallContext => ({
     transport,
     authMode: mode,
+    clientInfo: getClientInfo(),
+  });
+
+  const { getFigmaData } = registerReadTools(server, figmaService, {
     outputFormat,
-    skipImageDownloads,
-    imageDir,
-    getClientInfo,
-    pluginBridge,
+    images: skipImageDownloads ? { kind: "none" } : { kind: "disk", imageDir },
+    observe: (outcome) => captureReadToolOutcome(outcome, callContext()),
+    describeReadRecovery:
+      pluginBridge &&
+      ((error, request) => describePluginReadRecovery(pluginBridge, error, request)),
   });
 
   if (pluginBridge) {
+    advertisePluginReadRoute(getFigmaData, pluginBridge, {
+      baseDescription: getFigmaDataTool.description,
+      transport,
+    });
     registerCodeModeTools(server, pluginBridge, { codeMode, transport, figmaService });
   }
 
@@ -89,82 +88,24 @@ function createServer(
   return server;
 }
 
-type RegisterToolsOptions = {
-  transport: ServerTransport;
-  authMode: AuthMode;
-  outputFormat: OutputFormat;
-  skipImageDownloads: boolean;
-  imageDir?: string;
-  getClientInfo: () => ClientInfo | undefined;
-  pluginBridge?: PluginBridgeRuntime;
-};
-
-function registerTools(
-  server: McpServer,
-  figmaService: FigmaService,
-  options: RegisterToolsOptions,
-): void {
-  const { pluginBridge } = options;
-  const getFigmaData = server.registerTool(
-    getFigmaDataTool.name,
-    {
-      title: "Get Figma Data",
-      description: getFigmaDataTool.description,
-      inputSchema: getFigmaDataTool.parametersSchema,
-      annotations: { readOnlyHint: true },
-    },
-    (params: GetFigmaDataParams, extra: ToolExtra) =>
-      getFigmaDataTool.handler(
-        params,
-        figmaService,
-        options.outputFormat,
-        options.transport,
-        options.authMode,
-        options.getClientInfo(),
-        pluginBridge &&
-          ((error, request) => describePluginReadRecovery(pluginBridge, error, request)),
-        extra,
-      ),
-  );
-  if (pluginBridge) {
-    advertisePluginReadRoute(getFigmaData, pluginBridge, {
-      baseDescription: getFigmaDataTool.description,
-      transport: options.transport,
-    });
+// get_figma_comments has no telemetry event of its own yet.
+function captureReadToolOutcome(outcome: ReadToolOutcome, context: ToolCallContext): void {
+  if (outcome.kind === "rejected") {
+    const { tool, field, rule, message } = outcome;
+    captureValidationReject({ tool, field, rule, message }, context);
+  } else if (outcome.tool === "get_figma_data") {
+    captureGetFigmaDataCall(outcome.outcome, context);
+  } else if (outcome.tool === "download_figma_images") {
+    captureDownloadImagesCall(outcome.outcome, context);
   }
+}
 
-  server.registerTool(
-    getFigmaCommentsTool.name,
-    {
-      title: "Get Figma Comments",
-      description: getFigmaCommentsTool.description,
-      inputSchema: getFigmaCommentsTool.parameters,
-      annotations: { readOnlyHint: true },
-    },
-    (params: GetFigmaCommentsParams) => getFigmaCommentsTool.handler(params, figmaService),
-  );
-
-  if (!options.skipImageDownloads) {
-    server.registerTool(
-      downloadFigmaImagesTool.name,
-      {
-        title: "Download Figma Images",
-        description: downloadFigmaImagesTool.getDescription(options.imageDir),
-        inputSchema: downloadFigmaImagesTool.parametersSchema,
-        annotations: { openWorldHint: true },
-      },
-      (params: DownloadImagesParams, extra: ToolExtra) =>
-        downloadFigmaImagesTool.handler(
-          params,
-          figmaService,
-          options.imageDir,
-          options.transport,
-          options.authMode,
-          options.getClientInfo(),
-          extra,
-        ),
-    );
-  }
+function clientInfoReader(server: McpServer): () => ClientInfo | undefined {
+  return () => {
+    const info = server.server.getClientVersion();
+    if (!info) return undefined;
+    return { name: info.name, version: info.version };
+  };
 }
 
 export { createServer };

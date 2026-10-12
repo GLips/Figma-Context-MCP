@@ -1,6 +1,7 @@
 import type { Transform } from "@figma/rest-api-spec";
 import type { FigmaService, ImageDownloadItem, ImageDownloadOutcome } from "~/services/figma.js";
 import { tagError } from "~/utils/error-meta.js";
+import type { ImageDestination } from "~/utils/image-processing.js";
 import { normalizeFigmaNodeId } from "~/utils/figma-url.js";
 
 /**
@@ -22,7 +23,7 @@ export type DownloadImageNode = {
 export type DownloadFigmaImagesInput = {
   fileKey: string;
   nodes: DownloadImageNode[];
-  localPath: string;
+  destination: ImageDestination;
   pngScale?: number;
 };
 
@@ -82,7 +83,7 @@ export async function downloadFigmaImages(
   let caughtError: unknown;
 
   try {
-    const { fileKey, nodes, localPath, pngScale } = input;
+    const { fileKey, nodes, destination, pngScale } = input;
 
     // Resolve the set of unique downloads. Each carries the other requested
     // filenames it satisfies, so the alias text travels with the item itself.
@@ -133,7 +134,7 @@ export async function downloadFigmaImages(
     await hooks.onDownloadStart?.(downloadItems.length);
     let settled: Array<{ item: PendingDownload; outcome: ImageDownloadOutcome }>;
     try {
-      settled = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
+      settled = await figmaService.downloadImages(fileKey, destination, downloadItems, {
         pngScale,
       });
     } catch (error) {

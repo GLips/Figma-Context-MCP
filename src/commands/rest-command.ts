@@ -7,7 +7,7 @@ import {
 } from "~/config.js";
 import type { FigmaAuthOptions } from "~/services/figma.js";
 import { normalizeFigmaNodeId, parseFigmaUrl } from "~/utils/figma-url.js";
-import { installFigmaProxyDispatcher } from "~/utils/proxy-env.js";
+import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
 
 /** Flags every REST-backed command takes: where the file is and how to authenticate. */
 export const REST_COMMAND_FLAGS = {
