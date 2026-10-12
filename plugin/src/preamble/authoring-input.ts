@@ -98,7 +98,7 @@ function readyAuthoredValue(key: string, value: unknown, subject: string): unkno
 }
 
 // Every style slot (fill/stroke/effects/layout/textStyle) is a REF string when the read was compressed,
-// minted as `<prefix>_<8 hex>` (core/src/style-table.ts). The exact mint shape is matched — not "any
+// minted as `<prefix>_<8 hex>` (core/src/compress.ts). The exact mint shape is matched — not "any
 // string" — because `fill: "#FFF"` is a paint, and only the ref shape is worth its own message: handed
 // to a value parser it reads as a malformed value, not a wrong read mode.
 const STYLE_REF = /^(layout|style|fill|effect)_[0-9a-f]{8}/;

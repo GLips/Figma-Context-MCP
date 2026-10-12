@@ -103,7 +103,7 @@ test("get on an instance carries an honest type and its componentId", async () =
 
 // Beyond-CSS effects round-trip: what flcm.effects({...}) authors reads back as the same object form
 // (ADR-0002). This drives the whole plugin read path — the adapter's beyond-CSS decode + the core's
-// object-form emission — over the live-ish mock, complementing the core unit pins in src/tests/effects.test.ts.
+// object-form emission — over the live-ish mock, complementing the core unit pins in core/tests/effects.test.ts.
 test("get reads beyond-CSS effects back as the flcm.effects object form", async () => {
   createFigmaMock();
   await render({

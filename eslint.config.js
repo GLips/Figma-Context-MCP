@@ -77,8 +77,15 @@ export default [
     // would flag deliberate patterns (e.g. code.ts's `any` on Figma's
     // SceneNode union). Its quality bar is typecheck + tests + build guard,
     // run by the root `validate`.
-    // .agent_cache holds external repos cloned for reference reading (gitignored, never ours) — eslint
-    // walks it regardless of .gitignore, so 300+ of someone else's lint errors would fail `pnpm validate`.
-    ignores: ["**/dist/**", "node_modules/**", "plugin/**", ".agent_cache/**", ".claude/**"],
+    // .agent_cache (cloned reference repos) and .scratch (local probes) are never ours — eslint
+    // walks them regardless of .gitignore, so someone else's lint errors would fail `pnpm validate`.
+    ignores: [
+      "**/dist/**",
+      "node_modules/**",
+      "plugin/**",
+      ".agent_cache/**",
+      ".claude/**",
+      ".scratch/**",
+    ],
   },
 ];
