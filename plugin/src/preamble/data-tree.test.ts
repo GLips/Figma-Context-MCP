@@ -110,13 +110,12 @@ test("read-only vocabulary refuses by field and annotations survive a data copy"
   createFigmaMock();
   for (const words of [
     { strokeDashes: [1, 2] },
-    { aspectRatio: 2 },
     { fill: "fill_a1b2c3d4" },
     { layout: { mode: "grid" } },
   ]) {
     await assert.rejects(
       flcm.render({ type: "FRAME", ...words }),
-      /strokeDashes|aspectRatio|REFERENCE|grid/,
+      /strokeDashes|REFERENCE|grid/,
     );
   }
   const original = await flcm.render({
@@ -130,6 +129,33 @@ test("read-only vocabulary refuses by field and annotations survive a data copy"
   const out = await flcm.render(copy);
   assert.notEqual(out.id, id);
   assert.deepEqual(out.annotations, node.annotations);
+});
+
+test("a read's aspectRatio pastes back as a proportion lock that follows a fill width", async () => {
+  createFigmaMock();
+  const column = await flcm.render({
+    type: "FRAME",
+    width: 300,
+    layout: { mode: "column" },
+    children: [{ type: "RECTANGLE", width: "fill", aspectRatio: 1.5 }],
+  });
+  const { node } = await flcm.get(column);
+  const photo = node.children![0];
+  assert.equal(photo.aspectRatio, 1.5);
+  assert.equal(photo.height, 200);
+
+  const { id, children, ...frame } = node;
+  const copy = await flcm.render({ ...frame, width: 450, children: children!.map(({ id, ...child }) => child) });
+  const live = await figma.getNodeByIdAsync(copy.children![0].id);
+  assert.deepEqual([live.width, live.height], [450, 300]);
+  assert.ok(live.targetAspectRatio, "the copy is locked, not just sized");
+});
+
+test("aspectRatio refuses what no box can hold", async () => {
+  createFigmaMock();
+  await assert.rejects(flcm.render({ type: "RECTANGLE", width: 100, height: 100, aspectRatio: 2 }), /width 100 and height 100 are a 1 ratio/);
+  await assert.rejects(flcm.render({ type: "FRAME", width: "hug", aspectRatio: 2, layout: { mode: "row" } }), /"hug" axis/);
+  await assert.rejects(flcm.render({ type: "TEXT", text: "Hi", aspectRatio: 2 }), /sizes itself to its text/);
 });
 
 test("IR words are rejected and no node constructors, fromRead or move are exported", async () => {

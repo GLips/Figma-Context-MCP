@@ -91,6 +91,8 @@ export interface RenderCtx extends RenderResources {
   exposures: ExposureWrite[];
   keys: Set<string>;
   pending: PendingResolve[];
+  // Nodes built with an aspectRatio, locked once every size in the walk has landed.
+  ratios: { node: any; layout: WriteLayout }[];
   pivots: PivotSettlement[];
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
   // Collected DURING the walk along with keys because only the walk knows which live node a compiled
@@ -552,7 +554,7 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
  * it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], pivots: resources.pivots ??= [], exposures: [] };
+  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], ratios: [], pivots: resources.pivots ??= [], exposures: [] };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
@@ -579,6 +581,9 @@ export function resolvePercents(ctx: RenderCtx): void {
   settleSiblingOrder(ctx);
   ctx.pending.sort((a, b) => depthOf(a.node) - depthOf(b.node));
   for (const p of ctx.pending) resolvePercentLayout(p.parent, p.node, p.layout);
+  // After the percents (a percent axis drives a ratio), parents first (a child's fill follows its
+  // parent's settled box), and before the pivots, which read the final size.
+  for (const r of ctx.ratios.sort((a, b) => depthOf(a.node) - depthOf(b.node))) settleAspectRatio(r.node, r.layout);
   // Last: the pivot reads the final size and position. Emptied, because a second pass would turn
   // the same nodes again.
   for (const p of ctx.pivots.splice(0)) settleCentrePivot(p.node, p.hold, p.layout);
@@ -679,6 +684,41 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources?: Rend
  */
 export function settleLiveNodePercentSize(node: any, wl: WriteLayout): void {
   if (node.parent && wl.percentSize) resolvePercentSize(node.parent, node, wl);
+}
+
+/**
+ * Lock the node's proportions at `wl.aspectRatio` ("none" unlocks). Figma locks whatever ratio the box
+ * has, so the box is brought to the ratio first: the driving axis — a "fill" or percent one, else the
+ * width — keeps its size and the other follows. Runs once the sizes have landed, so it measures the
+ * realized box; afterwards Figma's lock carries the pair through layout and constraint resizes.
+ */
+export function settleAspectRatio(node: any, wl: WriteLayout): void {
+  const ratio = wl.aspectRatio;
+  if (ratio === undefined) return;
+  if (ratio === "none") {
+    node.unlockAspectRatio();
+    return;
+  }
+  const fills = (axis: "Horizontal" | "Vertical", pct: number | undefined) =>
+    node["layoutSizing" + axis] === "FILL" || pct !== undefined;
+  const heightDrives = fills("Vertical", wl.percentSize?.height) && !fills("Horizontal", wl.percentSize?.width);
+  const follower = heightDrives ? "Horizontal" : "Vertical";
+  // A live hug axis (create refuses an authored one) is sized by its content; resizing it would
+  // silently turn it fixed. Figma can't lock an auto-resizing text at all.
+  if (node["layoutSizing" + follower] === "HUG" || (node.type === "TEXT" && node.textAutoResize !== "NONE")) {
+    throw new Error(
+      "flcm: aspectRatio needs its " + (heightDrives ? "width" : "height") + " free to follow, but this " + node.type +
+        (node.type === "TEXT" ? " sizes itself to its text" : " hugs its content on that axis") +
+        ". Give the node a fixed width and height, or drop aspectRatio.",
+    );
+  }
+  const before = { horizontal: node.layoutSizingHorizontal, vertical: node.layoutSizingVertical };
+  if (heightDrives) resizeWithDiagnostics(node, Math.max(node.height * ratio, 0.01), node.height);
+  else resizeWithDiagnostics(node, node.width, Math.max(node.width / ratio, 0.01));
+  // resize() pins both axes; a driving "fill" axis must keep filling for the lock to follow it.
+  if (before.horizontal === "FILL" && node.layoutSizingHorizontal !== "FILL") node.layoutSizingHorizontal = "FILL";
+  if (before.vertical === "FILL" && node.layoutSizingVertical !== "FILL") node.layoutSizingVertical = "FILL";
+  node.lockAspectRatio();
 }
 
 export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void {
@@ -1413,6 +1453,17 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
       message: "A VECTOR path is bare geometry; " + prop + " was ignored. Use `scale` for uniform sizing, or `svg` with a viewBox for a sized canvas.",
     });
   }
+  const lockedPath = wn.ignoredSize?.aspectRatio;
+  if (lockedPath !== undefined) {
+    // A path's box is its geometry, so a ratio can only be the one it already has: a paste-back's
+    // own locks again, any other is ignored like width/height.
+    if (typeof lockedPath === "number" && Math.abs(node.width / node.height - lockedPath) <= 0.01) node.lockAspectRatio();
+    else warnings.add({
+      id: node.id, prop: "aspectRatio", authored: lockedPath, realized: pixelRound(node.width / node.height),
+      message: "A VECTOR path is bare geometry; aspectRatio was ignored. Its proportions are the path's own.",
+    });
+  }
+  if (wn.layout?.aspectRatio !== undefined) ctx.ratios.push({ node, layout: wn.layout });
   applySceneProps(node, wn);
   if (wn.rotation) ctx.pivots.push({ node });
   applyAnnotations(node, wn.annotations);

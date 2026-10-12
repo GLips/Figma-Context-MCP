@@ -78,7 +78,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import { assertLineFillUnrotated } from "./layout-legality.js";
 import { holdUnrotatedCorner, settleCentrePivot, type PivotHold } from "./pivot.js";
 import {
-  applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
+  applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize, settleAspectRatio,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
   RenderResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
@@ -568,6 +568,7 @@ export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resou
 export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: EditPlan): void {
   try {
     if (patch.layout) settleLiveNodePercentSize(node, patch.layout);
+    if (patch.layout) settleAspectRatio(node, patch.layout);
     if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
   } catch (cause) {
     throw fail(cause);

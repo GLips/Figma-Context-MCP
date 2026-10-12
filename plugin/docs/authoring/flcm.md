@@ -134,7 +134,7 @@ find's predicate, its optional second argument, can be async (find awaits each v
 
 Pass `node` straight to a placement verb to move it; to copy, `clone` (see the mental model). The parts that don't simply round-trip:
 
-- A read-only field with no authored equivalent fails by name. Compressed style references, dash patterns and locked proportions are refused.
+- A read-only field with no authored equivalent fails by name. Compressed style references and dash patterns are refused.
 - A nested node reads as it does among its parent's children. A root on the page or in a section reads `"contextual"` instead of its fixed size, and carries its real pixel size as `designedWidth`/`designedHeight` on any axis sized by its context or by `"fill"`. A verb uses that size for a context-sized axis, and for a `"fill"` axis placed on a page; under a frame, `"fill"` still fills.
 - On a node with an `id`, in a tree or in an `edit`/`editMany` delta, a word equal to what a read of it reports at that moment changes nothing, whether the read is from this call or an earlier call's output. So a component moves by its own read with its bindings intact, a value copied from an instance sublayer's read pins no override, and a pasted `"fill"` stays the node's standing state: a destination that reads fill differently keeps its pixel size. A `"fill"` you write over a fixed axis fills; to make a node that already fills cover a free-form destination, write `"100%"`. On text with styled runs, a `textStyle` word a run varies restates only beside the read's own `text` runs; without them it sets the whole node, flattening the runs.
 - VECTOR reads keep `d` or `vectorPaths` and author directly. An IMAGE-SVG node is a wire projection: fetch a fresh `flcm.get` to author its geometry.
@@ -287,6 +287,7 @@ A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a 
 | `maxHeight` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" \| { variable } | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
 | `height` | number \| "Npx" \| "N%" \| "fill" \| "hug" \| { variable } | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
+| `aspectRatio` | number \| "none" | Width ÷ height, locked: one axis keeps its size (a "fill" or "N%" axis, else width) and the other follows, now and as layout resizes the node. A fixed width alone derives the height; both fixed must agree. Not beside "hug", and a TEXT needs a fixed box. "none" unlocks. |
 | `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
 | `top` | number \| "Npx" \| "N%" | As `left`. |
 | `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`. |

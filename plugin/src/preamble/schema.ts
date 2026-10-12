@@ -234,6 +234,11 @@ const SIZE_FIELDS = fieldsFor(WORD_GROUPS.size)({
     'As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn\'t hug.',
     'number | "Npx" | "N%" | "fill" | "hug" | { variable }',
   ),
+  aspectRatio: prop(
+    z.union([z.number().positive(), z.literal("none")]),
+    'Width ÷ height, locked: one axis keeps its size (a "fill" or "N%" axis, else width) and the other follows, now and as layout resizes the node. A fixed width alone derives the height; both fixed must agree. Not beside "hug", and a TEXT needs a fixed box. "none" unlocks.',
+    'number | "none"',
+  ),
   // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming
   // either lifts the node out of an auto-layout parent's flow (read reports that as `position:
   // "absolute"`). Under a free-form parent they are just the coordinates. `position` on its own lifts
@@ -582,6 +587,7 @@ const EDIT_FIELDS = fieldsFor([] as EditWord[])({
   maxHeight: SIZE_FIELDS.maxHeight,
   width: SIZE_FIELDS.width,
   height: SIZE_FIELDS.height,
+  aspectRatio: SIZE_FIELDS.aspectRatio,
   ...PLACEMENT_FIELDS,
   layout: FRAME_FIELDS.layout,
   text: TEXT_FIELDS.text,
