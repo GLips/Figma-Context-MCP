@@ -3,6 +3,7 @@ import { simplify, type SimplifiedNode } from "@framelink/core";
 import type { GetFileNodesResponse, GetFileResponse } from "@figma/rest-api-spec";
 import { parseRestResponse } from "~/adapters/rest/decode/response.js";
 import { readRestDesign, type RestDesignSource } from "~/adapters/rest/read-rest-design.js";
+import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
 
 // A-7: a nested node reads the same whether targeted or reached through its parent. These are
 // ids-filtered file responses, where each ancestor lists only the child on the path.
@@ -122,7 +123,10 @@ describe("targeted REST reads", () => {
       getRawNodes: async (...args: unknown[]) => (calls.push(args), siblings),
     } as unknown as RestDesignSource;
 
-    const { design } = await readRestDesign(source, { fileKey: "file", nodeId: "2:2" });
+    const { design } = await readRestDesign(source, {
+      fileKey: figmaFileKey("file"),
+      nodeId: figmaNodeId("2:2"),
+    });
 
     expect(calls).toEqual([["file", ["2:1"], 1]]);
     expect(design.nodes[0].layout).toMatchObject({ gridColumn: "1", gridRow: "1" });

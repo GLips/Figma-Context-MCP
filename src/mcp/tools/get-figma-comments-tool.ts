@@ -2,7 +2,14 @@ import { z } from "zod";
 import type { FigmaService } from "~/services/figma.js";
 import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
 import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
-import { FIGMA_NODE_ID_FORMAT_MESSAGE, normalizeFigmaNodeId } from "~/utils/figma-url.js";
+import {
+  FIGMA_FILE_KEY_FORMAT_MESSAGE,
+  FIGMA_FILE_KEY_PATTERN,
+  FIGMA_NODE_ID_FORMAT_MESSAGE,
+  figmaFileKey,
+  figmaNodeId,
+  type FigmaFileKey,
+} from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 
 const nodeId = z.string().regex(FIGMA_NODE_ID_PATTERN, FIGMA_NODE_ID_FORMAT_MESSAGE);
@@ -10,7 +17,7 @@ const nodeId = z.string().regex(FIGMA_NODE_ID_PATTERN, FIGMA_NODE_ID_FORMAT_MESS
 const parameters = {
   fileKey: z
     .string()
-    .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
+    .regex(FIGMA_FILE_KEY_PATTERN, FIGMA_FILE_KEY_FORMAT_MESSAGE)
     .describe("The Figma file key, from a URL like figma.com/(file|design)/<fileKey>/..."),
   scope: z
     .union([nodeId, z.array(nodeId)])
@@ -44,12 +51,12 @@ export type GetFigmaCommentsOutcome = { durationMs: number; error?: unknown };
 
 /** Validates raw params, from the MCP tool or the `comments` CLI command, into the service's arguments. */
 export function parseGetFigmaCommentsParams(params: GetFigmaCommentsParams): {
-  fileKey: string;
+  fileKey: FigmaFileKey;
   options: GetFigmaCommentsOptions;
 } {
   const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
-  const scopeIds = scope === undefined ? undefined : [scope].flat().map(normalizeFigmaNodeId);
-  return { fileKey, options: { scope: scopeIds, include, status, since } };
+  const scopeIds = scope === undefined ? undefined : [scope].flat().map(figmaNodeId);
+  return { fileKey: figmaFileKey(fileKey), options: { scope: scopeIds, include, status, since } };
 }
 
 async function handleGetFigmaComments(

@@ -69,10 +69,10 @@ interface CommentsFlags {
 }
 
 export async function runComments(flags: CommentsFlags, positionals: string[]): Promise<void> {
-  const { fileKey, nodeId } = resolveRestTarget(positionals[0], flags);
-  const { options } = parseCommentsParams({
-    fileKey,
-    scope: nodeId?.split(",").map((id) => id.trim()),
+  const target = resolveRestTarget(positionals[0], flags);
+  const { fileKey, options } = parseCommentsParams({
+    fileKey: target.fileKey,
+    scope: target.nodeId?.split(",").map((id) => id.trim()),
     include: flags.full ? "full" : "counts",
     status: flags.all ? "all" : "unresolved",
     since: flags.since,

@@ -17,6 +17,7 @@ import {
   type CommentReply,
   type CommentThread,
 } from "./figma-comments.js";
+import type { FigmaFileKey } from "~/utils/figma-url.js";
 
 export interface GetFigmaCommentsOptions {
   /** Node ids; a thread matches when the node it is assigned to sits in one of their subtrees. */
@@ -76,7 +77,7 @@ const PATH_SEPARATOR = " › ";
 
 export async function getFigmaComments(
   figma: FigmaService,
-  fileKey: string,
+  fileKey: FigmaFileKey,
   options: GetFigmaCommentsOptions,
 ): Promise<GetFigmaCommentsResult> {
   const { comments } = await figma.getComments(fileKey);
@@ -125,7 +126,7 @@ interface AnchorTree {
 
 async function fetchAnchorTree(
   figma: FigmaService,
-  fileKey: string,
+  fileKey: FigmaFileKey,
   threads: readonly CommentThread[],
 ): Promise<AnchorTree> {
   const tree: AnchorTree = { pages: new Map(), nodes: new Map() };

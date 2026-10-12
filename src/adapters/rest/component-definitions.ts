@@ -7,6 +7,7 @@ import { mainComponentOf, type RestComponentTables } from "./decode/component-ta
 import { restNodeToSnapshot } from "./decode/node-to-snapshot.js";
 import type { ParsedRestResponse } from "./decode/response.js";
 import type { RestDesignSource } from "./read-rest-design.js";
+import type { FigmaFileKey } from "~/utils/figma-url.js";
 
 /**
  * Fetch the definitions for components a read REFERENCED but didn't contain.
@@ -36,7 +37,7 @@ import type { RestDesignSource } from "./read-rest-design.js";
  */
 export async function fetchComponentDefinitions(
   source: RestDesignSource,
-  fileKey: string,
+  fileKey: FigmaFileKey,
   { snapshots, tables: consuming }: ParsedRestResponse,
   maxDepth?: number,
 ): Promise<NodeSnapshot[]> {
@@ -100,8 +101,8 @@ const KEY_LOOKUP_CONCURRENCY = 6;
 async function locateRemote(
   source: RestDesignSource,
   remote: Array<[string, Component]>,
-): Promise<Map<string, Map<string, WantedDefinition>>> {
-  const byFile = new Map<string, Map<string, WantedDefinition>>();
+): Promise<Map<FigmaFileKey, Map<string, WantedDefinition>>> {
+  const byFile = new Map<FigmaFileKey, Map<string, WantedDefinition>>();
   const lookup = limitConcurrency(KEY_LOOKUP_CONCURRENCY);
   const sites = await Promise.all(
     remote.map(([localId, component]) =>
@@ -142,7 +143,7 @@ interface WantedDefinition {
  */
 async function fetchDefinitionNodes(
   source: RestDesignSource,
-  fileKey: string,
+  fileKey: FigmaFileKey,
   wanted: Map<string, WantedDefinition>,
   consuming: Required<RestComponentTables>,
   /** A published library answers with its CURRENT version; the same file answers with this one. */

@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { readCommentThreads } from "~/services/figma-comments.js";
+import { FIGMA_FILE_KEY_PATTERN, figmaFileKey } from "~/utils/figma-url.js";
 import type { CapabilityHandler } from "./bridge.js";
 
 /** One unresolved thread's pin, in the anchor's own frame — the preamble hit-tests it on live geometry. */
@@ -21,9 +22,10 @@ export interface CommentPinRecord {
  */
 export function createCommentPinsCapability(): CapabilityHandler {
   return async (payload, { signal, run }) => {
-    const fileKey = (payload as { fileKey?: unknown } | null)?.fileKey;
-    if (typeof fileKey !== "string" || !/^[a-zA-Z0-9]+$/.test(fileKey))
+    const raw = (payload as { fileKey?: unknown } | null)?.fileKey;
+    if (typeof raw !== "string" || !FIGMA_FILE_KEY_PATTERN.test(raw))
       throw { code: "INVALID_INPUT", message: "comments.pins takes { fileKey }." };
+    const fileKey = figmaFileKey(raw);
     if (!run.figma)
       throw {
         code: "FIGMA_AUTH_UNAVAILABLE",

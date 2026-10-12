@@ -1,17 +1,41 @@
+import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
 import { tagError } from "~/utils/error-meta.js";
+
+declare const FIGMA_FILE_KEY: unique symbol;
+declare const FIGMA_NODE_ID: unique symbol;
+
+/**
+ * A Figma file key or node id that passed the input edge: checked against its grammar, and a node
+ * id normalized to the colon form the API matches. Only the constructors below mint one, plus
+ * `FigmaService` for values Figma itself returns — so a Figma call can't be handed an unchecked
+ * string from an agent or the CLI.
+ */
+export type FigmaFileKey = string & { readonly [FIGMA_FILE_KEY]: true };
+export type FigmaNodeId = string & { readonly [FIGMA_NODE_ID]: true };
+
+export const FIGMA_FILE_KEY_PATTERN = /^[a-zA-Z0-9]+$/;
+export const FIGMA_FILE_KEY_FORMAT_MESSAGE = "File key must be alphanumeric";
 
 /** The refusal every tool schema pairs with core's `FIGMA_NODE_ID_PATTERN`. */
 export const FIGMA_NODE_ID_FORMAT_MESSAGE =
   "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'";
 
+export function figmaFileKey(raw: string): FigmaFileKey {
+  if (!FIGMA_FILE_KEY_PATTERN.test(raw))
+    tagError(new Error(FIGMA_FILE_KEY_FORMAT_MESSAGE), { category: "invalid_input" });
+  return raw as FigmaFileKey;
+}
+
 /** A URL's `node-id` is dashed (`1-2`); the API matches only the colon form (`1:2`). */
-export function normalizeFigmaNodeId(nodeId: string): string {
-  return nodeId.replace(/-/g, ":");
+export function figmaNodeId(raw: string): FigmaNodeId {
+  if (!FIGMA_NODE_ID_PATTERN.test(raw))
+    tagError(new Error(FIGMA_NODE_ID_FORMAT_MESSAGE), { category: "invalid_input" });
+  return raw.replace(/-/g, ":") as FigmaNodeId;
 }
 
 export interface FigmaUrlParts {
-  fileKey: string;
-  nodeId: string | undefined;
+  fileKey: FigmaFileKey;
+  nodeId: FigmaNodeId | undefined;
 }
 
 // `/proto/` is the prototype presentation of an ordinary design file — same file key,
@@ -35,10 +59,10 @@ export function parseFigmaUrl(input: string): FigmaUrlParts {
     });
   }
 
-  const fileKey = match[2];
+  const fileKey = figmaFileKey(match[2]);
 
   const rawNodeId = url.searchParams.get("node-id");
-  const nodeId = rawNodeId ? normalizeFigmaNodeId(rawNodeId) : undefined;
+  const nodeId = rawNodeId ? figmaNodeId(rawNodeId) : undefined;
 
   return { fileKey, nodeId };
 }

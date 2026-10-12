@@ -17,6 +17,7 @@ import {
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
 import { getErrorMeta, tagError } from "~/utils/error-meta.js";
+import type { FigmaFileKey, FigmaNodeId } from "~/utils/figma-url.js";
 import {
   buildForbiddenMessage,
   buildRateLimitMessage,
@@ -80,7 +81,7 @@ type SvgOptions = {
 export type ImageDownloadItem = {
   imageRef?: string;
   gifRef?: string;
-  nodeId?: string;
+  nodeId?: FigmaNodeId;
   fileName: string;
   needsCropping?: boolean;
   cropTransform?: Transform;
@@ -198,7 +199,7 @@ export class FigmaService {
    *
    * @returns Map of imageRef to download URL
    */
-  async getImageFillUrls(fileKey: string): Promise<Record<string, string>> {
+  async getImageFillUrls(fileKey: FigmaFileKey): Promise<Record<string, string>> {
     const response = await this.request<GetImageFillsResponse>(
       figmaEndpoint(["files", fileKey, "images"]),
     );
@@ -211,8 +212,8 @@ export class FigmaService {
    * @returns Map of node ID to download URL
    */
   async getNodeRenderUrls(
-    fileKey: string,
-    nodeIds: string[],
+    fileKey: FigmaFileKey,
+    nodeIds: FigmaNodeId[],
     format: "png" | "svg",
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
   ): Promise<Record<string, string>> {
@@ -239,7 +240,7 @@ export class FigmaService {
    * callers match results by item, never by position.
    */
   async downloadImages<T extends ImageDownloadItem>(
-    fileKey: string,
+    fileKey: FigmaFileKey,
     destination: ImageDestination,
     items: T[],
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
@@ -312,7 +313,7 @@ export class FigmaService {
    * can record payload size in telemetry.
    */
   async getRawFile(
-    fileKey: string,
+    fileKey: FigmaFileKey,
     depth?: number | null,
   ): Promise<{ data: GetFileResponse; rawSize: number }> {
     const endpoint = figmaEndpoint(["files", fileKey], { depth: depth ?? undefined });
@@ -334,8 +335,8 @@ export class FigmaService {
    * can record payload size in telemetry.
    */
   async getRawNodeInContext(
-    fileKey: string,
-    nodeId: string,
+    fileKey: FigmaFileKey,
+    nodeId: FigmaNodeId,
   ): Promise<{ data: GetFileResponse; rawSize: number }> {
     Logger.log(`Retrieving raw Figma node in context: ${nodeId} from ${fileKey}`);
 
@@ -354,7 +355,7 @@ export class FigmaService {
    * and the callers treat any failure as a fallback rather than failing the read.
    */
   async getRawNodes(
-    fileKey: string,
+    fileKey: FigmaFileKey,
     nodeIds: string[],
     depth?: number,
   ): Promise<GetFileNodesResponse> {
@@ -369,16 +370,17 @@ export class FigmaService {
    * that crosses files, and this endpoint trades that key for the library's file key and node id.
    * Needs read access to the library — a separate grant from access to the file being read.
    */
-  async getPublishedComponentSite(key: string): Promise<{ fileKey: string; nodeId: string }> {
+  async getPublishedComponentSite(key: string): Promise<{ fileKey: FigmaFileKey; nodeId: string }> {
     const response = await this.request<GetComponentResponse>(figmaEndpoint(["components", key]));
-    return { fileKey: response.meta.file_key, nodeId: response.meta.node_id };
+    // Figma's own answer names a file it serves, so it needs no input-edge check.
+    return { fileKey: response.meta.file_key as FigmaFileKey, nodeId: response.meta.node_id };
   }
 
   /**
    * Every comment on the file, replies included, with Markdown bodies. Tier 2 — the comments tool's
    * one cheap call. Needs the `file_comments:read` scope, which a file-content-only token lacks.
    */
-  async getComments(fileKey: string, signal?: AbortSignal): Promise<GetCommentsResponse> {
+  async getComments(fileKey: FigmaFileKey, signal?: AbortSignal): Promise<GetCommentsResponse> {
     return this.request<GetCommentsResponse>(
       figmaEndpoint(["files", fileKey, "comments"], { as_md: true }),
       signal,
@@ -391,7 +393,7 @@ export class FigmaService {
    *
    * Never pass a page id here: its "subtree" is the whole page.
    */
-  async getFileSlice(fileKey: string, nodeIds: string[]): Promise<GetFileResponse> {
+  async getFileSlice(fileKey: FigmaFileKey, nodeIds: string[]): Promise<GetFileResponse> {
     const query = nodeIds.length ? { ids: nodeIds.join(",") } : { depth: 1 };
     return this.request<GetFileResponse>(figmaEndpoint(["files", fileKey], query));
   }

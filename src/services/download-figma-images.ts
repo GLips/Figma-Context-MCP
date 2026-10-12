@@ -2,7 +2,7 @@ import type { Transform } from "@figma/rest-api-spec";
 import type { FigmaService, ImageDownloadItem, ImageDownloadOutcome } from "~/services/figma.js";
 import { tagError } from "~/utils/error-meta.js";
 import type { ImageDestination } from "~/utils/image-processing.js";
-import { normalizeFigmaNodeId } from "~/utils/figma-url.js";
+import type { FigmaFileKey, FigmaNodeId } from "~/utils/figma-url.js";
 
 /**
  * Structural shape for a single download request. Matches the relevant
@@ -10,7 +10,7 @@ import { normalizeFigmaNodeId } from "~/utils/figma-url.js";
  * itself — callers can pass any object that conforms.
  */
 export type DownloadImageNode = {
-  nodeId: string;
+  nodeId: FigmaNodeId;
   imageRef?: string;
   gifRef?: string;
   fileName: string;
@@ -21,7 +21,7 @@ export type DownloadImageNode = {
 };
 
 export type DownloadFigmaImagesInput = {
-  fileKey: string;
+  fileKey: FigmaFileKey;
   nodes: DownloadImageNode[];
   destination: ImageDestination;
   pngScale?: number;
@@ -127,7 +127,7 @@ export async function downloadFigmaImages(
         }
       } else {
         // Rendered nodes are always unique.
-        downloadItems.push({ ...downloadItem, nodeId: normalizeFigmaNodeId(node.nodeId) });
+        downloadItems.push({ ...downloadItem, nodeId: node.nodeId });
       }
     }
 

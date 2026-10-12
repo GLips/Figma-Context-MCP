@@ -4,7 +4,14 @@
 import { z } from "zod/v3";
 import { FigmaService } from "~/services/figma.js";
 import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
-import { FIGMA_NODE_ID_FORMAT_MESSAGE, normalizeFigmaNodeId } from "~/utils/figma-url.js";
+import {
+  FIGMA_FILE_KEY_FORMAT_MESSAGE,
+  FIGMA_FILE_KEY_PATTERN,
+  FIGMA_NODE_ID_FORMAT_MESSAGE,
+  figmaFileKey,
+  figmaNodeId,
+  type FigmaNodeId,
+} from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import {
@@ -17,7 +24,7 @@ import type { OutputFormat } from "~/utils/serialize.js";
 const parameters = {
   fileKey: z
     .string()
-    .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
+    .regex(FIGMA_FILE_KEY_PATTERN, FIGMA_FILE_KEY_FORMAT_MESSAGE)
     .describe(
       "The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/...",
     ),
@@ -62,10 +69,13 @@ async function getFigmaData(
     extra: ToolExtra;
   },
 ) {
+  // Outside the try: a failed read's recovery names the node, once the edge has accepted it.
+  let nodeId: FigmaNodeId | undefined;
   try {
-    const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
-
-    const nodeId = rawNodeId && normalizeFigmaNodeId(rawNodeId);
+    const parsed = parametersSchema.parse(params);
+    const fileKey = figmaFileKey(parsed.fileKey);
+    nodeId = parsed.nodeId === undefined ? undefined : figmaNodeId(parsed.nodeId);
+    const depth = parsed.depth;
 
     Logger.log(
       `Fetching ${depth ? `${depth} layers deep` : "all layers"} of ${
@@ -111,9 +121,7 @@ async function getFigmaData(
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     Logger.error(`Error fetching file ${params.fileKey}:`, message);
-    const recovery = describeRecovery?.(error, {
-      nodeId: params.nodeId && normalizeFigmaNodeId(params.nodeId),
-    });
+    const recovery = describeRecovery?.(error, { nodeId });
     return {
       isError: true,
       content: [

@@ -6,7 +6,7 @@ import {
   UsageError,
 } from "~/config.js";
 import type { FigmaCredential } from "~/services/figma.js";
-import { normalizeFigmaNodeId, parseFigmaUrl } from "~/utils/figma-url.js";
+import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
 
 /** Flags every REST-backed command takes: where the file is and how to authenticate. */
@@ -40,7 +40,10 @@ export const REST_COMMAND_FLAGS = {
   },
 } as const;
 
-/** The file and node a command targets: flags win over the URL's. */
+/**
+ * The file and node a command targets: flags win over the URL's. Unbranded on purpose: each command
+ * validates them with its tool's own parser (comments' node flag is a comma-separated list).
+ */
 export function resolveRestTarget(
   url: string | undefined,
   flags: { fileKey?: string; nodeId?: string },
@@ -57,7 +60,7 @@ export function resolveRestTarget(
     }
   }
   if (!fileKey) throw new UsageError("Either a Figma URL or --file-key is required");
-  return { fileKey, nodeId: nodeId && normalizeFigmaNodeId(nodeId) };
+  return { fileKey, nodeId };
 }
 
 /**

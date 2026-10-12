@@ -6,7 +6,13 @@ import {
 } from "../../services/download-figma-images.js";
 import type { FigmaService } from "../../services/figma.js";
 import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
-import { FIGMA_NODE_ID_FORMAT_MESSAGE } from "../../utils/figma-url.js";
+import {
+  FIGMA_FILE_KEY_FORMAT_MESSAGE,
+  FIGMA_FILE_KEY_PATTERN,
+  FIGMA_NODE_ID_FORMAT_MESSAGE,
+  figmaFileKey,
+  figmaNodeId,
+} from "../../utils/figma-url.js";
 import { createDiskImageDestination, type ImageDestination } from "../../utils/image-processing.js";
 import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
 import { Logger } from "../../utils/logger.js";
@@ -15,7 +21,7 @@ import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progres
 const sharedParameters = {
   fileKey: z
     .string()
-    .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
+    .regex(FIGMA_FILE_KEY_PATTERN, FIGMA_FILE_KEY_FORMAT_MESSAGE)
     .describe("The key of the Figma file containing the images"),
   nodes: z
     .object({
@@ -119,7 +125,12 @@ async function downloadAndList(
   await sendProgress(extra, 0, 3, "Resolving image downloads");
 
   let stopHeartbeat: (() => void) | undefined;
-  const { downloads, successCount } = await runDownloadFigmaImages(figmaService, input, {
+  const request = {
+    ...input,
+    fileKey: figmaFileKey(input.fileKey),
+    nodes: input.nodes.map((node) => ({ ...node, nodeId: figmaNodeId(node.nodeId) })),
+  };
+  const { downloads, successCount } = await runDownloadFigmaImages(figmaService, request, {
     onDownloadStart: async (downloadCount) => {
       await sendProgress(extra, 1, 3, `Resolved ${downloadCount} images, downloading`);
       stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");

@@ -4,11 +4,8 @@ import type {
   Node as FigmaNode,
 } from "@figma/rest-api-spec";
 import type { SimplifiedDesign } from "@framelink/core";
-import {
-  readRestDesign,
-  type RestDesignRequest,
-  type RestDesignSource,
-} from "~/adapters/rest/read-rest-design.js";
+import { readRestDesign, type RestDesignSource } from "~/adapters/rest/read-rest-design.js";
+import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
 
 /**
  * A recorded response served as a one-file Figma. A targeted read gets the recording ids-filtered
@@ -66,11 +63,12 @@ export function restFixtureSource(
 /** The composed REST read over a recorded response: what get_figma_data simplifies it to. */
 export async function readRestFixture(
   response: GetFileResponse | GetFileNodesResponse,
-  request: Partial<RestDesignRequest> = {},
+  { nodeId, depth }: { nodeId?: string; depth?: number } = {},
 ): Promise<SimplifiedDesign> {
   const { design } = await readRestDesign(restFixtureSource(response), {
-    fileKey: "fixture",
-    ...request,
+    fileKey: figmaFileKey("fixture"),
+    nodeId: nodeId === undefined ? undefined : figmaNodeId(nodeId),
+    depth,
   });
   return design;
 }

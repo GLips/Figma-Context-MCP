@@ -7,6 +7,7 @@ import type {
 import { fetchComponentDefinitions } from "~/adapters/rest/component-definitions.js";
 import { parseRestResponse } from "~/adapters/rest/decode/response.js";
 import { readRestDesign, type RestDesignSource } from "~/adapters/rest/read-rest-design.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 
 // The fetched upgrade: when a read instantiates a component whose subtree it didn't fetch, ask
 // Figma for the real definition instead of donating some instance's already-edited children. Every
@@ -100,11 +101,11 @@ describe("off-tree component definitions", () => {
     const service = stubService({
       getPublishedComponentSite: async (key: string) => {
         asked.push(key);
-        return { fileKey: "lib", nodeId: "77:7" };
+        return { fileKey: figmaFileKey("lib"), nodeId: "77:7" };
       },
     });
 
-    const { design } = await readRestDesign(service, { fileKey: "consumer" });
+    const { design } = await readRestDesign(service, { fileKey: figmaFileKey("consumer") });
     // One lookup for the one component, however many instances referenced it.
     expect(asked).toEqual(["pub-button"]);
     const entry = design.components["9:1"];
@@ -191,7 +192,7 @@ describe("off-tree component definitions", () => {
 
     const [definition] = await fetchComponentDefinitions(
       service,
-      "consumer",
+      figmaFileKey("consumer"),
       parseRestResponse(consuming),
     );
     // Same publish key on both sides — the reference lands on the id the consuming file uses, and
@@ -210,7 +211,7 @@ describe("off-tree component definitions", () => {
       },
     });
 
-    const { design } = await readRestDesign(service, { fileKey: "consumer" });
+    const { design } = await readRestDesign(service, { fileKey: figmaFileKey("consumer") });
     // An instance donated instead, and says so — its own edits are baked into these children.
     expect(design.components["9:1"].childrenFrom).toBeTruthy();
     expect(design.components["9:1"].children).toHaveLength(1);

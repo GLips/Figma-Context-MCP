@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { Comment, GetFileResponse } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
 import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 
 // One screen on "Home": a clipping card holding a button instance (label inside), a hidden overlay
 // painted above the card, and a non-clipping badge whose child overflows it. "Archive" is empty.
@@ -115,7 +116,7 @@ function run(options: Partial<GetFigmaCommentsOptions> = {}, fixture = comments)
       return file(frames.filter((frame) => ids.includes(frame.id)));
     },
   } as unknown as FigmaService;
-  const result = getFigmaComments(figma, "abc", {
+  const result = getFigmaComments(figma, figmaFileKey("abc"), {
     include: "full",
     status: "unresolved",
     ...options,

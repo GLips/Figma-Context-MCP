@@ -22,6 +22,7 @@ import type { AddressInfo } from "net";
 import { startHttpServer, stopHttpServer } from "~/server.js";
 import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
 import { REDACTED_FILE_KEY, REDACTED_NODE_ID } from "~/telemetry/redact-identifiers.js";
+import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
 
 const PER_REQUEST_KEY = "figd_TENANT_SECRET_xyz789";
 
@@ -107,8 +108,8 @@ describe("per-request telemetry redaction", () => {
  * `telemetry/redact-identifiers.ts`.
  */
 describe("figma identifier redaction in telemetry error_message", () => {
-  const FILE_KEY = "aB3xYz9QpLmN0kRtVwSdEf";
-  const NODE_ID = "1234:5678";
+  const FILE_KEY = figmaFileKey("aB3xYz9QpLmN0kRtVwSdEf");
+  const NODE_ID = figmaNodeId("1234:5678");
 
   function errorMessagesSent(): string[] {
     return captureSpy.mock.calls

@@ -2,6 +2,7 @@ import type { PlacementContext } from "@framelink/core";
 import { Logger } from "~/utils/logger.js";
 import { parseRestResponse } from "./decode/response.js";
 import type { RestDesignSource } from "./read-rest-design.js";
+import type { FigmaFileKey } from "~/utils/figma-url.js";
 
 /**
  * A targeted read's placement with every sibling, when its parent is a GRID.
@@ -13,7 +14,7 @@ import type { RestDesignSource } from "./read-rest-design.js";
  */
 export async function withGridSiblings(
   source: RestDesignSource,
-  fileKey: string,
+  fileKey: FigmaFileKey,
   placement: PlacementContext | undefined,
 ): Promise<PlacementContext | undefined> {
   if (placement?.parent.layoutMode !== "GRID") return placement;

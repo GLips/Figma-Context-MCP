@@ -2,6 +2,7 @@ import type { GetFileResponse } from "@figma/rest-api-spec";
 import { project, simplify, type NodeCounter, type SimplifiedDesign } from "@framelink/core";
 import { compressDesign } from "@framelink/core/compress";
 import type { FigmaService } from "~/services/figma.js";
+import type { FigmaFileKey, FigmaNodeId } from "~/utils/figma-url.js";
 import { tagError, type ErrorPhase } from "~/utils/error-meta.js";
 import { fetchComponentDefinitions } from "./component-definitions.js";
 import { parseRestResponse } from "./decode/response.js";
@@ -17,8 +18,8 @@ export type RestDesignSource = Pick<
 >;
 
 export interface RestDesignRequest {
-  fileKey: string;
-  nodeId?: string;
+  fileKey: FigmaFileKey;
+  nodeId?: FigmaNodeId;
   depth?: number;
 }
 

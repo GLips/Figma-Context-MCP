@@ -6,6 +6,7 @@ import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/te
 import { getFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
+import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
 import { REST_COMMAND_FLAGS, prepareRestCommand, resolveRestTarget } from "./rest-command.js";
 
 export const fetchCommand: Command = command(
@@ -82,7 +83,9 @@ async function run(
       parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n"),
     );
   }
-  const { fileKey, nodeId, depth } = parsed.data;
+  const fileKey = figmaFileKey(parsed.data.fileKey);
+  const nodeId = parsed.data.nodeId === undefined ? undefined : figmaNodeId(parsed.data.nodeId);
+  const depth = parsed.data.depth;
   const credential = prepareRestCommand(flags);
 
   // Initialize telemetry only after input validation succeeds, so every
