@@ -31,7 +31,7 @@ export function createCommentPinsCapability(): CapabilityHandler {
         code: "FIGMA_AUTH_UNAVAILABLE",
         message: "This run has no Figma credentials to read comments with.",
       };
-    const { comments } = await run.figma.getComments(fileKey, signal);
+    const { comments } = await run.figma.withSignal(signal).getComments(fileKey);
     const pins: CommentPinRecord[] = [];
     for (const thread of readCommentThreads(comments)) {
       if (thread.resolvedAt === null && thread.pin?.nodeId)

@@ -130,10 +130,17 @@ export class FigmaService {
     return { "X-Figma-Token": token };
   }
 
-  private signalFor(signal: AbortSignal | undefined): AbortSignal | undefined {
+  /**
+   * This service, scoped to one caller's lifetime: every Figma call, image download and store it
+   * makes also aborts on `signal` (a cancelled tool call, a finished plugin run). Shares the
+   * credential source, so a cached credential is still resolved once.
+   */
+  withSignal(signal: AbortSignal): FigmaService {
     const own = this.options.signal;
-    if (!own) return signal;
-    return signal ? AbortSignal.any([own, signal]) : own;
+    return new FigmaService(this.credentials, {
+      ...this.options,
+      signal: own ? AbortSignal.any([own, signal]) : signal,
+    });
   }
 
   /**
@@ -149,8 +156,8 @@ export class FigmaService {
     >;
   }
 
-  private async request<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
-    const { data } = await this.requestWithSize<T>(endpoint, signal);
+  private async request<T>(endpoint: string): Promise<T> {
+    const { data } = await this.requestWithSize<T>(endpoint);
     return data;
   }
 
@@ -160,20 +167,17 @@ export class FigmaService {
    * we care about (`getRawFile` / `getRawNodeInContext`); image-fetching endpoints
    * continue to use `request` unchanged.
    */
-  private async requestWithSize<T>(
-    endpoint: string,
-    signal?: AbortSignal,
-  ): Promise<{ data: T; rawSize: number }> {
+  private async requestWithSize<T>(endpoint: string): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
-      const requestSignal = this.signalFor(signal);
+      const { signal } = this.options;
       const credential = await this.credentials.resolve({
-        signal: requestSignal ?? new AbortController().signal,
+        signal: signal ?? new AbortController().signal,
       });
 
       return await fetchJSON<T>(`${this.baseUrl}${endpoint}`, {
         headers: this.getAuthHeaders(credential),
-        signal: requestSignal,
+        signal,
         redactFromResponseBody: [credential.token],
         maxBytes: this.options.maxResponseBytes,
       });
@@ -380,10 +384,9 @@ export class FigmaService {
    * Every comment on the file, replies included, with Markdown bodies. Tier 2 — the comments tool's
    * one cheap call. Needs the `file_comments:read` scope, which a file-content-only token lacks.
    */
-  async getComments(fileKey: FigmaFileKey, signal?: AbortSignal): Promise<GetCommentsResponse> {
+  async getComments(fileKey: FigmaFileKey): Promise<GetCommentsResponse> {
     return this.request<GetCommentsResponse>(
       figmaEndpoint(["files", fileKey, "comments"], { as_md: true }),
-      signal,
     );
   }
 

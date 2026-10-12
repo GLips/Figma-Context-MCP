@@ -67,7 +67,11 @@ const DISK_DOWNLOAD_ANNOTATIONS: ToolAnnotations = {
   openWorldHint: false,
 };
 
-/** Registers the read tools; returns get_figma_data's handle so a composition can re-describe it. */
+/**
+ * Registers the read tools; returns get_figma_data's handle so a composition can re-describe it.
+ * Each call runs on the service scoped to its own signal, so a client's cancellation stops that
+ * call's Figma reads, enrichment fetches and image downloads.
+ */
 export function registerReadTools(
   server: McpServer,
   figmaService: FigmaService,
@@ -88,7 +92,7 @@ export function registerReadTools(
     },
     (params: GetFigmaDataParams, extra: ToolExtra) =>
       guard(() =>
-        getFigmaDataTool.handler(params, figmaService, {
+        getFigmaDataTool.handler(params, figmaService.withSignal(extra.signal), {
           outputFormat: options.outputFormat,
           describeRecovery: options.describeReadRecovery,
           onComplete: (outcome) => observe({ tool: "get_figma_data", kind: "completed", outcome }),
@@ -105,9 +109,9 @@ export function registerReadTools(
       inputSchema: getFigmaCommentsTool.parameters,
       annotations: READ_ANNOTATIONS,
     },
-    (params: GetFigmaCommentsParams) =>
+    (params: GetFigmaCommentsParams, extra: ToolExtra) =>
       guard(() =>
-        getFigmaCommentsTool.handler(params, figmaService, {
+        getFigmaCommentsTool.handler(params, figmaService.withSignal(extra.signal), {
           onComplete: (outcome) =>
             observe({ tool: "get_figma_comments", kind: "completed", outcome }),
         }),
@@ -125,7 +129,7 @@ export function registerReadTools(
       },
       (params: DownloadImagesParams, extra: ToolExtra) =>
         guard(() =>
-          downloadFigmaImagesTool.handler(params, figmaService, {
+          downloadFigmaImagesTool.handler(params, figmaService.withSignal(extra.signal), {
             imageDir: images.imageDir,
             extra,
             onComplete: onDownloadComplete,
@@ -146,7 +150,7 @@ export function registerReadTools(
       },
       (params: DownloadImageDestinationParams, extra: ToolExtra) =>
         guard(() =>
-          downloadFigmaImageDestinationTool.handler(params, figmaService, {
+          downloadFigmaImageDestinationTool.handler(params, figmaService.withSignal(extra.signal), {
             destination: images.destination,
             extra,
             onComplete: onDownloadComplete,

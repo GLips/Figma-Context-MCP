@@ -98,4 +98,32 @@ describe("createReadServer", () => {
     expect(textOf(result)).toContain("[REDACTED]");
     expect(textOf(result)).not.toContain(TOKEN);
   });
+
+  it("aborts a tool call's Figma request when the client cancels the call", async () => {
+    const figmaSignals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init.signal!;
+            figmaSignals.push(signal);
+            signal.addEventListener("abort", () => reject(signal.reason));
+          }),
+      ),
+    );
+    const { client } = await connect();
+    const cancel = new AbortController();
+
+    const call = client.callTool(
+      { name: "get_figma_data", arguments: { fileKey: "abc" } },
+      undefined,
+      { signal: cancel.signal },
+    );
+    await vi.waitFor(() => expect(figmaSignals).toHaveLength(1));
+    cancel.abort();
+
+    await expect(call).rejects.toThrow();
+    await vi.waitFor(() => expect(figmaSignals[0].aborted).toBe(true));
+  });
 });
