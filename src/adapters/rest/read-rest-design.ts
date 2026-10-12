@@ -1,5 +1,6 @@
 import type { GetFileResponse } from "@figma/rest-api-spec";
 import { project, simplify, type NodeCounter, type SimplifiedDesign } from "@framelink/core";
+import { compressDesign } from "@framelink/core/compress";
 import type { FigmaService } from "~/services/figma.js";
 import { tagError, type ErrorPhase } from "~/utils/error-meta.js";
 import { fetchComponentDefinitions } from "./component-definitions.js";
@@ -90,11 +91,10 @@ export async function readRestDesign(
       nodeCounter: options.nodeCounter,
       scheduler: eventLoopYield,
     });
-    // Egress compression on: the shipped REST output is ref-deduplicated styles and templates.
-    const { nodes, styles, templates, components, elided } = project(full, {
-      compress: true,
-      maxDepth: depth,
-    });
+    // The shipped REST output is compressed: shared styles hoisted, repeated bodies templated.
+    const { nodes, styles, templates, components, elided } = compressDesign(
+      project(full, { maxDepth: depth }),
+    );
     return {
       name: parsed.name,
       nodes,

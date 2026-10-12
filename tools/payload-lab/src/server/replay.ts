@@ -23,6 +23,14 @@ const allowedBuiltins = new Set([
   "perf_hooks",
   "process",
 ]);
+// Core's package entries, resolved to source so a baseline replays its own core. A revision
+// without an entry never imports it.
+const CORE_ENTRIES: Record<string, string> = {
+  "@framelink/core": "core/src/index.ts",
+  "@framelink/core/snapshot": "core/src/snapshot.ts",
+  "@framelink/core/compress": "core/src/compress.ts",
+  "@framelink/core/internal": "core/src/internal.ts",
+};
 async function exists(path: string) {
   try {
     await access(path);
@@ -91,21 +99,8 @@ process.stdout.write(JSON.stringify({ design, serialized, timings: { simplifyMs,
           name: "offline-pipeline",
           setup(builder) {
             builder.onResolve({ filter: /.*/ }, (args) => {
-              if (
-                args.path === "@framelink/core" ||
-                args.path === "@framelink/core/snapshot" ||
-                args.path === "@framelink/core/internal"
-              )
-                return {
-                  path: join(
-                    source,
-                    args.path.endsWith("/snapshot")
-                      ? "core/src/snapshot.ts"
-                      : args.path.endsWith("/internal")
-                        ? "core/src/internal.ts"
-                        : "core/src/index.ts",
-                  ),
-                };
+              const coreEntry = CORE_ENTRIES[args.path];
+              if (coreEntry) return { path: join(source, coreEntry) };
               const name = args.path.replace(/^node:/, "");
               if (builtinModules.includes(name) && !allowedBuiltins.has(name))
                 throw new Error(`Replay refuses network/process module ${args.path}`);

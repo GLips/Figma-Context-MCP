@@ -66,6 +66,17 @@ export async function buildSandboxPreamble() {
     );
   }
 
+  // Compression is REST-only egress (ADR-0004): the plugin never compresses, so the hashing and
+  // template passes must not ride along in every request's preamble. Core ships them from a separate
+  // entry; this catches a preamble module importing it, or core's barrel growing a path back to it.
+  const compressionInputs = inputs.filter((f) => /(^|\/)core\/src\/(compress|sha1)\.ts$/.test(f));
+  if (compressionInputs.length) {
+    throw new Error(
+      "core's REST-only compression reached the sandbox preamble via " + compressionInputs.join(", ") +
+        ". The preamble must never import @framelink/core/compress, and core's barrel must not reach it.",
+    );
+  }
+
   // The other load-bearing invariant, and the reason the wrapper below is written HERE rather than
   // in code.ts: `__flcmHost` is the single identifier that crosses an eval boundary, so no bundler
   // or type checker connects the binding to the read. Emitting both ends from one file reduces that

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 import { simplify, project } from "@framelink/core";
+import { compressDesign } from "@framelink/core/compress";
 import { restNodeToSnapshot } from "~/adapters/rest/decode/node-to-snapshot.js";
 
 // Phase 2 Done-when (Invariant 3): simplify with defaults emits EXPANDED
@@ -70,10 +71,8 @@ describe("simplify — expanded by default", () => {
     expect(typeof nodes[0].textStyle).toBe("object");
   });
 
-  it("compress: true restores the egress form — refs plus hoisted shared styles", async () => {
-    const { nodes, styles } = project(await simplify(snapshots(twoRedRects())), {
-      compress: true,
-    });
+  it("compression restores the egress form — refs plus hoisted shared styles", async () => {
+    const { nodes, styles } = compressDesign(project(await simplify(snapshots(twoRedRects()))));
 
     expect(typeof nodes[0].fill).toBe("string");
     expect(nodes[1].fill).toBe(nodes[0].fill);

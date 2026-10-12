@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./snapshot": "./src/snapshot.ts",
+    "./compress": "./src/compress.ts",
     "./internal": "./src/internal.ts"
   },
   "scripts": {

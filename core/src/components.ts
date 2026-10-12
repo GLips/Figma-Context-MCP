@@ -1,6 +1,6 @@
 import { stableStringify } from "./utils.js";
 import { componentPath, definitionId } from "./instance-path.js";
-import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode, StyleValue } from "./types.js";
+import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode } from "./types.js";
 
 /**
  * The components pass: emit each component's `children` ONCE into a sidecar, and rewrite every
@@ -9,7 +9,7 @@ import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode, StyleValue } 
  * Why a post-walk pass rather than part of the walk: choosing which copy of a component's
  * children to publish needs GLOBAL knowledge the single-pass walk can't have — whether the
  * definition is in the tree at all, and which of N instances is the least-edited donor. Same
- * reason `compressDesign` runs after the walk.
+ * reason compression runs after projection.
  *
  * The priority for a component's children is fixed, and `childrenFrom` says which case fired:
  *   1. the definition's own node, when the read fetched it (in-tree)
@@ -102,7 +102,6 @@ export function extractComponents(
   nodes: SimplifiedNode[],
   notes: ComponentNotes,
   definitions: SimplifiedNode[] = [],
-  styles: Record<string, StyleValue> = {},
 ): Record<string, SimplifiedComponentEntry> {
   const index = indexComponentSources(nodes, definitions);
   const ids = componentIds(index, notes);
@@ -131,7 +130,7 @@ export function extractComponents(
     const source = sources.get(id);
     const children = source
       ? source.children.map((child) =>
-          reduceNode(clone(child), resolveChildren, notes.emptiedContainers, styles),
+          reduceNode(clone(child), resolveChildren, notes.emptiedContainers),
         )
       : undefined;
     resolving.delete(id);
@@ -142,7 +141,7 @@ export function extractComponents(
   };
 
   for (const id of ids) resolveChildren(id);
-  for (const node of nodes) reduceNode(node, resolveChildren, notes.emptiedContainers, styles);
+  for (const node of nodes) reduceNode(node, resolveChildren, notes.emptiedContainers);
   return components;
 }
 
@@ -297,10 +296,9 @@ function reduceNode(
   node: SimplifiedNode,
   resolveChildren: (id: string) => SimplifiedNode[] | undefined,
   emptied: Set<string>,
-  styles: Record<string, StyleValue>,
 ): SimplifiedNode {
   if (node.children) {
-    for (const child of node.children) reduceNode(child, resolveChildren, emptied, styles);
+    for (const child of node.children) reduceNode(child, resolveChildren, emptied);
   }
   if (node.type !== "INSTANCE" || !node.componentId) return node;
   // No children AND the walk didn't empty it: either the component has none, or the depth limit
@@ -315,7 +313,6 @@ function reduceNode(
     node.children ?? [],
     { instanceId: node.id, referenceRoot: "" },
     emptied,
-    styles,
   );
   // `null` means the instance added children the diff can't express as a delta (a filled slot
   // at the top level). Keeping the full subtree is the honest answer for that instance.
@@ -345,7 +342,6 @@ function diffChildren(
   actual: SimplifiedNode[],
   ids: DiffIds,
   emptied: Set<string>,
-  styles: Record<string, StyleValue> = {},
 ): Record<string, NodeDelta> | null {
   const referenceByPath = new Map<string, SimplifiedNode>();
   for (const child of reference)
@@ -360,7 +356,7 @@ function diffChildren(
     if (!counterpart) return null;
     matched.add(path);
     order.push(path);
-    const delta = diffNode(counterpart, child, ids, out, emptied, styles);
+    const delta = diffNode(counterpart, child, ids, out, emptied);
     if (delta) out[path] = delta;
   }
 
@@ -385,22 +381,16 @@ const DIFF_SKIP_KEYS = new Set(["id", "children", "readOnlySource", "elided"]);
 /**
  * A field's comparable form. A token reference compares by identity: the same variable resolving
  * to another value is a mode switch, not a designer's override, and would otherwise report every
- * bound field under a dark-mode instance. Interned values are looked up first, since two such
- * references intern under different names.
+ * bound field under a dark-mode instance.
  */
-function overrideIdentity(value: unknown, styles: Record<string, StyleValue>): string {
+function overrideIdentity(value: unknown): string {
   const comparable = (field: unknown): unknown => {
-    if (typeof field === "string")
-      return Object.prototype.hasOwnProperty.call(styles, field)
-        ? comparable(styles[field])
-        : field;
     if (Array.isArray(field)) return field.map(comparable);
     if (!field || typeof field !== "object") return field;
     const isReference = "variable" in field || "style" in field;
     const out: Record<string, unknown> = {};
     for (const [key, inner] of Object.entries(field)) {
       if (isReference && key === "value") continue;
-      // A reference's identity may be a bare token name, which is never an interned-style key.
       out[key] = isReference && (key === "variable" || key === "style") ? inner : comparable(inner);
     }
     return out;
@@ -419,7 +409,6 @@ function diffNode(
   ids: DiffIds,
   out: Record<string, NodeDelta>,
   emptied: Set<string>,
-  styles: Record<string, StyleValue>,
 ): NodeDelta | undefined {
   const delta: Record<string, unknown> = {};
   const referenceRecord = reference as unknown as Record<string, unknown>;
@@ -436,7 +425,7 @@ function diffNode(
       if (before !== undefined) delta[key] = null;
       continue;
     }
-    if (overrideIdentity(before, styles) !== overrideIdentity(after, styles)) delta[key] = after;
+    if (overrideIdentity(before) !== overrideIdentity(after)) delta[key] = after;
   }
 
   // An emptied container has no `children` to compare, but an EMPTY list is the honest actual:
@@ -444,7 +433,7 @@ function diffNode(
   const actualChildren = actual.children ?? (emptied.has(actual.id) ? [] : undefined);
   if (actualChildren) {
     const nested = reference.children
-      ? diffChildren(reference.children, actualChildren, ids, emptied, styles)
+      ? diffChildren(reference.children, actualChildren, ids, emptied)
       : null;
     if (nested === null) delta.children = actualChildren;
     else Object.assign(out, nested);

@@ -1,50 +1,45 @@
 import { stableStringify } from "./utils.js";
 import { sha1Hex } from "./sha1.js";
-import type { NodeDelta, SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
+import type { SimplifyResult } from "./simplify.js";
+import type {
+  NodeDelta,
+  SimplifiedNode,
+  StyleRefPrefix,
+  StyleValue,
+  TemplateBody,
+} from "./types.js";
 
 /**
- * Post-walk compression pass.
+ * The REST egress compression pass, run over `project()`'s expanded output. It is a separate entry
+ * (`@framelink/core/compress`) and the only importer of `sha1.ts`, so the plugin preamble — which
+ * never compresses — bundles neither (ADR-0004; the preamble build refuses either module).
  *
- * Both features here need GLOBAL knowledge that the single-pass walk can't
- * have: you can't tell whether a style or a subtree is used once or a hundred
- * times until the whole tree is built, so this runs over the already-built
- * design, after the walk completes.
+ * Every step needs GLOBAL knowledge a single-pass walk can't have: you can't tell whether a style
+ * or a subtree is used once or a hundred times until the whole tree is built.
  *
- * Two transformations, in this order:
- *   1. Count-gated style hoisting — a style stays in the top-level `styles`
- *      table only when 2+ nodes reference it; single-use styles are inlined back onto their node, dropping the
- *      indirection tax.
- *   2. Templates — node bodies (everything except id/name/children) that
- *      appear 2+ times are emitted once into `templates` and each occurrence is
- *      replaced by a compact `{ id, name, template, children? }` reference.
+ *   1. Interning — every style value is replaced by a content-addressed ref (`fill_a1b2c3d4`).
+ *   2. Count-gated hoisting — a ref stays in `styles` only when 2+ slots use it; single-use
+ *      values are inlined back onto their node, dropping the indirection tax.
+ *   3. Templates — node bodies (everything except id/name/children/elided) that appear 2+ times
+ *      are emitted once into `templates`, each occurrence replaced by a compact
+ *      `{ id, name, template, children?, elided? }` reference.
  *
- * The order is for simplicity (hash bodies that are already gated), NOT a
- * correctness requirement. Style ids are content-addressed (see the ref style
- * table's intern), so two structurally-identical subtrees already carry
- * byte-identical refs before gating — they hash to the same template with or
- * without it. And gating only rewrites single-use styles, whose lone reference
- * necessarily sits on a unique, non-repeated body (any repeated body would push
- * the style's count to >= 2), so gating never touches a node that participates
- * in templating. Hashing before or after gating yields the same templates
- * either way.
+ * Gating before templating is for simplicity, NOT correctness: refs are content-addressed, so two
+ * structurally-identical subtrees carry byte-identical refs either way, and gating only rewrites
+ * single-use styles, whose lone use necessarily sits on a body that doesn't repeat.
  *
- * A final step (inlineExclusiveStyles) collapses the double indirection that
- * arises when a surviving style turns out to be used only by the instances of a
- * single template — see below.
+ * A final step (inlineExclusiveStyles) collapses the double indirection that arises when a
+ * surviving style turns out to be used only by the instances of a single template — see below.
  */
-export function compressDesign(
-  nodes: SimplifiedNode[],
-  extraSurfaces: SimplifiedNode[][],
-  styles: Record<string, StyleValue>,
-): {
-  nodes: SimplifiedNode[];
-  styles: Record<string, StyleValue>;
-  templates: Record<string, TemplateBody>;
-} {
+export function compressDesign(read: SimplifyResult): SimplifyResult {
   // The components sidecar's published children are output too, so they count, inline and
   // template exactly like tree nodes — a style shared between a component's children and the
   // page must stay hoisted, and two identical bodies must template whichever surface they sit on.
-  const surfaces = [nodes, ...extraSurfaces];
+  const surfaces = [
+    read.nodes,
+    ...Object.values(read.components).flatMap((entry) => (entry.children ? [entry.children] : [])),
+  ];
+  const styles = internStyleValues(surfaces);
 
   // Per-style usage counts, taken before dedup while every node still carries
   // its own style fields. Reused by both the inlining and expansion steps.
@@ -54,18 +49,66 @@ export function compressDesign(
   const { templates, instanceCounts } = deduplicateTemplates(surfaces);
   inlineExclusiveStyles(templates, instanceCounts, surviving, styleCounts);
 
-  return { nodes, styles: surviving, templates };
+  return { ...read, styles: surviving, templates };
+}
+
+/**
+ * Step 1: replace every style value in `surfaces` with a content-addressed ref, in place, and
+ * return the table in first-sighting order (the order REST output shows). The same value always
+ * gets the same id, so output is byte-stable across runs; a value seen under two slot kinds keeps
+ * the prefix of the first.
+ */
+export function internStyleValues(surfaces: SimplifiedNode[][]): Record<string, StyleValue> {
+  const styles: Record<string, StyleValue> = {};
+  const refByValue = new Map<string, string>();
+  const intern = (value: StyleValue, prefix: StyleRefPrefix): string => {
+    const key = stableStringify(value);
+    const existing = refByValue.get(key);
+    if (existing) return existing;
+    // Truncated-hash collision guard. The 8-hex slice (32 bits) keeps refs short but can alias two
+    // different values; reusing a taken id would make every node referencing it resolve to the
+    // wrong style. The full 40-hex hash cannot collide with a truncated id (different length), and
+    // the walk order is stable, so the same file reproduces the same ids.
+    const fullHash = sha1Hex(key);
+    let ref = `${prefix}_${fullHash.slice(0, 8)}`;
+    if (styles[ref] !== undefined) ref = `${prefix}_${fullHash}`;
+    styles[ref] = value;
+    refByValue.set(key, ref);
+    return ref;
+  };
+  const walk = (nodes: Array<SimplifiedNode | NodeDelta>): void => {
+    for (const node of nodes) {
+      visitStyleRefSlots(node, (value, set, prefix) => {
+        // "none" is a removal word (a TEXT's fill, a LINE's stroke), not a paint to share.
+        if (value === undefined || value === "none") return;
+        set(intern(value as StyleValue, prefix));
+      });
+      walk(styleBearingNested(node as SimplifiedNode));
+    }
+  };
+  for (const surface of surfaces) walk(surface);
+  return styles;
 }
 
 /**
  * The node fields that can carry a styles-table ref (a string key) instead
- * of the inline style value (after gating). This is the authoritative list of
- * what compression hoists; the parity comparator imports it so its
+ * of the inline style value, with the prefix each mints refs under. This is the
+ * authoritative list of what compression hoists; the parity comparator imports it so its
  * expand-then-compare view can't drift from what this pass actually refs. Run
  * tuples inside a `text` array carry a ref the same way — visitStyleRefSlots
  * covers both.
  */
-export const STYLE_REF_FIELDS = ["layout", "fill", "stroke", "effects", "textStyle"] as const;
+const STYLE_REF_PREFIXES = {
+  layout: "layout",
+  textStyle: "style",
+  fill: "fill",
+  stroke: "fill",
+  effects: "effect",
+} as const satisfies Record<string, StyleRefPrefix>;
+
+export const STYLE_REF_FIELDS = Object.keys(STYLE_REF_PREFIXES) as Array<
+  keyof typeof STYLE_REF_PREFIXES
+>;
 
 /**
  * Visit every slot on a node (or template body) that can hold a style ref: the
@@ -75,28 +118,37 @@ export const STYLE_REF_FIELDS = ["layout", "fill", "stroke", "effects", "textSty
  */
 function visitStyleRefSlots(
   node: SimplifiedNode | TemplateBody | NodeDelta,
-  visit: (value: unknown, set: (value: unknown) => void) => void,
+  visit: (value: unknown, set: (value: unknown) => void, prefix: StyleRefPrefix) => void,
 ): void {
   const record = node as unknown as Record<string, unknown>;
   for (const field of STYLE_REF_FIELDS) {
-    visit(record[field], (value) => {
-      record[field] = value;
-    });
+    if (!(field in record)) continue;
+    visit(
+      record[field],
+      (value) => {
+        record[field] = value;
+      },
+      STYLE_REF_PREFIXES[field],
+    );
   }
   const text = record.text;
   if (Array.isArray(text)) {
     for (const run of text) {
       if (Array.isArray(run)) {
-        visit(run[1], (value) => {
-          run[1] = value;
-        });
+        visit(
+          run[1],
+          (value) => {
+            run[1] = value;
+          },
+          "style",
+        );
       }
     }
   }
 }
 
 /**
- * Feature 1: replace single-use style refs with their inline value, returning the
+ * Step 2: replace single-use style refs with their inline value, returning the
  * styles that stay hoisted (used by 2+ nodes). Mutates the passed nodes in place
  * (they're owned by this call). A single-use value is referenced by exactly one
  * node, so sharing the value object on inline creates no aliasing. A zero-use
@@ -166,7 +218,7 @@ function styleBearingNested(node: SimplifiedNode): Array<SimplifiedNode | NodeDe
 type TemplateCandidate = { body: TemplateBody; str: string; count: number };
 
 /**
- * Feature 2: hash each node body and replace bodies that repeat 2+ times with a
+ * Step 3: hash each node body and replace bodies that repeat 2+ times with a
  * template reference, returning the template table and each template's instance
  * count. Mutates nodes in place.
  */
@@ -230,8 +282,9 @@ function inlineExclusiveStyles(
 }
 
 // Per-instance keys excluded from the hashed body. Everything else (type and all
-// styling) is intrinsic to the template and gets shared across instances.
-const TEMPLATE_OMIT_KEYS = new Set(["id", "name", "children"]);
+// styling) is intrinsic to the template and gets shared across instances. `elided` sizes what was
+// cut from THIS node, so it stays on the reference rather than splitting otherwise-equal bodies.
+const TEMPLATE_OMIT_KEYS = new Set(["id", "name", "children", "elided"]);
 
 function bodyOf(node: SimplifiedNode): TemplateBody {
   const source = node as unknown as Record<string, unknown>;
@@ -295,6 +348,7 @@ function applyTemplateRefs(
     if (hash && templates[hash]) {
       const ref: SimplifiedNode = { id: node.id, name: node.name, template: hash };
       if (node.children && node.children.length > 0) ref.children = node.children;
+      if (node.elided) ref.elided = node.elided;
       nodes[i] = ref;
     }
   }

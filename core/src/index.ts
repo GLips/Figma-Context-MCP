@@ -7,7 +7,6 @@ export type {
   SimplifiedNode,
   WarningRecord,
   StyleRefPrefix,
-  StyleTable,
   TraversalOptions,
   WalkScheduler,
   StyleValue,
@@ -84,7 +83,8 @@ export {
   variableReference,
 } from "./tokens.js";
 
-// Deliberately absent: `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.
+// Deliberately absent: compression. It is REST-only egress, so it ships from its own entry
+// (`@framelink/core/compress`) the plugin preamble never imports — see compress.ts.
 
 export { project, projectReadNode, isElision } from "./project.js";
 export type { ProjectOptions } from "./project.js";

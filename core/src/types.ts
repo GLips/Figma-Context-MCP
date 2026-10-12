@@ -20,33 +20,9 @@ export type StyleValue =
 
 /**
  * The namespaces auto-generated style ref ids are minted under
- * (`fill_a1b2c3d4`). Closed set: the four value kinds projection interns.
+ * (`fill_a1b2c3d4`). Closed set: the four value kinds compression interns.
  */
 export type StyleRefPrefix = "layout" | "style" | "fill" | "effect";
-
-/**
- * Where `project` sends each node's style values as it builds the wire tree. The
- * table decides the output form, which is what makes compression separable from
- * projection (Invariant 3): the compressing table interns values under
- * content-addressed refs, hashing as each node is projected, while the inline
- * table hands the value straight back and never touches a hash. Gating only the
- * later `compressDesign` pass would not be enough — refs and sha1 fire during
- * projection — so the table is the seam expanded mode swaps.
- */
-export interface StyleTable {
-  /**
-   * Intern a style value. Returns a ref key (compressing table) or the value itself (inline
-   * table). Keys are content-addressed only: a Figma named style is already a `{ style }` value
-   * on the node, so it needs no key of its own.
-   */
-  intern<T extends StyleValue>(value: T, prefix: StyleRefPrefix): string | T;
-  /**
-   * Everything the table hoisted, in interning order. Compressing table: all
-   * shared styles (pre-compression). Inline table: always empty — every value
-   * is handed straight back for inline emission.
-   */
-  readonly styles: Record<string, StyleValue>;
-}
 
 /**
  * Cooperative-yield hook awaited by the walker every N nodes. Injected rather

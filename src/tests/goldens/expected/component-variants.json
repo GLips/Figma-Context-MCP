@@ -259,20 +259,20 @@
     }
   },
   "styles": {
-    "fill_1288b06a": "#E6E6E6",
-    "fill_314185fc": "#000000",
+    "fill_93e41386": "#3366FF",
+    "layout_5597a813": {
+      "mode": "column",
+      "gap": "8px"
+    },
     "style_9f723b14": {
       "fontFamily": "Inter",
       "fontWeight": 400,
       "fontSize": 14,
       "lineHeight": "20px"
     },
-    "fill_93e41386": "#3366FF",
-    "fill_93230492": "#FFFFFF",
-    "layout_5597a813": {
-      "mode": "column",
-      "gap": "8px"
-    }
+    "fill_314185fc": "#000000",
+    "fill_1288b06a": "#E6E6E6",
+    "fill_93230492": "#FFFFFF"
   },
   "templates": {}
 }

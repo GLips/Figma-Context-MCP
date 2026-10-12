@@ -19,18 +19,26 @@ Two gates in `tests/` enforce this: `figma-free.test.ts` (no REST types) and
 
 ```typescript
 import { simplify, project } from "@framelink/core";
+import { compressDesign } from "@framelink/core/compress";
 
 // Stage 1 — the walk: the expanded runtime tree, every style value inline
 const full = await simplify(snapshots);
 
-// Stage 2 — egress projection: depth cuts, deduplicated style refs + templates (what the REST tool ships)
-const { nodes, styles, templates } = project(full, { compress: true, maxDepth });
+// Stage 2 — egress projection: wire admission, depth cuts, the components sidecar, still inline
+const wire = project(full, { maxDepth });
+
+// Stage 3 — REST only: hoisted shared styles + templates (what the REST tool ships)
+const { nodes, styles, templates } = compressDesign(wire);
 ```
 
 `simplify` is async: it awaits an injectable cooperative-yield scheduler
 (`options.scheduler`) so servers can keep heartbeats live on large files.
 Callers without that need just await the promise. Its result always carries
-empty `styles`/`templates`; only `project` fills them.
+empty `styles`/`templates`, as does `project`'s; only `compressDesign` fills them.
+
+Compression is its own entry (`@framelink/core/compress`) and the only importer of
+`sha1.ts`, so the plugin preamble — which never compresses — bundles neither
+(ADR-0004). The preamble build refuses either module.
 
 ## Layers
 
@@ -38,10 +46,9 @@ empty `styles`/`templates`; only `project` fills them.
    visuals, and component data from each node (and collapses SVG-heavy
    containers bottom-up). It records producer facts in `read-context.ts` for
    the projection stage.
-2. `project.ts` — the egress projection: picks the style table, applies
-   `maxDepth` and `elided` cuts, and runs compression. Never mutates its input.
-3. `style-table.ts` — where `project` interns style values; the table decides
-   inline emission (expanded) vs content-addressed refs (compressing)
-4. `compress.ts` — opt-in egress compression: count-gated style hoisting +
-   element templates (needs whole-tree counts, so it runs over the projected tree)
-5. `transformers/` — pure per-property conversions (layout, text, style, effects, component)
+2. `project.ts` — the egress projection: applies wire admission, `maxDepth`
+   and `elided` cuts, and the components pass. Never mutates its input.
+3. `compress.ts` — REST egress compression: content-addressed interning,
+   count-gated style hoisting + element templates (needs whole-tree counts, so
+   it runs over the projected tree)
+4. `transformers/` — pure per-property conversions (layout, text, style, effects, component)

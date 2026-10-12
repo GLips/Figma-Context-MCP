@@ -1,18 +1,15 @@
 import { admittedOnWire, childrenInsideDefinition } from "./admission.js";
-import { compressDesign } from "./compress.js";
 import { createComponentNotes, extractComponents } from "./components.js";
 import { readContext, type ReadContext } from "./read-context.js";
-import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import { computeGridChildOrder } from "./transformers/layout.js";
 import { paintSlot } from "./transformers/style.js";
 import { hasAutoLayout } from "./utils.js";
 import { componentPath, liveSublayerId } from "./instance-path.js";
 import type { SimplifyResult } from "./simplify.js";
 import type { NodeSnapshot } from "./snapshot.js";
-import type { SimplifiedNode, StyleTable, Elision } from "./types.js";
+import type { SimplifiedNode, Elision } from "./types.js";
 
 export interface ProjectOptions {
-  compress?: boolean;
   maxDepth?: number;
 }
 
@@ -36,22 +33,11 @@ export function projectReadNode(node: SimplifiedNode, full: SimplifyResult): Sim
   );
 }
 
-export function projectIntoTable(
-  full: SimplifyResult,
-  table: StyleTable,
-  options: ProjectOptions = {},
-): SimplifyResult {
-  return projectTrees(full.nodes, readContext(full), options, table);
-}
-
 function projectTrees(
   roots: SimplifiedNode[],
   context: ReadContext,
   options: ProjectOptions,
-  providedTable?: StyleTable,
 ): SimplifyResult {
-  const refs = options.compress ? createRefStyleTable() : undefined;
-  const table = providedTable ?? refs ?? createInlineStyleTable();
   const notes = createComponentNotes();
   const cuts = new Map<string, Elision>();
   const cut = (node: SimplifiedNode, field: string, value: unknown) => {
@@ -92,7 +78,6 @@ function projectTrees(
         if (value !== undefined) node[slot] = value;
         else delete node[slot];
       }
-      internStyles(node, table);
       // Notes are collected only for nodes admitted by the wire's visibility/depth rules.
       for (const id of [full.id, full.componentId, snapshot.mainComponent?.set?.id]) {
         if (!id) continue;
@@ -138,14 +123,10 @@ function projectTrees(
   };
   const nodes = walk(roots, 0, false);
   const definitions = walk(context.definitions, 0, false);
-  const components = extractComponents(nodes, notes, definitions, table.styles);
-  const surfaces = Object.values(components).flatMap((entry) =>
-    entry.children ? [entry.children] : [],
-  );
-  const result = refs
-    ? { ...compressDesign(nodes, surfaces, table.styles), components }
-    : { nodes, styles: table.styles, templates: {}, components };
-  // Markers attach after hashing/diffing so they cannot change template ids or component deltas.
+  const components = extractComponents(nodes, notes, definitions);
+  const result: SimplifyResult = { nodes, styles: {}, templates: {}, components };
+  // Markers attach after diffing so they cannot change component deltas; compression keeps them
+  // out of template bodies for the same reason.
   const mark = (list: SimplifiedNode[], donorId?: string) => {
     for (const node of list) {
       // A donated body is keyed in the definition's id space; its cuts were recorded on the donor.
@@ -159,7 +140,7 @@ function projectTrees(
   };
   const omittedRoots = roots.filter((root) => !nodes.some((node) => node.id === root.id));
   if (omittedRoots.length)
-    (result as SimplifyResult).elided = omittedRoots.map((root) => ({
+    result.elided = omittedRoots.map((root) => ({
       id: root.id,
       elided: { node: JSON.stringify(root).length },
     }));
@@ -169,20 +150,6 @@ function projectTrees(
   return result;
 }
 
-function internStyles(node: SimplifiedNode, table: StyleTable): void {
-  // Extraction order: the styles table's key order is observable on REST.
-  if (node.layout !== undefined) node.layout = table.intern(node.layout, "layout");
-  if (Array.isArray(node.text))
-    for (const run of node.text) {
-      if (Array.isArray(run)) run[1] = table.intern(run[1], "style");
-    }
-  if (node.textStyle !== undefined) node.textStyle = table.intern(node.textStyle, "style");
-  if (node.fill !== undefined && !(node.type === "TEXT" && node.fill === "none"))
-    node.fill = table.intern(node.fill, "fill");
-  if (node.stroke !== undefined && !(node.type === "LINE" && node.stroke === "none"))
-    node.stroke = table.intern(node.stroke, "fill");
-  if (node.effects !== undefined) node.effects = table.intern(node.effects, "effect");
-}
 // ---------------------------------------------------------------------------
 // SVG container collapse
 // ---------------------------------------------------------------------------

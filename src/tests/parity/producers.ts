@@ -4,6 +4,7 @@ import { readSceneDesign } from "@framelink/plugin/scene-read";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 import type { SimplifiedDesign, SimplifyResult } from "@framelink/core";
 import { simplify, project } from "@framelink/core";
+import { compressDesign } from "@framelink/core/compress";
 import { readRestFixture } from "../rest-fixture-source.js";
 import type { LoadedScene } from "./scenes-io.js";
 
@@ -37,7 +38,7 @@ export interface ParityProducer {
 
 /** The wire form both producers egress: compressed projection of a full simplify result. */
 function compressed(full: SimplifyResult): SimplifiedDesign {
-  const { nodes, styles, templates, components } = project(full, { compress: true });
+  const { nodes, styles, templates, components } = compressDesign(project(full));
   // `name` is scoped out of the parity view — no source name in a snapshot.
   return { name: "", nodes, components, styles, templates };
 }

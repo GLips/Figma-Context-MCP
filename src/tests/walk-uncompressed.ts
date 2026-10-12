@@ -1,13 +1,14 @@
 import type { Node as FigmaNode, Style } from "@figma/rest-api-spec";
 import { restNodeToSnapshot } from "~/adapters/rest/decode/node-to-snapshot.js";
 import type { RestComponentTables } from "~/adapters/rest/decode/component-tables.js";
-import { simplify } from "@framelink/core";
+import { project, simplify } from "@framelink/core";
 import type { TraversalOptions } from "@framelink/core";
-import { createRefStyleTable, projectIntoTable } from "@framelink/core/internal";
+import { internStyleValues } from "@framelink/core/internal";
 
-// The uncompressed walk — what `simplify` runs before `compressDesign`. Three read-path suites
-// need the output and style sink before compression rewrites both. Kept to one file so the
-// divergent-walk toolkit has a single call site to audit.
+// The projected walk with every style value interned but none gated or templated — the state
+// compression starts from. Read-path suites assert on a value's ref and table entry before
+// compression inlines single-use ones. Kept to one file so the divergent-walk toolkit has a
+// single call site to audit.
 export async function walkUncompressed(
   nodes: FigmaNode[],
   options: {
@@ -17,10 +18,15 @@ export async function walkUncompressed(
     tables?: RestComponentTables;
   } = {},
 ) {
-  const sink = createRefStyleTable();
   const full = await simplify(
     nodes.map((node) => restNodeToSnapshot(node, options.extraStyles, options.tables)),
   );
-  const result = projectIntoTable(full, sink, options.traversal);
-  return { ...result, styles: sink.styles };
+  const result = project(full, options.traversal);
+  const surfaces = [
+    result.nodes,
+    ...Object.values(result.components).flatMap((entry) =>
+      entry.children ? [entry.children] : [],
+    ),
+  ];
+  return { ...result, styles: internStyleValues(surfaces) };
 }
