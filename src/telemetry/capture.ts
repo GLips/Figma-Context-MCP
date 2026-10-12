@@ -2,27 +2,149 @@ import { getErrorMeta } from "~/utils/error-meta.js";
 import { HttpError } from "~/utils/fetch-json.js";
 import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
 import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
-import { captureEvent } from "./client.js";
+import { captureEvent, captureUnexpectedError } from "./client.js";
 import { fingerprintResponseBody } from "./response-body-fingerprint.js";
 import type {
-  CommonCallProps,
-  GetFigmaDataCall,
-  DownloadFigmaImagesCall,
-  ToolCallProperties,
+  ErrorCallProps,
   ToolCallContext,
-  ValidationRejectCall,
-  ValidationRejectInput,
+  ToolCallEvent,
+  ToolEventProperties,
 } from "./types.js";
 
-function captureToolCall(props: ToolCallProperties): void {
-  captureEvent("tool_called", props as unknown as Record<string, unknown>);
+/**
+ * One `tool_called` event, for any tool. Failures are reported as codes — category, status,
+ * phase, the responder's fingerprint — never as the error's free text, which quotes what the user
+ * sent and what servers answered. An UNEXPECTED failure (no category, or `internal`) also goes to
+ * error tracking, message and stack scrubbed (client.ts), since codes can't say what broke.
+ */
+export function captureToolCall(event: ToolCallEvent, context: ToolCallContext): void {
+  const { tool, durationMs, isError, error, rejection, properties } = event;
+  captureEvent("tool_called", {
+    ...properties,
+    tool,
+    duration_ms: durationMs,
+    transport: context.transport,
+    auth_mode: context.authMode,
+    client_name: context.clientInfo?.name,
+    client_version: context.clientInfo?.version,
+    is_error: isError || rejection !== undefined,
+    ...(rejection
+      ? {
+          error_phase: "validate",
+          error_category: "invalid_input",
+          validation_field: rejection.field,
+          validation_rule: rejection.rule,
+          validation_detail: rejection.detail,
+        }
+      : error === undefined
+        ? {}
+        : errorFields(error)),
+  });
+  if (error !== undefined && isUnexpectedError(error))
+    captureUnexpectedError(error, messageWithoutResponseBodies(error), {
+      tool,
+      transport: context.transport,
+      figma_user_id:
+        typeof properties?.figma_user_id === "string" ? properties.figma_user_id : undefined,
+    });
+}
+
+export function captureGetFigmaDataCall(
+  outcome: GetFigmaDataOutcome,
+  context: ToolCallContext,
+): void {
+  captureToolCall(
+    {
+      tool: "get_figma_data",
+      durationMs: outcome.durationMs,
+      isError: outcome.error !== undefined,
+      error: outcome.error,
+      properties: getFigmaDataProperties(outcome),
+    },
+    context,
+  );
+}
+
+export function captureDownloadImagesCall(
+  outcome: DownloadImagesOutcome,
+  context: ToolCallContext,
+): void {
+  captureToolCall(
+    {
+      tool: "download_figma_images",
+      durationMs: outcome.durationMs,
+      isError: outcome.error !== undefined,
+      error: outcome.error,
+      properties: { image_count: outcome.imageCount, success_count: outcome.successCount },
+    },
+    context,
+  );
+}
+
+function getFigmaDataProperties(outcome: GetFigmaDataOutcome): ToolEventProperties {
+  const { metrics } = outcome;
+  return {
+    output_format: outcome.outputFormat,
+    depth: outcome.input.depth ?? null,
+    has_node_id: Boolean(outcome.input.nodeId),
+    raw_size_kb: metrics?.rawSizeKb,
+    simplified_size_kb: metrics?.simplifiedSizeKb,
+    raw_node_count: metrics?.rawNodeCount,
+    simplified_node_count: metrics?.simplifiedNodeCount,
+    max_depth: metrics?.maxDepth,
+    named_style_count: metrics?.namedStyleCount,
+    component_count: metrics?.componentCount,
+    instance_count: metrics?.instanceCount,
+    text_node_count: metrics?.textNodeCount,
+    image_node_count: metrics?.imageNodeCount,
+    component_property_count: metrics?.componentPropertyCount,
+    has_variables: metrics?.hasVariables,
+    fetch_ms: metrics?.fetchMs,
+    decode_ms: metrics?.decodeMs,
+    enrich_ms: metrics?.enrichMs,
+    simplify_ms: metrics?.simplifyMs,
+    serialize_ms: metrics?.serializeMs,
+  };
+}
+
+/** A failure nothing tagged as anticipated: a bug, or an outage no producer names. */
+function isUnexpectedError(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return false;
+  const { category } = getErrorMeta(error);
+  return category === undefined || category === "internal";
+}
+
+function errorFields(error: unknown): ErrorCallProps {
+  const meta = getErrorMeta(error);
+  const responseBody = responseBodyOf(error);
+  return {
+    error_type: error instanceof Error ? error.constructor.name : "Unknown",
+    error_phase: meta.phase,
+    error_category: meta.category,
+    http_status: meta.http_status,
+    network_code: meta.network_code,
+    fs_code: meta.fs_code,
+    is_retryable: meta.is_retryable,
+    response_fingerprint:
+      responseBody === undefined ? undefined : fingerprintResponseBody(responseBody),
+  };
+}
+
+/** The first HTTP response body in the error's cause chain — who answered a failed request. */
+function responseBodyOf(error: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  for (let current = error; current instanceof Error && !seen.has(current); ) {
+    seen.add(current);
+    if (current instanceof HttpError && current.responseBody) return current.responseBody;
+    current = current.cause;
+  }
+  return undefined;
 }
 
 /**
- * The error message with every HTTP response body in its cause chain swapped
- * for a fingerprint. Producers splice the body into the message verbatim (the
- * user needs it), so substitution here is what keeps block-page contents —
- * usernames, client IPs, internal hosts — out of PostHog.
+ * The error message with every HTTP response body in its cause chain swapped for a fingerprint.
+ * Producers splice the body into the message verbatim (the user needs it), so substitution here is
+ * what keeps block-page contents — usernames, client IPs, internal hosts — out of PostHog.
  */
 function messageWithoutResponseBodies(error: unknown): string {
   let message = error instanceof Error ? error.message : String(error);
@@ -38,131 +160,4 @@ function messageWithoutResponseBodies(error: unknown): string {
     current = current.cause;
   }
   return message;
-}
-
-function errorFields(
-  error: unknown,
-): Pick<
-  CommonCallProps,
-  | "is_error"
-  | "error_type"
-  | "error_message"
-  | "error_phase"
-  | "error_category"
-  | "http_status"
-  | "network_code"
-  | "fs_code"
-  | "is_retryable"
-> {
-  if (error === undefined) return { is_error: false };
-  const meta = getErrorMeta(error);
-  return {
-    is_error: true,
-    error_type: error instanceof Error ? error.constructor.name : "Unknown",
-    error_message: messageWithoutResponseBodies(error),
-    error_phase: meta.phase,
-    error_category: meta.category,
-    http_status: meta.http_status,
-    network_code: meta.network_code,
-    fs_code: meta.fs_code,
-    is_retryable: meta.is_retryable,
-  };
-}
-
-function toGetFigmaDataEvent(
-  outcome: GetFigmaDataOutcome,
-  context: ToolCallContext,
-): GetFigmaDataCall {
-  return {
-    tool: "get_figma_data",
-    duration_ms: outcome.durationMs,
-    transport: context.transport,
-    auth_mode: context.authMode,
-    client_name: context.clientInfo?.name,
-    client_version: context.clientInfo?.version,
-    output_format: outcome.outputFormat,
-    depth: outcome.input.depth ?? null,
-    has_node_id: Boolean(outcome.input.nodeId),
-    raw_size_kb: outcome.metrics?.rawSizeKb,
-    simplified_size_kb: outcome.metrics?.simplifiedSizeKb,
-    raw_node_count: outcome.metrics?.rawNodeCount,
-    simplified_node_count: outcome.metrics?.simplifiedNodeCount,
-    max_depth: outcome.metrics?.maxDepth,
-    named_style_count: outcome.metrics?.namedStyleCount,
-    component_count: outcome.metrics?.componentCount,
-    instance_count: outcome.metrics?.instanceCount,
-    text_node_count: outcome.metrics?.textNodeCount,
-    image_node_count: outcome.metrics?.imageNodeCount,
-    component_property_count: outcome.metrics?.componentPropertyCount,
-    has_variables: outcome.metrics?.hasVariables,
-    fetch_ms: outcome.metrics?.fetchMs,
-    decode_ms: outcome.metrics?.decodeMs,
-    enrich_ms: outcome.metrics?.enrichMs,
-    simplify_ms: outcome.metrics?.simplifyMs,
-    serialize_ms: outcome.metrics?.serializeMs,
-    ...errorFields(outcome.error),
-  };
-}
-
-function toDownloadImagesEvent(
-  outcome: DownloadImagesOutcome,
-  context: ToolCallContext,
-): DownloadFigmaImagesCall {
-  return {
-    tool: "download_figma_images",
-    duration_ms: outcome.durationMs,
-    transport: context.transport,
-    auth_mode: context.authMode,
-    client_name: context.clientInfo?.name,
-    client_version: context.clientInfo?.version,
-    image_count: outcome.imageCount,
-    success_count: outcome.successCount,
-    ...errorFields(outcome.error),
-  };
-}
-
-export function captureGetFigmaDataCall(
-  outcome: GetFigmaDataOutcome,
-  context: ToolCallContext,
-): void {
-  captureToolCall(toGetFigmaDataEvent(outcome, context));
-}
-
-export function captureDownloadImagesCall(
-  outcome: DownloadImagesOutcome,
-  context: ToolCallContext,
-): void {
-  captureToolCall(toDownloadImagesEvent(outcome, context));
-}
-
-/**
- * Capture a tool call that was rejected by input validation. Fires a regular
- * `tool_called` event so PostHog dashboards can aggregate it alongside
- * executed calls (filter by `error_phase == "validate"`), but without run
- * metrics: the pipeline never ran, so there are none to report.
- */
-export function captureValidationReject(
-  input: ValidationRejectInput,
-  context: ToolCallContext,
-): void {
-  const common: CommonCallProps & { error_phase: "validate" } = {
-    duration_ms: input.durationMs ?? 0,
-    transport: context.transport,
-    auth_mode: context.authMode,
-    client_name: context.clientInfo?.name,
-    client_version: context.clientInfo?.version,
-    is_error: true,
-    error_type: "ValidationError",
-    error_message: input.message,
-    error_phase: "validate",
-    error_category: "invalid_input",
-    validation_field: input.field,
-    validation_rule: input.rule,
-  };
-
-  const event: ValidationRejectCall =
-    input.tool === "get_figma_data"
-      ? { ...common, tool: "get_figma_data", output_format: input.outputFormat }
-      : { ...common, tool: "download_figma_images" };
-  captureToolCall(event);
 }

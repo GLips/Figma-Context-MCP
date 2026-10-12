@@ -44,7 +44,7 @@ describe("download path validation (handler)", () => {
       rule: "outside_image_dir",
     });
     // The rejected path names the user's directories; only its shape may reach telemetry.
-    expect(onReject.mock.calls[0][0].message).not.toContain("../../etc");
+    expect(JSON.stringify(onReject.mock.calls[0][0])).not.toContain("../../etc");
   });
 
   it("rejects localPath that traverses outside imageDir", async () => {

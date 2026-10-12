@@ -2,16 +2,37 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock posthog-node so we can observe what the telemetry client sends without
 // hitting the network. We're testing OUR code (withRequestSecrets, ALS
-// propagation, redactErrorMessage merge logic) end-to-end — only the system
-// boundary is mocked.
+// propagation, the scrub) end-to-end — only the system boundary is mocked.
 const captureSpy = vi.fn();
+const captureExceptionSpy =
+  vi.fn<(error: Error, distinctId: string, properties: Record<string, unknown>) => void>();
 const shutdownSpy = vi.fn(async () => {});
 vi.mock("posthog-node", () => ({
   PostHog: class {
     capture = captureSpy;
+    captureException = captureExceptionSpy;
     shutdown = shutdownSpy;
   },
 }));
+
+/** Every byte handed to PostHog: events, and reported errors' messages and stacks. */
+function everythingSent(): string {
+  const events = captureSpy.mock.calls.map(([args]) => JSON.stringify(args));
+  const exceptions = captureExceptionSpy.mock.calls.map(([error, distinctId, props]) =>
+    [error.message, error.stack, distinctId, JSON.stringify(props)].join("\n"),
+  );
+  return [...events, ...exceptions].join("\n");
+}
+
+/** The errors sent to error tracking, as PostHog receives them. */
+function exceptionsSent(): Error[] {
+  return captureExceptionSpy.mock.calls.map(([error]) => error);
+}
+
+function resetPostHogSpies() {
+  captureSpy.mockClear();
+  captureExceptionSpy.mockClear();
+}
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -31,7 +52,7 @@ describe("per-request telemetry redaction", () => {
   let httpServer: Server | undefined;
 
   beforeEach(() => {
-    captureSpy.mockClear();
+    resetPostHogSpies();
     // Init with NO global redaction secrets so the assertion proves the
     // per-request AsyncLocalStorage path is what's doing the scrubbing.
     initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: [] });
@@ -61,7 +82,7 @@ describe("per-request telemetry redaction", () => {
     vi.unstubAllGlobals();
   });
 
-  it("scrubs per-request X-Figma-Token from telemetry error_message", async () => {
+  it("scrubs a per-request X-Figma-Token from everything sent to PostHog", async () => {
     httpServer = await startHttpServer("127.0.0.1", 0, undefined, {});
     const port = (httpServer.address() as AddressInfo).port;
 
@@ -83,18 +104,10 @@ describe("per-request telemetry redaction", () => {
     // path actually fired.
     expect(result.isError).toBe(true);
 
-    const errorEvents = captureSpy.mock.calls
-      .map(([args]) => args)
-      .filter((args) => args?.properties?.is_error === true);
-    expect(errorEvents.length).toBeGreaterThan(0);
-
-    for (const event of errorEvents) {
-      const message = String(event.properties.error_message ?? "");
-      expect(message, `event ${event.event} leaked the per-request token`).not.toContain(
-        PER_REQUEST_KEY,
-      );
-      expect(message).toContain("[REDACTED]");
-    }
+    // An untagged fetch failure is unexpected, so it went to error tracking — scrubbed.
+    const [reported] = exceptionsSent();
+    expect(reported.message).toContain("[REDACTED]");
+    expect(everythingSent()).not.toContain(PER_REQUEST_KEY);
   });
 });
 
@@ -107,15 +120,14 @@ describe("per-request telemetry redaction", () => {
  * node ID reaches PostHog") rather than the regex shapes in
  * `telemetry/redact-identifiers.ts`.
  */
-describe("figma identifier redaction in telemetry error_message", () => {
+describe("figma identifier redaction in telemetry", () => {
   const FILE_KEY = figmaFileKey("aB3xYz9QpLmN0kRtVwSdEf");
   const NODE_ID = figmaNodeId("1234:5678");
 
-  function errorMessagesSent(): string[] {
-    return captureSpy.mock.calls
-      .map(([args]) => args)
-      .filter((args) => args?.properties?.is_error === true)
-      .map((args) => String(args.properties.error_message ?? ""));
+  function onlyExceptionMessage(): string {
+    const [reported, ...rest] = exceptionsSent();
+    expect(rest).toEqual([]);
+    return reported.message;
   }
 
   async function captureThrown(fn: () => Promise<unknown>): Promise<unknown> {
@@ -128,7 +140,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
   }
 
   beforeEach(() => {
-    captureSpy.mockClear();
+    resetPostHogSpies();
     initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: [] });
   });
 
@@ -166,13 +178,10 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
-    expect(message).not.toContain(FILE_KEY);
-    expect(message).not.toContain(NODE_ID);
-    expect(message).toContain(`/files/${REDACTED_FILE_KEY}`);
-    expect(message).toContain(`ids=${REDACTED_NODE_ID}`);
-
-    // The analytics signal survives the scrub.
+    // An expected failure travels as codes only; nothing quotes the endpoint.
+    expect(exceptionsSent()).toEqual([]);
+    expect(everythingSent()).not.toContain(FILE_KEY);
+    expect(everythingSent()).not.toContain(NODE_ID);
     const [event] = captureSpy.mock.calls.map(([args]) => args);
     expect(event.properties.http_status).toBe(403);
     expect(event.properties.error_category).toBe("auth");
@@ -192,9 +201,8 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
-    expect(message).not.toContain(NODE_ID);
-    expect(message).toContain(`Node ${REDACTED_NODE_ID} was not found`);
+    expect(exceptionsSent()).toEqual([]);
+    expect(everythingSent()).not.toContain(NODE_ID);
     const [event] = captureSpy.mock.calls.map(([args]) => args);
     expect(event.properties.error_category).toBe("not_found");
   });
@@ -230,13 +238,12 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
     for (const leak of ["jane.doe", "10.42.7.19", "zs-gw-03", "acme-corp", FILE_KEY]) {
-      expect(message).not.toContain(leak);
+      expect(everythingSent()).not.toContain(leak);
     }
-    expect(message).toContain("returned 403 Forbidden");
-    expect(message).toContain("vendor=zscaler");
-    expect(message).toContain('title="Website Blocked"');
+    const [event] = captureSpy.mock.calls.map(([args]) => args);
+    expect(event.properties.response_fingerprint).toContain("vendor=zscaler");
+    expect(event.properties.response_fingerprint).toContain('title="Website Blocked"');
   });
 
   it("scrubs a branch URL's keys and file-name slug", async () => {
@@ -254,7 +261,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
+    const message = onlyExceptionMessage();
     expect(message).not.toContain(FILE_KEY);
     expect(message).not.toContain("BrKey987654321");
     expect(message).not.toContain("Acme-Secret-Rebrand");
@@ -274,9 +281,11 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
-    expect(message).not.toContain(homedir());
+    const message = onlyExceptionMessage();
     expect(message).toContain("'~/clients/acme/hero.png'");
+    // The stack's frames are absolute paths too.
+    expect(exceptionsSent()[0].stack).toMatch(/^\s+at /m);
+    expect(everythingSent()).not.toContain(homedir());
   });
 
   it("scrubs a percent-encoded Figma URL quoted from a proxy block page", async () => {
@@ -297,7 +306,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
+    const message = onlyExceptionMessage();
     expect(message).not.toContain(FILE_KEY);
     expect(message).not.toContain("1%3A2");
     expect(message).toContain(REDACTED_FILE_KEY);
@@ -321,7 +330,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
+    const message = onlyExceptionMessage();
     expect(message).toContain("127.0.0.1:8080");
     expect(message).toContain("fetch-json.ts:75:11");
     expect(message).not.toContain(REDACTED_NODE_ID);
@@ -345,10 +354,10 @@ describe("figma identifier redaction in telemetry error_message", () => {
       { transport: "stdio", authMode: "api_key" },
     );
 
-    const [message] = errorMessagesSent();
+    const message = onlyExceptionMessage();
     expect(message).not.toContain(FILE_KEY);
     expect(message).not.toContain(NODE_ID);
     expect(message).not.toContain("1234-5678");
-    expect(message).not.toContain("figd_secret");
+    expect(everythingSent()).not.toContain("figd_secret");
   });
 });

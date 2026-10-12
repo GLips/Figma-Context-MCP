@@ -3,7 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
-import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
+import {
+  screenshotInputError,
+  type ScreenshotOptions,
+} from "~/commercial/plugin-bridge/screenshot-options.js";
 import { OutsideAssetRootError } from "~/commercial/plugin-bridge/contained-file.js";
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { resolve as resolvePath } from "node:path";
@@ -14,7 +17,7 @@ import {
   bindPluginAdvertisement,
   type PluginBridgeRuntime,
 } from "~/commercial/plugin-bridge/index.js";
-import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
+import { APPROVAL_WAIT_MS, ApprovalWaitError } from "~/commercial/plugin-bridge/await-approval.js";
 import {
   approvalGuidance,
   pluginDisconnectedNotSubmittedText,
@@ -23,10 +26,15 @@ import {
   executePluginCode,
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
-import type { ServerTransport } from "~/mcp/index.js";
-import type { FigmaService } from "~/services/figma.js";
-import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
+import { BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
+import type { ApprovedSession } from "~/commercial/plugin-bridge/approval-session.js";
+import type { ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
+import { getFigmaDataTool } from "~/mcp/tools/index.js";
+import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
+import { retryableToolReply } from "~/mcp/fail-loud-params.js";
+import type { ToolEventProperties } from "~/telemetry/index.js";
 import { referenceSessionGuidance } from "~/commercial/plugin-bridge/session-guidance.js";
+import { advertisePluginReadRoute, describePluginReadRecovery } from "./plugin-read-route.js";
 import {
   buildQuickStart,
   buildReferenceMenu,
@@ -44,12 +52,81 @@ import { formatExecuteCodeReply } from "./token-tree.js";
 // get_flcm_reference.
 const EXECUTE_CODE_DESCRIPTION = buildQuickStart(MCP_DOCS_CHANNEL);
 
-type CodeModeToolsOptions = {
+/**
+ * The commercial write path as an extension of the MIT read server: the code-mode tools, plus the
+ * plugin route get_figma_data's description and failures point at.
+ */
+export function codeModeExtension(
+  runtime: PluginBridgeRuntime,
+  { codeMode }: { codeMode: boolean },
+): ServerExtension {
+  return {
+    describeReadRecovery: (error, request) => describePluginReadRecovery(runtime, error, request),
+    register(server, context) {
+      advertisePluginReadRoute(context.getFigmaData, runtime, {
+        baseDescription: getFigmaDataTool.description,
+        transport: context.transport,
+      });
+      registerCodeModeTools(server, runtime, { ...context, codeMode });
+    },
+  };
+}
+
+/**
+ * What a write-path call reports. Codes and flags only: never the script, its reply or a message.
+ * `figma_user_id` is the Authorizing User of the Allow that admitted the run (README: Telemetry).
+ */
+type CodeModeFacts = ToolEventProperties & {
+  figma_user_id?: string;
+  /** How far the call got. */
+  outcome?: "executed" | "captured" | "pending_approval" | "refused" | "failed" | "not_run";
+  /** A failure answered to the agent as a result — the plugin or the approval, never a bug. */
+  failure?: string;
+};
+
+/** Who a run is attributed to: the Authorizing User of the Allow that admitted it. */
+function admittedBy(session: ApprovedSession | null): CodeModeFacts {
+  return session?.authorizingUser ? { figma_user_id: session.authorizingUser.figmaUserId } : {};
+}
+
+/**
+ * The expected ways a plugin call ends without a reply, as a code — or null for anything else,
+ * which is a bug and propagates.
+ */
+function expectedRunFailure(error: unknown, signal: AbortSignal): string | null {
+  if (error instanceof BridgeRequestError) return `bridge_${error.outcome.replace("-", "_")}`;
+  if (error instanceof ApprovalWaitError) return `approval_${error.reason}`;
+  if (signal.aborted) return "cancelled";
+  return null;
+}
+
+/**
+ * Answer an expected failure as the result the SDK would have made of the throw — the same text —
+ * so only a bug escapes the handler (and reaches error tracking as one). `failed`, not `not_run`: a
+ * request lost after submission may have run.
+ */
+async function answeringExpectedFailures(
+  call: FramelinkToolCall<CodeModeFacts>,
+  extra: ToolExtra,
+  facts: CodeModeFacts,
+  run: () => Promise<CallToolResult>,
+): Promise<CallToolResult> {
+  try {
+    return await run();
+  } catch (error) {
+    const failure = expectedRunFailure(error, extra.signal);
+    if (!failure) throw error;
+    call.record({ ...facts, outcome: "failed", failure });
+    return { isError: true, content: [{ type: "text", text: (error as Error).message }] };
+  }
+}
+
+type CodeModeToolsOptions = Pick<
+  ServerExtensionContext,
+  "figmaService" | "transport" | "observe"
+> & {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
   codeMode: boolean;
-  /** This MCP request's Figma client. A run's mid-run Figma fetches (comment counts) spend its token. */
-  figmaService: FigmaService;
-  transport: ServerTransport;
 };
 
 /**
@@ -63,10 +140,10 @@ type CodeModeToolsOptions = {
  * connection to notify (GETs are 405'd — no SSE stream exists to carry a notification).
  * `--code-mode` forces always-on registration for list-caching clients that ignore list_changed.
  */
-export function registerCodeModeTools(
+function registerCodeModeTools(
   server: McpServer,
   runtime: PluginBridgeRuntime,
-  { codeMode, transport, figmaService }: CodeModeToolsOptions,
+  { codeMode, transport, figmaService, observe }: CodeModeToolsOptions,
 ): void {
   const { bridge } = runtime;
 
@@ -110,14 +187,14 @@ export function registerCodeModeTools(
     };
   }
 
-  // Every code-mode tool registers through registerFailLoudTool, not server.registerTool: a mistyped
-  // param must come back as a named, retryable error instead of being silently stripped (see
-  // fail-loud-params.ts).
+  // Every code-mode tool fails loud on an unknown param: a mistyped param must come back as a named,
+  // retryable error instead of being silently stripped (see fail-loud-params.ts).
   const tools = [
-    registerFailLoudTool(
+    registerFramelinkTool(
       server,
-      "figma_execute_code",
       {
+        name: "figma_execute_code",
+        unknownParams: "fail-loud",
         description: EXECUTE_CODE_DESCRIPTION,
         inputSchema: {
           // Both optional at the wire so a call with neither or both reaches the handler's named,
@@ -136,51 +213,73 @@ export function registerCodeModeTools(
                 `For a file outside the root, send it as code, or from a shell run \`npx ${CLI_NAME} execute <file>\`.`,
             ),
         },
+        handler: async (
+          { code, scriptPath }: { code?: string; scriptPath?: string },
+          call: FramelinkToolCall<CodeModeFacts>,
+          extra: ToolExtra,
+        ) => {
+          const source = { script_source: code === undefined ? "script_path" : "code" };
+          call.record({ ...source, outcome: "not_run" });
+          if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
+          let script: string;
+          if (code !== undefined) script = code;
+          else if (scriptPath !== undefined) {
+            try {
+              script = await runtime.readSavedScript(scriptPath);
+            } catch (error) {
+              const { message, cause } = error as Error;
+              // The server never widens what it reads (no roots, no path grants). An agent working
+              // outside the root is sent to routes that already work; the CLI reads on the agent's
+              // side. Its path is absolute because the CLI resolves against the shell's cwd.
+              const remedy =
+                cause instanceof OutsideAssetRootError
+                  ? `send the script inline as code, or, with shell access, run ` +
+                    `\`npx ${CLI_NAME} execute ${shellQuotedPath(resolvePath(cause.assetRoot, scriptPath))}\`, ` +
+                    `which reads the file on your side with your own permissions (the CLI pairs ` +
+                    `separately, so a human approves its pairing code in the Figma plugin)`
+                  : "correct scriptPath, or send the script inline as code";
+              call.record({ ...source, outcome: "not_run", failure: "script_unreadable" });
+              return retryableToolReply(
+                `figma_execute_code ${message}, so this call did not run. This is NOT a failure: ${remedy}.`,
+              );
+            }
+          } else return scriptSourceReply("neither");
+          const unavailable = pluginUnavailableReply();
+          if (unavailable) return unavailable;
+          return answeringExpectedFailures(call, extra, source, async () => {
+            const outcome = await executePluginCode(runtime, script, approvalOptions(extra), {
+              figma: figmaService,
+            });
+            if (outcome.kind === "refused") {
+              call.record({ ...source, outcome: "refused", failure: outcome.refusal.reason });
+              return { content: [{ type: "text", text: outcome.message }], isError: true };
+            }
+            if (outcome.kind === "pending") {
+              call.record({ ...source, outcome: "pending_approval" });
+              return pendingApprovalResult();
+            }
+            call.record({
+              ...source,
+              ...admittedBy(outcome.session),
+              outcome: "executed",
+              script_errored: outcome.reply.errors !== null,
+            });
+            return { content: [{ type: "text", text: formatExecuteCodeReply(outcome.reply) }] };
+          });
+        },
       },
-      async ({ code, scriptPath }, extra) => {
-        if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
-        let script: string;
-        if (code !== undefined) script = code;
-        else if (scriptPath !== undefined) {
-          try {
-            script = await runtime.readSavedScript(scriptPath);
-          } catch (error) {
-            const { message, cause } = error as Error;
-            // The server never widens what it reads (no roots, no path grants). An agent working outside
-            // the root is sent to routes that already work; the CLI reads on the agent's side. Its path
-            // is absolute because the CLI resolves against the shell's cwd, not the asset root.
-            const remedy =
-              cause instanceof OutsideAssetRootError
-                ? `send the script inline as code, or, with shell access, run ` +
-                  `\`npx ${CLI_NAME} execute ${shellQuotedPath(resolvePath(cause.assetRoot, scriptPath))}\`, ` +
-                  `which reads the file on your side with your own permissions (the CLI pairs ` +
-                  `separately, so a human approves its pairing code in the Figma plugin)`
-                : "correct scriptPath, or send the script inline as code";
-            return retryableToolReply(
-              `figma_execute_code ${message}, so this call did not run. This is NOT a failure: ${remedy}.`,
-            );
-          }
-        } else return scriptSourceReply("neither");
-        const unavailable = pluginUnavailableReply();
-        if (unavailable) return unavailable;
-        const outcome = await executePluginCode(runtime, script, approvalOptions(extra), {
-          figma: figmaService,
-        });
-        if (outcome.kind === "refused")
-          return { content: [{ type: "text", text: outcome.message }], isError: true };
-        if (outcome.kind === "pending") return pendingApprovalResult();
-        return { content: [{ type: "text", text: formatExecuteCodeReply(outcome.reply) }] };
-      },
+      observe,
     ),
 
     // The full flcm authoring reference, delivered as a TOOL (not a resource): it can't fit the
     // figma_execute_code description, and MCP resources are user-gated / unevenly supported across clients.
     // A tool is the universal, autonomously-callable channel for shipping docs to agents. Sectioned because
     // the whole reference is far over one tool result's budget (REFERENCE_LIMIT_BYTES in reference.ts).
-    registerFailLoudTool(
+    registerFramelinkTool(
       server,
-      "get_flcm_reference",
       {
+        name: "get_flcm_reference",
+        unknownParams: "fail-loud",
         description:
           "Full authoring reference for the `flcm` DSL used in figma_execute_code. Requires an array of " +
           'section ids (deduped, served in canonical order); start with ["mental-model"], which carries the ' +
@@ -199,28 +298,34 @@ export function registerCodeModeTools(
                 buildReferenceMenu(),
             ),
         },
+        handler: async (
+          { sections }: { sections?: string[] },
+          call: FramelinkToolCall<CodeModeFacts>,
+        ) => {
+          call.record({ section_count: sections?.length ?? 0 });
+          // Docs still serve on a stale plugin — but lead with the refusal text so the agent learns
+          // the re-import fix here, before its first (refused) write.
+          const note = await referenceSessionGuidance({
+            pairingCode: bridge.getPairingCode(),
+            protocolRefusal: bridge.protocolRefusal(),
+            status: (signal) => bridge.approvalStatus(signal),
+          });
+          return {
+            content: [
+              ...(note ? [{ type: "text" as const, text: note }] : []),
+              { type: "text" as const, text: buildReferenceSections(sections, MCP_DOCS_CHANNEL) },
+            ],
+          };
+        },
       },
-      async ({ sections }) => {
-        // Docs still serve on a stale plugin — but lead with the refusal text so the agent learns
-        // the re-import fix here, before its first (refused) write.
-        const note = await referenceSessionGuidance({
-          pairingCode: bridge.getPairingCode(),
-          protocolRefusal: bridge.protocolRefusal(),
-          status: (signal) => bridge.approvalStatus(signal),
-        });
-        return {
-          content: [
-            ...(note ? [{ type: "text" as const, text: note }] : []),
-            { type: "text" as const, text: buildReferenceSections(sections, MCP_DOCS_CHANNEL) },
-          ],
-        };
-      },
+      observe,
     ),
 
-    registerFailLoudTool(
+    registerFramelinkTool(
       server,
-      "get_screenshot",
       {
+        name: "get_screenshot",
+        unknownParams: "fail-loud",
         description: `Capture a PNG of what you've built so you can see it and self-correct. Build → screenshot → look → fix.
 
 Target ONE node, or omit both targets to snapshot the whole current page:
@@ -262,27 +367,42 @@ Returns a PNG image.`,
               `Export resolution multiplier, greater than 0 and at most ${MAX_SCREENSHOT_SCALE} (default 1). Raise it to inspect fine detail.`,
             ),
         },
+        handler: async (
+          target: ScreenshotOptions,
+          call: FramelinkToolCall<CodeModeFacts>,
+          extra: ToolExtra,
+        ) => {
+          call.record({ outcome: "not_run" });
+          // Known params are type-checked by the SDK; their value-level misuse is checked here, in
+          // the same retryable shape as an unknown param, so the agent fixes the call and retries.
+          const inputError = screenshotInputError(target);
+          if (inputError) {
+            call.reject({ field: "(root)", rule: "screenshot_target" });
+            return retryableToolReply(
+              `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
+            );
+          }
+          const unavailable = pluginUnavailableReply();
+          if (unavailable) return unavailable;
+          return answeringExpectedFailures(call, extra, {}, async () => {
+            const outcome = await capturePluginScreenshot(bridge, target, approvalOptions(extra));
+            if (outcome.kind === "pending") {
+              call.record({ outcome: "pending_approval" });
+              return pendingApprovalResult();
+            }
+            const reply = outcome.reply;
+            const failed = "errors" in reply;
+            call.record({
+              ...admittedBy(outcome.session),
+              outcome: "captured",
+              failure: failed ? "screenshot_failed" : undefined,
+            });
+            if (failed) return { content: [{ type: "text", text: reply.errors }], isError: true };
+            return { content: [{ type: "image", data: reply.image, mimeType: "image/png" }] };
+          });
+        },
       },
-      async (target, extra) => {
-        // Known params are type-checked by the SDK; their value-level misuse is checked here, in the
-        // same retryable shape as an unknown param, so the agent fixes the call and retries.
-        const inputError = screenshotInputError(target);
-        if (inputError)
-          return retryableToolReply(
-            `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
-          );
-        const unavailable = pluginUnavailableReply();
-        if (unavailable) return unavailable;
-        const outcome = await capturePluginScreenshot(bridge, target, approvalOptions(extra));
-        if (outcome.kind === "pending") return pendingApprovalResult();
-        const reply = outcome.reply;
-        if ("errors" in reply) {
-          return { content: [{ type: "text", text: reply.errors }], isError: true };
-        }
-        return {
-          content: [{ type: "image", data: reply.image, mimeType: "image/png" }],
-        };
-      },
+      observe,
     ),
   ];
 

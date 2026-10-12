@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime, PluginPresence } from "~/commercial/plugin-bridge/index.js";
@@ -33,7 +34,7 @@ function listToolsWith(presence: PluginPresence) {
   };
   const server = createServer(
     { kind: "pat", token: "test-key" },
-    { transport: "http", pluginBridge: runtime },
+    { transport: "http", extensions: [codeModeExtension(runtime, { codeMode: false })] },
   );
   const client = new Client({ name: "code-mode-test-client", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();

@@ -12,6 +12,21 @@ export function isPendingApproval(reply: object): reply is PendingApprovalReply 
   return "type" in reply && reply.type === "PENDING_APPROVAL";
 }
 
+/**
+ * The approval wait ended without a grant: the plugin couldn't be asked, the human rejected the
+ * session, or nothing answered in time. Nothing was submitted, whichever it was.
+ */
+export class ApprovalWaitError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "unavailable" | "rejected" | "unresponsive",
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "ApprovalWaitError";
+  }
+}
+
 // Human-scale wait. SDK 1.29 only resets idle timeouts if the CLIENT opts into
 // resetTimeoutOnProgress. Caller abort wins. A private client deadline that sends
 // neither cancellation nor disconnect is not observable by this server. SDK 1.29
@@ -48,7 +63,10 @@ export async function requestUntilApproved<R>(
   const abort = () => local.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
-  const expired = new Error(approvalGuidance({ kind: "unresponsive" }, "mcp"));
+  const expired = new ApprovalWaitError(
+    approvalGuidance({ kind: "unresponsive" }, "mcp"),
+    "unresponsive",
+  );
   const timeout = setTimeout(() => local.abort(expired), waitMs);
   let stop: (() => Promise<void>) | undefined;
   // The timer can win the race against the deadline checks below (or cut a hung poll). Once a poll
@@ -62,14 +80,18 @@ export async function requestUntilApproved<R>(
         reply = await status(local.signal);
       } catch (error) {
         local.signal.throwIfAborted();
-        throw new Error(
+        throw new ApprovalWaitError(
           `Approval status unavailable; no code was submitted. ${error instanceof Error ? error.message : String(error)}`,
+          "unavailable",
           { cause: error },
         );
       }
       local.signal.throwIfAborted();
       if (reply.type === "APPROVAL_REJECTED")
-        throw new Error(approvalGuidance({ kind: "rejected", pairingCode: null }, "mcp"));
+        throw new ApprovalWaitError(
+          approvalGuidance({ kind: "rejected", pairingCode: null }, "mcp"),
+          "rejected",
+        );
       if (reply.type === "APPROVAL_GRANTED") {
         // Stop approval feedback before execution; never catch/retry a submitted run.
         clearTimeout(timeout);

@@ -156,18 +156,17 @@ function errorFields(error: unknown): Pick<ReadToolObservation, "errorCategory" 
 }
 
 function toReadToolObservation(outcome: ReadToolOutcome): ReadToolObservation {
-  if (outcome.kind === "rejected") {
-    return {
-      tool: outcome.tool,
-      outcome: "rejected",
-      durationMs: 0,
-      errorCategory: "invalid_input",
-    };
-  }
-  const { error, durationMs } = outcome.outcome;
+  const { tool, durationMs } = outcome;
+  if (outcome.kind === "rejected")
+    return { tool, outcome: "rejected", durationMs, errorCategory: "invalid_input" };
+  if (outcome.kind === "threw")
+    return { tool, outcome: "error", durationMs, ...errorFields(outcome.error) };
+  // A call that failed before its pipeline ran (a malformed key the schema let through) has no facts.
+  if (!outcome.facts) return { tool, outcome: outcome.isError ? "error" : "ok", durationMs };
+  const { error } = outcome.facts;
   const base = {
-    tool: outcome.tool,
-    durationMs,
+    tool,
+    durationMs: outcome.facts.durationMs,
     outcome: error === undefined ? ("ok" as const) : ("error" as const),
     ...errorFields(error),
   };
@@ -175,14 +174,14 @@ function toReadToolObservation(outcome: ReadToolOutcome): ReadToolObservation {
     case "get_figma_data":
       return {
         ...base,
-        rawSizeKb: outcome.outcome.metrics?.rawSizeKb,
-        simplifiedSizeKb: outcome.outcome.metrics?.simplifiedSizeKb,
+        rawSizeKb: outcome.facts.metrics?.rawSizeKb,
+        simplifiedSizeKb: outcome.facts.metrics?.simplifiedSizeKb,
       };
     case "download_figma_images":
       return {
         ...base,
-        imageCount: outcome.outcome.imageCount,
-        successCount: outcome.outcome.successCount,
+        imageCount: outcome.facts.imageCount,
+        successCount: outcome.facts.successCount,
       };
     case "get_figma_comments":
       return base;

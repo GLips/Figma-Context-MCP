@@ -8,6 +8,7 @@ import { withRequestSecrets } from "./utils/request-secrets.js";
 import { installFigmaProxyDispatcher } from "./utils/figma-proxy-dispatcher.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
+import { codeModeExtension } from "./commercial/tools/code-mode-tools.js";
 import { requireGlobalCredential, type ServerConfig } from "./config.js";
 import type { FigmaCredential } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -59,13 +60,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
     acceptUploads: true,
   });
 
-  const serverOptions = {
-    transport: config.isStdioMode ? ("stdio" as const) : ("http" as const),
+  const serverOptions: CreateServerOptions = {
+    transport: config.isStdioMode ? "stdio" : "http",
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
     imageDir: config.imageDir,
-    pluginBridge,
-    codeMode: config.codeMode,
+    extensions: [codeModeExtension(pluginBridge, { codeMode: config.codeMode })],
   };
 
   if (config.isStdioMode) {

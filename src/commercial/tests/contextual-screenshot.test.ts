@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
@@ -34,7 +35,7 @@ function connectedServer() {
   };
   const server = createServer(
     { kind: "pat", token: "test-key" },
-    { transport: "stdio", pluginBridge: runtime },
+    { transport: "stdio", extensions: [codeModeExtension(runtime, { codeMode: false })] },
   );
   const client = new Client({ name: "preamble-test-client", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();

@@ -107,6 +107,15 @@ The execution reply is JSON on stdout; progress and errors go to stderr. `--outp
 
 Results are delivered promptly. When a free-allowance execution reports no document change yet, the command retains its relay for the existing late-change accounting window (up to 90 seconds), exiting sooner if a late change is reported. Seat-covered executions and already-counted writes do not need that wait. Ctrl-C exits with status 130 and warns if it interrupts this observation; the emitted result remains available, but late-write accounting could not be fully observed.
 
+## Telemetry
+
+The server sends usage telemetry to PostHog: one event per tool call, with its duration, outcome and sizes. Opt out with `--no-telemetry`, `FRAMELINK_TELEMETRY=off`, or `DO_NOT_TRACK=1`.
+
+- **Reads are anonymous.** Read events carry a per-process random ID, never your identity, file keys, node IDs, or design content.
+- **Writes name the Figma user.** Events from write-path tools (`figma_execute_code`, `get_screenshot`) carry the Figma user ID of the Authorizing User who approved the run. Writes are metered per user, so we need it to tell usage apart. Neither authored code nor returned content is ever sent.
+- **Failures are sent as codes.** Expected failures, such as a 403, a rate limit, a rejected argument, or a declined approval, go out as a category, status and field name, never as the error text.
+- **Unexpected errors go to error tracking.** The error message and stack frames are scrubbed of credentials, your home directory, and Figma file and node IDs. Response bodies are replaced with a fingerprint of who answered.
+
 ## Licensing proposal
 
 Reads and the shared read transform stay MIT. The write path ("code mode") is

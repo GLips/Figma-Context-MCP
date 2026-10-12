@@ -95,16 +95,8 @@ export function initTelemetry(opts: InitTelemetryOptions): boolean {
   return true;
 }
 
-/**
- * Low-level event capture. Handles disabled state, redaction, and common
- * property merging. Capture functions in capture.ts shape the event and
- * delegate here.
- *
- * Telemetry must never surface errors to callers — this runs inside lifecycle
- * observers where throwing would mask the tool's real return value (or its
- * original error). Swallow silently; no logging because telemetry is supposed
- * to be invisible.
- */
+// A reported error's message is free text of unbounded length; redact BEFORE truncating, so a token
+// straddling the cut can't survive as a partial match.
 const MAX_ERROR_MESSAGE_LENGTH = 2000;
 
 function truncateForTelemetry(message: string): string {
@@ -113,30 +105,25 @@ function truncateForTelemetry(message: string): string {
     : message;
 }
 
+/**
+ * Low-level event capture: disabled state, redaction, common properties. Capture functions in
+ * capture.ts shape the event and delegate here.
+ *
+ * Telemetry must never surface errors to callers — this runs inside lifecycle observers where
+ * throwing would mask the tool's real return value (or its original error). Swallow silently; no
+ * logging because telemetry is supposed to be invisible.
+ */
 export function captureEvent(event: string, properties: Record<string, unknown>): void {
   if (state.kind === "off") return;
   const { client, sessionId, commonProps, redactionSecrets } = state;
 
-  // Scrub every string-valued property, not just `error_message`. The
-  // signature here is `Record<string, unknown>`, so the next event field that
-  // carries free text would otherwise ship raw — the exact failure this
-  // redaction exists to prevent, reintroduced by someone naming a field
-  // something other than `error_message`. Non-string values can't carry an
-  // identifier we care about, and `commonProps` is machine-generated, so it's
-  // merged in below without passing through here.
-  //
-  // Redact BEFORE truncating so a token straddling the cut point can't
-  // survive as a partial match. Only `error_message` is truncated; the other
-  // fields are bounded by construction.
+  // Every string-valued property is scrubbed, whatever its name: the signature is
+  // `Record<string, unknown>`, so the next field to carry free text would otherwise ship raw.
+  // `commonProps` is machine-generated, so it's merged in below without passing through here.
   const processed: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(properties)) {
-    if (typeof value !== "string") {
-      processed[key] = value;
-      continue;
-    }
-    const redacted = redactTelemetryString(value, redactionSecrets);
-    processed[key] = key === "error_message" ? truncateForTelemetry(redacted) : redacted;
-  }
+  for (const [key, value] of Object.entries(properties))
+    processed[key] =
+      typeof value === "string" ? redactTelemetryString(value, redactionSecrets) : value;
 
   try {
     client.capture({
@@ -144,6 +131,37 @@ export function captureEvent(event: string, properties: Record<string, unknown>)
       event,
       properties: { ...commonProps, ...processed },
     });
+  } catch {
+    // intentionally empty
+  }
+}
+
+/**
+ * Report an unexpected failure to PostHog Error Tracking. What leaves is a fresh error, never the
+ * original: its message is `message` (the caller has already fingerprinted response bodies) and its
+ * stack is the original's frames, both through the same scrub as every event string — credentials,
+ * the home directory, Figma identifiers. No cause chain rides along, so nothing unscrubbed can.
+ */
+export function captureUnexpectedError(
+  error: unknown,
+  message: string,
+  properties: Record<string, string | undefined>,
+): void {
+  if (state.kind === "off") return;
+  const { client, sessionId, commonProps, redactionSecrets } = state;
+  const scrub = (value: string) => redactTelemetryString(value, redactionSecrets);
+  const reported = new Error(truncateForTelemetry(scrub(message)));
+  reported.name = error instanceof Error ? error.name : "NonError";
+  // Frames only: the stack's first lines repeat the raw message.
+  const frames = (error instanceof Error ? (error.stack ?? "") : "")
+    .split("\n")
+    .filter((line) => /^\s+at /.test(line));
+  reported.stack = [`${reported.name}: ${reported.message}`, ...frames.map(scrub)].join("\n");
+  const scrubbed: Record<string, string> = {};
+  for (const [key, value] of Object.entries(properties))
+    if (value !== undefined) scrubbed[key] = scrub(value);
+  try {
+    client.captureException(reported, sessionId, { ...commonProps, ...scrubbed });
   } catch {
     // intentionally empty
   }

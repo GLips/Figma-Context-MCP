@@ -2,18 +2,15 @@ import type { FigmaCredential } from "~/services/figma.js";
 import type { AuthMode } from "./types.js";
 
 export { initTelemetry, shutdown } from "./client.js";
-export {
-  captureGetFigmaDataCall,
-  captureDownloadImagesCall,
-  captureValidationReject,
-} from "./capture.js";
+export { captureToolCall, captureGetFigmaDataCall, captureDownloadImagesCall } from "./capture.js";
 export type {
   Transport,
   AuthMode,
   InitTelemetryOptions,
   ClientInfo,
   ToolCallContext,
-  ValidationRejectInput,
+  ToolCallEvent,
+  ToolEventProperties,
 } from "./types.js";
 
 /**

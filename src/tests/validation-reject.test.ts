@@ -4,7 +4,7 @@ vi.mock("~/telemetry/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/telemetry/index.js")>();
   return {
     ...actual,
-    captureValidationReject: vi.fn(),
+    captureToolCall: vi.fn(),
     captureGetFigmaDataCall: vi.fn(),
     captureDownloadImagesCall: vi.fn(),
   };
@@ -17,9 +17,17 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as telemetry from "~/telemetry/index.js";
 
+/** The rejections reported through `tool_called`, one per rejected call. */
+const rejections = () =>
+  vi
+    .mocked(telemetry.captureToolCall)
+    .mock.calls.flatMap(([event]) =>
+      event.rejection ? [{ tool: event.tool, ...event.rejection }] : [],
+    );
+
 /**
  * These tests cover the McpServer.validateToolInput monkey patch in
- * src/mcp/index.ts. They use a real Client/Server pair over InMemoryTransport
+ * src/mcp/validation-capture.ts. They use a real Client/Server pair over InMemoryTransport
  * so the SDK validation path runs end-to-end — anything less wouldn't catch
  * SDK upgrades that change the validation signature.
  */
@@ -28,7 +36,7 @@ describe("validation reject capture (monkey patch)", () => {
   let server: McpServer;
 
   beforeEach(async () => {
-    vi.mocked(telemetry.captureValidationReject).mockClear();
+    vi.mocked(telemetry.captureToolCall).mockClear();
 
     server = createServer({ kind: "pat", token: "test-key" }, { transport: "stdio" });
     client = new Client({ name: "validation-test-client", version: "1.0.0" });
@@ -57,9 +65,8 @@ describe("validation reject capture (monkey patch)", () => {
     );
     expect(result.isError).toBe(true);
 
-    const captureSpy = vi.mocked(telemetry.captureValidationReject);
-    expect(captureSpy).toHaveBeenCalledOnce();
-    const [input] = captureSpy.mock.calls[0];
+    expect(rejections()).toHaveLength(1);
+    const [input] = rejections();
     expect(input.tool).toBe("get_figma_data");
     expect(input.field).toBe("fileKey");
     // Zod regex failures emit invalid_string in v3 and invalid_format in v4 —
@@ -85,9 +92,8 @@ describe("validation reject capture (monkey patch)", () => {
     );
     expect(result.isError).toBe(true);
 
-    const captureSpy = vi.mocked(telemetry.captureValidationReject);
-    expect(captureSpy).toHaveBeenCalledOnce();
-    const [input] = captureSpy.mock.calls[0];
+    expect(rejections()).toHaveLength(1);
+    const [input] = rejections();
     expect(input.tool).toBe("download_figma_images");
     // The literal index 0 should be collapsed so `nodes.0.nodeId` doesn't
     // appear with high cardinality in PostHog.
@@ -98,7 +104,7 @@ describe("validation reject capture (monkey patch)", () => {
     // We don't actually want this to run the full pipeline — we only need to
     // confirm the monkey patch doesn't fire on the success path. Use a
     // syntactically valid fileKey; the call will fail later (no real API), but
-    // SDK validation will pass and captureValidationReject must not be called.
+    // SDK validation will pass and no rejection may be reported.
     await client
       .request(
         {
@@ -115,6 +121,6 @@ describe("validation reject capture (monkey patch)", () => {
         // outcome, only that the validation hook stayed quiet.
       });
 
-    expect(vi.mocked(telemetry.captureValidationReject)).not.toHaveBeenCalled();
+    expect(rejections()).toEqual([]);
   });
 });

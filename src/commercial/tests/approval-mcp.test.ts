@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import type {
   ApprovalStatusReply,
@@ -64,13 +65,18 @@ async function setup() {
     { kind: "pat", token: "test" },
     {
       transport: "stdio",
-      pluginBridge: {
-        bridge,
-        writeMeter: createTestWriteAccess().writeMeter,
-        readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-        pluginPresence: () => "connected",
-        onFirstConnect: () => {},
-      },
+      extensions: [
+        codeModeExtension(
+          {
+            bridge,
+            writeMeter: createTestWriteAccess().writeMeter,
+            readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
+            pluginPresence: () => "connected",
+            onFirstConnect: () => {},
+          },
+          { codeMode: false },
+        ),
+      ],
     },
   );
   const client = new Client({ name: "approval-test", version: "1" });

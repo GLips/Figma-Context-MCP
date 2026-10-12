@@ -9,6 +9,11 @@ import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
 import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
 import type { ImageDestination } from "~/utils/image-processing.js";
 import type { OutputFormat } from "~/utils/serialize.js";
+import {
+  registerFramelinkTool,
+  type FramelinkToolCall,
+  type ToolCallObservation,
+} from "./framelink-tool.js";
 import type { ToolExtra } from "./progress.js";
 import {
   downloadFigmaImageDestinationTool,
@@ -21,7 +26,6 @@ import {
   type GetFigmaCommentsOutcome,
   type GetFigmaCommentsParams,
   type GetFigmaDataParams,
-  type LocalPathRejection,
 } from "./tools/index.js";
 
 /** Where download_figma_images puts images, or that it isn't offered at all. */
@@ -36,12 +40,11 @@ export type ImageOutput =
  */
 export type ToolCallGuard = (run: () => Promise<CallToolResult>) => Promise<CallToolResult>;
 
-/** What a read tool reports when it finishes, raw: errors and inputs included. */
+/** How a read-tool call ended, raw: errors and inputs included. Facts are the tool's own outcome. */
 export type ReadToolOutcome =
-  | { tool: "get_figma_data"; kind: "completed"; outcome: GetFigmaDataOutcome }
-  | { tool: "get_figma_comments"; kind: "completed"; outcome: GetFigmaCommentsOutcome }
-  | { tool: "download_figma_images"; kind: "completed"; outcome: DownloadImagesOutcome }
-  | ({ tool: "download_figma_images"; kind: "rejected" } & LocalPathRejection);
+  | ToolCallObservation<"get_figma_data", GetFigmaDataOutcome>
+  | ToolCallObservation<"get_figma_comments", GetFigmaCommentsOutcome>
+  | ToolCallObservation<"download_figma_images", DownloadImagesOutcome>;
 
 export type RegisterReadToolsOptions = {
   outputFormat: OutputFormat;
@@ -79,83 +82,107 @@ export function registerReadTools(
 ): { getFigmaData: RegisteredTool } {
   const { images, observe } = options;
   const guard: ToolCallGuard = options.guardToolCall ?? ((run) => run());
-  const onDownloadComplete = (outcome: DownloadImagesOutcome) =>
-    observe({ tool: "download_figma_images", kind: "completed", outcome });
 
-  const getFigmaData = server.registerTool(
-    getFigmaDataTool.name,
+  const getFigmaData = registerFramelinkTool(
+    server,
     {
+      name: getFigmaDataTool.name,
       title: "Get Figma Data",
       description: getFigmaDataTool.description,
       inputSchema: getFigmaDataTool.parametersSchema,
+      unknownParams: "strip",
       annotations: READ_ANNOTATIONS,
+      handler: (
+        params: GetFigmaDataParams,
+        call: FramelinkToolCall<GetFigmaDataOutcome>,
+        extra: ToolExtra,
+      ) =>
+        guard(() =>
+          getFigmaDataTool.handler(params, figmaService.withSignal(extra.signal), {
+            outputFormat: options.outputFormat,
+            describeRecovery: options.describeReadRecovery,
+            onComplete: call.record,
+            extra,
+          }),
+        ),
     },
-    (params: GetFigmaDataParams, extra: ToolExtra) =>
-      guard(() =>
-        getFigmaDataTool.handler(params, figmaService.withSignal(extra.signal), {
-          outputFormat: options.outputFormat,
-          describeRecovery: options.describeReadRecovery,
-          onComplete: (outcome) => observe({ tool: "get_figma_data", kind: "completed", outcome }),
-          extra,
-        }),
-      ),
+    observe,
   );
 
-  server.registerTool(
-    getFigmaCommentsTool.name,
+  registerFramelinkTool(
+    server,
     {
+      name: getFigmaCommentsTool.name,
       title: "Get Figma Comments",
       description: getFigmaCommentsTool.description,
       inputSchema: getFigmaCommentsTool.parameters,
+      unknownParams: "strip",
       annotations: READ_ANNOTATIONS,
+      handler: (
+        params: GetFigmaCommentsParams,
+        call: FramelinkToolCall<GetFigmaCommentsOutcome>,
+        extra: ToolExtra,
+      ) =>
+        guard(() =>
+          getFigmaCommentsTool.handler(params, figmaService.withSignal(extra.signal), {
+            onComplete: call.record,
+          }),
+        ),
     },
-    (params: GetFigmaCommentsParams, extra: ToolExtra) =>
-      guard(() =>
-        getFigmaCommentsTool.handler(params, figmaService.withSignal(extra.signal), {
-          onComplete: (outcome) =>
-            observe({ tool: "get_figma_comments", kind: "completed", outcome }),
-        }),
-      ),
+    observe,
   );
 
   if (images.kind === "disk") {
-    server.registerTool(
-      downloadFigmaImagesTool.name,
+    registerFramelinkTool(
+      server,
       {
+        name: downloadFigmaImagesTool.name,
         title: "Download Figma Images",
         description: downloadFigmaImagesTool.getDescription(images.imageDir),
         inputSchema: downloadFigmaImagesTool.parametersSchema,
+        unknownParams: "strip",
         annotations: DISK_DOWNLOAD_ANNOTATIONS,
+        handler: (
+          params: DownloadImagesParams,
+          call: FramelinkToolCall<DownloadImagesOutcome>,
+          extra: ToolExtra,
+        ) =>
+          guard(() =>
+            downloadFigmaImagesTool.handler(params, figmaService.withSignal(extra.signal), {
+              imageDir: images.imageDir,
+              extra,
+              onComplete: call.record,
+              onReject: call.reject,
+            }),
+          ),
       },
-      (params: DownloadImagesParams, extra: ToolExtra) =>
-        guard(() =>
-          downloadFigmaImagesTool.handler(params, figmaService.withSignal(extra.signal), {
-            imageDir: images.imageDir,
-            extra,
-            onComplete: onDownloadComplete,
-            onReject: (rejection) =>
-              observe({ tool: "download_figma_images", kind: "rejected", ...rejection }),
-          }),
-        ),
+      observe,
     );
   } else if (images.kind === "destination") {
-    server.registerTool(
-      downloadFigmaImageDestinationTool.name,
+    registerFramelinkTool(
+      server,
       {
+        name: downloadFigmaImageDestinationTool.name,
         title: "Download Figma Images",
         description: downloadFigmaImageDestinationTool.getDescription(images.retentionDays),
         inputSchema: downloadFigmaImageDestinationTool.parametersSchema,
+        unknownParams: "strip",
         // Exports into the host's own storage: nothing of the user's changes.
         annotations: READ_ANNOTATIONS,
+        handler: (
+          params: DownloadImageDestinationParams,
+          call: FramelinkToolCall<DownloadImagesOutcome>,
+          extra: ToolExtra,
+        ) =>
+          guard(() =>
+            downloadFigmaImageDestinationTool.handler(
+              params,
+              figmaService.withSignal(extra.signal),
+              { destination: images.destination, extra, onComplete: call.record },
+            ),
+          ),
       },
-      (params: DownloadImageDestinationParams, extra: ToolExtra) =>
-        guard(() =>
-          downloadFigmaImageDestinationTool.handler(params, figmaService.withSignal(extra.signal), {
-            destination: images.destination,
-            extra,
-            onComplete: onDownloadComplete,
-          }),
-        ),
+      observe,
     );
   }
 

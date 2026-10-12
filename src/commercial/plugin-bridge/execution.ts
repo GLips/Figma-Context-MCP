@@ -110,11 +110,15 @@ export async function capturePluginScreenshot(
   target: { nodeId?: string; key?: string; scale?: number; context?: boolean; margin?: number },
   options?: ApprovalOptions,
 ) {
+  let admitted: ApprovedSession | null = null;
   const raw = await requestUntilApproved(
     (signal) => bridge.approvalStatus(signal),
-    (signal) => bridge.request({ type: "SCREENSHOT", ...target }, signal),
+    (signal, session) => {
+      admitted = session;
+      return bridge.request({ type: "SCREENSHOT", ...target }, signal);
+    },
     options,
   );
   if (isPendingApproval(raw)) return { kind: "pending" as const };
-  return { kind: "captured" as const, reply: raw };
+  return { kind: "captured" as const, reply: raw, session: admitted as ApprovedSession | null };
 }

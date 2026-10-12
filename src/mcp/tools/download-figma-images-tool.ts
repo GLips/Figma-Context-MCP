@@ -101,11 +101,11 @@ export type DownloadImageDestinationParams = z.infer<typeof destinationParameter
 
 type TextToolResult = { isError?: boolean; content: Array<{ type: "text"; text: string }> };
 
-/** A localPath the schema accepted but the image directory refuses. */
+/** A localPath the schema accepted but the image directory refuses — codes only, never the path. */
 export type LocalPathRejection = {
   field: "localPath";
   rule: ResolveLocalPathFailureReason;
-  message: string;
+  detail?: string;
 };
 
 type DownloadHandlerOptions = {
@@ -216,7 +216,7 @@ async function downloadFigmaImages(
       // validation hook never sees it. Report it here as a validation reject so we
       // can track how often LLMs trip over the localPath contract.
       const details = rejectionDetails(resolution.reason, localPath, baseDir);
-      onReject({ field: "localPath", rule: details.rule, message: details.telemetryMessage });
+      onReject({ field: "localPath", rule: details.rule, detail: details.detail });
       return {
         isError: true,
         content: [{ type: "text" as const, text: details.userMessage }],
@@ -292,14 +292,13 @@ function rejectionDetails(
   baseDir: string,
 ): {
   rule: ResolveLocalPathFailureReason;
+  detail?: string;
   userMessage: string;
-  telemetryMessage: string;
 } {
   switch (reason) {
     case "drive_letter_on_posix":
       return {
         rule: reason,
-        telemetryMessage: "Drive-letter path on POSIX server",
         userMessage:
           `Invalid path: "${localPath}" starts with a Windows drive letter, but this server is running on POSIX where drive letters don't exist. ` +
           `The server's image directory is "${baseDir}"; pass a path relative to it (e.g., "public/images").`,
@@ -314,7 +313,7 @@ function rejectionDetails(
         : "";
       return {
         rule: reason,
-        telemetryMessage: `Path resolves outside allowed image directory (path shape: ${localPathShape(localPath)})`,
+        detail: localPathShape(localPath),
         userMessage:
           `Invalid path: "${localPath}" resolves outside the allowed image directory. ` +
           `The server's image directory is "${baseDir}". Provide a path relative to this directory (e.g., "public/images" or "assets/icons").` +

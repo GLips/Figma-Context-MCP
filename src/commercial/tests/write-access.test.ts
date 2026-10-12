@@ -7,6 +7,7 @@
 // licensing/LICENSE-Framelink-Commercial.md "Limit of the grant" that would otherwise regress silently: the refusal before an over-allowance
 // execution starts, what counts as a Write, and when a seat does — and does not — end.
 import { chmodSync } from "node:fs";
+import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer, type Server } from "node:http";
 import { dirname } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -169,13 +170,18 @@ async function connectTools(writeMeter: WriteMeter) {
     { kind: "pat", token: "test" },
     {
       transport: "stdio",
-      pluginBridge: {
-        bridge,
-        writeMeter,
-        readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-        pluginPresence: () => "connected",
-        onFirstConnect: () => {},
-      },
+      extensions: [
+        codeModeExtension(
+          {
+            bridge,
+            writeMeter,
+            readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
+            pluginPresence: () => "connected",
+            onFirstConnect: () => {},
+          },
+          { codeMode: false },
+        ),
+      ],
     },
   );
   const client = new Client({ name: "write-access-test", version: "1" });

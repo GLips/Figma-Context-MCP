@@ -10,6 +10,7 @@ import {
   ListToolsResultSchema,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
@@ -39,7 +40,7 @@ function connectWithPlugin({ connected }: { connected: boolean }) {
   };
   const server = createServer(
     { kind: "pat", token: "test-key" },
-    { transport: "stdio", pluginBridge: runtime },
+    { transport: "stdio", extensions: [codeModeExtension(runtime, { codeMode: false })] },
   );
   const client = new Client({ name: "plugin-read-route-test", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
