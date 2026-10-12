@@ -230,7 +230,7 @@ export class PluginBridge {
   >();
   private disconnectedAt: number | null = null;
   // Where the CURRENT connection stands with the version handshake, and the refusal text when it came
-  // back under the minimum. Connection-scoped on purpose: reset to `checking` the moment a socket is
+  // back mismatched. Connection-scoped on purpose: reset to `checking` the moment a socket is
   // installed, so a newer plugin reconnecting onto the freed slot starts clean instead of inheriting
   // its predecessor's verdict.
   //
@@ -677,7 +677,7 @@ export class PluginBridge {
     // Human channel: a toast the plugin words itself. Fire-and-forget — a plugin predating the NOTIFY
     // handler envelope-ERRORs and the toast is silently dropped, which is fine; the agent still gets
     // the refusal on every canvas call it tries.
-    this.request({ type: "NOTIFY", minProtocol: PROTOCOL_VERSION }).catch(() => {});
+    this.request({ type: "NOTIFY", serverProtocol: PROTOCOL_VERSION }).catch(() => {});
   }
 
   /**
@@ -843,7 +843,7 @@ export class PluginBridge {
 
   /**
    * Send a canvas request, but only once this connection's protocol is known to be supported: hold
-   * while the verdict is still `checking`, refuse outright when it came back under the minimum.
+   * while the verdict is still `checking`, refuse outright when it came back mismatched.
    *
    * A LOOP, not a single await: each abandonment settles the gate (see `verdictSettled`), which wakes
    * us to re-read the field. A reclaim mid-hold puts us back to `checking` on the newcomer, so we hold
@@ -859,8 +859,8 @@ export class PluginBridge {
     while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {
       await waitForSignal(this.verdictSettled, signal);
     }
-    // Refuse rather than send. A stale plugin executing agent code against a wire contract the server
-    // no longer speaks is the failure the minimum exists to prevent, and a refusal the agent relays
+    // Refuse rather than send. A plugin executing agent code against a wire contract the server
+    // doesn't speak is the failure the version gate exists to prevent, and a refusal the agent relays
     // beats a nudge stapled to a result the wrong runtime already produced.
     const refusal = this.compatibility === "incompatible" ? this.skewRefusal : null;
     if (refusal) throw new BridgeRequestError(refusal, "not-submitted");

@@ -82,7 +82,7 @@ async function realPlugin(port, options) {
 
 // ---- Adversarial peers ----
 
-// A plugin older than this server: answers GET_VERSION with `version` after `delayMs`, or — with
+// A plugin on another protocol than this server: answers GET_VERSION with `version` after `delayMs`, or — with
 // `version: null` — predates the handshake and ERRORs every request. Never runs anything; `received`
 // lists every request it was sent, so a test can prove code never reached it.
 function stalePeer(url, version, delayMs = 0) {
@@ -586,6 +586,20 @@ await assert.rejects(execute(raceBridge), /protocol v/, "a plugin with no versio
 assert.ok(!spikeEra.received.includes("EXECUTE_CODE"), "and never receives the code");
 console.log("✅ A plugin predating the handshake is refused (missing version → floor)");
 spikeEra.close();
+await wait(150);
+
+// A plugin NEWER than this server is refused too: its FlcmHost isn't the one this preamble targets.
+const newer = stalePeer(raceUrl, { pluginVersion: "9.9.9", protocolVersion: PROTOCOL_VERSION + 1 });
+await opened(newer);
+await wait(30);
+await assert.rejects(
+  execute(raceBridge),
+  (e) => e.message.includes("is newer") && e.message.includes("update this Framelink MCP server"),
+  "a newer plugin is refused, telling the human to update the server",
+);
+assert.ok(!newer.received.includes("EXECUTE_CODE"), "and never receives the code");
+console.log("✅ A plugin newer than the server is refused, naming the server as the side to update");
+newer.close();
 await wait(150);
 
 // The hold DELAYS a current plugin, it doesn't break it.

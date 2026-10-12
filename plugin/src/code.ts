@@ -64,12 +64,15 @@ figma.showUI(__html__, {
 // human in a skew refusal. Informational: the server gates on the protocol alone (protocol.ts).
 const PLUGIN_VERSION = "0.1.0";
 
-/** The toast for a server that needs a newer plugin. Worded here, so a peer can't author it. */
-function skewNotice(minProtocol: number): string {
+/** The toast for a server on another protocol. Worded here, so a peer can't author it. */
+function skewNotice(serverProtocol: number): string {
+  const fix =
+    serverProtocol > PROTOCOL_VERSION
+      ? "Re-import the latest Framelink plugin (Plugins → Development → Import plugin from manifest…), re-open it, then retry."
+      : "Update the Framelink MCP server to the latest figma-developer-mcp, restart it, then retry.";
   return (
-    `Framelink: a connected server needs plugin protocol v${minProtocol}, and this plugin ` +
-    `(v${PLUGIN_VERSION}) speaks v${PROTOCOL_VERSION}, so nothing was run. Re-import the latest ` +
-    "Framelink plugin (Plugins → Development → Import plugin from manifest…), re-open it, then retry."
+    `Framelink: a connected server speaks plugin protocol v${serverProtocol}, and this plugin ` +
+    `(v${PLUGIN_VERSION}) speaks v${PROTOCOL_VERSION}, so nothing was run. ${fix}`
   );
 }
 
@@ -956,7 +959,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       // Human channel of the server's version-skew refusal (it is the only sender). The skew is found
       // at connect, before any consent, so any local process can send this frame: it carries a number
       // and the plugin words the toast, so a peer can't put its own text in front of the human.
-      figma.notify(skewNotice(msg.minProtocol), { timeout: 15_000 });
+      figma.notify(skewNotice(msg.serverProtocol), { timeout: 15_000 });
       reply(to, { type: "NOTIFY_RESULT" });
       return;
   }

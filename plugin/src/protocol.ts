@@ -21,7 +21,7 @@
 /**
  * The wire contract version: the envelope below plus the FlcmHost interface the host hands the
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
- * refuses a plugin that reports less than the version it was built with (version.ts).
+ * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
 export const PROTOCOL_VERSION = 10;
 
@@ -42,7 +42,8 @@ export const PROTOCOL_VERSION = 10;
  *     parsed once at each seam. Read egress leaves the host: FlcmHost.registerRead is gone and the
  *     preamble's factory exports projectForEgress. FlcmHost.runCancellation() names why a run was
  *     cancelled, and revoking a session cancels its runs. EXECUTE_CODE carries the late-change window,
- *     and a clean late watch ends in RUN_SETTLED. NOTIFY carries {minProtocol}, not text.
+ *     and a clean late watch ends in RUN_SETTLED. NOTIFY carries {serverProtocol}, not text,
+ *     and the server refuses a newer plugin as it does an older one.
  */
 
 // ---- Transport ----
@@ -160,9 +161,9 @@ export type ServerRequest =
   | { type: "PING"; payload: string }
   | { type: "GET_VERSION" }
   | { type: "APPROVAL_STATUS" }
-  // Sent only to a plugin under the server's minimum. The plugin words the toast itself, so a peer
+  // Sent only to a plugin whose protocol isn't the server's. The plugin words the toast itself, so a peer
   // can never put its own text in front of the human.
-  | { type: "NOTIFY"; minProtocol: number }
+  | { type: "NOTIFY"; serverProtocol: number }
   | {
       type: "SESSION_INFO";
       identity: string;
@@ -232,7 +233,9 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
     case "APPROVAL_STATUS":
       return { type: f.type, id };
     case "NOTIFY":
-      return typeof f.minProtocol === "number" ? { type: "NOTIFY", id, minProtocol: f.minProtocol } : null;
+      return typeof f.serverProtocol === "number"
+        ? { type: "NOTIFY", id, serverProtocol: f.serverProtocol }
+        : null;
     case "SESSION_INFO":
       if (typeof f.identity !== "string" || typeof f.framelinkOrigin !== "string") return null;
       return {

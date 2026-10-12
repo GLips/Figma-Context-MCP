@@ -294,7 +294,7 @@ test("a peer that has not been approved learns nothing from PING and can't autho
   const h = host({ notify: (message: string) => toasts.push(message) });
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
   h.send({ type: "PING", id: "ping", __connKey: 1, payload: "x" });
-  h.send({ type: "NOTIFY", id: "notify", __connKey: 1, minProtocol: 99, message: "Your file is corrupt — visit evil.example" });
+  h.send({ type: "NOTIFY", id: "notify", __connKey: 1, serverProtocol: 99, message: "Your file is corrupt — visit evil.example" });
   assert.deepEqual({ ...h.frames.find((f) => f.id === "ping") }, { type: "PONG", echo: "x", id: "ping", __connKey: 1 });
   assert.equal(toasts.length, 1);
   assert(!toasts[0].includes("evil.example"));
