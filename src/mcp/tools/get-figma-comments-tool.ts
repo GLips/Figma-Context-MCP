@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { FigmaService } from "~/services/figma.js";
 import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
-import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
 import {
   FIGMA_FILE_KEY_FORMAT_MESSAGE,
   FIGMA_FILE_KEY_PATTERN,
   FIGMA_NODE_ID_FORMAT_MESSAGE,
+  FIGMA_NODE_ID_PATTERN,
   figmaFileKey,
   figmaNodeId,
   type FigmaFileKey,

@@ -92,10 +92,9 @@ export type { Elision } from "./types.js";
 
 export { projectNames } from "./project-names.js";
 
-// Instance sublayer ids are read by core's component diff, built by the plugin's override and
-// selection code, and validated by every tool schema — one grammar for all of them.
+// Instance sublayer ids are read by core's component diff and built by the plugin's override and
+// selection code — one grammar for both.
 export {
-  FIGMA_NODE_ID_PATTERN,
   componentPath,
   definitionId,
   guidOf,

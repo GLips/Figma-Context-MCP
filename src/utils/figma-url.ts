@@ -1,4 +1,3 @@
-import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
 import { tagError } from "~/utils/error-meta.js";
 
 declare const FIGMA_FILE_KEY: unique symbol;
@@ -16,7 +15,12 @@ export type FigmaNodeId = string & { readonly [FIGMA_NODE_ID]: true };
 export const FIGMA_FILE_KEY_PATTERN = /^[a-zA-Z0-9]+$/;
 export const FIGMA_FILE_KEY_FORMAT_MESSAGE = "File key must be alphanumeric";
 
-/** The refusal every tool schema pairs with core's `FIGMA_NODE_ID_PATTERN`. */
+/**
+ * A Figma node id as an agent may pass it: colon form from the API (`1234:5678`), dash form from
+ * a URL's `node-id` (`1234-5678`), or an instance sublayer chain (`I5666:180910;1:10515`). An
+ * input-edge grammar, so it lives with the message and normalizer it pairs with, not in core.
+ */
+export const FIGMA_NODE_ID_PATTERN = /^I?\d+[:-]\d+(?:;\d+[:-]\d+)*$/;
 export const FIGMA_NODE_ID_FORMAT_MESSAGE =
   "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'";
 

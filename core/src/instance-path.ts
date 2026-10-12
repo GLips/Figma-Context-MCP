@@ -10,12 +10,6 @@
  * instance boundary, the id the node has inside the definition itself.
  */
 
-/**
- * A Figma node id as an agent may pass it: colon form from the API (`1234:5678`), dash form from
- * a URL's `node-id` (`1234-5678`), or an instance sublayer chain (`I5666:180910;1:10515`).
- */
-export const FIGMA_NODE_ID_PATTERN = /^I?\d+[:-]\d+(?:;\d+[:-]\d+)*$/;
-
 /** Whether `id` names a node inside an instance — a composite id, rather than a plain one. */
 export function isSublayerId(id: string): boolean {
   return id.startsWith("I");
