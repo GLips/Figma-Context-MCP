@@ -50,7 +50,7 @@ import { resolveTarget, ResolvedTargets } from "./read.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { FontMap } from "./fonts.js";
 import {
-  mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent,
+  mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent, assertBuiltInteriorLegal,
   InstancePlan, RenderCtx, RenderResources, BatchLayoutDeltas,
 } from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
@@ -479,7 +479,10 @@ function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInp
   // slot, or a fill-height text in its flow, refuses here with zero writes, not from the span.
   const deltas: BatchLayoutDeltas | undefined = plan.patch.layout ? { [sublayer.id]: plan.patch.layout } : undefined;
   // A live root is judged against the slot where it lands, like every live node it places (live-tree.ts).
-  for (const content of slotContent) if (content.liveId === undefined) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
+  for (const content of slotContent) {
+    if (content.liveId === undefined) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
+    assertBuiltInteriorLegal(content);
+  }
   return { path, delta: words, plan, slotContent };
 }
 

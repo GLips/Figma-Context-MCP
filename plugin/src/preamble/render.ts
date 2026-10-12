@@ -15,7 +15,7 @@ import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
 import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens } from "./tokens.js";
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
-import { attachBuiltChild, liveParentAttachFacts, settleApplySpan, RenderCtx, RenderResources } from "./bridge.js";
+import { attachBuiltChild, liveParentAttachFacts, settleApplySpan, assertBuiltInteriorLegal, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { fetchImagesForTrees } from "./flcm.js";
 import { resolveInstanceTreeTargets, planInstanceTree } from "./instance.js";
@@ -104,6 +104,7 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
  */
 export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, exposure: ExposureContext = {}): RenderResources {
   assertExposureTree(tree, exposure);
+  assertBuiltInteriorLegal(tree);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, fonts: loaded.fonts });
   const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances: needs.plans, live: new Map() };
   return { ...resources, live: gateLiveTree(loaded.live, resources) };

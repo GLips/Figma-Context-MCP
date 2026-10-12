@@ -12,10 +12,10 @@
 // the live flags. A rule that needs a fact neither side can state this way doesn't belong here.
 //
 // Convention: `subject` (the rejecting verb's name for the error prefix) is always the LAST
-// parameter. The parent-relative rules fire from create's APPLY walk, not prepare — deliberate:
-// the walk already holds each parent's authored facts beside the appliers, and duplicating that
-// derivation in a prepare pass is where the two could drift. Accepted cost: a bad percent child
-// pays prepare's font/image loads before rejecting.
+// parameter. The parent-relative rules judge a built tree's interior in the verb's GATE
+// (bridge.assertBuiltInteriorLegal), from the same authored-parent facts the build walk derives
+// (childFlowFactsOf), so a bad child refuses with zero writes. Accepted cost: it pays prepare's
+// font/image loads before rejecting.
 import { AXES, effectiveLayoutMode, type LayoutMode } from "./layout-mode.js";
 import { WriteLayout, isTokenRef, type Bindable } from "./ir.js";
 

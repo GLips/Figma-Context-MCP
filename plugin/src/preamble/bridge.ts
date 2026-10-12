@@ -988,9 +988,41 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
   return { ...flow, crossStretch: false, widthIsBounded: !flow.hugW, subject };
 }
 
+// The flow facts a built FRAME's children are judged against, from its AUTHORED words alone — the
+// frame's own sizing modes don't exist until applyOwnSize runs after the children (see
+// assertPercentResolvable's contract). Pure, so the gate can judge the interior before the seal.
+function childFlowFactsOf(wn: BuiltNode): ParentFlowFacts & { crossStretch: boolean } {
+  const layout = wn.layout || {};
+  const mode = effectiveLayoutMode(layout);
+  const sizing = behaviorForMode(mode).defaultSizing(layout);
+  return {
+    mode,
+    hugW: !sizing.horizontal || sizing.horizontal === "hug",
+    hugH: !sizing.vertical || sizing.vertical === "hug",
+    crossStretch: layout.alignItems === "stretch",
+  };
+}
+
+/**
+ * Judge every built child of a built parent in `tree` against that parent's authored facts — the
+ * same verdict the build walk reaches, reached in the verb's gate so a bad interior child refuses
+ * with zero writes. A root meets its destination elsewhere (assertBuiltRootLandsUnderParent), and
+ * slot content is judged where its instance is planned (instance.ts). A live parent's children stay
+ * the walk's: its own delta can change its layout before they attach.
+ */
+export function assertBuiltInteriorLegal(tree: WriteNode): void {
+  const facts = tree.liveId === undefined ? childFlowFactsOf(tree) : undefined;
+  for (const child of tree.children ?? []) {
+    if (facts && child.liveId === undefined) legalChildLayout(child, child.layout || {}, { ...facts, subject: child.sourcePath ?? "flcm" });
+    assertBuiltInteriorLegal(child);
+  }
+}
+
 // The child-side legality checks run inside the PARENT's buildNode, so they're attributed to the
-// child here — and flagged as flcm's own refusal, which their path-prefixed messages can't say.
-function legalChildLayout(wn: BuiltNode, words: WriteLayout, facts: AttachParentFacts): ChildLayout {
+// child here — and flagged as flcm's own refusal, which their path-prefixed messages can't say. The
+// gate judges authored words (assertBuiltInteriorLegal), the walk words with the text-fill default:
+// that default is legal wherever it applies, so the verdict is the same.
+function legalChildLayout(wn: BuiltNode, words: WriteLayout, facts: ParentFlowFacts & { subject: string }): ChildLayout {
   try {
     const context = childLayout(facts.mode, words, words.position === "absolute", facts.subject);
     const cl = context.layout;
@@ -1024,7 +1056,7 @@ export function attachBuiltChild(
   if (wn.liveId !== undefined) return ctx.live.get(wn)!.place(parent, place, ctx);
   facts = { ...facts, subject: wn.sourcePath ?? facts.subject };
   const authored = wn.layout || {};
-  const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && parent.layoutMode === "VERTICAL" && facts.widthIsBounded;
+  const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && facts.mode.word === "column" && facts.widthIsBounded;
   const words: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
   const context = legalChildLayout(wn, words, facts);
   const cl = context.layout;
@@ -1073,17 +1105,11 @@ function buildFrame(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded = false
   if (!wn.fills) f.fills = []; // omitted fill -> transparent, not a surprise white box
   applyPaint(f, wn, ctx);
 
-  const parentMode = effectiveLayoutMode(layout);
-  const isAutoParent = parentMode.kind !== "free";
-  // The hug facts answer from the AUTHORED node — the frame's live sizing modes don't exist until
-  // applyOwnSize runs after the children (see assertPercentResolvable's contract).
-  const authoredSizing = layoutBehavior(f).defaultSizing(layout);
+  const flow = childFlowFactsOf(wn);
+  const authoredSizing = behaviorForMode(flow.mode).defaultSizing(layout);
   const facts: AttachParentFacts = {
-    mode: parentMode,
-    hugW: !authoredSizing.horizontal || authoredSizing.horizontal === "hug",
-    hugH: !authoredSizing.vertical || authoredSizing.vertical === "hug",
-    crossStretch: layout.alignItems === "stretch",
-    widthIsBounded: !isAutoParent || (authoredSizing.horizontal === "fixed" && !layout.percentSize?.width) || ((authoredSizing.horizontal === "fill" || layout.percentSize?.width !== undefined) && enclosingWidthBounded),
+    ...flow,
+    widthIsBounded: flow.mode.kind === "free" || (authoredSizing.horizontal === "fixed" && !layout.percentSize?.width) || ((authoredSizing.horizontal === "fill" || layout.percentSize?.width !== undefined) && enclosingWidthBounded),
     subject: "flcm",
   };
   // Every positioned child (absolute, or any child of a free-form parent) settles only once the frame
