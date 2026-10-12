@@ -30,7 +30,8 @@ export function requestAnnotationCategories(annotations: readonly WriteAnnotatio
 }
 
 export function requestTreeAnnotationCategories(tree: WriteNode): void {
-  requestAnnotationCategories(tree.annotations);
+  // A live node's notes are its delta's, requested with the edit's own words (live-tree.ts).
+  if (tree.liveId === undefined) requestAnnotationCategories(tree.annotations);
   for (const child of tree.children ?? []) {
     if (child && typeof child === "object") requestTreeAnnotationCategories(child);
   }

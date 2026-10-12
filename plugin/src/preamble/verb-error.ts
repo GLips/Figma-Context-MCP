@@ -13,7 +13,7 @@
 // Lives in its own module because both edit-plan.ts and structure.ts throw it and neither should
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
-import { Identity, WriteNode } from "./ir.js";
+import type { Identity, BuiltNode } from "./ir.js";
 import { identityOf, childListClosingInstanceOf } from "./identity.js";
 import { committedVerbCount } from "./mutation-lock.js";
 
@@ -47,7 +47,7 @@ export class NodeBuildError extends Error {
   readonly nodeName: string | undefined;
   readonly reason: string;
   readonly flcmRefusal: boolean;
-  constructor(wn: WriteNode, sourcePath: string, cause: unknown, opts: { flcmRefusal?: boolean } = {}) {
+  constructor(wn: BuiltNode, sourcePath: string, cause: unknown, opts: { flcmRefusal?: boolean } = {}) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     super(reason.includes(sourcePath) ? reason : sourcePath + ": " + reason);
     this.sourcePath = sourcePath;

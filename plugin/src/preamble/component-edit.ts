@@ -25,12 +25,12 @@
 // own words (a rename must be part of the same step as whatever else the delta says), bindings land
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
-import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
+import { WriteNode, LiveRef, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
 import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue,
+  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue, bindingsOf, type LiveBindings,
 } from "./component.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, assertNoComponentPropertyBindings } from "./flcm.js";
@@ -671,7 +671,7 @@ export function prepareInsertBindings(
   subject: string, parent: any, tree: WriteNode, resources: RenderResources, removes: (node: any) => boolean = () => false,
 ): InsertBindingPlan | undefined {
   const bound: { wn: WriteNode; refs: ComponentPropertyBinding }[] = [];
-  collectTreeBindings(tree, bound);
+  collectTreeBindings(tree, resources.live, bound);
   if (!bound.length) return undefined;
   // A COMPONENT_SET destination is refused before this runs (structure.ts's assertBuiltInsertNotIntoSet),
   // so `component` is a standalone component or a set's VARIANT — the definition the slot rule counts in.
@@ -718,24 +718,24 @@ export function prepareInsertBindings(
         claimSlot(full, at);
         continue;
       }
-      const layer = describeBinder(wn.name ?? resources.live?.get(wn)?.node.name, wn.sourcePath!);
+      const layer = describeBinder(wn.liveId === undefined ? wn.name : resources.live.get(wn)!.node.name, wn.sourcePath!);
       existing.push({ owner, full, wire: BINDING_FIELD_WIRE_KEYS[field].wire, binder: { layer, value: boundLayerValue(definitions[full].type, wn, resources.instances, resources.live) }, at });
       binderNodes.push({ wn, full });
     }
   }
-  // A live node in the tree is what it is once its own words land (live-tree.ts projected them onto
-  // its write node), and one that carries a binding on a field rebinds that field.
-  const liveWriteNodes = new Map<any, WriteNode>();
-  for (const [wn, liveNode] of resources.live ?? []) liveWriteNodes.set(liveNode.node, wn);
+  // A live node in the tree is what it is once its own words land (LiveTreeNode.shows), and one
+  // that carries a binding on a field rebinds that field.
+  const liveRefs = new Map<any, LiveRef>();
+  for (const [ref, liveNode] of resources.live) liveRefs.set(liveNode.node, ref);
   plan.defaults = settleExistingPropertyDefaults(existing, {
     leaves: (node, wire) => {
-      const wn = liveWriteNodes.get(node);
-      const refs = (wn?.componentPropertyReferences ?? {}) as Record<string, string>;
+      const ref = liveRefs.get(node);
+      const refs = (ref ? resources.live.get(ref)!.refs ?? {} : {}) as Record<string, string>;
       return removes(node) || Object.keys(refs).some((field) => BINDING_FIELD_WIRE_KEYS[field].wire === wire);
     },
     shows: (node, field) => {
-      const wn = liveWriteNodes.get(node);
-      return wn ? boundLayerValue(PROPERTY_TYPES[BINDING_FIELD_WIRE_KEYS[field].type], wn, resources.instances, resources.live) : undefined;
+      const ref = liveRefs.get(node);
+      return ref ? boundLayerValue(PROPERTY_TYPES[BINDING_FIELD_WIRE_KEYS[field].type], ref, resources.instances, resources.live) : undefined;
     },
   });
   for (const { wn, full } of binderNodes) {
@@ -748,10 +748,10 @@ export function prepareInsertBindings(
 // Every bound node in the tree, ROOT INCLUDED — unlike flcm.component's collectChildBindings, where the root
 // becomes the component and can't point at a property of itself. Here the root is an ordinary child
 // of the component it lands in, so binding it is exactly as meaningful as binding any other layer.
-function collectTreeBindings(wn: WriteChild, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
-  if (!wn || typeof wn !== "object") return;
-  if (wn.componentPropertyReferences) out.push({ wn, refs: wn.componentPropertyReferences });
-  for (const child of wn.children || []) collectTreeBindings(child, out);
+function collectTreeBindings(wn: WriteNode, live: LiveBindings, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
+  const refs = bindingsOf(wn, live);
+  if (refs) out.push({ wn, refs });
+  for (const child of wn.children ?? []) collectTreeBindings(child, live, out);
 }
 
 /**

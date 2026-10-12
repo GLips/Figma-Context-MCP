@@ -3,8 +3,8 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Trees cross the authoring boundary once. Only this private compile produces IR.
-import type { WriteNode, WriteChild, WriteType } from "./ir.js";
-import type { NodeSpec, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
+import type { WriteNode, WriteChild, WriteType, BuiltNode } from "./ir.js";
+import type { NodeSpec, AuthoredTree, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
 import { isElision } from "@framelink/core";
 import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
 import { acceptAuthoringProps, withoutReadRecords, type Accepted } from "./authoring-input.js";
@@ -20,9 +20,9 @@ interface NodeEntry {
   /** The type the prelude matches a read's `type` against. */
   type: WriteType;
   known: ReadonlySet<string>;
-  compile(props: Accepted<Record<string, unknown>>): WriteNode;
+  compile(props: Accepted<Record<string, unknown>>): BuiltNode;
 }
-function nodeEntry<P>(type: WriteType, row: readonly WordGroup[], compile: (props: Accepted<P>) => WriteNode): NodeEntry {
+function nodeEntry<P>(type: WriteType, row: readonly WordGroup[], compile: (props: Accepted<P>) => BuiltNode): NodeEntry {
   return { type, known: wordsOf(row), compile: compile as NodeEntry["compile"] };
 }
 const NODE_ENTRY = {
@@ -109,15 +109,14 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       }));
     }
     try {
-      let tree: WriteNode;
       if (id !== undefined) {
         if (type !== undefined && typeof type !== "string") throw new Error("type must be a string.");
-        tree = { type: "UNRESOLVED", liveId: id as string, authoring: props };
-      } else {
-        const entry = nodeEntryFor(type, props);
-        tree = entry.compile(acceptAuthoringProps(props, { type: entry.type, verb: "create", known: entry.known, subject: entry.type }));
-        if (compiledChildren?.length && type !== "FRAME") throw new Error(String(type) + " does not accept children; instance content belongs in slot overrides.");
+        // The authored words only: what the live node resolves to is the loaded live tree's (live-tree.ts).
+        return { liveId: id as string, authoring: props, ...(children !== undefined && { children: compiledChildren }), source: src as NodeSpec, sourcePath: at };
       }
+      const entry = nodeEntryFor(type, props);
+      const tree = entry.compile(acceptAuthoringProps(props, { type: entry.type, verb: "create", known: entry.known, subject: entry.type }));
+      if (compiledChildren?.length && type !== "FRAME") throw new Error(String(type) + " does not accept children; instance content belongs in slot overrides.");
       if (children !== undefined) tree.children = compiledChildren;
       tree.source = src as NodeSpec;
       tree.sourcePath = at;
@@ -128,13 +127,29 @@ export function compileTree(input: unknown, subject: string): WriteNode {
 
 /** The nodes placed directly into `tree`: its children, then the slot content its overrides state. */
 export function childTreeNodes(tree: WriteNode): WriteNode[] {
-  const nested = Object.values(tree.overrides ?? tree.authoring?.overrides ?? {}).flatMap((delta: any) => Array.isArray(delta?.children) ? delta.children : []);
+  const overrides = tree.liveId !== undefined ? tree.authoring.overrides as BuiltNode["overrides"] : tree.overrides;
+  const nested = Object.values(overrides ?? {}).flatMap((delta: any) => Array.isArray(delta?.children) ? delta.children : []);
   return [...(tree.children ?? []), ...nested];
 }
 
 export function treeNodes(tree: WriteChild): WriteNode[] {
   if (!tree) return [];
   return [tree, ...childTreeNodes(tree).flatMap(treeNodes)];
+}
+
+/**
+ * The authored tree as it landed: a fresh copy of `source` with each placed node's id (ids are keyed
+ * by the node's own spec object, recorded as it lands). The compiled tree and its source stay as authored.
+ */
+export function placedTreeOf(source: NodeSpec, ids: ReadonlyMap<NodeSpec, string>): AuthoredTree {
+  const copyPlaced = (value: unknown): unknown => {
+    if (value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return value.map(copyPlaced);
+    const copy = Object.fromEntries(Object.entries(value).map(([k, v]) => [k, copyPlaced(v)]));
+    const id = ids.get(value as NodeSpec);
+    return id === undefined ? copy : { ...copy, id };
+  };
+  return copyPlaced(source) as AuthoredTree;
 }
 
 /** Edit deltas may contain trees only under instance slot overrides. */

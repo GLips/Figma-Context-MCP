@@ -105,9 +105,8 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
 export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, exposure: ExposureContext = {}): RenderResources {
   assertExposureTree(tree, exposure);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, fonts: loaded.fonts });
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances: needs.plans };
-  resources.live = gateLiveTree(loaded.live, resources);
-  return resources;
+  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances: needs.plans, live: new Map() };
+  return { ...resources, live: gateLiveTree(loaded.live, resources) };
 }
 
 /**

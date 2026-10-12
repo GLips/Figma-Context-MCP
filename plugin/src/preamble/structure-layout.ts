@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { WriteLayout, WriteNode, Sizing, ConstraintX, ConstraintY } from "./ir.js";
+import type { WriteLayout, BuiltNode, Sizing, ConstraintX, ConstraintY } from "./ir.js";
 import { layoutModeOf } from "./layout-mode.js";
 import { BOUND_WORDS } from "./vocabulary.js";
 import { unrotatedCornerOf } from "./pivot.js";
@@ -27,7 +27,7 @@ function mergePlacementLayout(inherited: WriteLayout, explicit: WriteLayout = {}
   return result;
 }
 
-export function replacementTree(node: any, spec: WriteNode): WriteNode {
+export function replacementTree(node: any, spec: BuiltNode): BuiltNode {
   const sizing = (value: "FILL" | "FIXED" | "HUG" | undefined): Sizing => convertSizing(value) || "fixed";
   const inherited: WriteLayout = {
     sizing: { horizontal: sizing(node.layoutSizingHorizontal), vertical: sizing(node.layoutSizingVertical) },

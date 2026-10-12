@@ -275,7 +275,8 @@ export async function loadFontsForTree(tree: WriteNode, tokens?: ResolvedTokens)
 
 function collectText(wn: WriteChild, needs: FontNeed[], styles: StyleRef[]): void {
   if (!wn || typeof wn !== "object") return;
-  if (wn.type === "TEXT") {
+  // A live text's fonts are its edit delta's, loaded with the live tree (live-tree.ts).
+  if (wn.liveId === undefined && wn.type === "TEXT") {
     const ts = wn.textStyle || {};
     needs.push(needOf(ts));
     if (ts.style) styles.push(ts.style);

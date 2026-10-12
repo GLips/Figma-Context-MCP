@@ -45,7 +45,7 @@ import { assertBounds } from "./size-bounds.js";
 // flcm.detach lives here too: it is the one verb that ENDS an instance, and it reads the same
 // facts (the ancestor chain Figma restricts overrides by).
 
-import { WriteNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, Handle } from "./ir.js";
+import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, Handle } from "./ir.js";
 import { resolveTarget, ResolvedTargets } from "./read.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { FontMap } from "./fonts.js";
@@ -112,7 +112,7 @@ export interface InstancePlanning { targets: ResolvedTargets; fonts?: FontMap }
  * loads is a miss the lookup refuses (read.ts ResolvedTargets).
  */
 export async function resolveInstanceTreeTargets(tree: WriteNode, targets: ResolvedTargets): Promise<void> {
-  const instances: WriteNode[] = [];
+  const instances: BuiltNode[] = [];
   collectInstanceNodes(tree, instances);
   for (const wn of instances) {
     await targets.resolve(wn.component as Target);
@@ -154,7 +154,7 @@ async function resolveSwapValueTargets(owner: any | null, authored: Record<strin
  */
 export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): InstanceNeeds {
   const needs: InstanceNeeds = { plans: new Map(), fontNeeds: [], slotContentTrees: [] };
-  const instances: WriteNode[] = [];
+  const instances: BuiltNode[] = [];
   collectInstanceNodes(tree, instances);
   for (const wn of instances) {
     const { plan, overrides } = (() => {
@@ -172,9 +172,9 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
 
 // Descends into slot content as well as children: a `INSTANCE` inside an override's `children`
 // is an INSTANCE node like any other, and the build walk will ask for its plan by identity.
-function collectInstanceNodes(wn: WriteChild, out: WriteNode[]): void {
+function collectInstanceNodes(wn: WriteChild, out: BuiltNode[]): void {
   if (!wn || typeof wn !== "object") return;
-  if (wn.type === "INSTANCE" && !wn.liveId) out.push(wn);
+  if (wn.liveId === undefined && wn.type === "INSTANCE") out.push(wn);
   for (const child of wn.children || []) collectInstanceNodes(child, out);
   for (const content of slotContentListsOf(wn)) for (const child of content) collectInstanceNodes(child, out);
 }
@@ -183,6 +183,7 @@ function collectInstanceNodes(wn: WriteChild, out: WriteNode[]): void {
 // construction (flcm.compileOverrideBag) and resolved to a slot here.
 function slotContentListsOf(wn: WriteNode): WriteChild[][] {
   const out: WriteChild[][] = [];
+  if (wn.liveId !== undefined) return out; // a live instance's slot content is its edit delta's (planInstanceEdit)
   for (const path of Object.keys(wn.overrides || {})) {
     const content = own(wn.overrides![path], SLOT_CONTENT_WORD);
     if (Array.isArray(content)) out.push(content as WriteChild[]);
@@ -206,7 +207,7 @@ function planSlotContentNeeds(content: readonly WriteNode[], planning: InstanceP
   return needs;
 }
 
-function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
+function planInstanceNode(wn: BuiltNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
   const resolved = resolveComponentNode(planning.targets.node(wn.component as Target, SUBJECT), SUBJECT);
   const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
@@ -477,7 +478,8 @@ function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInp
   // layout words projected, the way a batch projects a parent's delta) — a percent under a hug
   // slot, or a fill-height text in its flow, refuses here with zero writes, not from the span.
   const deltas: BatchLayoutDeltas | undefined = plan.patch.layout ? { [sublayer.id]: plan.patch.layout } : undefined;
-  for (const content of slotContent) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
+  // A live root is judged against the slot where it lands, like every live node it places (live-tree.ts).
+  for (const content of slotContent) if (content.liveId === undefined) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
   return { path, delta: words, plan, slotContent };
 }
 

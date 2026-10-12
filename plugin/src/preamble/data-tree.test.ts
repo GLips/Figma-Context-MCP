@@ -326,3 +326,13 @@ test("component promotion can declare bindings on existing children and derive t
   assert.equal(definition.defaultValue, "Existing label");
   assert.equal(live.children[0].id, text.id);
 });
+
+test("promoting a live keyed frame keeps its key on the component", async () => {
+  const figma = createFigmaMock();
+  const frame = await flcm.render({ type: "FRAME", key: "card", width: 100, height: 100, children: [{ type: "RECTANGLE", width: 20, height: 20 }] });
+  const result = await flcm.component({ id: frame.id!, children: [{ id: frame.children![0].id! }] });
+  const comp: any = await figma.getNodeByIdAsync(result.id!);
+  assert.equal(comp.type, "COMPONENT");
+  assert.equal(comp.getPluginData("flcm/key"), "card");
+  assert.equal(result.children![0].id, frame.children![0].id);
+});

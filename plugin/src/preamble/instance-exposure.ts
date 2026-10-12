@@ -25,6 +25,12 @@ export function assertExposureTarget(node: SceneNode, subject: string): void {
 
 export function assertExposureTree(tree: WriteNode, context: ExposureContext = {}): void {
   function visit(node: WriteNode, owner: boolean): void {
+    // A live node's `exposed` is an edit word, judged against the live node (assertExposureTarget);
+    // its authored children can't sit in an instance's own list (gateLiveTree refuses that).
+    if (node.liveId !== undefined) {
+      for (const child of node.children || []) visit(child, owner);
+      return;
+    }
     if (node.exposed !== undefined && !owner) throw new Error((node.sourcePath ?? "INSTANCE") + ": exposed needs an instance inside a component definition, and this one isn't — build it with flcm.component or insert it into an existing component.");
     for (const child of node.children || []) if (child && typeof child === "object") visit(child, owner && node.type !== "INSTANCE");
     for (const delta of Object.values(node.overrides || {})) {

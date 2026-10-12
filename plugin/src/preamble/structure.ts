@@ -5,7 +5,7 @@
 import { registerRead } from "./host.js";
 import type { WarningRecord } from "./warnings.js";
 import { sceneFigma as figma } from "./scene-access.js";
-import { compileTree, treeNodes } from "./compile-tree.js";
+import { compileTree, treeNodes, placedTreeOf } from "./compile-tree.js";
 import { isTargetShaped } from "./flcm.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 // structure — the tree-shape verbs (sibling to edit.ts, the field-level one). Position is the
@@ -206,7 +206,7 @@ function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverla
   } catch (cause) {
     throw fail(cause);
   }
-  return tree.source as AuthoredTree;
+  return placedTreeOf(tree.source!, ctx.placedIds);
 }
 
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is
@@ -252,18 +252,18 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
   }, ({ tree, anchorNode, pages, loaded }): PreparedInsert => {
     const dest = destinationOf(subject, anchorNode, placement, pages);
     assertInstanceChildListUntouched(subject, dest.parent, "destination");
-    if (!tree.liveId) {
+    if (tree.liveId === undefined) {
       assertBuiltInsertNotIntoSet(subject, dest.parent);
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, subject);
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
-    for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
-    const liveRoot = resources.live?.get(tree);
-    if (liveRoot) {
+    for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
+    if (tree.liveId !== undefined) {
       // Also checked as each live node is placed; here it refuses the common case before the seal.
-      assertInheritedSlotContentStays(tree.sourcePath!, liveRoot.node, dest.parent);
-      assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
+      const liveRoot = resources.live.get(tree)!;
+      assertInheritedSlotContentStays(tree.sourcePath, liveRoot.node, dest.parent);
+      assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, liveRoot.layout);
     }
     const bindings = prepareInsertBindings(subject, dest.parent, tree, resources);
     return { kind: "insert", dest, tree, resources, bindings, noteOverlap: verb === "render" };
@@ -447,14 +447,14 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       place: (built) => after ? parent.insertChild(parent.children.indexOf(after), built) : parent.appendChild(built),
     };
     assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
-    if (!tree.liveId) {
+    if (tree.liveId === undefined) {
       assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
       Object.assign(tree, replacementTree(node, tree));
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
-    for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
+    for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
     // The original leaves unless the replacement keeps it, and its descendants leave with it unless kept.
     const removes = (layer: any): boolean => {
       for (let p = layer; p; p = p.parent) {

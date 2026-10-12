@@ -9,6 +9,7 @@ import { hasContainerLayout } from "./vocabulary.js";
 import type { LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
+import type { NodeSpec } from "./schema.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
 import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js";
@@ -31,7 +32,7 @@ import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js"
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef } from "./ir.js";
+import { WriteType, WriteNode, BuiltNode, LiveRef, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef } from "./ir.js";
 import { writeBindable, unbindField, variableFor, variableLiteral, styleFor, type ResolvedTokens } from "./tokens.js";
 import { queueStyleLink, settlePivot, type ApplySpan } from "./apply-span.js";
 import { own } from "./validate.js";
@@ -53,7 +54,7 @@ import { unrotatedCornerOf } from "./pivot.js";
 // it). An edit caller supplies these for a live target without fabricating walk state. The verb's
 // gate builds it; apply adds the lock's span (ApplyResources).
 export interface RenderResources {
-  live?: ReadonlyMap<WriteNode, LiveTreeNode>;
+  live: ReadonlyMap<LiveRef, LiveTreeNode>;
   fonts: FontMap;
   images: Record<string, string>;
   // Every token the verb's IR names, resolved in prepare — the apply span binds from here, never looks up.
@@ -88,6 +89,9 @@ export interface InstancePlan {
 export interface RenderCtx extends ApplyResources {
   exposures: ExposureWrite[];
   keys: Set<string>;
+  // The id each placed node's spec gets back, by spec: the verb's AuthoredTree is a copy of the
+  // spec with these filled in (compile-tree.ts placedTreeOf), never the IR written over.
+  placedIds: Map<NodeSpec, string>;
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
   // Collected DURING the walk along with keys because only the walk knows which live node a compiled
   // node became — a built→live pairing recovered afterwards would have to guess past falsy children
@@ -183,7 +187,7 @@ export function mintHandle(node: any): Handle {
 // is created as a page child and reparented only when it's appended (so mid-walk even "does the parent
 // place this node?" — which decides whether left/top exist at all — answers wrong). Minting once here is
 // what keeps a returned handle from ever carrying a provisional value.
-function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
+function stampKey(node: any, wn: BuiltNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   // No verb name: the same walk runs under render AND under every structural insert verb, and
   // naming the wrong one sends the agent looking at a call it didn't make.
@@ -542,7 +546,7 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
  * component behind it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: ApplyResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, keys: new Set(), exposures: [] };
+  const ctx: RenderCtx = { ...resources, keys: new Set(), exposures: [], placedIds: new Map() };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
@@ -907,7 +911,7 @@ function rederiveCarriedFill(node: any, wl: WriteLayout, overrides: WriteLayout 
 
 // A compiled root bound for `destination`: on a page, a read root's fill axes take their designed px
 // (foldDesignedSizeForPage). Runs before assertBuiltRootLandsUnderParent, which then judges the folded words.
-export function foldBuiltRootForDestination(destination: any, wn: WriteNode): void {
+export function foldBuiltRootForDestination(destination: any, wn: BuiltNode): void {
   if (destination.type === "PAGE" && wn.layout) wn.layout = foldDesignedSizeForPage(wn.layout);
 }
 
@@ -915,7 +919,7 @@ export function foldBuiltRootForDestination(destination: any, wn: WriteNode): vo
 // are checked against their own authored parents inside the build walk, exactly as at create.
 // `deltas` is the same projection a batch hands assertLayoutDeltaResolvable: a slot's content is
 // judged against the slot as the SAME override's own layout words will leave it, not as it stands.
-export function assertBuiltRootLandsUnderParent(destination: any, wn: WriteNode, subject: string, deltas?: BatchLayoutDeltas): void {
+export function assertBuiltRootLandsUnderParent(destination: any, wn: BuiltNode, subject: string, deltas?: BatchLayoutDeltas): void {
   // Instance planning validates node-local words against the resolved component/selected variant,
   // including recursively planned slot content. This gate only adds destination-relative checks.
   const wl = wn.layout || {};
@@ -986,7 +990,7 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
 
 // The child-side legality checks run inside the PARENT's buildNode, so they're attributed to the
 // child here — and flagged as flcm's own refusal, which their path-prefixed messages can't say.
-function legalChildLayout(wn: WriteNode, words: WriteLayout, facts: AttachParentFacts): ChildLayout {
+function legalChildLayout(wn: BuiltNode, words: WriteLayout, facts: AttachParentFacts): ChildLayout {
   try {
     const context = childLayout(facts.mode, words, words.position === "absolute", facts.subject);
     const cl = context.layout;
@@ -1017,9 +1021,8 @@ export function attachBuiltChild(
   parent: any, wn: WriteNode, ctx: RenderCtx, facts: AttachParentFacts, place: (child: any) => void,
   settleAfterParentSize?: PositionedChildSettlement[],
 ): any {
+  if (wn.liveId !== undefined) return ctx.live.get(wn)!.place(parent, place, ctx);
   facts = { ...facts, subject: wn.sourcePath ?? facts.subject };
-  const live = ctx.live?.get(wn);
-  if (live) return live.place(parent, place, ctx);
   const authored = wn.layout || {};
   const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && parent.layoutMode === "VERTICAL" && facts.widthIsBounded;
   const words: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
@@ -1058,7 +1061,7 @@ export function attachBuiltChild(
   return child;
 }
 
-function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false): any {
+function buildFrame(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded = false): any {
   const f = figma.createFrame();
   figma.currentPage.appendChild(f); // enter the doc; reparented when appended to a parent frame
   // CSS default overflow is VISIBLE; Figma's createFrame() defaults clipsContent = true. Default it off so
@@ -1108,7 +1111,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
 // Order: properties before overrides, since a property can swap a nested instance or hide a
 // sublayer and the override paths were resolved against the tree the properties produce. The
 // child-side words (position, fill, constraints) are attachBuiltChild's, after the caller places the node.
-function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
+function buildInstance(wn: BuiltNode, ctx: RenderCtx): any {
   const plan = ctx.instances.get(wn);
   if (!plan) throw new Error("flcm: an INSTANCE node reached the build walk without a resolved plan. This is an internal error; report it.");
   const inst = plan.component.createInstance();
@@ -1128,7 +1131,7 @@ function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
 // API. Offsets track the concatenation order the runs were joined in (buildText). A run only carries the
 // fields it overrides, so we touch only those ranges — the rest inherit the node's base style. A run's font
 // resolves STRICTLY (resolveFontStrict): an unloaded run font fails loud rather than silently rendering base.
-function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderResources): void {
+function applyRuns(t: any, runs: NonNullable<WriteProps["runs"]>, ctx: RenderResources): void {
   // Read once: a literal run write clears a binding only where the node has one, so plain text
   // pays no extra writes. Runs never overlap, so a binding laid by an earlier run is never in the way.
   const bound = t.boundVariables || {};
@@ -1267,7 +1270,7 @@ export function applyTextClamp(t: any, maxLines: WriteProps["maxLines"]): void {
   t.maxLines = maxLines;
 }
 
-function buildText(wn: WriteNode, ctx: RenderCtx): any {
+function buildText(wn: BuiltNode, ctx: RenderCtx): any {
   const t = figma.createText();
   figma.currentPage.appendChild(t);
   // The creation default is the builder's: a fresh text ALWAYS ends up with a written base font —
@@ -1285,7 +1288,7 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
 }
 
 
-function buildShape(node: any, wn: WriteNode, ctx: RenderCtx): any {
+function buildShape(node: any, wn: BuiltNode, ctx: RenderCtx): any {
   figma.currentPage.appendChild(node);
   if (!wn.fills) node.fills = []; // omitted fill -> transparent
   applyPaint(node, wn, ctx);
@@ -1293,7 +1296,7 @@ function buildShape(node: any, wn: WriteNode, ctx: RenderCtx): any {
   return node;
 }
 
-function buildLine(wn: WriteNode, ctx: RenderCtx): any {
+function buildLine(wn: BuiltNode, ctx: RenderCtx): any {
   const l = figma.createLine();
   figma.currentPage.appendChild(l);
   // An omitted stroke keeps createLine's seeded black; the weight's creation default is 1.
@@ -1305,13 +1308,13 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
 // A VECTOR WriteNode carries one WriteVectorSource (ir.ts), and each arm drives a different plugin call:
 // svg → createNodeFromSvg (a FRAME of vectors); path → createVector + vectorPaths (one themeable vector).
 // Both fail loud on unparseable input rather than leaving a silent empty node.
-function buildVector(wn: WriteNode, ctx: RenderCtx): any {
+function buildVector(wn: BuiltNode, ctx: RenderCtx): any {
   const source = wn.vector;
   if (!source) throw new Error("flcm: a VECTOR node carries no geometry (compileSvg/compilePath guarantee one).");
   return source.kind === "svg" ? buildSvg(wn, source.markup, ctx) : buildPath(wn, source, ctx);
 }
 
-function buildSvg(wn: WriteNode, markup: string, ctx: RenderCtx): any {
+function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx): any {
   let frame: any;
   try {
     frame = figma.createNodeFromSvg(markup);
@@ -1342,7 +1345,7 @@ function buildSvg(wn: WriteNode, markup: string, ctx: RenderCtx): any {
 // parent, so nested <g> frames need it too) and `edit(icon, { width: 48, height: 48 })` scales the drawing.
 // Paints: only the vectors, never the containers — painting a <g>'s frame would put a backdrop behind the
 // art instead of recolouring it. A present-but-empty array is the compiled "none", same as applyPaint.
-function themeImportedArt(frame: any, wn: WriteNode, ctx: RenderCtx): void {
+function themeImportedArt(frame: any, wn: BuiltNode, ctx: RenderCtx): void {
   const fills = wn.fills ? toFigmaPaintStack(wn.fills, ctx) : undefined;
   const strokes = wn.strokes ? toFigmaPaintStack(wn.strokes, ctx) : undefined;
   const walk = (node: any): void => {
@@ -1363,7 +1366,7 @@ export function applyVectorPath(node: VectorNode, paths: VectorPaths): void {
   node.resize(width, height);
 }
 
-function buildPath(wn: WriteNode, source: { paths: VectorPaths; scale?: number }, ctx: RenderCtx): any {
+function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }, ctx: RenderCtx): any {
   const v: any = figma.createVector();
   figma.currentPage.appendChild(v);
   if (!wn.fills) v.fills = []; // omitted fill -> transparent, like the other primitives (no surprise default)
@@ -1392,7 +1395,7 @@ function buildPath(wn: WriteNode, source: { paths: VectorPaths; scale?: number }
 // The createable allow-list AND the dispatch in one table — `Record<WriteType, …>` makes TS reject any
 // createable type that lacks a builder (or a builder for a non-createable type), so the two can't drift.
 // A type outside the table falls through to the loud error in buildNode.
-const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean) => any> = {
+const BUILDERS: Record<WriteType, (wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?: boolean) => any> = {
   FRAME: (wn, ctx, bounded) => buildFrame(wn, ctx, bounded),
   TEXT: (wn, ctx) => buildText(wn, ctx),
   RECTANGLE: (wn, ctx) => buildShape(figma.createRectangle(), wn, ctx),
@@ -1405,7 +1408,7 @@ const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx, enclosingWidth
 // Build one node and its subtree. Percent size/position is NOT resolved here — the node is built at a
 // provisional size and attachBuiltChild records it on the span for the post-walk settleApplySpan pass (which
 // needs the fully-assembled tree to read realized parent sizes). Returns the live node.
-export function buildNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
+export function buildNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
   try { return buildCompiledNode(wn, ctx, enclosingWidthBounded); }
   catch (cause) {
     // Innermost wins: the deepest node that failed is the one the verb error should name. A nested
@@ -1415,15 +1418,13 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?:
   }
 }
 
-function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
+function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
   const build = own(BUILDERS, wn.type);
   if (!build) {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
   const node = build(wn, ctx, enclosingWidthBounded);
-  if (wn.source) {
-    wn.source.id = node.id;
-  }
+  if (wn.source) ctx.placedIds.set(wn.source, node.id);
   for (const prop of ["width", "height"] as const) {
     const authored = wn.ignoredSize?.[prop];
     // A `get` round-trip re-authors the read's own (pixel-rounded) size, so a match is no divergence.

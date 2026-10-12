@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { acceptAuthoringProps } from "./authoring-input.js";
-import { loadLiveTree, gateLiveTree, liveChildrenOfNewNodes, LoadedLiveTree } from "./live-tree.js";
+import { loadLiveTree, gateLiveTree, liveChildrenOfNewNodes, LoadedLiveTree, LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
 // `flcm.edit` (edit.ts) once, `flcm.editMany` (edit-many.ts) N times over one queue slot, and an
@@ -69,7 +69,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 // before it is wired to a property.
 
 import {
-  WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
+  WriteNode, LiveRef, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
   ComponentPropertyBindingEdit, namesFontIdentity,
 } from "./ir.js";
 import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
@@ -429,7 +429,7 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
   for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
   // Tokens first: a font variable's mode values and a text style's font are font needs of their own.
   const tokens = mergeResolvedTokens(
-    await resolveTokenRefs(collectTokenRefs([...plans, ...fontNeeds].map((p) => p.patch).concat(trees))),
+    await resolveTokenRefs(collectTokenRefs([...[...plans, ...fontNeeds].map((p) => p.patch), ...trees])),
     ...liveTrees.map((live) => live.loaded.tokens),
   );
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
@@ -506,10 +506,9 @@ export function assertEditPlanLands(
 export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
   const instances = new Map<WriteNode, InstancePlan>();
   for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances };
-  const live = new Map();
-  for (const tree of loaded.liveTrees ?? []) for (const [wn, plan] of gateLiveTree(tree, resources)) live.set(wn, plan);
-  resources.live = live;
+  const live = new Map<LiveRef, LiveTreeNode>();
+  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances, live };
+  for (const tree of loaded.liveTrees ?? []) for (const [ref, node] of gateLiveTree(tree, resources)) live.set(ref, node);
   return resources;
 }
 

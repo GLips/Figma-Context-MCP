@@ -7,13 +7,13 @@ import { bindableFieldsOf } from "./vocabulary.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
-import type { WriteNode } from "./ir.js";
+import type { WriteNode, LiveRef, WriteLayout, ComponentPropertyBinding } from "./ir.js";
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { createStandingState } from "./standing-state.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
-import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
+import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue, editedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
@@ -48,27 +48,26 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
 // content. Taken across every tree a verb loads, because an edit's slot content lists a nested new
 // instance's slot content again as a root of its own.
 export function liveChildrenOfNewNodes(trees: readonly WriteNode[]): Set<WriteNode> {
-  return new Set(trees.flatMap(treeNodes).flatMap(wn => wn.liveId ? [] : childTreeNodes(wn)));
+  return new Set(trees.flatMap(treeNodes).flatMap(wn => wn.liveId !== undefined ? [] : childTreeNodes(wn)));
 }
 
 export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOfNewNodes([tree])): Promise<LoadedLiveTree> {
-  const entries = [];
+  const entries = new Map<LiveRef, LoadedLiveEntry>();
   const standing = createStandingState();
   const parentOf = new Map(treeNodes(tree).flatMap(parent => childTreeNodes(parent).map(child => [child, parent] as const)));
-  const live: { wn: WriteNode; node: SceneNode }[] = [];
-  for (const wn of treeNodes(tree)) {
-    if (!wn.liveId) continue;
+  const live: { ref: LiveRef; node: SceneNode }[] = [];
+  for (const ref of treeNodes(tree)) {
+    if (ref.liveId === undefined) continue;
     try {
-      const node = await resolveTarget({ id: wn.liveId });
+      const node = await resolveTarget({ id: ref.liveId });
       assertSceneNode(node);
-      if (wn.authoring!.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
-      if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
-      wn.type = node.type;
+      if (ref.authoring.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
+      if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) throw new Error("type " + ref.source.type + " does not match live " + node.type + ".");
       // Pre-order, so a live root's one read covers every live descendant pasted with it. A node
       // stating no words (a bare { id } move) has nothing to compare and costs no read.
-      if (Object.keys(wn.authoring!).length) await standing.load(node);
-      live.push({ wn, node });
-    } catch (cause) { throw new Error(wn.sourcePath! + ": " + (cause instanceof Error ? cause.message : String(cause))); }
+      if (Object.keys(ref.authoring).length) await standing.load(node);
+      live.push({ ref, node });
+    } catch (cause) { throw new Error(ref.sourcePath + ": " + (cause instanceof Error ? cause.message : String(cause))); }
   }
   // A new parent has no live id; its source path keys its children as siblings all the same.
   const parentKey = (wn: WriteNode): string | undefined => {
@@ -76,19 +75,17 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
     return parent && (parent.liveId ?? parent.sourcePath);
   };
   const changed = standing.changesInCall(
-    live.map(({ wn, node }) => ({ node, words: wn.authoring!, parent: parentKey(wn) })),
+    live.map(({ ref, node }) => ({ node, words: ref.authoring, parent: parentKey(ref) })),
     treeNodes(tree).flatMap(wn => {
       const parent = parentKey(wn);
-      return !wn.liveId && wn.layout?.zIndex !== undefined && parent ? [parent] : [];
+      return wn.liveId === undefined && wn.layout?.zIndex !== undefined && parent ? [parent] : [];
     }),
   );
-  for (const [i, { wn, node }] of live.entries()) {
-    const at = wn.sourcePath!;
+  for (const [i, { ref, node }] of live.entries()) {
+    const at = ref.sourcePath;
     try {
       const { key, d, vectorPaths, componentPropertyReferences, ...delta } = changed[i];
-      if (componentPropertyReferences !== undefined) {
-        wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
-      }
+      const refs = componentPropertyReferences === undefined ? undefined : compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
       let pathData: VectorPaths | undefined;
       if (d !== undefined) {
         if (node.type !== "VECTOR") throw new Error("d is a VECTOR geometry word.");
@@ -102,58 +99,67 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       if (key !== undefined && typeof key !== "string") throw new Error("key must be a string.");
       const changes = delta as EditDelta;
       const hint = Object.keys(delta).some(k => delta[k] !== undefined) ? compileEditPlan(node, changes, at) : undefined;
-      wn.layout = hint?.patch.layout;
       const targets = createResolvedTargets();
       const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
       const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
-      entries.push({ wn, node, changes, key, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(wn) });
+      entries.set(ref, { ref, node, changes, key, refs, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(ref) });
     } catch (cause) { throw new Error(at + ": " + (cause instanceof Error ? cause.message : String(cause))); }
   }
-  const loaded = entries.length ? await loadEditResources(entries.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), entries.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
+  const prepared = [...entries.values()];
+  const loaded = prepared.length ? await loadEditResources(prepared.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), prepared.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
   return { entries, loaded };
+}
+
+/** One live node a tree names, resolved in prepare: the node, its words split by who resolves them, and the hint plans. */
+export interface LoadedLiveEntry {
+  ref: LiveRef; node: SceneNode; changes: EditDelta; key: unknown; pathData?: VectorPaths;
+  /** The binding bag the author stated, compiled against the live node's type. */
+  refs?: ComponentPropertyBinding;
+  hint: import("./edit-plan.js").EditPlan | undefined;
+  targets: ReturnType<typeof createResolvedTargets>;
+  current: Awaited<ReturnType<typeof resolveInstanceEditTargets>> | null;
+  instance: ReturnType<typeof planInstanceEdit> | undefined;
+  intoNewNode: boolean;
 }
 
 export interface LoadedLiveTree {
   loaded: import("./edit-plan.js").LoadedResources;
-  entries: {
-    wn: WriteNode; node: SceneNode; changes: EditDelta; key: unknown; pathData?: VectorPaths;
-    hint: import("./edit-plan.js").EditPlan | undefined;
-    targets: ReturnType<typeof createResolvedTargets>;
-    current: Awaited<ReturnType<typeof resolveInstanceEditTargets>> | null;
-    instance: ReturnType<typeof planInstanceEdit> | undefined;
-    intoNewNode: boolean;
-  }[];
+  entries: ReadonlyMap<LiveRef, LoadedLiveEntry>;
 }
+
+/** A live node as the gate resolved it — the one authority for what the call makes of it. */
 export interface LiveTreeNode {
   node: SceneNode;
   component?: ComponentNode | null;
+  /** Its delta's layout words: what it says about the parent it lands under. */
+  layout?: WriteLayout;
+  /** The binding bag it carries, if any. */
+  refs?: ComponentPropertyBinding;
+  /** What it shows once its words land — the value a property default is judged by (component.ts). */
+  shows: { visible: boolean; text?: string };
   place(parent: BaseNode & ChildrenMixin, place: (node: SceneNode) => void, ctx: RenderCtx): SceneNode;
 }
 
-export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): Map<WriteNode, LiveTreeNode> {
-  const plans = new Map<WriteNode, LiveTreeNode>();
-  for (const entry of live.entries) {
-    const { wn, node, changes, key, pathData, targets, current, intoNewNode } = entry;
-    const at = wn.sourcePath!;
+export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): Map<LiveRef, LiveTreeNode> {
+  const plans = new Map<LiveRef, LiveTreeNode>();
+  for (const entry of live.entries.values()) {
+    const { ref, node, changes, key, refs, pathData, targets, current, intoNewNode } = entry;
+    const at = ref.sourcePath;
     assertNodeStillOnCanvas(node, at);
     if (childListClosingInstanceOf(node, false)) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
-    if (wn.children?.length && (!("appendChild" in node) || childListClosingInstanceOf(node, true))) throw new Error(at + ".children: this live node's child list cannot be authored.");
+    if (ref.children?.length && (!("appendChild" in node) || childListClosingInstanceOf(node, true))) throw new Error(at + ".children: this live node's child list cannot be authored.");
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
-    wn.layout = plan?.patch.layout;
     const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, fonts: resources.fonts }, at) : undefined;
     const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at, (field) => projectedBinderValue(field, plan, instance, current, at)) : undefined;
     // Placement validates against the destination. Font coverage and node-local legality still
     // use the edit gate, with parent-relative words withheld until that destination exists.
     if (plan) assertEditPlanLands({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources.fonts, at);
     if (instance) for (const [tree, instancePlan] of instance.needs.plans) (resources.instances as Map<WriteNode, typeof instancePlan>).set(tree, instancePlan);
-    // What the node shows once its words land: the value a property default is judged by, whether
-    // this node binds the property or is already bound to it (component.ts, component-edit.ts).
-    wn.visible = plan?.patch.visible ?? node.visible;
-    if (node.type === "TEXT") {
-      wn.text = plan?.patch.runs ? undefined : plan?.patch.text ?? node.characters;
-      wn.runs = plan?.patch.runs;
-    }
-    plans.set(wn, { node, component: instance?.becomes ?? current, place(parent, place, ctx) {
+    const shows = {
+      visible: (plan && editedBinderValue("visible", plan, instance) as boolean | undefined) ?? node.visible,
+      text: node.type === "TEXT" ? (plan && editedBinderValue("text", plan, instance) as string | undefined) ?? node.characters : undefined,
+    };
+    plans.set(ref, { node, component: instance?.becomes ?? current, layout: plan?.patch.layout, refs, shows, place(parent, place, ctx) {
       assertInheritedSlotContentStays(at, node, parent);
       // Inherited slot content lands as Figma's copy, leaving the original where it was: not a move.
       const from = intoNewNode && !isInheritedSlotContent(node) ? node.parent : null;
@@ -166,23 +172,24 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
         holdPivot(ctx.span, node);
         // Before the node's own writes, so none lands on a property it is leaving (see releaseRewiredBindings).
-        if (wn.componentPropertyReferences) releaseRewiredBindings(node, Object.keys(wn.componentPropertyReferences).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
+        if (refs) releaseRewiredBindings(node, Object.keys(refs).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
         if (instance) applyInstanceRetarget(fail, node, instance);
         if (component?.definitions) applyComponentDefinitionEdit(fail, node, component.definitions);
         if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData);
         if (plan) applyEditPlanWrites(fail, plan, ctx);
         if (component?.binding) applyComponentBindingEdit(fail, node, component.binding);
         if (key !== undefined) writeKey(node, key as string);
-        if (wn.componentPropertyReferences) {
+        if (refs) {
           if (!ctx.bindings) throw new Error(at + ": componentPropertyReferences has no declaring component.");
-          ctx.bindings.push({ node, refs: wn.componentPropertyReferences });
+          ctx.bindings.push({ node, refs });
         }
-        if ("appendChild" in node) for (const child of wn.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
+        if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
         resettleMovedNode(node, words, ctx);
         if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan, ctx.span); }
         else settlePivot(ctx.span, node, words);
         if (instance) applyInstanceOverrides(node, instance, ctx, at);
-        if (wn.source) wn.source.id = node.id;
+        // Inherited slot content lands as Figma's copy, under a new id.
+        ctx.placedIds.set(ref.source, node.id);
         return node;
       } catch (cause) { throw fail(cause); }
     } });

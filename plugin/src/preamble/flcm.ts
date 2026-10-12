@@ -13,7 +13,7 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import { compileBounds } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
 import {
-  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
+  BuiltNode, LiveRef, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
   GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, ConstraintX, ConstraintY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   Bindable, CornerRadii, isTokenRef,
@@ -597,8 +597,8 @@ export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, su
   return [parseFill(value, subject)];
 }
 
-function compileFrame(props: Accepted<FrameProps>): WriteNode {
-  const wn: WriteNode = { type: "FRAME" };
+function compileFrame(props: Accepted<FrameProps>): BuiltNode {
+  const wn: BuiltNode = { type: "FRAME" };
   compileNodeLocalProps(wn, props, { type: "FRAME", radius: true, clip: true });
   compileBindings(wn, props, "FRAME");
   wn.layout = buildLayout(props, "FRAME", "FRAME");
@@ -627,12 +627,12 @@ export const COMPONENT_TARGET_HINT = "a component's node id (a read's `component
 // default, no hug default. An instance's root already has every value from its component, and a
 // creation default written onto it would be a root-level override the author never asked for — the
 // instance would stop tracking the component on that field. Only a named word becomes an override.
-function compileInstance(props: Accepted<InstanceProps>): WriteNode {
+function compileInstance(props: Accepted<InstanceProps>): BuiltNode {
   const component = props.componentId;
   if (!isTargetShaped(component)) {
     throw new Error("INSTANCE: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
   }
-  const wn: WriteNode = { type: "INSTANCE" };
+  const wn: BuiltNode = { type: "INSTANCE" };
   wn.component = component;
   if (props.exposed !== undefined) { assertScalarType(props.exposed, "boolean", "exposed"); wn.exposed = props.exposed; }
   compileNodeLocalProps(wn, props, { type: "INSTANCE", radius: true, clip: true });
@@ -846,7 +846,7 @@ function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: 
  */
 export function assertNoComponentPropertyBindings(tree: WriteChild, subject: string): void {
   if (!tree || typeof tree !== "object") return;
-  if (tree.componentPropertyReferences) {
+  if (tree.liveId !== undefined ? tree.authoring.componentPropertyReferences : tree.componentPropertyReferences) {
     throw new Error(
       subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
         "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
@@ -1040,9 +1040,9 @@ export function compileTextContent(content: unknown, base: WriteTextStyle, boldW
   return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "TEXT run")) };
 }
 
-function compileText(props: Accepted<TextProps>): WriteNode {
+function compileText(props: Accepted<TextProps>): BuiltNode {
   const content = props.text;
-  const wn: WriteNode = { type: "TEXT" };
+  const wn: BuiltNode = { type: "TEXT" };
   base(wn, props);
   compileBindings(wn, props, "TEXT");
   // The text's paint is `fill`, like every other node's. "none" is the same removal word edit takes.
@@ -1232,9 +1232,9 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
 
 // An ELLIPSE has no corners, so its row has no radius word (vocabulary `ellipse` group): refused by the
 // gate, not accepted and dropped on the floor.
-function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps): WriteNode {
+function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps): BuiltNode {
   const subject = type;
-  const wn: WriteNode = { type };
+  const wn: BuiltNode = { type };
   compileNodeLocalProps(wn, props, { type, radius: type === "RECTANGLE" });
   compileBindings(wn, props, type);
   const layout = buildLayout(props as FrameProps, type, subject);
@@ -1242,11 +1242,11 @@ function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps):
   return wn;
 }
 
-function compileRectangle(props: Accepted<ShapeProps>): WriteNode { return shape("RECTANGLE", props); }
-function compileEllipse(props: Accepted<EllipseProps>): WriteNode { return shape("ELLIPSE", props); }
+function compileRectangle(props: Accepted<ShapeProps>): BuiltNode { return shape("RECTANGLE", props); }
+function compileEllipse(props: Accepted<EllipseProps>): BuiltNode { return shape("ELLIPSE", props); }
 
-function compileLine(props: Accepted<LineProps>): WriteNode {
-  const wn: WriteNode = { type: "LINE" };
+function compileLine(props: Accepted<LineProps>): BuiltNode {
+  const wn: BuiltNode = { type: "LINE" };
   base(wn, props);
   compileBindings(wn, props, "LINE");
   if (props.stroke != null) compilePaintSlot(wn, props.stroke, "stroke");
@@ -1268,12 +1268,12 @@ function compileLine(props: Accepted<LineProps>): WriteNode {
 // SVG markup imports through createNodeFromSvg, which yields a native frame of vectors. The markup must
 // look like an <svg> document (catches a URL/path passed by mistake); the render-time parse (bridge) is
 // the second, authoritative fail-loud.
-function compileSvg(props: Accepted<SvgProps>): WriteNode {
+function compileSvg(props: Accepted<SvgProps>): BuiltNode {
   const markup = props.svg;
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
     throw new Error("VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
   }
-  const wn: WriteNode = { type: "VECTOR", vector: { kind: "svg", markup } };
+  const wn: BuiltNode = { type: "VECTOR", vector: { kind: "svg", markup } };
   // Compiled like any other node's paints, but the bridge lands them on the vectors INSIDE the imported
   // frame rather than on the frame itself — painting the frame would put a backdrop behind the art.
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
@@ -1289,7 +1289,7 @@ function compileSvg(props: Accepted<SvgProps>): WriteNode {
 // compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect. Path data is
 // normalized HERE, not at render: Figma's parser accepts only absolute M/L/C/Q/Z, and doing the
 // conversion at compile means malformed data fails before anything reaches the canvas.
-function compilePath(accepted: Accepted<PathProps>): WriteNode {
+function compilePath(accepted: Accepted<PathProps>): BuiltNode {
   const d = accepted.d;
   if (accepted.vectorPaths === undefined && (typeof d !== "string" || !d.trim())) {
     throw new Error("VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
@@ -1298,7 +1298,7 @@ function compilePath(accepted: Accepted<PathProps>): WriteNode {
   const paths = props.vectorPaths !== undefined
     ? normalizeVectorPaths(props.vectorPaths)
     : [{ windingRule: "NONZERO" as const, data: normalizePathData(d as string) }];
-  const wn: WriteNode = { type: "VECTOR", vector: { kind: "path", paths, scale: compileScale(props.scale) } };
+  const wn: BuiltNode = { type: "VECTOR", vector: { kind: "path", paths, scale: compileScale(props.scale) } };
   if (width !== undefined || height !== undefined || aspectRatio !== undefined) wn.ignoredSize = { width, height, aspectRatio };
   compileNodeLocalProps(wn, props, { type: "VECTOR" }); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   compileBindings(wn, props, "VECTOR");
@@ -1501,15 +1501,21 @@ function normalizeEffects(v: EffectsInput): WriteEffect[] {
 // paintOf (node fills/strokes AND per-run fills), so render() can check which still need server-fetched
 // bytes before it creates a single node. This must stay in lockstep with paintOf's coverage: a paint site
 // paintOf resolves but this misses would fetch nothing, then hit the "no bytes" throw at render.
-function collectImageUrls(tree: WriteProps): string[] {
+function collectImageUrls(tree: WriteProps | LiveRef): string[] {
   const urls: string[] = [];
   const addFrom = (paints: readonly WritePaint[] | undefined): void => {
     // `"url" in paint` is the whole hash-vs-url branch: a hash-backed image already names bytes in the
     // document, so including it here would ask the server to fetch a string that is not a source.
     if (paints) for (const paint of paints) if (paint && paint.kind === "image" && "url" in paint) urls.push(paint.url);
   };
-  const visit = (wn: WriteChild | WriteProps): void => {
+  const visit = (wn: WriteProps | LiveRef): void => {
     if (!wn || typeof wn !== "object") return;
+    // A live node's paints are its edit delta's, fetched with the live tree (live-tree.ts); its
+    // children are this tree's.
+    if ("liveId" in wn) {
+      for (const child of wn.children ?? []) visit(child);
+      return;
+    }
     addFrom(wn.fills);
     addFrom(wn.strokes);
     if (wn.runs) for (const run of wn.runs) addFrom(run.fills);
@@ -1528,7 +1534,7 @@ function collectImageUrls(tree: WriteProps): string[] {
 //
 // Plural because ONE VERB OWES ONE ROUND TRIP: a batch of deltas dedupes across every entry, so ten
 // entries sharing an image url fetch it once and the batch has a single suspension point.
-export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise<Record<string, string>> {
+export async function fetchImagesForTrees(trees: readonly (WriteProps | LiveRef)[]): Promise<Record<string, string>> {
   const all: string[] = [];
   for (const tree of trees) for (const url of collectImageUrls(tree)) all.push(url);
   const urls = Array.from(new Set(all));

@@ -515,15 +515,29 @@ export interface InstanceEditWords {
   overrides?: Record<string, OverrideDeltaInput>;
 }
 
-export type WriteNode = WriteProps & {
+/** A node this call builds: its compiled words. */
+export type BuiltNode = WriteProps & {
+  type: WriteType;
+  liveId?: never;
   ignoredSize?: { width?: unknown; height?: unknown; aspectRatio?: unknown };
   source?: NodeSpec;
   sourcePath?: string;
-} & (
-  | { type: WriteType; liveId?: never; authoring?: never }
-  // Live types come from the document, including node kinds that cannot be created here.
-  | { type: string; liveId: string; authoring: Record<string, unknown> }
-);
+};
+
+/**
+ * A live node an authored tree names by id — what the author wrote about it, and nothing else. It
+ * is never resolved in place: its live type, compiled delta and projected values are the loaded
+ * live tree's (live-tree.ts), so one value never mixes authored and document facts.
+ */
+export interface LiveRef {
+  readonly liveId: string;
+  readonly authoring: Readonly<Record<string, unknown>>;
+  readonly children?: readonly WriteNode[];
+  readonly source: NodeSpec;
+  readonly sourcePath: string;
+}
+
+export type WriteNode = BuiltNode | LiveRef;
 
 // Compiled children are private IR nodes; author input is validated before the walk.
 export type WriteChild = WriteNode;

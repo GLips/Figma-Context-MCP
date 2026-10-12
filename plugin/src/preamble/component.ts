@@ -28,14 +28,14 @@ import { sceneFigma as figma } from "./scene-access.js";
 // a live file during the design spike].
 
 import {
-  WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
+  WriteNode, BuiltNode, LiveRef, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
 } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
 import { resolveTarget } from "./read.js";
 import {
   mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
 } from "./bridge.js";
-import { compileTree } from "./compile-tree.js";
+import { compileTree, placedTreeOf } from "./compile-tree.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
 import { loadTreeResources, gateTreeResources, landTree, LoadedTreeResources } from "./render.js";
@@ -201,20 +201,28 @@ export function compilePropertyDefinition(name: string, raw: unknown, at: string
 
 // Every bound node in the tree, ROOT EXCLUDED: the root becomes the component itself, so a binding
 // on it would name a property of a component that is the node — refused rather than dropped.
-function collectChildBindings(tree: WriteNode): BoundWriteNode[] {
-  if (tree.componentPropertyReferences) {
+function collectChildBindings(tree: WriteNode, live: LiveBindings): BoundWriteNode[] {
+  if (bindingsOf(tree, live)) {
     throw new Error(
       SUBJECT + ": the tree's ROOT carries `componentPropertyReferences`, and the root is what BECOMES the component — there is no outer component whose property could drive it. Bind a child instead.",
     );
   }
   const out: BoundWriteNode[] = [];
-  const visit = (wn: WriteChild): void => {
-    if (!wn || typeof wn !== "object") return;
-    if (wn.componentPropertyReferences) out.push({ wn, refs: wn.componentPropertyReferences });
-    for (const child of wn.children || []) visit(child);
+  const visit = (wn: WriteNode): void => {
+    const refs = bindingsOf(wn, live);
+    if (refs) out.push({ wn, refs });
+    for (const child of wn.children ?? []) visit(child);
   };
-  for (const child of tree.children || []) visit(child);
+  for (const child of tree.children ?? []) visit(child);
   return out;
+}
+
+/** Where a live node's binding bag lives: compiled at load, carried through the gate. */
+export type LiveBindings = ReadonlyMap<LiveRef, { refs?: ComponentPropertyBinding }>;
+
+/** The binding bag a node carries: compiled onto a built node, compiled at load for a live one. */
+export function bindingsOf(wn: WriteNode, live: LiveBindings): ComponentPropertyBinding | undefined {
+  return wn.liveId === undefined ? wn.componentPropertyReferences : live.get(wn)?.refs;
 }
 
 // Every binding name resolves against THIS call's definitions, and its field must match the
@@ -283,7 +291,7 @@ function resolveDefaults(
     if (definition.figmaType === "SLOT") return { name: definition.name, figmaType: "SLOT", defaultValue: "" };
     const nodes = bindersOf(bound, definition).map(({ wn }) => wn);
     const binders = nodes.map((wn) => ({
-      layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
+      layer: describeBinder(wn.liveId === undefined ? wn.name : live.get(wn)!.node.name, wn.sourcePath!),
       value: boundLayerValue(definition.figmaType, wn, plans, live),
     }));
     const defaultValue = agreedDefault(definition, binders, at, { inherited: FRESH_LAYER_SHOWS[definition.figmaType], unboundRemedy: targetForm ? promoteThenBind(definition) : undefined });
@@ -305,10 +313,15 @@ export const FRESH_LAYER_SHOWS: Record<string, boolean | string> = { BOOLEAN: tr
  * content to lose, so it takes whatever default the property settles on. Shared with a bound insert
  * into an existing component (component-edit.ts).
  */
-export function boundLayerValue(figmaType: string, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string | undefined {
-  // A live node's `visible` and text were projected onto it at the gate (live-tree.ts), its authored
-  // edit if there is one, else what it shows now — so a live node always states both, and only a
-  // node this call creates can leave one unwritten.
+export function boundLayerValue(figmaType: string, wn: WriteNode, plans: InstancePlans, live: RenderResources["live"]): boolean | string | undefined {
+  // A live node always states both — its authored edit if there is one, else what it shows now
+  // (LiveTreeNode.shows) — so only a node this call creates can leave one unwritten.
+  if (wn.liveId !== undefined) {
+    const { shows, component, node } = live.get(wn)!;
+    if (figmaType === "BOOLEAN") return shows.visible;
+    if (figmaType === "TEXT") return shows.text;
+    return readableComponentOf(component, node, wn.sourcePath).id;
+  }
   if (figmaType === "BOOLEAN") return wn.visible;
   if (figmaType === "TEXT") return authoredTextOf(wn);
   // The bound node is an INSTANCE (the compilers allow `componentId` on nothing else), and
@@ -316,8 +329,7 @@ export function boundLayerValue(figmaType: string, wn: WriteNode, plans: Instanc
   // the node names a SET and picks a member with `componentProperties`, re-resolving the target here
   // would land on the set's DEFAULT variant and the definition's default would disagree with the very
   // node it was derived from.
-  const liveNode = live?.get(wn);
-  return readableComponentOf(plans.get(wn)?.component ?? liveNode?.component, liveNode?.node, wn.sourcePath!).id;
+  return readableComponentOf(plans.get(wn)?.component, undefined, wn.sourcePath!).id;
 }
 
 /**
@@ -326,6 +338,8 @@ export function boundLayerValue(figmaType: string, wn: WriteNode, plans: Instanc
  * the size it ends up with.
  */
 export function writeInheritedDefault(figmaType: string, wn: WriteNode, value: boolean | string): void {
+  // A live binder already shows a value (boundLayerValue), so it never inherits one.
+  if (wn.liveId !== undefined) return;
   if (figmaType === "BOOLEAN" && wn.visible === undefined) wn.visible = value as boolean;
   if (figmaType === "TEXT" && authoredTextOf(wn) === undefined) wn.text = value as string;
 }
@@ -384,7 +398,7 @@ export function describeBinder(name: string | undefined, where: string): string 
 
 // A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich author
 // produced (concatenated exactly as the bridge concatenates them into `characters`) — undefined when it states neither.
-function authoredTextOf(wn: WriteNode): string | undefined {
+function authoredTextOf(wn: BuiltNode): string | undefined {
   if (typeof wn.text === "string") return wn.text;
   return wn.runs?.map((run) => run.text).join("");
 }
@@ -402,7 +416,7 @@ const WOULD_WRAP =
 // path, an instance — is exactly the wrappable case above, and the mismatch is silent twice over:
 // the key the author put on the root would end up on the wrapper, not on the node they keyed.
 // Document-blind, so judged in prepare before a single resource is loaded: a refusal costs nothing.
-function assertPromotableBuiltRoot(tree: WriteNode): void {
+function assertPromotableBuiltRoot(tree: BuiltNode): void {
   if (tree.type === "FRAME") return;
   // The one non-FRAME node that builds a frame: createNodeFromSvg returns a FrameNode of vectors.
   // VECTOR (also a VECTOR) builds a real VECTOR, so it falls through to the refusal.
@@ -538,7 +552,7 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
       ? { id: (await resolveTarget(specOrTarget as Target)).id } : specOrTarget;
     const tree = compileTree(spec, "flcm.component.spec");
     const loaded = await loadTreeResources(tree);
-    if (tree.liveId) assertPromotable(loaded.live.entries.find(e => e.wn === tree)!.node);
+    if (tree.liveId !== undefined) assertPromotable(loaded.live.entries.get(tree)!.node);
     else {
       assertPromotableBuiltRoot(tree);
       if (tree.layout) {
@@ -546,13 +560,13 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
         assertSizingResolvesAgainstParentFrame(tree.layout, true, SUBJECT);
       }
     }
-    const bound = collectChildBindings(tree);
+    const bound = collectChildBindings(tree, loaded.live.entries);
     assertBindingsResolve(bound, prepared.definitions);
     assertSlotsAreBound(bound, prepared.definitions);
     return { tree, loaded, bound, options: prepared };
   }, (prepared): GatedBuiltComponent => {
     const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
-    const live = resources.live?.get(prepared.tree);
+    const live = prepared.tree.liveId !== undefined ? resources.live.get(prepared.tree)! : undefined;
     if (live) assertPromotable(live.node);
     // A live root converts where it stands; a built one lands on the page as flcm.render's would.
     const parent = live ? live.node.parent! : figma.currentPage;
@@ -560,7 +574,7 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     return { tree: prepared.tree, parent, place, resources,
       definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live,
         // A live root with no authored children: nothing in the call can carry a binding.
-        Boolean(prepared.tree.liveId) && !prepared.tree.children?.length), options: prepared.options };
+        live !== undefined && !prepared.tree.children?.length), options: prepared.options };
   }, applyBuiltComponent);
 }
 
@@ -577,20 +591,18 @@ function applyBuiltComponent({ tree, parent, place, resources, definitions, opti
   // (the component it would have become doesn't exist to be named).
   const fail = beginMutatingApply("component", root);
   try {
+    // Read before the conversion: the frame's pluginData doesn't ride across (below).
+    const key = readKey(root);
     const comp = figma.createComponentFromNode(root);
     // Style links, diagnostics and warnings were queued on the frame, which no longer exists.
     retargetReplacedNode(span, root, comp);
     // The root's own key rides across by hand: createComponentFromNode returns a NEW node, so the
     // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs:
     // Figma moves the same child nodes into the component.
-    if (typeof tree.key === "string") {
-      writeKey(comp, tree.key);
-    }
+    if (key) writeKey(comp, key);
     declareProperties(comp, definitions, ctx.bindings!, options);
     applyExposures(ctx.exposures);
-    tree.source!.id = comp.id;
-    tree.source!.type = "COMPONENT";
-    return tree.source as AuthoredTree;
+    return { ...placedTreeOf(tree.source!, ctx.placedIds), id: comp.id, type: "COMPONENT" } as AuthoredTree;
   } catch (cause) {
     throw fail(cause);
   }
