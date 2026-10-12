@@ -17,6 +17,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Server } from "http";
+import { homedir } from "os";
 import type { AddressInfo } from "net";
 import { startHttpServer, stopHttpServer } from "~/server.js";
 import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
@@ -32,7 +33,7 @@ describe("per-request telemetry redaction", () => {
     captureSpy.mockClear();
     // Init with NO global redaction secrets so the assertion proves the
     // per-request AsyncLocalStorage path is what's doing the scrubbing.
-    initTelemetry({ optOut: false, immediateFlush: true, redactFromErrors: [] });
+    initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: [] });
 
     // Stub fetch to fail with the per-request token embedded in the error
     // message. FigmaService wraps the original message into a new Error, so
@@ -132,7 +133,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
 
   beforeEach(() => {
     captureSpy.mockClear();
-    initTelemetry({ optOut: false, immediateFlush: true, redactFromErrors: [] });
+    initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: [] });
   });
 
   afterEach(async () => {
@@ -206,10 +207,93 @@ describe("figma identifier redaction in telemetry error_message", () => {
     expect(event.properties.error_category).toBe("not_found");
   });
 
-  it("scrubs a percent-encoded Figma URL echoed back by a proxy block page", async () => {
-    // Corporate proxies splice the blocked URL into their HTML block page, and
-    // `buildForbiddenMessage` copies that body verbatim into the 403 message.
-    // Many encode the URL they quote, so the separators arrive as %2F/%3F/%3D.
+  it("fingerprints a proxy block page instead of sending its body", async () => {
+    // Block pages print who was blocked and from where. The user needs that to
+    // talk to IT; PostHog must only learn which vendor answered.
+    const blockPage = `<!DOCTYPE html><html><head><title>Website Blocked</title></head><body>
+      <img src="https://login.zscloud.net/img/zscaler-logo.png">
+      <p>Access to api.figma.com/v1/files/${FILE_KEY} is blocked by your organization.</p>
+      <p>User: jane.doe@acme-corp.com</p><p>Client IP: 10.42.7.19</p>
+      <p>Gateway: zs-gw-03.internal.acme-corp.com</p></body></html>`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(blockPage, {
+            status: 403,
+            statusText: "Forbidden",
+            headers: { "content-type": "text/html" },
+          }),
+      ),
+    );
+
+    const { FigmaService } = await import("~/services/figma.js");
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+    const service = new FigmaService({
+      figmaApiKey: "figd_test",
+      figmaOAuthToken: "",
+      useOAuth: false,
+    });
+    const error = await captureThrown(() => service.getRawFile(FILE_KEY));
+    expect(String((error as Error).message)).toContain("jane.doe@acme-corp.com");
+
+    captureGetFigmaDataCall(
+      { input: { fileKey: FILE_KEY }, outputFormat: "tree", durationMs: 1, error },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    for (const leak of ["jane.doe", "10.42.7.19", "zs-gw-03", "acme-corp", FILE_KEY]) {
+      expect(message).not.toContain(leak);
+    }
+    expect(message).toContain("returned 403 Forbidden");
+    expect(message).toContain("vendor=zscaler");
+    expect(message).toContain('title="Website Blocked"');
+  });
+
+  it("scrubs a branch URL's keys and file-name slug", async () => {
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+
+    captureGetFigmaDataCall(
+      {
+        input: { fileKey: FILE_KEY },
+        outputFormat: "tree",
+        durationMs: 1,
+        error: new Error(
+          `bad link https://www.figma.com/design/${FILE_KEY}/branch/BrKey987654321/Acme-Secret-Rebrand?node-id=1-2`,
+        ),
+      },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).not.toContain(FILE_KEY);
+    expect(message).not.toContain("BrKey987654321");
+    expect(message).not.toContain("Acme-Secret-Rebrand");
+    expect(message).toContain(`figma.com/design/${REDACTED_FILE_KEY}?node-id=${REDACTED_NODE_ID}`);
+  });
+
+  it("replaces the home directory with ~", async () => {
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+
+    captureGetFigmaDataCall(
+      {
+        input: { fileKey: FILE_KEY },
+        outputFormat: "tree",
+        durationMs: 1,
+        error: new Error(`EACCES: permission denied, open '${homedir()}/clients/acme/hero.png'`),
+      },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).not.toContain(homedir());
+    expect(message).toContain("'~/clients/acme/hero.png'");
+  });
+
+  it("scrubs a percent-encoded Figma URL quoted from a proxy block page", async () => {
+    // An untagged error can still quote a block page, and many encode the URL
+    // they echo, so the separators arrive as %2F/%3F/%3D.
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
 
     captureGetFigmaDataCall(
@@ -257,7 +341,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
 
   it("scrubs identifiers alongside credentials in an untagged error", async () => {
     await shutdownTelemetry();
-    initTelemetry({ optOut: false, immediateFlush: true, redactFromErrors: ["figd_secret"] });
+    initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: ["figd_secret"] });
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
 
     captureGetFigmaDataCall(

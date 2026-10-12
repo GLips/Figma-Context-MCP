@@ -2,7 +2,10 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
+import {
+  MAX_SCREENSHOT_SCALE,
+  screenshotInputError,
+} from "~/commercial/plugin-bridge/screenshot-options.js";
 import { OutsideAssetRootError } from "~/commercial/plugin-bridge/contained-file.js";
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { resolve as resolvePath } from "node:path";
@@ -27,7 +30,6 @@ import {
   buildQuickStart,
   buildReferenceMenu,
   buildReferenceSections,
-  SECTION_IDS,
 } from "./flcm-docs/reference.js";
 import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
@@ -174,11 +176,10 @@ export function registerCodeModeTools(
       },
     ),
 
-    // The full flcm authoring reference, delivered as a TOOL (not a resource): the ~18.5K contract can't fit
-    // the 2KB figma_execute_code description, and MCP resources are user-gated / unevenly supported across
-    // clients. A tool is the universal, autonomously-callable channel — the established pattern for shipping
-    // docs to agents. Sectioned so a single call stays well under the ~25K tool-result budget as the surface
-    // grows.
+    // The full flcm authoring reference, delivered as a TOOL (not a resource): it can't fit the
+    // figma_execute_code description, and MCP resources are user-gated / unevenly supported across clients.
+    // A tool is the universal, autonomously-callable channel for shipping docs to agents. Sectioned because
+    // the whole reference is far over one tool result's budget (REFERENCE_LIMIT_BYTES in reference.ts).
     registerFailLoudTool(
       server,
       "get_flcm_reference",
@@ -188,11 +189,12 @@ export function registerCodeModeTools(
           'section ids (deduped, served in canonical order); start with ["mental-model"], which carries the ' +
           "identity, copying and session rules the rest assumes.",
         inputSchema: {
-          // Optional at the wire so a blank call reaches the handler and gets the section menu back. A
-          // required zod field would make the SDK answer with its own fixed "Input validation error",
-          // which names no sections and reads as a broken tool (see fail-loud-params.ts).
+          // Optional, and plain strings rather than an enum of SECTION_IDS, so a blank call or a wrong id
+          // reaches the handler: it serves the menu or an "Ignored unknown section … Valid: …" note. The
+          // SDK's own fixed "Input validation error" names no sections and reads as a broken tool (see
+          // fail-loud-params.ts).
           sections: z
-            .array(z.enum(SECTION_IDS))
+            .array(z.string())
             .optional()
             // The menu lives here, always in context, because a successful call never returns it.
             .describe(
@@ -230,7 +232,7 @@ Target ONE node, or omit both targets to snapshot the whole current page:
 
 Passing both nodeId and key is ambiguous and fails loud. A failed lookup NEVER falls back to the whole page.
 
-scale (default 1, max 4) multiplies the export resolution — use scale: 2–4 to inspect detail you can't resolve at 1x: hairline borders, 1px strokes, grain, glass refraction, small type.
+scale (default 1, max ${MAX_SCREENSHOT_SCALE}) multiplies the export resolution — use scale: 2–4 to inspect detail you can't resolve at 1x: hairline borders, 1px strokes, grain, glass refraction, small type.
 
 context:true also captures the canvas around the target, to check how it sits among its neighbours; it needs nodeId or key. margin is the pixels added on each side (default 10% of the target's longest side, clamped to 80–160).
 
@@ -264,52 +266,22 @@ Returns a PNG image.`,
             ),
         },
       },
-      async ({ nodeId, key, scale, context, margin }, extra) => {
-        // Value-level target checks (Phase 1 covers UNKNOWN keys; nodeId/key/scale are all known, so
-        // their misuse is checked here). Same retryable shape: the agent can fix the call and retry.
-        if (nodeId !== undefined && key !== undefined) {
+      async (target, extra) => {
+        // Known params are type-checked by the SDK; their value-level misuse is checked here, in the
+        // same retryable shape as an unknown param, so the agent fixes the call and retries.
+        const inputError = screenshotInputError(target);
+        if (inputError)
           return retryableToolReply(
-            `get_screenshot got both nodeId ("${nodeId}") and key ("${key}"), which is ambiguous, so ` +
-              `this call did not run. Pass exactly one target — or neither, to capture the whole current ` +
-              `page. This is NOT a failure: retry with a single target.`,
-          );
-        }
-        if (scale !== undefined && !(scale > 0 && scale <= MAX_SCREENSHOT_SCALE)) {
-          return retryableToolReply(
-            `get_screenshot got scale ${scale}, which is outside the supported range (greater than 0, at ` +
-              `most ${MAX_SCREENSHOT_SCALE}), so this call did not run — an unbounded scale can try to ` +
-              `export a page-sized image at absurd resolution. This is NOT a failure: retry with a scale ` +
-              `in range (2–4 is plenty for inspecting fine detail).`,
-          );
-        }
-        if (context && nodeId === undefined && key === undefined)
-          return retryableToolReply("Contextual capture requires nodeId or key.");
-        if (margin !== undefined && (!context || !Number.isFinite(margin) || margin < 0))
-          return retryableToolReply(
-            "margin requires context:true and a finite nonnegative pixel value.",
+            `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
           );
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
-        const outcome = await capturePluginScreenshot(
-          bridge,
-          { nodeId, key, scale, context, margin },
-          approvalOptions(extra),
-        );
+        const outcome = await capturePluginScreenshot(bridge, target, approvalOptions(extra));
         if (outcome.kind === "pending") return gateResult({ type: "PENDING_APPROVAL" })!;
         const reply = outcome.reply;
         if ("errors" in reply) {
           return { content: [{ type: "text", text: reply.errors }], isError: true };
         }
-        if (context && reply.capture !== "contextual")
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Connected plugin does not support contextual capture. Rebuild and reopen the updated plugin; this isolated response was discarded.",
-              },
-            ],
-            isError: true,
-          };
         return {
           content: [{ type: "image", data: reply.image, mimeType: "image/png" }],
         };

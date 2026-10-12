@@ -26,6 +26,7 @@ function connectedServer(
   const bridge = {
     request,
     getPairingCode: () => "1234",
+    protocolRefusal: () => null,
     touchApproval: () => {},
     // A plugin is on the wire in these tests, so the disconnect reply never fires.
     getAuthorizingUser: () => TEST_AUTHORIZING_USER,
@@ -92,6 +93,18 @@ describe("unknown MCP tool params fail loud", () => {
     // No near-miss suggestion here (singular/plural isn't a case/separator slip) — the listed valid
     // params carry the fix instead.
     expect(textOf(result)).toContain("Valid parameter: sections.");
+    await close();
+  });
+});
+
+describe("get_flcm_reference section ids", () => {
+  it("answers a wrong section id with the valid list instead of an SDK validation error", async () => {
+    const { call, close } = connectedServer();
+    const result = await call("get_flcm_reference", { sections: ["mental-model", "prop"] });
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("# flcm reference");
+    expect(textOf(result)).toMatch(/Ignored unknown section: "prop"\. Valid: /);
     await close();
   });
 });

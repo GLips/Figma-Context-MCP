@@ -9,7 +9,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { effects as effectsSugar, id } from "./flcm.js";
-import { render } from "./render.js";
+import { render } from "./structure.js";
 import { edit } from "./edit.js";
 import { component } from "./component.js";
 import { warnings as diagnostics } from "./warnings.js";

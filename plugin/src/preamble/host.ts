@@ -23,8 +23,8 @@ import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // that doesn't reference the name. Rename it here alone and the generator throws.
 // Execution services are required. Diagnostic reporting is optional so a newer preamble can
 // still run on an older host; diagnostics never affect execution or deadlines.
-export type NativeOperation = "page-create" | "page-switch" | "font-load" | "font-list";
-export type NativeTraceStage = "native-start" | "native-end" | "native-error";
+type NativeOperation = "page-create" | "page-switch" | "font-load" | "font-list";
+type NativeTraceStage = "native-start" | "native-end" | "native-error";
 
 export interface FlcmHost {
   /** Retain one preamble-initialized object for this plugin run; never retain the initializer. */

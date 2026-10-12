@@ -37,6 +37,7 @@
         },
         "clipsContent": true,
         "componentKey": "compkey123",
+        "componentDescription": "Shows one product with an optional sale ribbon",
         "componentPropertyDefinitions": {
           "On Sale#341:0": {
             "type": "BOOLEAN"

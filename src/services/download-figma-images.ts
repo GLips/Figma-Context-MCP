@@ -1,7 +1,7 @@
 import type { Transform } from "@figma/rest-api-spec";
-import type { FigmaService } from "~/services/figma.js";
-import type { ImageProcessingResult } from "~/utils/image-processing.js";
+import type { FigmaService, ImageDownloadItem, ImageDownloadOutcome } from "~/services/figma.js";
 import { tagError } from "~/utils/error-meta.js";
+import { normalizeFigmaNodeId } from "~/utils/figma-url.js";
 
 /**
  * Structural shape for a single download request. Matches the relevant
@@ -27,12 +27,21 @@ export type DownloadFigmaImagesInput = {
 };
 
 export type DownloadFigmaImagesResult = {
+  /**
+   * One entry per unique download. `aliases` are the other requested filenames that this file
+   * satisfies (deduplicated image fills) — they are not written to disk.
+   */
   downloads: Array<{
-    result: ImageProcessingResult;
-    requestedFileNames: string[];
+    fileName: string;
+    aliases: string[];
+    outcome: ImageDownloadOutcome;
   }>;
+  /** Downloads whose file was written. */
   successCount: number;
 };
+
+/** A unique download plus the other requested filenames its file satisfies. */
+type PendingDownload = ImageDownloadItem & { aliases: string[] };
 
 export type DownloadImagesOutcome = {
   input: DownloadFigmaImagesInput;
@@ -56,8 +65,8 @@ export type DownloadFigmaImagesHooks = {
 /**
  * Shared pipeline for "download figma images": resolve the set of unique
  * downloads (deduping image fills by imageRef), invoke the Figma service,
- * and return per-download results keyed back to the original requested
- * filenames so the caller can render aliases.
+ * and return each download's outcome with the requested filenames it
+ * satisfies so the caller can render aliases.
  *
  * Param parsing, path validation, and MCP-specific result formatting stay
  * at the edge in the tool handler.
@@ -75,76 +84,56 @@ export async function downloadFigmaImages(
   try {
     const { fileKey, nodes, localPath, pngScale } = input;
 
-    // Resolve the set of unique downloads and track which requested
-    // filenames each one satisfies (so the caller can render aliases).
-    const downloadItems: Array<{
-      fileName: string;
-      needsCropping: boolean;
-      cropTransform?: Transform;
-      requiresImageDimensions: boolean;
-      imageRef?: string;
-      gifRef?: string;
-      nodeId?: string;
-    }> = [];
-    const downloadToRequests = new Map<number, string[]>();
-    const seenDownloads = new Map<string, number>();
+    // Resolve the set of unique downloads. Each carries the other requested
+    // filenames it satisfies, so the alias text travels with the item itself.
+    const downloadItems: PendingDownload[] = [];
+    const seenFills = new Map<string, PendingDownload>();
 
-    for (const rawNode of nodes) {
-      const { nodeId: rawNodeId, ...node } = rawNode;
-
-      // Replace - with : in nodeId for our query — Figma API expects :.
-      const nodeId = rawNodeId?.replace(/-/g, ":");
-
-      let finalFileName = node.fileName;
-      if (node.filenameSuffix && !finalFileName.includes(node.filenameSuffix)) {
-        const ext = finalFileName.split(".").pop();
-        const nameWithoutExt = finalFileName.substring(0, finalFileName.lastIndexOf("."));
-        finalFileName = `${nameWithoutExt}-${node.filenameSuffix}.${ext}`;
+    for (const node of nodes) {
+      let fileName = node.fileName;
+      if (node.filenameSuffix && !fileName.includes(node.filenameSuffix)) {
+        const ext = fileName.split(".").pop();
+        const nameWithoutExt = fileName.substring(0, fileName.lastIndexOf("."));
+        fileName = `${nameWithoutExt}-${node.filenameSuffix}.${ext}`;
       }
 
-      const downloadItem = {
-        fileName: finalFileName,
+      const downloadItem: PendingDownload = {
+        fileName,
         needsCropping: node.needsCropping || false,
         cropTransform: node.cropTransform,
         requiresImageDimensions: node.requiresImageDimensions || false,
+        aliases: [],
       };
 
       if (node.gifRef) {
         // GIF fills are always unique downloads (animated, no dedup needed).
-        const downloadIndex = downloadItems.length;
         downloadItems.push({ ...downloadItem, gifRef: node.gifRef });
-        downloadToRequests.set(downloadIndex, [finalFileName]);
       } else if (node.imageRef) {
         const uniqueKey = `${node.imageRef}-${node.filenameSuffix || "none"}`;
+        const seen = node.filenameSuffix ? undefined : seenFills.get(uniqueKey);
 
-        if (!node.filenameSuffix && seenDownloads.has(uniqueKey)) {
-          const downloadIndex = seenDownloads.get(uniqueKey)!;
-          const requests = downloadToRequests.get(downloadIndex)!;
-          if (!requests.includes(finalFileName)) {
-            requests.push(finalFileName);
+        if (seen) {
+          if (fileName !== seen.fileName && !seen.aliases.includes(fileName)) {
+            seen.aliases.push(fileName);
           }
-
           if (downloadItem.requiresImageDimensions) {
-            downloadItems[downloadIndex].requiresImageDimensions = true;
+            seen.requiresImageDimensions = true;
           }
         } else {
-          const downloadIndex = downloadItems.length;
-          downloadItems.push({ ...downloadItem, imageRef: node.imageRef });
-          downloadToRequests.set(downloadIndex, [finalFileName]);
-          seenDownloads.set(uniqueKey, downloadIndex);
+          const item = { ...downloadItem, imageRef: node.imageRef };
+          downloadItems.push(item);
+          seenFills.set(uniqueKey, item);
         }
       } else {
         // Rendered nodes are always unique.
-        const downloadIndex = downloadItems.length;
-        downloadItems.push({ ...downloadItem, nodeId });
-        downloadToRequests.set(downloadIndex, [finalFileName]);
+        downloadItems.push({ ...downloadItem, nodeId: normalizeFigmaNodeId(node.nodeId) });
       }
     }
 
     await hooks.onDownloadStart?.(downloadItems.length);
-    let allDownloads: ImageProcessingResult[];
+    let settled: Array<{ item: PendingDownload; outcome: ImageDownloadOutcome }>;
     try {
-      allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
+      settled = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
         pngScale,
       });
     } catch (error) {
@@ -153,12 +142,12 @@ export async function downloadFigmaImages(
       hooks.onDownloadComplete?.();
     }
 
-    successCount = allDownloads.filter(Boolean).length;
-
-    const downloads = allDownloads.map((result, index) => ({
-      result,
-      requestedFileNames: downloadToRequests.get(index) ?? [result.filePath],
+    const downloads = settled.map(({ item, outcome }) => ({
+      fileName: item.fileName,
+      aliases: item.aliases,
+      outcome,
     }));
+    successCount = downloads.filter(({ outcome }) => outcome.status === "written").length;
 
     return { downloads, successCount };
   } catch (error) {

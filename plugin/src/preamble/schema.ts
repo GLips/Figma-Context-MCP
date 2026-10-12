@@ -42,17 +42,17 @@ import type { SimplifiedNode } from "@framelink/core";
 // ---- Author leaf-input types the schema references but can't structurally model in zod (they're loose
 // on purpose, or reference the typed currency). `z.custom<T>()` infers exactly T with no runtime check —
 // perfect here, since these are never validated by zod, only inferred and documented. ----
-export type LengthInput = number | string; // a number or "Npx"
+type LengthInput = number | string; // a number or "Npx"
 // A length a variable may stand in for: the read emits `{ variable: "name" }` (or `{ variable: { id, name? } }`) in a bound word's place.
-export type BindableLength = LengthInput | VariableInput;
+type BindableLength = LengthInput | VariableInput;
 export type PadInput =
   | number
   | string // the CSS box shorthand, in read's spelling: "12px" | "12px 16px" | "8px 8px 0px 0px"
   | VariableInput
   | { x?: BindableLength; y?: BindableLength; top?: BindableLength; right?: BindableLength; bottom?: BindableLength; left?: BindableLength };
-export type GapInput = number | string | VariableInput | { row: BindableLength; column: BindableLength };
-export type SidesInput = { top: BindableLength; right: BindableLength; bottom: BindableLength; left: BindableLength };
-export type CornersInput = { topLeft: BindableLength; topRight: BindableLength; bottomRight: BindableLength; bottomLeft: BindableLength };
+type GapInput = number | string | VariableInput | { row: BindableLength; column: BindableLength };
+type SidesInput = { top: BindableLength; right: BindableLength; bottom: BindableLength; left: BindableLength };
+type CornersInput = { topLeft: BindableLength; topRight: BindableLength; bottomRight: BindableLength; bottomLeft: BindableLength };
 
 export type GradientStopInput = string | { color: string; pos?: number; position?: number };
 export type GradientSugar = {
@@ -219,7 +219,7 @@ const SIZE_FIELDS = {
   height: prop(
     z.union([z.number(), z.string(), variable]),
     'As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn\'t hug.',
-    'number | "fill" | "hug" | "N%" | { variable }',
+    'number | "Npx" | "N%" | "fill" | "hug" | { variable }',
   ),
   // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming
   // either lifts the node out of an auto-layout parent's flow (read reports that as `position:
@@ -422,13 +422,17 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 const LINE_FIELDS = {
   stroke: color('The line\'s paint. A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
   strokeWidth: bindableMetric("Thickness. Defaults to 1."),
-  width: bindableMetric('The length: a number or { variable }, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent.'),
+  width: prop(
+    z.union([z.number(), z.string(), variable]),
+    'The length: a number or { variable }, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent.',
+    'number | "Npx" | "fill" | { variable }',
+  ),
   rotation: degrees('90 makes it vertical. Needs a numeric `width`.'),
   ...PLACEMENT_FIELDS,
 };
 
 // A single themeable vector (VECTOR with `d`/`vectorPaths`): the shared appearance vocabulary MINUS
-// `radius` (a vector has no corner radius — accepting it would be a documented no-op, which ADR-0003
+// `borderRadius` (a vector has no corner radius — accepting it would be a documented no-op, which ADR-0003
 // forbids) plus path geometry and its one size word. Reuses the APPEARANCE_FIELDS entries so a path
 // themes exactly like a rect and the docs can't drift.
 //
@@ -460,7 +464,7 @@ const PATH_FIELDS = {
 // An SVG import (VECTOR with `svg`): a canvas of art, so it takes the size/position words — and these
 // two theme words. Figma parses the markup into a frame of vectors and flcm simply never touched them
 // before, which is why colours looked baked in; `fill`/`stroke` repaint every vector inside.
-// Negative space: no `strokeWidth`/`effects`/`radius`. Stroke weight is part of the ART's proportions
+// Negative space: no `strokeWidth`/`effects`/`borderRadius`. Stroke weight is part of the ART's proportions
 // (the markup's own stroke-width is what makes a 1.5px icon a 1.5px icon), so overriding it per-import
 // would silently redraw the drawing rather than recolour it.
 const SVG_FIELDS = {
@@ -528,11 +532,11 @@ const BINDING_FIELDS = {
 // ---- Composed verb schemas → inferred Props. flcm.ts imports these types (import type only). The Base/
 // Size/Appearance sub-schemas exist so flcm.ts's shared compilers (base/applySizing/appearance) type
 // against the same fields the verbs are built from. ----
-export const BaseSchema = z.object(SHARED_FIELDS);
+const BaseSchema = z.object(SHARED_FIELDS);
 export const SizeSchema = z.object(SIZE_FIELDS);
 // Appearance carries the shared base fields too (name/key/opacity) — flcm.ts's appearance() compiler runs
 // base() over the same value, so the type it accepts must include them.
-export const AppearanceSchema = z.object({ ...SHARED_FIELDS, ...APPEARANCE_FIELDS });
+const AppearanceSchema = z.object({ ...SHARED_FIELDS, ...APPEARANCE_FIELDS });
 export type BaseProps = z.infer<typeof BaseSchema>;
 export type SizeProps = z.infer<typeof SizeSchema>;
 export type AppearanceProps = z.infer<typeof AppearanceSchema>;
@@ -627,9 +631,9 @@ const EDIT_FIELDS = {
   ),
   ...COMPONENT_DEFINITION_FIELDS,
 };
-export const EditSchema = z.object(EDIT_FIELDS);
+const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
-export type CloneProps = Omit<EditDelta, "componentId" | "componentProperties" | "overrides" | "exposed" | "componentPropertyReferences" | "description" | "propertyDefinitions">;
+type CloneProps = Omit<EditDelta, "componentId" | "componentProperties" | "overrides" | "exposed" | "componentPropertyReferences" | "description" | "propertyDefinitions">;
 
 // One entry of an flcm.editMany batch — the plain-data node shape the whole surface uses: `id` is
 // live identity (exactly as in a render spec), and every other key is an flcm.edit delta word. A key
@@ -682,9 +686,9 @@ const VARIANTS_FIELDS = {
   description: COMPONENT_FIELDS.description,
 };
 
-export const ComponentOptionsSchema = z.object(COMPONENT_FIELDS);
+const ComponentOptionsSchema = z.object(COMPONENT_FIELDS);
 export type ComponentOptions = z.infer<typeof ComponentOptionsSchema>;
-export const VariantsOptionsSchema = z.object(VARIANTS_FIELDS);
+const VariantsOptionsSchema = z.object(VARIANTS_FIELDS);
 export type VariantsOptions = z.infer<typeof VariantsOptionsSchema>;
 
 // Image sources are URLs or local paths under the server’s asset root; options control paint mapping.
@@ -717,11 +721,11 @@ const IMAGE_FIELDS = {
     '"multiply" | "screen" | "overlay" | … (CSS blend name)',
   ),
 };
-export const ImageSchema = z.object(IMAGE_FIELDS);
+const ImageSchema = z.object(IMAGE_FIELDS);
 export type ImageOpts = z.infer<typeof ImageSchema>;
 
 // ---- gradient() / effects() sugar, documented as their own field tables. ----
-export const GradientSchema = z.object({
+const GradientSchema = z.object({
   type: prop(z.enum(["linear", "radial"]), 'Gradient type. Default "linear".'),
   stops: prop(
     z.custom<GradientStopInput[]>(),
@@ -732,7 +736,7 @@ export const GradientSchema = z.object({
   at: prop(z.object({ x: z.number().optional(), y: z.number().optional() }), "Radial only — the center, in percent. Default { x: 50, y: 50 }.", "{ x?, y? } percent"),
 });
 
-export const EffectsSchema = z.object({
+const EffectsSchema = z.object({
   shadow: prop(
     z.custom<ShadowSugar | ShadowSugar[]>(),
     "A drop (or inner) shadow. `true` for the default, or { x?, y?, blur?, spread?, color?, inner? }. Defaults: x:0, y:4, blur:8, spread:0, color:\"rgba(0,0,0,0.25)\". `blur` is 1:1 with CSS.",
@@ -745,9 +749,10 @@ export const EffectsSchema = z.object({
     "Native glass (refractive frosted pane) — no CSS equivalent, so object form only. `true` for a usable default pane, or { lightIntensity 0–1, lightAngle°, refraction 0–1, depth ≥1, dispersion 0–1, radius (frost px) }. Values are raw Figma units (not CSS-scaled).",
     "true | object",
   ),
+  // Negative space: no per-noise blendMode. The runtime doesn't accept one, so it isn't offered.
   noise: prop(
     z.custom<NoiseSugar>(),
-    'Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"|"duotone"|"multitone", color, secondaryColor, opacity, noiseSize, density }. Two fields are scoped to one `type` and are REJECTED on any other: `secondaryColor` is **duotone only**, and `opacity` is **multitone only** — on the default monotone grain it fails, so vary `density`/`color` alpha instead. Note: the running runtime does not accept a per-noise blendMode (typing-ahead-of-runtime), so it is not exposed.',
+    'Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"|"duotone"|"multitone", color, secondaryColor, opacity, noiseSize, density }. Two fields are scoped to one `type` and are REJECTED on any other: `secondaryColor` is **duotone only**, and `opacity` is **multitone only** — on the default monotone grain it fails, so vary `density`/`color` alpha instead.',
     "true | object",
   ),
   texture: prop(
@@ -851,7 +856,7 @@ export interface Flcm {
 // line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
 export type VerbCategory = "value" | "render" | "edit" | "structure" | "component" | "read" | "page" | "target";
 
-export interface VerbDoc {
+interface VerbDoc {
   signature: string;
   builds: string;
   args: string;

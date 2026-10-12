@@ -180,7 +180,7 @@ export function buildSimplifiedStrokes(
   }
 
   if (typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
-    strokes.strokeWidth = `${n.strokeWeight}px`;
+    strokes.strokeWidth = `${pixelRound(n.strokeWeight)}px`;
   }
 
   if (n.strokeDashes && n.strokeDashes.length) {

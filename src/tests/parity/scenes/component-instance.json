@@ -21,6 +21,7 @@
           "id": "6:2",
           "name": "Product Card",
           "key": "compkey123",
+          "description": "Shows one product with an optional sale ribbon",
           "type": "COMPONENT",
           "visible": true,
           "absoluteBoundingBox": {

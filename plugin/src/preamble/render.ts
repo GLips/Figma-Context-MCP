@@ -2,10 +2,12 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// render — the one place a compiled tree becomes live nodes. Split from flcm.ts (the compilers)
-// because its PREPARE reaches the edit compile through instance.ts (an INSTANCE's overrides
-// are edit deltas resolved against the live component), and edit-plan.ts imports the compilers'
-// leaf compilers — so a render living beside the compilers would close a module cycle.
+// Tree resources — the prepare/gate pair every verb that lands a compiled tree runs before its seal
+// (render and the insert verbs in structure.ts, flcm.component), plus flcm.component's root-on-page
+// build. Split from flcm.ts (the compilers) because the PREPARE reaches the edit compile through
+// instance.ts (an INSTANCE's overrides are edit deltas resolved against the live component), and
+// edit-plan.ts imports the compilers' leaf compilers — so living beside the compilers would close a
+// module cycle.
 
 import { requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { WriteNode, Handle } from "./ir.js";
@@ -136,5 +138,3 @@ export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
   if (overlap) console.log(overlap);
   return root;
 }
-
-export { render } from "./structure.js";

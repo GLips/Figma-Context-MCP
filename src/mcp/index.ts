@@ -1,6 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
-import { Logger } from "../utils/logger.js";
 import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
@@ -86,8 +85,6 @@ function createServer(
     outputFormat,
     getClientInfo,
   });
-
-  Logger.isHTTP = transport !== "stdio";
 
   return server;
 }

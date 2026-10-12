@@ -22,7 +22,6 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseImageAdjustments, parseCssEffects, parseBlendMode, boxShorthand, cornerRadii, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { requestHostImages } from "./host.js";
-import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
 import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
 import type { SimplifiedNode } from "@framelink/core";
@@ -99,7 +98,7 @@ export const INSTANCE_COMPONENT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.i
 // (`componentPropertyReferences`). Live-document questions all — which definition a bare name
 // reaches, which component owns the node — so edit's stage 2 splits them off raw exactly as it
 // splits the instance words, and component-edit.ts resolves them.
-export const COMPONENT_EDIT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.componentDefinition, KNOWN_KEYS.binding);
+const COMPONENT_EDIT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.componentDefinition, KNOWN_KEYS.binding);
 // Every edit word the sync compile can only judge the SHAPE of. One set, so a word added to either
 // half is split by stage 2 and refused by the override gate below without a second edit.
 export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INSTANCE_COMPONENT_WORDS], [...COMPONENT_EDIT_WORDS]);
@@ -820,7 +819,8 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], subjec
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property name declared in the same flcm.component call. Got " + JSON.stringify(value) + ".");
     }
-    out[field] = value;
+    // Trimmed like a definition's name (component.ts compilePropertyDefinitions), so both sides meet on one spelling.
+    out[field] = value.trim();
   }
   return out as ComponentPropertyBinding;
 }
@@ -851,7 +851,7 @@ export function compileBindingEditBag(raw: unknown, legal: readonly string[], su
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property this component declares — or null to unbind it. Got " + JSON.stringify(value) + ".");
     }
-    out[field] = value;
+    out[field] = value.trim();
   }
   return out;
 }
@@ -1307,7 +1307,7 @@ function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
     throw new Error("VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
   }
-  rejectUnknownKeys(props, SVG_KEYS, "VECTOR");
+  props = acceptAuthoringProps(props, { type: "VECTOR", verb: "create", known: SVG_KEYS, subject: "VECTOR" }) as SvgProps;
   const wn: WriteNode = { type: "VECTOR", vector: { kind: "svg", markup } };
   // Compiled like any other node's paints, but the bridge lands them on the vectors INSIDE the imported
   // frame rather than on the frame itself — painting the frame would put a backdrop behind the art.
@@ -1589,10 +1589,6 @@ function id(nodeId: unknown): RawIdRef {
   return { __flcmId: nodeId };
 }
 
-// The verbs this module contributes to the public surface — runtime.ts (the bundle entry) re-exports
-// these plus `render` (render.ts) and `edit` (edit.ts), both of which import FROM this module, so
-// defining either here would be a cycle — and holds the one exhaustive `satisfies Flcm` drift guard
-// against the schema's typed surface. Nothing else in the preamble is re-exported, so every other
-// helper stays closure-private. `get`/`find`/`findOne`/`selection` are defined in read.ts (the
-// figma.*-speaking read walk) and surface here.
-export { compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileSvg, compilePath, compileInstance, gradient, image, effects, get, find, findOne, selection, id };
+// The compilers serve compile-tree.ts; gradient/image/effects/id are public verbs, which runtime.ts
+// (the bundle entry) imports from here like every other verb from its defining module.
+export { compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileSvg, compilePath, compileInstance, gradient, image, effects, id };

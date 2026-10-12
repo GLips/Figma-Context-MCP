@@ -10,7 +10,7 @@
 // window to one synchronous read/rename; it doesn't close it. What a lost update or a lost file
 // costs, and what gets it back:
 //   • Writes already reported: the server's count for the month comes back on the next
-//     reconciliation (the effective count takes the server's number when higher).
+//     reconciliation (the effective count starts from the server's number).
 //   • Writes not yet reported, and bearer tokens: gone. Nothing else holds them — the Writes go
 //     uncounted and the Authorizing User signs in again.
 import { randomUUID } from "node:crypto";
@@ -18,15 +18,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { Logger } from "~/utils/logger.js";
-import {
-  resolveStateDir,
-  writePrivateFileAtomic,
-} from "~/commercial/plugin-bridge/approval-store.js";
+import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
 import type { CachedSeat } from "./write-authorization.js";
 import type { WriteLedger } from "./write-ledger.js";
 
 export interface WriteAccessState {
-  installId: string;
+  /** Null until the first save mints one: reading never writes, so an unwritable dir still decides. */
+  installId: string | null;
   /** Keyed by figmaUserId. */
   seats: Record<string, CachedSeat>;
   ledger: WriteLedger;
@@ -55,6 +53,8 @@ const WriteAccessStateFile = z.object({
   ),
 });
 
+export type PersistedWriteAccessState = WriteAccessState & { installId: string };
+
 export class WriteAccessStore {
   readonly file: string;
 
@@ -62,23 +62,26 @@ export class WriteAccessStore {
     this.file = join(baseDir, "write-access.json");
   }
 
-  /** The current state, minting and persisting an installId on first use. */
+  /** The current state; an absent file (or a corrupt one, see the header) reads as empty. */
   read(): WriteAccessState {
-    const state = this.load();
-    if (state) return state;
-    return this.persist({ installId: randomUUID(), seats: {}, ledger: {} });
+    return this.load() ?? { installId: null, seats: {}, ledger: {} };
   }
 
-  update(transform: (state: WriteAccessState) => WriteAccessState): WriteAccessState {
-    return this.persist(transform(this.read()));
+  /** Read → transform → save, minting the installId on the first save. */
+  update(transform: (state: WriteAccessState) => WriteAccessState): PersistedWriteAccessState {
+    const next = transform(this.read());
+    return this.persist({ ...next, installId: next.installId ?? randomUUID() });
   }
 
   private load(): WriteAccessState | null {
     let raw: string;
     try {
       raw = readFileSync(this.file, "utf8");
-    } catch {
-      return null;
+    } catch (err) {
+      // Only a missing file is "no state". Anything else (EACCES, EMFILE) propagates: reading it as
+      // empty would let the next save overwrite every token and unreported Write in the real file.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
     }
     let json: unknown;
     try {
@@ -96,7 +99,7 @@ export class WriteAccessStore {
 
   // A failed write propagates: the caller decides what a lost save costs. WriteAccess keeps Writes
   // that couldn't be saved counted in memory and retries; a sign-in whose token can't be kept fails.
-  private persist(state: WriteAccessState): WriteAccessState {
+  private persist(state: PersistedWriteAccessState): PersistedWriteAccessState {
     writePrivateFileAtomic(this.file, JSON.stringify(state));
     return state;
   }

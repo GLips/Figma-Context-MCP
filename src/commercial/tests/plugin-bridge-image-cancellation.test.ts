@@ -8,11 +8,8 @@ import { channel } from "node:diagnostics_channel";
 import { afterAll, expect, it, vi } from "vitest";
 import { fetchAndProcessImage } from "~/commercial/plugin-bridge/images.js";
 
-// Only DNS routing is controlled. Validation sees a public address; the HTTP connection dials our
-// local fixture. Fetch, TCP, response streaming and abort propagation are the real implementation.
-vi.mock("node:dns/promises", () => ({
-  lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-}));
+// Only DNS routing is controlled: the Agent's lookup (where the public-address guard lives) is
+// replaced to dial our local fixture. Fetch, TCP, response streaming and abort propagation are real.
 const transport = vi.hoisted(() => ({ agents: [] as import("undici").Agent[] }));
 vi.mock("undici", async (original) => {
   const actual = await original<typeof import("undici")>();

@@ -5,16 +5,13 @@
  * decoded (text as runs, uniform image ref, normalized gradient, resolved
  * style/component metadata, no top-level tables), but the values are still raw
  * (RGBA floats, numeric sizes, raw layout traits) — CSS conversion + dedup is
- * `simplify`'s sole job, never an adapter's (Invariant 5). One core, two
- * producers: `restNodeToSnapshot` (server) and `sceneNodeToSnapshot` (plugin,
- * out of scope here) both feed this identical shape (Invariant 2).
+ * `simplify`'s sole job, never an adapter's (Invariant 5). One core, two live
+ * producers: `restNodeToSnapshot` (server) and `sceneNodeToSnapshot` (plugin)
+ * both feed this identical shape (Invariant 2).
  *
- * IMPORTANT: this type is deliberately a *structural subset* of a Figma
- * `Node` for the ~1:1 fields (same names, compatible value types), so raw Figma
- * nodes remain assignable during the incremental carve. It carries NO
- * `@figma/rest-api-spec` import — the core module graph must stay Figma-free
- * (Invariant 2 / Phase 1 Done-when). The type grows one concern at a time as
- * each transformer migrates off Figma types onto the snapshot.
+ * The ~1:1 fields keep Figma's names and compatible value types, so each adapter's
+ * decode of them is a plain field copy. It carries NO `@figma/rest-api-spec`
+ * import — the core module graph must stay Figma-free (Invariant 2).
  */
 /** A node's own width/height in px (Figma plugin `node.width`/`node.height`). */
 export interface SnapshotSize {
@@ -70,8 +67,8 @@ export type SnapshotTransform = number[][];
 // Paints — DECODED from the wire: solid/pattern map ~1:1, but the image ref is
 // uniform (`ref`, not REST's `imageRef`) and the gradient is normalized to
 // {stops, handles} (not REST's gradientHandlePositions). This is a decode the
-// adapter owns; the plugin adapter (out of scope) derives the same shape from
-// its own wire form. See ADR/plan: {stops, handles} keeps simplify's
+// adapter owns; the plugin adapter derives the same shape from its own wire
+// form. See ADR/plan: {stops, handles} keeps simplify's
 // gradient math (which works off handle vectors) behavior-identical.
 // ---------------------------------------------------------------------------
 export interface SnapshotSolidPaint {
@@ -365,8 +362,8 @@ export interface SnapshotOverride {
  * This is the one thing the core cannot derive for itself when the definition sits outside
  * the fetched subtree, and it is what lets BOTH producers name a component. REST reads it
  * from the response's `components`/`componentSets` tables; the plugin reads it off the
- * `getMainComponentAsync()` node it already resolves for `componentId`, which is why the
- * plugin no longer needs a response table it has nowhere to put.
+ * `getMainComponentAsync()` node it already resolves for `componentId`, so the plugin needs
+ * no response table it has nowhere to put.
  *
  * Carrying `name` here is also what makes an instance's VARIANT recoverable on the plugin:
  * `componentId` plus this `name` ("Variant=Primary") says which variant resolved, so the
@@ -414,9 +411,9 @@ export interface NodeSnapshot {
 
   // ------------------------------------------------------------------------
   // Layout traits — a node's own box and how it sits in its parent's layout.
-  // Field names/unions mirror Figma's HasLayoutTrait so raw REST nodes stay
-  // structurally assignable during the carve; the values are raw (px numbers,
-  // enum tags), and the CSS mapping is simplify's job (Invariant 5).
+  // Field names/unions mirror Figma's HasLayoutTrait so the adapters copy them
+  // across; the values are raw (px numbers, enum tags), and the CSS mapping is
+  // simplify's job (Invariant 5).
   // ------------------------------------------------------------------------
   absoluteBoundingBox?: SnapshotRect | null;
   /**

@@ -343,16 +343,6 @@ function formatLineHeight(
 // Rich text (inline formatting)
 // ---------------------------------------------------------------------------
 
-/**
- * Callback used by `buildFormattedText` to register a styled run's residual
- * delta and receive the run tuple's style slot back: a styles-table ref string
- * (compressed output; count-gated by the compression pass like every other style)
- * or the delta itself for inline emission. Keeping the side effects (dedup,
- * styles-table mutation) in the caller lets this module stay a near-pure
- * transformer.
- */
-type RegisterRunStyle = (delta: SimplifiedTextStyle) => TextRunStyle;
-
 type BuildFormattedTextResult = {
   /**
    * Plain (or markdown-only) text degrades to a single string; the run array
@@ -401,10 +391,7 @@ type Classification = {
  *      depth, multiplied by every line. Literal `\n` keeps each string
  *      segment on a single YAML plain scalar.
  */
-export function buildFormattedText(
-  node: NodeSnapshot,
-  registerStyle: RegisterRunStyle,
-): BuildFormattedTextResult {
+export function buildFormattedText(node: NodeSnapshot): BuildFormattedTextResult {
   const text = node.text;
   if (!text) {
     return {};
@@ -422,7 +409,7 @@ export function buildFormattedText(
   // leaving `lines` empty (a text node with no `style` — synthetic fixtures only;
   // real Figma TEXT nodes always have one, so the run pipeline runs). Gating on
   // empty `lines` rather than an empty `style` object keeps a present-but-empty
-  // style running the pipeline, matching the pre-carve `!node.style` check.
+  // style running the pipeline.
   // `escapeMarkdown` still rewrites real newlines to a literal `\n` so multi-line
   // plain text stays compact in YAML.
   if (perLineRuns.length === 0) {
@@ -460,7 +447,7 @@ export function buildFormattedText(
       const classification = classifyRun(run.delta, baseStyle, boldWeight);
       const rendered = renderRunMarkdown(run.text, classification);
       if (classification.refDelta) {
-        segments.push([rendered, registerStyle(classification.refDelta)]);
+        segments.push([rendered, classification.refDelta]);
       } else {
         pushPlain(rendered);
       }
@@ -836,6 +823,9 @@ function renderRunMarkdown(rawText: string, c: Classification): string {
   const { leading, core, trailing } = hasMarkdownWrap
     ? splitEdgeWhitespace(rawText)
     : { leading: "", core: rawText, trailing: "" };
+  // A whitespace-only run (a bold space between differently styled words) has nothing for the
+  // markers to hug; wrapping it would emit bare `****` that parses back as literal asterisks.
+  if (!core) return escapeMarkdown(rawText);
 
   let inner = escapeMarkdown(core);
   if (c.isItalic) inner = `*${inner}*`;

@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { render } from "./render.js";
+import { render } from "./structure.js";
 import { get, find, resolveTarget } from "./read.js";
 
 // Its own file on purpose: counts are memoized per preamble evaluation, i.e. per module instance.

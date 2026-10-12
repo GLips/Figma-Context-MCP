@@ -42,13 +42,14 @@ export function styleReference<V>(ref: SnapshotTokenRef, value?: V): StyleRefere
   return withValue({ style: tokenIdentity(ref) }, value);
 }
 
-// `value` always follows the identity key: compression hashes the serialized form.
+// `value` always follows the identity key, so the wire bytes (and goldens) keep one order. Hashing
+// doesn't depend on it: every hash goes through `stableStringify`, which sorts keys.
 function withValue<T extends object, V>(reference: T, value: V | undefined): T & { value?: V } {
   return value === undefined ? reference : { ...reference, value };
 }
 
-// Key order is fixed (id, then name) so a reference stringifies identically whichever producer
-// built it — compression and template hashing key on the serialized form.
+// Key order is fixed (id, then name) so a reference's wire bytes match whichever producer built it.
+// Hashing sorts keys itself (`stableStringify`); this order is for byte-stable output and goldens.
 function tokenIdentity(ref: SnapshotTokenRef): TokenIdentity {
   if (ref.name !== undefined && ref.nameSuffices) return ref.name;
   return ref.name === undefined ? { id: ref.id } : { id: ref.id, name: ref.name };

@@ -10,12 +10,12 @@ This project adheres to the Unix philosophy: tools should have one job and few a
 
 ### MCP Server Scope
 
-The MCP server should only focus on **ingesting designs for AI consumption**. This is our core responsibility and what we do best. Additional features are best handled externally by other specialized tools. Examples of features that would be out of scope include:
+The MCP server does two jobs: **ingesting designs for AI consumption** (the read path) and **executing authored design edits** through the Framelink Figma plugin (the write path, "code mode"). The write path is commercial-licensed and maintainer-only (see [License](#license)), so outside contributions belong on the read path. Additional features are best handled externally by other specialized tools. Examples of features that would be out of scope include:
 
 - Image conversion, cropping, or other image manipulation
 - Syncing design data to CMSes or databases
 - Code generation or framework-specific output
-- Third-party integrations unrelated to design ingestion
+- Third-party integrations unrelated to reading or editing designs
 
 This focused approach ensures:
 
@@ -28,7 +28,7 @@ This focused approach ensures:
 
 ### Prerequisites
 
-- Node.js 18.0.0 or higher
+- Node.js 20.20.0 or higher (`.nvmrc` pins the version CI uses)
 - pnpm (recommended package manager)
 - A Figma API access token ([how to create one](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens))
 
@@ -91,6 +91,7 @@ This focused approach ensures:
 - `pnpm type-check` - Run TypeScript type checking
 - `pnpm test` - Run tests
 - `pnpm lint` - Run ESLint
+- `pnpm validate` - Run everything CI runs (tests for every member, type checks, lint, formatting, license headers, docs drift)
 - `pnpm format` - Format code with Prettier
 - `pnpm inspect` - Run MCP inspector for debugging
 
@@ -111,21 +112,27 @@ This focused approach ensures:
 
 A pnpm workspace. `src/` is the shipped npm package; `core/` and `plugin/` are private members
 bundled into `dist` by the root build. Dependencies point one way — both members are consumed by
-`src/`, `plugin/` consumes `core/`, and `core/` depends on nothing.
+`src/`, `plugin/` consumes `core/`, and `core/` depends on nothing. `tools/payload-lab/` is a third,
+dev-only member for inspecting read payloads; it is never bundled.
 
 ```
 src/                    # figma-developer-mcp — the published package
-├── cli.ts              # Command line interface
+├── bin.ts              # CLI entry: dispatches a subcommand or starts the server
 ├── config.ts           # Configuration management
-├── index.ts            # Main entry point (the npm surface)
-├── server.ts           # MCP server implementation
+├── index.ts            # Library entry (the npm surface)
+├── mcp-server.ts       # Programmatic createServer/startServer entry
+├── server.ts           # MCP server startup (stdio or HTTP)
+├── commands/           # CLI subcommands: fetch, comments
 ├── mcp/                # MCP-specific code
 │   ├── index.ts
-│   └── tools/          # MCP tools
+│   └── tools/          # MCP read tools
 ├── adapters/rest/      # REST wire format → NodeSnapshot
 ├── services/           # Core business logic
+├── telemetry/          # Anonymous usage telemetry (PostHog)
 ├── commercial/         # Write path ("code mode") — commercial-licensed, see LICENSING.md
-│   ├── plugin-bridge/  # WS relay to the Figma plugin
+│   ├── plugin-bridge/  # WS relay to the Figma plugin, plus the image upload endpoint
+│   ├── entitlement/    # Write gate: free allowance and seat checks
+│   ├── commands/       # CLI subcommands: execute, reference, upload
 │   ├── tools/          # Code-mode MCP tools + flcm docs
 │   └── tests/          # Write-path tests
 ├── utils/              # Utility functions
@@ -153,11 +160,9 @@ plugin/                 # @framelink/plugin — the Figma plugin and the flcm sc
 1. **Fork the repository** and create a feature branch
 2. **Make your changes** following the code style guidelines
 3. **Add tests** for new functionality
-4. **Run the test suite** to ensure nothing is broken:
+4. **Run the CI gate** to ensure nothing is broken:
    ```bash
-   pnpm test
-   pnpm type-check
-   pnpm lint
+   pnpm validate
    ```
 5. **Update documentation** if needed
 6. **Submit a pull request** with a clear description that includes context and motivation for the changes
@@ -184,7 +189,7 @@ For reference, these prefixes determine version bumps:
 
 ### What We're Not Looking For
 
-- Features that go beyond design ingestion (see Philosophy section)
+- Features outside the server's scope (see Philosophy section)
 - Breaking changes without discussion
 - Code that doesn't follow our style guidelines
 - Features without tests

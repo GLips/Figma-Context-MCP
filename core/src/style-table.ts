@@ -4,21 +4,21 @@ import { sha1Hex } from "./sha1.js";
 
 /**
  * The two StyleTable implementations — the seam that makes compression
- * separable from the walk (Invariant 3).
+ * separable from projection (Invariant 3).
  *
- * `createRefStyleTable` reproduces the shipped intern-then-compress behavior:
- * values are hoisted under content-addressed (sha1) keys and the walk emits
- * refs. A named style needs no key of its own — it is already a `{ style }`
- * value on the node, so it hoists by content when shared, like any value.
- * `createInlineStyleTable` is expanded mode: the walk emits the values
- * themselves, nothing is hoisted, and the hash is never touched.
+ * `createRefStyleTable` is the intern-then-compress form: values are hoisted
+ * under content-addressed (sha1) keys and `project` emits refs. A named style
+ * needs no key of its own — it is already a `{ style }` value on the node, so it
+ * hoists by content when shared, like any value. `createInlineStyleTable` is
+ * expanded mode: `project` emits the values themselves, nothing is hoisted, and
+ * the hash is never touched.
  */
 
 /** Compressing table: intern style values under deduplicating refs. */
 export function createRefStyleTable(): StyleTable {
   const styles: Record<string, StyleValue> = {};
   // Reverse lookup: serialized style value → ref id. Scoped to this table,
-  // i.e. to one walk.
+  // i.e. to one projection.
   const refIdCache = new Map<string, string>();
 
   return {
@@ -39,7 +39,7 @@ export function createRefStyleTable(): StyleTable {
       // other value and every node referencing it would silently resolve to the wrong
       // style. Fall back to the full 40-hex hash, which cannot collide with any
       // truncated id (different length) and not with another full id (that would be
-      // a sha1 collision of distinct values). Deterministic because the walk order
+      // a sha1 collision of distinct values). Deterministic because projection order
       // is stable, so the same file reproduces the same ids.
       let refId = `${prefix}_${fullHash.slice(0, 8)}`;
       if (styles[refId] !== undefined) {

@@ -3,6 +3,11 @@
 // accepts both. Migrating them to v4 is its own change, not a side effect of a dependency bump.
 import { z } from "zod/v3";
 import { FigmaService } from "~/services/figma.js";
+import {
+  FIGMA_NODE_ID_FORMAT_MESSAGE,
+  FIGMA_NODE_ID_PATTERN,
+  normalizeFigmaNodeId,
+} from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import {
@@ -23,16 +28,15 @@ const parameters = {
     ),
   nodeId: z
     .string()
-    .regex(
-      /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
-      "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
-    )
+    .regex(FIGMA_NODE_ID_PATTERN, FIGMA_NODE_ID_FORMAT_MESSAGE)
     .optional()
     .describe(
       "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain — it's still a single node ID, not multiple nodes).",
     ),
   depth: z
     .number()
+    .int()
+    .positive()
     .optional()
     .describe(
       "How many levels of children to include. Only for when the user asks for a depth; the elided map is how to go deeper.",
@@ -61,9 +65,7 @@ async function getFigmaData(
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
 
-    // Replace - with : in nodeId for our query — Figma API expects :.
-    // MCP-specific input quirk, so it lives here rather than in the shared core.
-    const nodeId = rawNodeId?.replace(/-/g, ":");
+    const nodeId = rawNodeId && normalizeFigmaNodeId(rawNodeId);
 
     Logger.log(
       `Fetching ${depth ? `${depth} layers deep` : "all layers"} of ${
@@ -108,7 +110,9 @@ async function getFigmaData(
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     Logger.error(`Error fetching file ${params.fileKey}:`, message);
-    const recovery = describeRecovery?.(error, { nodeId: params.nodeId?.replace(/-/g, ":") });
+    const recovery = describeRecovery?.(error, {
+      nodeId: params.nodeId && normalizeFigmaNodeId(params.nodeId),
+    });
     return {
       isError: true,
       content: [

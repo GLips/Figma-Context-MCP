@@ -5,7 +5,7 @@ import { FigmaService } from "~/services/figma.js";
 import { getFigmaComments } from "~/services/get-figma-comments.js";
 import { parseGetFigmaCommentsParams } from "~/mcp/tools/get-figma-comments-tool.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-import { REST_COMMAND_FLAGS, resolveRestAuth, resolveRestTarget } from "./rest-command.js";
+import { REST_COMMAND_FLAGS, prepareRestCommand, resolveRestTarget } from "./rest-command.js";
 
 export const commentsCommand: Command = command(
   {
@@ -65,6 +65,7 @@ interface CommentsFlags {
   figmaApiKey?: string;
   figmaOauthToken?: string;
   env?: string;
+  proxy?: string;
 }
 
 export async function runComments(flags: CommentsFlags, positionals: string[]): Promise<void> {
@@ -76,7 +77,7 @@ export async function runComments(flags: CommentsFlags, positionals: string[]): 
     status: flags.all ? "all" : "unresolved",
     since: flags.since,
   });
-  const auth = resolveRestAuth(flags);
+  const auth = prepareRestCommand(flags);
   const result = await getFigmaComments(new FigmaService(auth), fileKey, options);
   console.log(JSON.stringify(result, null, 2));
 }

@@ -3,9 +3,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
-import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
+import { installFigmaProxyDispatcher } from "./utils/proxy-env.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
 import { requireGlobalCredentials, type ServerConfig } from "./config.js";
@@ -34,26 +33,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
     requireGlobalCredentials(config.auth);
   }
 
-  // Three outcomes: explicit proxy URL → ProxyAgent; no proxy but env vars set
-  // → EnvHttpProxyAgent; otherwise Node's default (includes `--proxy=none`,
-  // which lets users opt out of system-level proxy vars misbehaving for
-  // api.figma.com — see issue #358).
-  //
-  // We deliberately do NOT install EnvHttpProxyAgent when no proxy vars are
-  // present, so a stale or incidental var in the user's shell (VPN client,
-  // old dev setup) can't silently route Figma traffic through an intermediary
-  // that may return 403.
-  if (config.proxy && config.proxy !== "none") {
-    setGlobalDispatcher(new ProxyAgent(config.proxy));
-    setProxyMode("explicit");
-  } else if (!config.proxy && hasProxyEnv()) {
-    setGlobalDispatcher(new EnvHttpProxyAgent());
-    setProxyMode("env");
-  }
+  installFigmaProxyDispatcher(config.proxy);
+  // A process property, known before any server exists: createServer runs once per HTTP request.
+  Logger.isHTTP = !config.isStdioMode;
 
   const telemetryEnabled = telemetry.initTelemetry({
-    optOut: config.noTelemetry,
-    redactFromErrors: [config.auth.figmaApiKey, config.auth.figmaOAuthToken],
+    enabled: config.telemetryEnabled,
+    redactFromTelemetry: [config.auth.figmaApiKey, config.auth.figmaOAuthToken],
   });
 
   if (telemetryEnabled) {

@@ -15,13 +15,13 @@ import { readStandingState } from "./read.js";
 import { liveSublayerIdOf } from "./instance.js";
 
 /** One live node a verb writes words to, and its parent within the call (a node id, or any key). */
-export interface StatedNode {
+interface StatedNode {
   node: SceneNode;
   words: Record<string, unknown>;
   parent?: string;
 }
 
-export interface StandingState {
+interface StandingState {
   /** Read `node` (and its subtree) unless an ancestor's read already covers it. */
   load(node: SceneNode): Promise<void>;
   /**

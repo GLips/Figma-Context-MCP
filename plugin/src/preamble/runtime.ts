@@ -6,13 +6,13 @@
 // Internal helpers remain closure-private, so their names cannot collide with agent declarations.
 //
 // Only these exports are visible to sandbox authors.
-import { gradient, image, effects, get, find, findOne, selection, id } from "./flcm.js";
-import { render } from "./render.js";
+import { gradient, image, effects, id } from "./flcm.js";
+import { get, find, findOne, selection } from "./read.js";
 import { detach } from "./instance.js";
 import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { append, prepend, insertBefore, insertAfter, remove, clone, measure, replace } from "./structure.js";
+import { render, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace } from "./structure.js";
 import { page } from "./page.js";
 import { designTokens as listDesignTokens } from "./design-tokens.js";
 import { registerMarked } from "./host.js";

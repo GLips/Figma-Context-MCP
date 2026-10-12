@@ -12,6 +12,9 @@
 // blur-×2 note (the code applies it) and NO alignItems:"stretch" no-op warning (the bridge now synthesizes
 // container stretch per-child, so it just works). What stays documented is the fail-loud boundary: what
 // we reject rather than approximate, and the few departures that render anyway (FIDELITY_AND_SCOPE).
+import { FIND_MATERIALIZE_CAP } from "@framelink/plugin/find-cap";
+import { UPLOAD_TTL_MS } from "~/commercial/plugin-bridge/image-intake.js";
+import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
 
 export const MENTAL_MODEL = `Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE, and children is an ordinary array of node specs. A spec is a value, not a node: every placement verb returns a deep copy with ids filled in and never changes its input, so rendering one template twice makes two independent trees.
@@ -68,7 +71,7 @@ export const READS = `The read verbs — \`get\`, \`find\`, \`findOne\`, \`selec
 - \`type\` and \`key\` match exactly; \`hasAnnotations\` is a boolean.
 - \`within\` is a target whose descendants are searched, never the node itself. Without it, the current page.
 
-find's predicate, its optional second argument, can be async (find awaits each verdict) and is offered at most 5,000 candidates, so narrow large files with \`within\` or the query.
+find's predicate, its optional second argument, can be async (find awaits each verdict) and is offered at most ${FIND_MATERIALIZE_CAP.toLocaleString("en-US")} candidates, so narrow large files with \`within\` or the query.
 
 ### A read is a spec
 
@@ -282,7 +285,7 @@ const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotatio
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
 - **Local paths are confined to the server's asset root** (\`--asset-root\`, default: the directory the server started in). A path outside it is refused, naming the root.
-- **For a file outside the root**, run \`npx ${CLI_NAME} upload <file>\` from a shell. It reads the file on your side and prints a handle (\`flcm-upload:…\`) to pass as \`src\`. Write the handle into the script literally: a run can only use handles its own code names. A handle lasts 30 minutes and works only on the MCP server that issued it, not in a CLI \`execute\` run, which reads files under its own \`--asset-root\` instead.
+- **For a file outside the root**, run \`npx ${CLI_NAME} upload <file>\` from a shell. It reads the file on your side and prints a handle (\`flcm-upload:…\`) to pass as \`src\`. Write the handle into the script literally: a run can only use handles its own code names. A handle lasts ${UPLOAD_TTL_MS / 60_000} minutes and works only on the MCP server that issued it, not in a CLI \`execute\` run, which reads files under its own \`--asset-root\` instead.
 - An **unfetchable, blocked, out-of-root, oversize, or non-image source fails loud** — never a silent blank fill.`;
 
 export const EFFECTS_INTRO = `Write effects as the CSS you'd already write — a bag of \`{ boxShadow?, textShadow?, filter?, backdropFilter? }\`. \`flcm.effects({...})\` is the second form, and the only way to reach the Figma-native effects CSS has no word for (\`glass\`, \`noise\`, \`texture\`, \`progressiveBlur\`, \`progressiveBackgroundBlur\`).
@@ -312,7 +315,7 @@ ${screenshotHowTo}
 - **A node id** — any handle's \`.id\`, or an id from a read verb.
 - **A key** — one you authored. Matching no node, or several, fails loud; a failed lookup never falls back to the whole page.
 - **Neither** captures the whole current page.
-- **Scale** (above 0, up to 4; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.`;
+- **Scale** (above 0, up to ${MAX_SCREENSHOT_SCALE}; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.`;
 
 export const RAW_FIGMA = `The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`**, the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for document operations the DSL doesn't cover, like the viewport and selection.
 

@@ -32,7 +32,7 @@ const ExecuteCodeReply = z.object({
 // The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
 // (base64 PNG) on success, `errors` on the failure path — never both, never neither.
 const ScreenshotReply = z.union([
-  z.object({ image: z.string(), capture: z.literal("contextual").optional() }),
+  z.object({ image: z.string() }),
   z.object({ errors: z.string() }),
 ]);
 

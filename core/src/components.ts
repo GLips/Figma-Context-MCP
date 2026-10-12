@@ -134,38 +134,25 @@ export function extractComponents(
   definitions: SimplifiedNode[] = [],
   styles: Record<string, StyleValue> = {},
 ): Record<string, SimplifiedComponentEntry> {
-  const definitionNodes = new Map<string, SimplifiedNode>();
-  const instancesByComponent = new Map<string, SimplifiedNode[]>();
-  indexTree(nodes, definitionNodes, instancesByComponent);
-  for (const definition of definitions) {
-    indexTree([definition], definitionNodes, instancesByComponent);
-    // `indexTree` only registers COMPONENT/COMPONENT_SET-typed roots, so a fetched definition whose
-    // root is neither still needs registering. First-wins there and here, for the same reason.
-    if (!definitionNodes.has(definition.id)) definitionNodes.set(definition.id, definition);
-  }
-
-  // Every id anything in this read names — instances point at components the tree may not hold,
-  // and the notes hold provenance for exactly those. Sorted so two runs emit the same sidecar.
-  const ids = [
-    ...new Set([
-      ...notes.components.keys(),
-      ...definitionNodes.keys(),
-      ...instancesByComponent.keys(),
-    ]),
-  ].sort();
+  const index = indexComponentSources(nodes, definitions);
+  const ids = componentIds(index, notes);
 
   // The children each entry publishes, captured BEFORE any node is rewritten — an instance that
   // donates is itself reduced afterwards (against its own donation, so its diff comes out empty).
-  const sources = new Map<
-    string,
-    { children: SimplifiedNode[]; from?: string; unverified?: true }
-  >();
+  // A donation is re-keyed into the definition's id space so a reader resolves a path the same
+  // way whatever the provenance was: `I<donor>;<path>` on the canvas, `<path>` once published.
+  const sources = new Map<string, ChildrenSource>();
   for (const id of ids) {
-    const source = chooseChildren(id, definitionNodes, instancesByComponent, notes);
-    if (source) sources.set(id, source);
+    const source = chooseChildren(id, index, notes);
+    if (!source) continue;
+    const from = source.from;
+    sources.set(
+      id,
+      from ? { ...source, children: source.children.map((c) => rekey(clone(c), from)) } : source,
+    );
   }
 
-  for (const definition of definitionNodes.values()) delete definition.children;
+  for (const definition of index.definitionNodes.values()) delete definition.children;
 
   const components: Record<string, SimplifiedComponentEntry> = {};
   const resolved = new Map<string, SimplifiedNode[] | undefined>();
@@ -208,39 +195,72 @@ export function extractComponents(
   return components;
 }
 
-function indexTree(
+interface ComponentSources {
+  definitionNodes: Map<string, SimplifiedNode>;
+  instancesByComponent: Map<string, SimplifiedNode[]>;
+}
+
+/** Where each component's children could come from: its definition node, or its instances. */
+function indexComponentSources(
   nodes: SimplifiedNode[],
-  definitionNodes: Map<string, SimplifiedNode>,
-  instancesByComponent: Map<string, SimplifiedNode[]>,
-): void {
+  definitions: SimplifiedNode[],
+): ComponentSources {
+  const index: ComponentSources = { definitionNodes: new Map(), instancesByComponent: new Map() };
+  indexTree(nodes, index);
+  for (const definition of definitions) {
+    indexTree([definition], index);
+    // `indexTree` only registers COMPONENT/COMPONENT_SET-typed roots, so a fetched definition whose
+    // root is neither still needs registering. First-wins there and here, for the same reason.
+    if (!index.definitionNodes.has(definition.id))
+      index.definitionNodes.set(definition.id, definition);
+  }
+  return index;
+}
+
+/**
+ * Every id anything in this read names — instances point at components the tree may not hold,
+ * and the notes hold provenance for exactly those. Sorted so two runs emit the same sidecar.
+ */
+function componentIds(index: ComponentSources, notes: ComponentNotes): string[] {
+  return [
+    ...new Set([
+      ...notes.components.keys(),
+      ...index.definitionNodes.keys(),
+      ...index.instancesByComponent.keys(),
+    ]),
+  ].sort();
+}
+
+function indexTree(nodes: SimplifiedNode[], index: ComponentSources): void {
   for (const node of nodes) {
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
       // First wins. The tree is indexed before any adapter-supplied definition, so this is what
       // enforces priority 1 over 2: the in-tree node is the definition as THIS document has it,
       // while a fetched one is the library's current state, which the document may not have taken.
-      if (!definitionNodes.has(node.id)) definitionNodes.set(node.id, node);
+      if (!index.definitionNodes.has(node.id)) index.definitionNodes.set(node.id, node);
     } else if (node.type === "INSTANCE" && node.componentId) {
-      const list = instancesByComponent.get(node.componentId);
+      const list = index.instancesByComponent.get(node.componentId);
       if (list) list.push(node);
-      else instancesByComponent.set(node.componentId, [node]);
+      else index.instancesByComponent.set(node.componentId, [node]);
     }
-    if (node.children) indexTree(node.children, definitionNodes, instancesByComponent);
+    if (node.children) indexTree(node.children, index);
   }
 }
 
-/**
- * Pick the children an entry publishes, and re-key them into the DEFINITION's id space so a
- * reader resolves a path the same way whatever the provenance was. A donated subtree is keyed
- * `I<donor>;<path>` on the canvas; republished it is keyed `<path>` — `childrenFrom` records
- * where it came from, but addressing never depends on that.
- */
+interface ChildrenSource {
+  children: SimplifiedNode[];
+  /** The donor instance's id when the children are a donation, still keyed in its id space. */
+  from?: string;
+  unverified?: true;
+}
+
+/** Pick the children an entry publishes. Both the runtime catalog and the wire pass use this. */
 function chooseChildren(
   id: string,
-  definitionNodes: Map<string, SimplifiedNode>,
-  instancesByComponent: Map<string, SimplifiedNode[]>,
+  index: ComponentSources,
   notes: ComponentNotes,
-): { children: SimplifiedNode[]; from?: string; unverified?: true } | undefined {
-  const definition = definitionNodes.get(id);
+): ChildrenSource | undefined {
+  const definition = index.definitionNodes.get(id);
   if (definition?.children?.length) {
     const children = definition.children;
     return notes.unverifiedDefinitions.has(id) ? { children, unverified: true } : { children };
@@ -248,12 +268,8 @@ function chooseChildren(
   // The least-edited instance first, then the next — an instance whose own sublayers were all
   // hidden has nothing to donate, and stopping at it would publish no children for a component
   // some other instance could have shown whole.
-  for (const donor of byEditCount(instancesByComponent.get(id), notes.instanceEdits)) {
-    if (!donor.children?.length) continue;
-    return {
-      children: donor.children.map((child) => rekey(clone(child), donor.id)),
-      from: donor.id,
-    };
+  for (const donor of byEditCount(index.instancesByComponent.get(id), notes.instanceEdits)) {
+    if (donor.children?.length) return { children: donor.children, from: donor.id };
   }
   return undefined;
 }
@@ -310,13 +326,29 @@ function reduceNode(
   const reference = resolveChildren(node.componentId);
   if (!reference) return node;
 
-  const overrides = diffChildren(reference, node.children ?? [], node.id, emptied, styles);
+  const overrides = diffChildren(
+    reference,
+    node.children ?? [],
+    { instanceId: node.id, referenceRoot: "" },
+    emptied,
+    styles,
+  );
   // `null` means the instance added children the diff can't express as a delta (a filled slot
   // at the top level). Keeping the full subtree is the honest answer for that instance.
   if (overrides === null) return node;
   delete node.children;
   if (Object.keys(overrides).length > 0) node.overrides = overrides;
   return node;
+}
+
+/**
+ * The two id spaces a diff strips down to component-relative paths: the instance being diffed, and
+ * the reference's — `""` for a definition's own ids, or the donor instance whose live ids a runtime
+ * donation still carries.
+ */
+interface DiffIds {
+  instanceId: string;
+  referenceRoot: string;
 }
 
 /**
@@ -327,23 +359,24 @@ function reduceNode(
 function diffChildren(
   reference: SimplifiedNode[],
   actual: SimplifiedNode[],
-  instanceId: string,
+  ids: DiffIds,
   emptied: Set<string>,
   styles: Record<string, StyleValue> = {},
 ): Record<string, NodeDelta> | null {
   const referenceByPath = new Map<string, SimplifiedNode>();
-  for (const child of reference) referenceByPath.set(componentPath(child.id, ""), child);
+  for (const child of reference)
+    referenceByPath.set(componentPath(child.id, ids.referenceRoot), child);
 
   const out: Record<string, NodeDelta> = {};
   const matched = new Set<string>();
   const order: string[] = [];
   for (const child of actual) {
-    const path = componentPath(child.id, instanceId);
+    const path = componentPath(child.id, ids.instanceId);
     const counterpart = referenceByPath.get(path);
     if (!counterpart) return null;
     matched.add(path);
     order.push(path);
-    const delta = diffNode(counterpart, child, instanceId, out, emptied, styles);
+    const delta = diffNode(counterpart, child, ids, out, emptied, styles);
     if (delta) out[path] = delta;
   }
 
@@ -373,7 +406,10 @@ const DIFF_SKIP_KEYS = new Set(["id", "children", "readOnlySource", "elided"]);
  */
 function overrideIdentity(value: unknown, styles: Record<string, StyleValue>): string {
   const comparable = (field: unknown): unknown => {
-    if (typeof field === "string") return field in styles ? comparable(styles[field]) : field;
+    if (typeof field === "string")
+      return Object.prototype.hasOwnProperty.call(styles, field)
+        ? comparable(styles[field])
+        : field;
     if (Array.isArray(field)) return field.map(comparable);
     if (!field || typeof field !== "object") return field;
     const isReference = "variable" in field || "style" in field;
@@ -396,7 +432,7 @@ function overrideIdentity(value: unknown, styles: Record<string, StyleValue>): s
 function diffNode(
   reference: SimplifiedNode,
   actual: SimplifiedNode,
-  instanceId: string,
+  ids: DiffIds,
   out: Record<string, NodeDelta>,
   emptied: Set<string>,
   styles: Record<string, StyleValue>,
@@ -424,7 +460,7 @@ function diffNode(
   const actualChildren = actual.children ?? (emptied.has(actual.id) ? [] : undefined);
   if (actualChildren) {
     const nested = reference.children
-      ? diffChildren(reference.children, actualChildren, instanceId, emptied, styles)
+      ? diffChildren(reference.children, actualChildren, ids, emptied, styles)
       : null;
     if (nested === null) delta.children = actualChildren;
     else Object.assign(out, nested);
@@ -434,24 +470,20 @@ function diffNode(
   return delta as NodeDelta;
 }
 
-/** Full definitions and donor subtrees retain their live identities in the runtime. */
+/**
+ * The runtime sidecar. Unlike `extractComponents` it neither clones nor re-keys: a published
+ * definition or donation is the live subtree itself, so an agent's read keeps live ids.
+ */
 export function componentCatalog(
   nodes: SimplifiedNode[],
   notes: ComponentNotes,
   definitions: SimplifiedNode[],
 ): Record<string, SimplifiedComponentEntry> {
-  const defined = new Map<string, SimplifiedNode>();
-  const instances = new Map<string, SimplifiedNode[]>();
-  indexTree(nodes, defined, instances);
-  indexTree(definitions, defined, instances);
+  const index = indexComponentSources(nodes, definitions);
   const result: Record<string, SimplifiedComponentEntry> = {};
-  for (const id of [
-    ...new Set([...notes.components.keys(), ...defined.keys(), ...instances.keys()]),
-  ].sort()) {
+  for (const id of componentIds(index, notes)) {
     const provenance = notes.components.get(id);
-    const definition = defined.get(id);
-    const donor = byEditCount(instances.get(id), notes.instanceEdits)[0];
-    const source = definition ?? donor;
+    const source = chooseChildren(id, index, notes);
     result[id] = {
       type: provenance?.type ?? "COMPONENT",
       name: provenance?.name ?? id,
@@ -459,9 +491,11 @@ export function componentCatalog(
         Object.entries(provenance ?? {}).filter(([, value]) => value !== undefined),
       ),
     };
-    if (source?.children) result[id].children = source.children;
-    if (!definition && donor) result[id].childrenFrom = donor.id;
-    if (notes.unverifiedDefinitions.has(id)) result[id].childrenUnverified = true;
+    // A definition with an empty child list still states it: the runtime keeps what the wire omits.
+    const children = source?.children ?? index.definitionNodes.get(id)?.children;
+    if (children) result[id].children = children;
+    if (source?.from) result[id].childrenFrom = source.from;
+    if (source?.unverified) result[id].childrenUnverified = true;
   }
   return result;
 }
@@ -473,9 +507,14 @@ export function describeInstanceChanges(
 ): void {
   for (const node of nodes) {
     if (node.children) describeInstanceChanges(node.children, components);
-    const reference = node.componentId ? components[node.componentId]?.children : undefined;
-    if (node.type !== "INSTANCE" || !reference) continue;
-    const overrides = diffChildren(reference, node.children ?? [], node.id, new Set());
+    const entry = node.componentId ? components[node.componentId] : undefined;
+    if (node.type !== "INSTANCE" || !entry?.children) continue;
+    const overrides = diffChildren(
+      entry.children,
+      node.children ?? [],
+      { instanceId: node.id, referenceRoot: entry.childrenFrom ?? "" },
+      new Set(),
+    );
     if (overrides && Object.keys(overrides).length)
       node.overrides = JSON.parse(JSON.stringify(overrides));
   }

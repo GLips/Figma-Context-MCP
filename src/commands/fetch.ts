@@ -1,11 +1,12 @@
 import { type Command, command } from "cleye";
-import { parseOutputFormat } from "~/config.js";
+import { parseOutputFormat, resolveTelemetryEnabled, UsageError } from "~/config.js";
+import { getFigmaDataTool } from "~/mcp/tools/get-figma-data-tool.js";
 import { FigmaService } from "~/services/figma.js";
 import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-import { REST_COMMAND_FLAGS, resolveRestAuth, resolveRestTarget } from "./rest-command.js";
+import { REST_COMMAND_FLAGS, prepareRestCommand, resolveRestTarget } from "./rest-command.js";
 
 export const fetchCommand: Command = command(
   {
@@ -68,19 +69,28 @@ async function run(
     figmaApiKey?: string;
     figmaOauthToken?: string;
     env?: string;
+    proxy?: string;
     noTelemetry?: boolean;
   },
   positionals: string[],
 ) {
-  const { fileKey, nodeId } = resolveRestTarget(positionals[0], flags);
-  const auth = resolveRestAuth(flags);
+  const target = resolveRestTarget(positionals[0], flags);
+  // The tool's own validation, so the CLI accepts exactly what get_figma_data does.
+  const parsed = getFigmaDataTool.parametersSchema.safeParse({ ...target, depth: flags.depth });
+  if (!parsed.success) {
+    throw new UsageError(
+      parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n"),
+    );
+  }
+  const { fileKey, nodeId, depth } = parsed.data;
+  const auth = prepareRestCommand(flags);
 
   // Initialize telemetry only after input validation succeeds, so every
   // captured event corresponds to an actual fetch attempt (not a usage error).
   initTelemetry({
-    optOut: flags.noTelemetry,
+    enabled: resolveTelemetryEnabled(flags.noTelemetry),
     immediateFlush: true,
-    redactFromErrors: [auth.figmaApiKey, auth.figmaOAuthToken],
+    redactFromTelemetry: [auth.figmaApiKey, auth.figmaOAuthToken],
   });
 
   const mode = authMode(auth);
@@ -93,7 +103,7 @@ async function run(
 
   const result = await getFigmaData(
     new FigmaService(auth),
-    { fileKey, nodeId, depth: flags.depth },
+    { fileKey, nodeId, depth },
     outputFormat,
     {
       onComplete: (outcome) =>

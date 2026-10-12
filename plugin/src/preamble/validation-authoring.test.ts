@@ -7,10 +7,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { id } from "./flcm.js";
-import { render } from "./render.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { append, prepend } from "./structure.js";
+import { render, append, prepend } from "./structure.js";
 import { component } from "./component.js";
 import { find, findOne, get, resolveTarget } from "./read.js";
 

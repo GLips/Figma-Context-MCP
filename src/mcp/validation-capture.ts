@@ -42,21 +42,6 @@ export function installValidationRejectCapture(
     getClientInfo: () => ClientInfo | undefined;
   },
 ): void {
-  type ZodIssue = {
-    path?: Array<string | number>;
-    code?: string;
-    message?: string;
-  };
-  type SafeParseResult = { success: boolean; error?: { issues?: ZodIssue[] } };
-  type ValidatableSchema = {
-    safeParse?: (args: unknown) => SafeParseResult;
-    safeParseAsync?: (args: unknown) => Promise<SafeParseResult>;
-  };
-  type ValidatedTool = { inputSchema?: ValidatableSchema };
-  type Patchable = {
-    validateToolInput?: (tool: ValidatedTool, args: unknown, toolName: string) => Promise<unknown>;
-  };
-
   const patchable = server as unknown as Patchable;
   // Fail open if the SDK ever renames or removes this private method — we
   // lose validation reject telemetry, but the server still starts.
@@ -71,12 +56,13 @@ export function installValidationRejectCapture(
     } catch (error) {
       if (error instanceof McpError && error.code === ErrorCode.InvalidParams) {
         const issue = await extractIssue(tool, args);
+        const field = normalizeFieldPath(issue?.path);
 
         if (toolName === "get_figma_data" || toolName === "download_figma_images") {
           captureValidationReject(
             {
               tool: toolName,
-              field: normalizeFieldPath(issue?.path),
+              field,
               rule: issue?.code ?? "unknown",
               message: issue?.message ?? error.message,
               outputFormat: context.outputFormat,
@@ -94,7 +80,7 @@ export function installValidationRejectCapture(
         // the LLM can act on. The SDK's createToolError uses error.message
         // regardless of error type, so a plain Error works fine here.
         if (issue) {
-          throw new Error(`Invalid ${normalizeFieldPath(issue.path)}: ${issue.message}`);
+          throw new Error(`Invalid ${field}: ${issue.message}`);
         }
       }
       throw error;
@@ -102,10 +88,20 @@ export function installValidationRejectCapture(
   };
 }
 
+// The slice of the SDK's private tool/schema shapes this patch touches.
 type ZodIssue = {
   path?: Array<string | number>;
   code?: string;
   message?: string;
+};
+type SafeParseResult = { success: boolean; error?: { issues?: ZodIssue[] } };
+type ValidatableSchema = {
+  safeParse?: (args: unknown) => SafeParseResult;
+  safeParseAsync?: (args: unknown) => Promise<SafeParseResult>;
+};
+type ValidatedTool = { inputSchema?: ValidatableSchema };
+type Patchable = {
+  validateToolInput?: (tool: ValidatedTool, args: unknown, toolName: string) => Promise<unknown>;
 };
 
 /**
@@ -114,17 +110,7 @@ type ZodIssue = {
  * Wrapped in try/catch so a future schema with side effects can't corrupt the
  * SDK's normal error response.
  */
-async function extractIssue(
-  tool: {
-    inputSchema?: {
-      safeParse?: (args: unknown) => { success: boolean; error?: { issues?: ZodIssue[] } };
-      safeParseAsync?: (
-        args: unknown,
-      ) => Promise<{ success: boolean; error?: { issues?: ZodIssue[] } }>;
-    };
-  },
-  args: unknown,
-): Promise<ZodIssue | undefined> {
+async function extractIssue(tool: ValidatedTool, args: unknown): Promise<ZodIssue | undefined> {
   try {
     const schema = tool.inputSchema;
     if (schema?.safeParseAsync) {

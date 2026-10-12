@@ -67,7 +67,7 @@ export interface RenderResources {
 }
 
 /** One node's deferred centre pivot: its span's opening hold and the delta it applied, if any. */
-export interface PivotSettlement { node: any; hold?: PivotHold; layout?: WriteLayout }
+interface PivotSettlement { node: any; hold?: PivotHold; layout?: WriteLayout }
 
 export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
 
@@ -123,7 +123,7 @@ const DECORATION: Record<TextDecoration, "UNDERLINE" | "STRIKETHROUGH" | "NONE">
 // unlike every other text word here — see WriteTextStyle.textAlignVertical.
 const VERTICAL_ALIGN: Record<"top" | "center" | "bottom", "TOP" | "CENTER" | "BOTTOM"> = { top: "TOP", center: "CENTER", bottom: "BOTTOM" };
 
-export function isAutoLayout(node: any): boolean { return layoutModeOf(node).kind !== "free"; }
+function isAutoLayout(node: any): boolean { return layoutModeOf(node).kind !== "free"; }
 function isFrameLike(node: any): boolean { return hasContainerLayout(node.type); }
 
 // A node's geometry in the read verbs' spelling (ir.Handle). width/height are the measured px, rounded the
@@ -544,11 +544,6 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
 // (The layout legality rules — percent-hug cycle, page-parent fill/percent, TEXT fill-height,
 // per-type realizability — live in layout-legality.ts, the one home both verbs consult.)
 
-// Post-walk pass: fold every collected percent size / percent position into concrete pixels
-// against each parent's REALIZED size. Runs after the whole tree is built and appended, so a `fill`/`hug`
-// parent's size is finally readable off the canvas (the ordering hazard: doing this at walk time would
-// predate the fill/hug pin and reintroduce the unknown-parent-size problem this replaces). Ancestor-first
-// (shallowest depth first) so a percent child of a percent parent reads its parent's already-resolved px.
 /**
  * Open a build walk over `resources`. ONE per verb, never per node or per entry: the walk's key set
  * map is where duplicate keys collide, so a key is unique across an editMany batch's slot content
@@ -575,6 +570,11 @@ export function settleSiblingOrder(resources: RenderResources): void {
   resources.siblingOrder?.clear();
 }
 
+// Post-walk pass: fold every collected percent size / percent position into concrete pixels
+// against each parent's REALIZED size. Runs after the whole tree is built and appended, so a `fill`/`hug`
+// parent's size is finally readable off the canvas (the ordering hazard: doing this at walk time would
+// predate the fill/hug pin and reintroduce the unknown-parent-size problem this replaces). Ancestor-first
+// (shallowest depth first) so a percent child of a percent parent reads its parent's already-resolved px.
 export function resolvePercents(ctx: RenderCtx): void {
   settleSiblingOrder(ctx);
   ctx.pending.sort((a, b) => depthOf(a.node) - depthOf(b.node));
@@ -596,9 +596,9 @@ function pctOf(pct: number, parentDim: number): number {
 }
 
 // Fold one child's percent size / percent position into concrete pixels against its parent's
-// realized size. Render calls this through the deferred resolvePercents pass above; the edit path
-// calls it directly — at edit time the parent's realized size already exists, so there is no deferral
-// to ride. Parameter order matches the sibling child-appliers (parent, child, layout).
+// realized size, through the deferred resolvePercents pass above (an edit's live node settles through
+// settleLiveNodePercentSize/Position instead). Parameter order matches the sibling child-appliers
+// (parent, child, layout).
 function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): void {
   resolvePercentSize(parent, child, layout);
   resolvePercentPosition(parent, child, layout);
@@ -704,7 +704,7 @@ function parentHugFacts(parent: any): ParentFlowFacts {
 // because the parent a child is judged against is not always the parent on the canvas: inside a
 // batch the SAME call may be changing that parent, and the entries must be legal against the
 // canvas the batch is creating, not the one it found.
-export interface ParentLayoutFacts extends ParentFlowFacts { isPage: boolean }
+interface ParentLayoutFacts extends ParentFlowFacts { isPage: boolean }
 
 function liveParentLayoutFacts(parent: any): ParentLayoutFacts {
   return {
@@ -941,14 +941,14 @@ export function resettleMovedNode(node: any, wl: WriteLayout, resources?: Render
 }
 
 /** One positioned child waiting on its parent's final size — cover its "fill" axes, then constrain it. */
-export interface PositionedChildSettlement { child: any; layout: WriteLayout }
+interface PositionedChildSettlement { child: any; layout: WriteLayout }
 
 // The parent-side facts a compiled child is settled against. The flow facts are ParentFlowFacts (the
 // percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
 // "stretch"` intent is never stored — not by Figma, not by us (see the flow policy) — so
 // only a caller holding the parent's own WriteNode can state it. A caller inserting into a LIVE parent
 // passes false and says so in its docs: the marks are re-synthesized by editing the container.
-export interface AttachParentFacts extends ParentFlowFacts {
+interface AttachParentFacts extends ParentFlowFacts {
   crossStretch: boolean;
   widthIsBounded: boolean;
   subject: string; // the verb name the shared legality rules prefix their rejections with
@@ -1254,20 +1254,13 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   // applyTextProps's font write is presence-gated (edit's rule), so when the node names no identity
   // word, create writes the resolveFont fallback triple itself (loadFontsForTree preloaded it).
   if (!wn.textStyle?.style && !namesFontIdentity(wn.textStyle)) t.fontName = resolveFont(ctx.fonts, undefined, undefined, false);
-  // Present-but-empty is the compiled "none" — write the clear (live createText seeds a default
-  // black fill, so skipping would leave the "unfilled" text black).
-  if (wn.fills) {
-    t.fills = toFigmaPaintStack(wn.fills, ctx);
-    if (wn.fills.length) stampImageData(t, wn);
-  }
-  if (wn.effects) t.effects = toFigmaEffects(wn.effects);
-  applyStyleSlots(t, wn, ctx);
+  // An omitted fill keeps createText's seeded black — the text default, unlike a shape's transparent one.
+  applyPaint(t, wn, ctx);
   applyTextProps(t, { ...wn, text: wn.text == null ? "" : wn.text }, ctx);
   applyLeafSize(t, wn.layout || {}, ctx.tokens);
   // TEXT guarantees a bounded width when maxLines is set (the handshake above gave it a
   // wrap), so the truncation always has real lines to bite.
   applyTextClamp(t, wn.maxLines);
-  if (wn.opacity !== undefined) writeBindable(t, "opacity", wn.opacity, ctx.tokens);
   return t;
 }
 
@@ -1283,13 +1276,9 @@ function buildShape(node: any, wn: WriteNode, ctx: RenderCtx): any {
 function buildLine(wn: WriteNode, ctx: RenderCtx): any {
   const l = figma.createLine();
   figma.currentPage.appendChild(l);
-  // Present-but-empty is the compiled "none" — write the clear (live createLine seeds a default
-  // black stroke, so skipping would leave the line stroked, not unstroked).
-  if (wn.strokes) l.strokes = toFigmaPaintStack(wn.strokes, ctx);
-  applyStyleSlots(l, wn, ctx);
-  applyStrokeWeight(l, wn.strokeWeight ?? 1, ctx.tokens);
+  // An omitted stroke keeps createLine's seeded black; the weight's creation default is 1.
+  applyPaint(l, { ...wn, strokeWeight: wn.strokeWeight ?? 1 }, ctx);
   applyLeafSize(l, wn.layout || {}, ctx.tokens);
-  if (wn.opacity !== undefined) writeBindable(l, "opacity", wn.opacity, ctx.tokens);
   return l;
 }
 

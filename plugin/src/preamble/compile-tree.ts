@@ -19,7 +19,7 @@ const READ_FIELD_DISPOSITIONS: Record<string, ReadFieldDisposition> = {
 };
 
 /** Copy author data so compilation and returned identities never mutate a reusable template. */
-export function copySpec<T>(value: T, path = "spec", ancestors = new Set<object>()): T {
+function copySpec<T>(value: T, path = "spec", ancestors = new Set<object>()): T {
   if (value === null || typeof value !== "object") {
     if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") throw new Error(path + ": expected plain data.");
     return value;
@@ -108,7 +108,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
   }
 }
 
-export function readyNodeWords(src: Record<string, unknown>, subject: string): Record<string, unknown> {
+function readyNodeWords(src: Record<string, unknown>, subject: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(src)) {
     // These records describe a read, never an authored change. Omission preserves live children.
@@ -131,7 +131,7 @@ export function treeNodes(tree: WriteChild): WriteNode[] {
   return [tree, ...childTreeNodes(tree).flatMap(treeNodes)];
 }
 
-export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" | ReadFieldDisposition> = {
+const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" | ReadFieldDisposition> = {
   mode: "author",
   gap: "author",
   padding: "author",

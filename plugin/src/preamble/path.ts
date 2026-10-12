@@ -17,6 +17,8 @@
 // re-serialized output no longer byte-matches the author's input. Icon-scale error is imperceptible; the
 // warning about byte-equality is for a future read side, not the render path.
 
+import { rejectUnknownKeys } from "./validate.js";
+
 // Returns [c1x, c1y, c2x, c2y, endX, endY] cubic segments approximating the arc from (x1,y1) to (x2,y2).
 // Standard endpoint→center parameterization (SVG impl notes F.6) + split into ≤90° segments, each a cubic.
 // Caller handles the degenerate rx|ry==0 and coincident-endpoint cases before calling. Returns [] when
@@ -418,12 +420,19 @@ export function normalizePathData(d: string): string {
   return out.join(" ");
 }
 
+const VECTOR_PATH_KEYS: ReadonlySet<string> = new Set(["data", "windingRule"]);
+const WINDING_RULES = ["NONZERO", "EVENODD", "NONE"];
+
 /** Validate every path before a verb starts mutating the document. */
 export function normalizeVectorPaths(value: unknown): VectorPaths {
   if (!Array.isArray(value) || !value.length) throw new Error("VECTOR.vectorPaths must be a non-empty path array.");
   return value.map((path, index) => {
-    if (!path || typeof path !== "object" || typeof path.data !== "string" || !["NONZERO", "EVENODD", "NONE"].includes(path.windingRule)) throw new Error("VECTOR.vectorPaths[" + index + "] needs data and windingRule.");
-    if (Object.keys(path).some(key => key !== "data" && key !== "windingRule")) throw new Error("VECTOR.vectorPaths[" + index + "]: unknown path field.");
+    const at = "VECTOR.vectorPaths[" + index + "]";
+    rejectUnknownKeys(path, VECTOR_PATH_KEYS, at, "field");
+    if (typeof path.data !== "string") throw new Error(at + ".data must be SVG path data (a string) — got " + JSON.stringify(path.data) + ".");
+    if (!WINDING_RULES.includes(path.windingRule)) {
+      throw new Error(at + ".windingRule must be one of " + WINDING_RULES.map((rule) => JSON.stringify(rule)).join(", ") + " — got " + JSON.stringify(path.windingRule) + ".");
+    }
     return { data: normalizePathData(path.data), windingRule: path.windingRule };
   });
 }

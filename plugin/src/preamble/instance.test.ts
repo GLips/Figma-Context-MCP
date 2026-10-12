@@ -11,9 +11,9 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id, get } from "./flcm.js";
-import { render } from "./render.js";
-import { append } from "./structure.js";
+import { id } from "./flcm.js";
+import { get } from "./read.js";
+import { render, append } from "./structure.js";
 
 // A "Chip" component: a row with a bound label, a bound icon, and a plain body — the three sublayer
 // kinds an instance touches (a TEXT property, a BOOLEAN property, an override target).

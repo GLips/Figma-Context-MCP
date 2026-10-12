@@ -80,7 +80,7 @@ export {
   variableReference,
 } from "./tokens.js";
 
-// Deliberately absent: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.
+// Deliberately absent: `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.
 
 export { project, projectReadNode, isElision } from "./project.js";
 export type { ProjectOptions } from "./project.js";

@@ -20,18 +20,18 @@ export type StyleValue =
 
 /**
  * The namespaces auto-generated style ref ids are minted under
- * (`fill_a1b2c3d4`). Closed set: the four value kinds the walk interns.
+ * (`fill_a1b2c3d4`). Closed set: the four value kinds projection interns.
  */
 export type StyleRefPrefix = "layout" | "style" | "fill" | "effect";
 
 /**
- * Where the walk sends the style values it builds. The table decides the
- * output form, which is what makes compression separable from the walk
- * (Invariant 3): the compressing table interns values under content-addressed
- * refs (hashing DURING the walk), while the inline table hands the value
- * straight back for inline emission and never touches a hash. Gating only the
- * post-walk compression pass would not be enough — refs and sha1 fire inside
- * the walk — so the table is the seam expanded mode swaps.
+ * Where `project` sends each node's style values as it builds the wire tree. The
+ * table decides the output form, which is what makes compression separable from
+ * projection (Invariant 3): the compressing table interns values under
+ * content-addressed refs, hashing as each node is projected, while the inline
+ * table hands the value straight back and never touches a hash. Gating only the
+ * later `compressDesign` pass would not be enough — refs and sha1 fire during
+ * projection — so the table is the seam expanded mode swaps.
  */
 export interface StyleTable {
   /**

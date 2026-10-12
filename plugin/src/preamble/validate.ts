@@ -83,7 +83,7 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
       subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
     );
   }
-  // The read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged
+  // The read shape's read-only words (`type`, `children`, a root's `designedWidth`) are judged
   // later, where the live node's TYPE is known. They pass this document-blind gate unjudged;
   // everything else is judged now, against the edit vocabulary alone.
   const foreign: Record<string, unknown> = {};
@@ -91,6 +91,10 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
     if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
   }
   rejectUnknownKeys(normalizeInputAliases(foreign, subject), known, subject);
+  assertDeltaNotEmpty(changes, known, subject);
+}
+
+export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>, subject: string): void {
   if (Object.keys(changes).length === 0) {
     throw new Error(
       subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +

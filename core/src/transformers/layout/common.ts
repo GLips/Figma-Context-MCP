@@ -1,4 +1,4 @@
-import { exhaustiveCheck, isFrame, isInAutoLayoutFlow } from "../../utils.js";
+import { exhaustiveCheck, isFrame, isInAutoLayoutFlow, pixelRound } from "../../utils.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 import type { VariableReference } from "../../tokens.js";
 import type { BindableNumber, BoundSides } from "../bound-values.js";
@@ -182,10 +182,9 @@ export function resolveChildAxis(
   if (parentIsGrid) return "grid";
   // When in an auto-layout parent, prefer the parent's axis (fix #379).
   // Outside it, fall back to the node's own mode so a top-level row/column
-  // frame still threads through the row/column dimension logic. Per the
-  // Figma spec, layoutGrow/layoutAlign only apply to direct auto-layout
-  // children, so consulting them outside that context is arguably wrong —
-  // but this preserves the pre-refactor behavior.
+  // frame still threads through the row/column dimension logic. That lets a
+  // stale layoutGrow/layoutAlign on a non-auto-layout node (Figma ignores
+  // them there) still read as a stretch.
   const parentAxis = isInAutoLayoutFlow(n, parent) ? getParentAutoLayoutMode(parent) : undefined;
   if (parentAxis) return parentAxis;
   return ownMode === "row" || ownMode === "column" ? ownMode : "none";
@@ -224,7 +223,7 @@ export function getChildStretch(n: NodeSnapshot, axis: ChildAxis): StretchFlags 
  * Flex children are strict: `layoutSizing*` is reliably populated by Figma and
  * only `FIXED` should emit. Grid children and non-auto-layout nodes also allow
  * absent sizing — for non-auto-layout nodes the property may not exist at all,
- * and the historical grid path treated absent as fixed for symmetry.
+ * and a grid child with absent sizing is treated the same way, as fixed.
  */
 export function shouldEmitFixedDimension(
   sizing: NodeSnapshot["layoutSizingHorizontal"] | undefined,
@@ -236,7 +235,9 @@ export function shouldEmitFixedDimension(
 
 // Zero is only meaningful as one half of a two-value shorthand (e.g. "0px 16px").
 // As a single value it's the CSS default — omit to match the project's convention.
-export function gapShorthand(row?: number, col?: number): string | undefined {
+export function gapShorthand(rawRow?: number, rawCol?: number): string | undefined {
+  const row = rawRow === undefined ? undefined : pixelRound(rawRow);
+  const col = rawCol === undefined ? undefined : pixelRound(rawCol);
   if (row === undefined && col === undefined) return undefined;
   if (row !== undefined && col !== undefined) {
     if (row === 0 && col === 0) return undefined;

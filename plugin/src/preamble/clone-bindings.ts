@@ -4,13 +4,15 @@
  */
 // Native variant-member cloning drops bindings before placement. Capture ownership and structural
 // paths before that boundary; definition display names are never used as identity.
+import { definitionOwnerOf } from "./identity.js";
+import { bareName } from "./instance.js";
+
 type Path = number[];
 type Definition = { type: string; defaultValue: string | boolean; preferredValues?: readonly any[] };
 interface Layer { path: Path; type: string; refs: Record<string, string> }
 interface Owner { path: Path; source: any; definitions: Record<string, Definition>; layers: Layer[] }
-export interface CloneBindings { owners: Owner[] }
+interface CloneBindings { owners: Owner[] }
 const supported = new Set(["TEXT", "BOOLEAN", "INSTANCE_SWAP"]);
-function ownerOf(node: any): any { return node.type === "COMPONENT" && node.parent?.type === "COMPONENT_SET" ? node.parent : node; }
 function at(root: any, path: Path): any {
   return path.reduce((node, index) => node?.children?.[index], root);
 }
@@ -19,7 +21,7 @@ export function captureCloneBindings(root: any): CloneBindings {
   function discover(node: any, path: Path): void {
     if (node.type === "INSTANCE") return;
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
-      const source = ownerOf(node);
+      const source = definitionOwnerOf(node);
       const definitions = JSON.parse(JSON.stringify(source.componentPropertyDefinitions || {}));
       for (const def of Object.values(definitions) as Definition[]) {
         if (def.type !== "VARIANT" && !supported.has(def.type)) throw new Error("flcm.clone: unsupported component property type " + def.type + ". Nothing was applied.");
@@ -48,7 +50,7 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
   for (const entry of plan.owners) {
     const root = at(copy, entry.path);
     if (!root) throw new Error("flcm.clone: copied component structure changed during placement.");
-    const destination = ownerOf(root);
+    const destination = definitionOwnerOf(root);
     const mapping = new Map<string, string>();
     // A duplicate variant temporarily makes the set definition getter reject. The source
     // owner was validated before cloning, and same-owner restoration needs no new definitions.
@@ -61,7 +63,7 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
         const copiedId = node.componentPropertyReferences?.[field];
         // Native clones may already preserve independent definitions. Structural correspondence
         // supplies identity here; same display names elsewhere in the destination never do.
-        if (destination === entry.source) mapping.set(sourceId, sourceId);
+        if (sameOwner) mapping.set(sourceId, sourceId);
         else if (copiedId && defs[copiedId] && JSON.stringify(defs[copiedId]) === JSON.stringify(entry.definitions[sourceId])) {
           const prior = mapping.get(sourceId);
           if (prior && prior !== copiedId) throw new Error("flcm.clone: inconsistent native property mapping.");
@@ -71,11 +73,10 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
     }
     for (const [sourceId, def] of Object.entries(entry.definitions)) {
       if (def.type === "VARIANT") continue;
-      if (!supported.has(def.type)) throw new Error("flcm.clone: unsupported component property type " + def.type);
-      if (destination === entry.source || defs[sourceId] && JSON.stringify(defs[sourceId]) === JSON.stringify(def)) mapping.set(sourceId, sourceId);
+      if (sameOwner || defs[sourceId] && JSON.stringify(defs[sourceId]) === JSON.stringify(def)) mapping.set(sourceId, sourceId);
       if (!mapping.has(sourceId)) {
         // Keep full-ID identity distinct even when multiple source definitions share a name.
-        const id = destination.addComponentProperty(sourceId.replace(/#[^#]*$/, ""), def.type, def.defaultValue,
+        const id = destination.addComponentProperty(bareName(sourceId), def.type, def.defaultValue,
           def.preferredValues ? { preferredValues: def.preferredValues } : undefined);
         created.push({ owner: destination, id });
         mapping.set(sourceId, id);

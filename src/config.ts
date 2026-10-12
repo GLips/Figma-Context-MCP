@@ -1,7 +1,6 @@
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
-import { resolveTelemetryEnabled } from "./telemetry/index.js";
 import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils/serialize.js";
 
 export type Source = "cli" | "env" | "default";
@@ -41,7 +40,7 @@ export interface ServerConfig {
   skipImageDownloads: boolean;
   imageDir: string;
   isStdioMode: boolean;
-  noTelemetry: boolean;
+  telemetryEnabled: boolean;
   codeMode: boolean;
   assetRoot: string;
   framelinkApiUrl: string;
@@ -100,21 +99,46 @@ export function loadEnvFile(envPath?: string): string {
   return envFilePath;
 }
 
-export function resolveAuth(flags: {
-  figmaApiKey?: string;
-  figmaOauthToken?: string;
-}): FigmaAuthOptions {
+type CredentialFlags = { figmaApiKey?: string; figmaOauthToken?: string };
+
+// The single resolution of the Figma credentials; `getServerConfig` keeps the
+// `Resolved` pair for its source display, everyone else takes `resolveAuth`.
+function resolveFigmaCredentials(flags: CredentialFlags) {
   const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
   const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
-
-  const useOAuth = Boolean(figmaOauthToken.value);
   const auth: FigmaAuthOptions = {
     figmaApiKey: figmaApiKey.value,
     figmaOAuthToken: figmaOauthToken.value,
-    useOAuth,
+    useOAuth: Boolean(figmaOauthToken.value),
   };
+  return { auth, figmaApiKey, figmaOauthToken };
+}
 
-  return auth;
+export function resolveAuth(flags: CredentialFlags): FigmaAuthOptions {
+  return resolveFigmaCredentials(flags).auth;
+}
+
+// Only explicit proxy config: standard env vars (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) are handled by
+// undici's EnvHttpProxyAgent at the dispatcher level, which correctly respects NO_PROXY exclusions.
+export function resolveProxy(flags: { proxy?: string }) {
+  return resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
+}
+
+/**
+ * Telemetry is enabled by default. Any single opt-out signal disables it —
+ * the `--no-telemetry` flag, FRAMELINK_TELEMETRY=off, or a truthy DO_NOT_TRACK.
+ * Signals are OR'd, not prioritized, so users can't accidentally re-enable
+ * telemetry by setting one variable when another is already opting out.
+ *
+ * DO_NOT_TRACK follows the https://consoledonottrack.com/ convention: any
+ * non-empty value other than "0" means opt-out.
+ */
+export function resolveTelemetryEnabled(optOut?: boolean): boolean {
+  if (optOut === true) return false;
+  if (envStr("FRAMELINK_TELEMETRY") === "off") return false;
+  const doNotTrack = envStr("DO_NOT_TRACK");
+  if (doNotTrack && doNotTrack !== "0") return false;
+  return true;
 }
 
 /**
@@ -150,12 +174,8 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   const envFilePath = loadEnvFile(flags.env);
   const envFileSource: Source = flags.env !== undefined ? "cli" : "default";
 
-  // Auth
-  const auth = resolveAuth(flags);
-
   // Resolve config values: CLI flag → env var → default
-  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
-  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
+  const { auth, figmaApiKey, figmaOauthToken } = resolveFigmaCredentials(flags);
   const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), DEFAULT_HTTP_PORT);
   const host = resolve(flags.host, envStr("FRAMELINK_HOST"), DEFAULT_HTTP_HOST);
   const skipImageDownloads = resolve(
@@ -170,10 +190,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     process.cwd(),
   );
 
-  // Only resolve explicit proxy config here. Standard env vars (HTTPS_PROXY, HTTP_PROXY,
-  // NO_PROXY) are handled by undici's EnvHttpProxyAgent at the dispatcher level, which
-  // correctly respects NO_PROXY exclusions.
-  const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
+  const proxy = resolveProxy(flags);
 
   // --format wins; --json is a back-compat alias for --format=json. Invalid
   // user-supplied values fail loudly at startup rather than silently coercing.
@@ -193,11 +210,11 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   // repo in the common launch shape.
   const { assetRoot, framelinkApiUrl } = resolvePluginConfig(flags.assetRoot);
 
-  const noTelemetry = flags.noTelemetry ?? false;
+  const telemetryEnabled = resolveTelemetryEnabled(flags.noTelemetry);
   const telemetrySource: Source =
     flags.noTelemetry === true
       ? "cli"
-      : process.env.FRAMELINK_TELEMETRY !== undefined || process.env.DO_NOT_TRACK !== undefined
+      : envStr("FRAMELINK_TELEMETRY") !== undefined || envStr("DO_NOT_TRACK") !== undefined
         ? "env"
         : "default";
 
@@ -246,7 +263,6 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     console.log(
       `- FRAMELINK_API_URL: ${framelinkApiUrl.value} (source: ${configSources.framelinkApiUrl})`,
     );
-    const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
     );
@@ -262,7 +278,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     skipImageDownloads: skipImageDownloads.value,
     imageDir: imageDir.value,
     isStdioMode,
-    noTelemetry,
+    telemetryEnabled,
     codeMode: codeMode.value,
     assetRoot: assetRoot.value,
     framelinkApiUrl: framelinkApiUrl.value,

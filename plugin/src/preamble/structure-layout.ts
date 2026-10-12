@@ -8,7 +8,7 @@ import { unrotatedCornerOf } from "./pivot.js";
 import { convertSizing } from "@framelink/core";
 
 /** Per-axis intent wins as a unit: an explicit hug/fill/percent never retains old fixed pixels. */
-export function mergePlacementLayout(inherited: WriteLayout, explicit: WriteLayout = {}): WriteLayout {
+function mergePlacementLayout(inherited: WriteLayout, explicit: WriteLayout = {}): WriteLayout {
   const result: WriteLayout = { ...inherited, ...explicit,
     sizing: { ...inherited.sizing, ...explicit.sizing },
     dimensions: { ...inherited.dimensions, ...explicit.dimensions },

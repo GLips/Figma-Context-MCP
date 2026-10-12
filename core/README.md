@@ -18,26 +18,30 @@ Two gates in `tests/` enforce this: `figma-free.test.ts` (no REST types) and
 ## Entry point
 
 ```typescript
-import { simplify } from "@framelink/core";
+import { simplify, project } from "@framelink/core";
 
-// Expanded output (default): every style value inline, no refs, no crypto
-const { nodes } = await simplify(snapshots);
+// Stage 1 — the walk: the expanded runtime tree, every style value inline
+const full = await simplify(snapshots);
 
-// Egress form: deduplicated style refs + templates (what the REST tool ships)
-const { nodes, styles, templates } = await simplify(snapshots, { compress: true });
+// Stage 2 — egress projection: depth cuts, deduplicated style refs + templates (what the REST tool ships)
+const { nodes, styles, templates } = project(full, { compress: true, maxDepth });
 ```
 
 `simplify` is async: it awaits an injectable cooperative-yield scheduler
 (`options.scheduler`) so servers can keep heartbeats live on large files.
-Callers without that need just await the promise.
+Callers without that need just await the promise. Its result always carries
+empty `styles`/`templates`; only `project` fills them.
 
 ## Layers
 
-1. `simplify.ts` — the whole spine: the entry picks a style table, then a
-   single-pass walk extracts geometry/layout, text, visuals, and component data
-   from each node (and collapses SVG-heavy containers bottom-up)
-2. `style-table.ts` — where the walk interns style values; the table decides
+1. `simplify.ts` — the walk: a single pass extracts geometry/layout, text,
+   visuals, and component data from each node (and collapses SVG-heavy
+   containers bottom-up). It records producer facts in `read-context.ts` for
+   the projection stage.
+2. `project.ts` — the egress projection: picks the style table, applies
+   `maxDepth` and `elided` cuts, and runs compression. Never mutates its input.
+3. `style-table.ts` — where `project` interns style values; the table decides
    inline emission (expanded) vs content-addressed refs (compressing)
-3. `compress.ts` — opt-in egress compression: count-gated style hoisting +
-   element templates (needs whole-tree counts, so it runs after the walk)
-4. `transformers/` — pure per-property conversions (layout, text, style, effects, component)
+4. `compress.ts` — opt-in egress compression: count-gated style hoisting +
+   element templates (needs whole-tree counts, so it runs over the projected tree)
+5. `transformers/` — pure per-property conversions (layout, text, style, effects, component)

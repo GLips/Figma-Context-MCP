@@ -13,17 +13,14 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { image, id } from "./flcm.js";
-import { render } from "./render.js";
-import {
-  append,
+import { render, append,
   prepend,
   insertBefore,
   insertAfter,
   remove,
   clone,
   measure,
-  replace,
-} from "./structure.js";
+  replace, } from "./structure.js";
 import { get } from "./read.js";
 import { readKey } from "./identity.js";
 

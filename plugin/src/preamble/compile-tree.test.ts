@@ -10,9 +10,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { compileTree } from "./compile-tree.js";
-import { render } from "./render.js";
 import { component } from "./component.js";
-import { append } from "./structure.js";
+import { render, append } from "./structure.js";
 import { get } from "./read.js";
 import { id } from "./flcm.js";
 

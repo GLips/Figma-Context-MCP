@@ -13,9 +13,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 
-import { render } from "./render.js";
 import { component, variants } from "./component.js";
-import { append } from "./structure.js";
+import { render, append } from "./structure.js";
 import { edit } from "./edit.js";
 
 // A bare component to swap in — the value an `instance_swap` property points at.
@@ -293,6 +292,14 @@ test("flcm.variants folds components into a set an instance selects from", async
     componentProperties: { Size: "Large", State: "Hover" },
   });
   assert.equal((await figma.getNodeByIdAsync(out.id)).mainComponent, live.children[2]);
+});
+
+test("a binding meets its definition on one trimmed spelling", async () => {
+  createFigmaMock();
+  await component(
+    { type: "FRAME", width: 10, height: 10, children: [{ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Label " } }] },
+    { propertyDefinitions: { " Label": { type: "text" } } },
+  );
 });
 
 test("what a component call refuses, with zero writes", async () => {

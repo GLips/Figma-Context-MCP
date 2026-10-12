@@ -92,7 +92,7 @@ const NULL_RESTORE: Record<string, unknown> = {
  * `delta` rides along because the plan is compiled AGAIN inside the sealed span, against the live
  * sublayer as it stands after this call's own retarget (applyOverridePlans).
  */
-export interface OverridePlan { path: string; delta: EditDelta | undefined; plan: EditPlan; slotContent?: WriteNode[] }
+interface OverridePlan { path: string; delta: EditDelta | undefined; plan: EditPlan; slotContent?: WriteNode[] }
 
 /**
  * What the sync planners resolve against: the targets prepare resolved, and — in the gate — the
@@ -159,7 +159,7 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
   for (const wn of instances) {
     const { plan, overrides } = (() => {
       try { return planInstanceNode(wn, planning); }
-      catch (cause) { throw new Error((wn.sourcePath ?? "INSTANCE") + ": " + String(cause)); }
+      catch (cause) { throw new Error((wn.sourcePath ?? "INSTANCE") + ": " + (cause instanceof Error ? cause.message : String(cause))); }
     })();
     needs.plans.set(wn, plan);
     for (const o of overrides) {
@@ -228,7 +228,7 @@ function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: In
 
 // ---- the component ----
 
-export interface ResolvedComponent {
+interface ResolvedComponent {
   /** The component to stamp before any variant selection: a set's default, or the named one. */
   base: any;
   /** The set, when the base is a variant — the owner of the property definitions. */
@@ -247,7 +247,7 @@ function resolvedFromComponent(node: any): ResolvedComponent {
  * with one sentence. Sync, from a node prepare already resolved: a set's default variant is a live
  * fact, read where every live fact is read.
  */
-export function resolveComponentNode(node: any, subject: string): ResolvedComponent {
+function resolveComponentNode(node: any, subject: string): ResolvedComponent {
   if (node.type === "COMPONENT_SET") return { base: node.defaultVariant, set: node };
   if (node.type === "COMPONENT") return resolvedFromComponent(node);
   const who = describeNodeIdentity(node);

@@ -1,6 +1,7 @@
 import { gapShorthand, type SimplifiedLayout } from "./common.js";
 import { bindNumber } from "../bound-values.js";
 import { variableReference } from "../../tokens.js";
+import { pixelRound } from "../../utils.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 
 export function convertJustifyContent(align?: NodeSnapshot["primaryAxisAlignItems"]) {
@@ -49,11 +50,16 @@ export function buildFlexGap(
   n: NodeSnapshot,
   mode: "row" | "column",
 ): SimplifiedLayout["gap"] | undefined {
-  const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
-  const counterGap =
-    n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
+  const primaryGap =
+    n.primaryAxisAlignItems === "SPACE_BETWEEN" || n.itemSpacing === undefined
       ? undefined
-      : n.counterAxisSpacing;
+      : pixelRound(n.itemSpacing);
+  const counterGap =
+    n.layoutWrap !== "WRAP" ||
+    n.counterAxisAlignContent === "SPACE_BETWEEN" ||
+    n.counterAxisSpacing === undefined
+      ? undefined
+      : pixelRound(n.counterAxisSpacing);
   const primaryRef = primaryGap === undefined ? undefined : n.boundVariables?.itemSpacing;
   const counterRef = counterGap === undefined ? undefined : n.boundVariables?.counterAxisSpacing;
 

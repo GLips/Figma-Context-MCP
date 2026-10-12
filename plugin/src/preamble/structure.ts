@@ -7,6 +7,7 @@ import type { WarningRecord } from "./warnings.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import { compileTree, treeNodes } from "./compile-tree.js";
+import { isTargetShaped } from "./flcm.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 // structure — the tree-shape verbs (sibling to edit.ts, the field-level one). Position is the
 // VERB, DOM-style: `append`/`prepend` take the parent, `insertBefore`/`insertAfter` take a sibling
@@ -129,10 +130,6 @@ function assertNoCycle(subject: string, node: any, destination: any): void {
         (node === destination ? "itself" : "its own descendant " + JSON.stringify(destination.name)) + ".",
     );
   }
-}
-
-function isTargetShaped(thing: object): boolean {
-  return "id" in thing || "__flcmId" in thing;
 }
 
 // ---- destination resolution ----
@@ -347,7 +344,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       return Promise.reject(error);
     }
   }
-  const isDestination = typeof propsOrParent === "string" || !!propsOrParent && typeof propsOrParent === "object" && isTargetShaped(propsOrParent);
+  const isDestination = typeof propsOrParent === "string" || isTargetShaped(propsOrParent);
   const props = isDestination ? undefined : propsOrParent as EditDelta | undefined;
   const destination = isDestination ? propsOrParent as Target : parent;
   return enterMutatingVerb(
@@ -398,9 +395,10 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
         if (edit) {
           const plan = { ...edit, node: copy };
           applyEditPlanWrites(fail, plan, resources);
-          settleSiblingOrder(resources);
           settleEditPlanSizes(fail, plan);
           settleEditPlanPositions(fail, plan);
+          // Last, as edit and editMany settle it: a reorder never lands between a delta's writes and its settles.
+          settleSiblingOrder(resources);
         }
         return mintHandle(copy);
       } catch (cause) {

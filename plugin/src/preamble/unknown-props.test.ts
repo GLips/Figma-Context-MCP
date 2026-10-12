@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { render } from "./render.js";
+import { render } from "./structure.js";
 // Unknown-prop rejection (ratified decision 1): the authoring surface fails loud on an unknown prop —
 // at the verb, before it touches the canvas. Two
 // concerns pinned here:
@@ -22,6 +22,7 @@ import {
   effects,
 } from "./flcm.js";
 import { find } from "./read.js";
+import { compileTree } from "./compile-tree.js";
 import {
   FIELD_GROUPS,
   SizeSchema,
@@ -136,6 +137,12 @@ test("nested authoring objects reject unknown keys with a path-threaded error", 
     render({ type: "FRAME", constraints: { z: "left" } as never }),
     /unknown prop "z" on constraints/,
   );
+});
+
+test("an svg VECTOR's layout typo rejects exactly like a RECTANGLE's", () => {
+  const layout = { alignSelff: "stretch" };
+  assert.throws(() => compileTree({ type: "RECTANGLE", layout }, "flcm.render"), /unknown prop "alignSelff" on RECTANGLE\.layout/);
+  assert.throws(() => compileTree({ type: "VECTOR", svg: "<svg></svg>", layout }, "flcm.render"), /unknown prop "alignSelff" on VECTOR\.layout/);
 });
 
 test("a run delta rejects an unknown key, naming the run index", async () => {

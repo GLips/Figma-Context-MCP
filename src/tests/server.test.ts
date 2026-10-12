@@ -193,9 +193,8 @@ describe("Process-level HTTP startup", () => {
         reject(new Error("Server did not become ready within 15 seconds"));
       }, 15_000);
 
-      // Logger.isHTTP is not set until the first request, so startup logs
-      // go to stderr. The config block logs to stdout via console.log.
-      // Watch both streams to catch the "listening" message regardless.
+      // Logger writes to stdout in HTTP mode and stderr otherwise; the config block logs to
+      // stdout via console.log. Watch both streams to catch the "listening" message regardless.
       const onData = (chunk: Buffer) => {
         if (chunk.toString().includes(`HTTP server listening on port ${TEST_PORT}`)) {
           clearTimeout(timeout);

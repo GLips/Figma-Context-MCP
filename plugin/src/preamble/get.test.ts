@@ -9,8 +9,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id, get, effects } from "./flcm.js";
-import { render } from "./render.js";
+import { id, effects } from "./flcm.js";
+import { get } from "./read.js";
+import { render } from "./structure.js";
 
 test("get on a frame returns the expanded canonical shape — values inline, children included", async () => {
   createFigmaMock();

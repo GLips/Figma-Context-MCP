@@ -17,13 +17,13 @@ test("revoke before delayed restore stays revoked after reopening", async () => 
   let persisted = ["old"];
   const approvals = createApprovalLifecycle({ load: () => load.promise, save: async (t) => { persisted = t; } }, assert.fail);
   const revoke = approvals.revokeAll();
-  assert.equal(approvals.has("old"), false);
+  assert.equal(approvals.approval("old"), "unknown");
   load.resolve(["old"]);
   await revoke;
-  assert.equal(approvals.has("old"), false);
+  assert.equal(approvals.approval("old"), "unapproved");
   const reopened = createApprovalLifecycle({ load: async () => persisted, save: async () => {} }, assert.fail);
   await reopened.ready;
-  assert.equal(reopened.has("old"), false);
+  assert.equal(reopened.approval("old"), "unapproved");
 });
 
 test("Allow and revoke persist in order and gates stay closed during a pending write", async () => {
@@ -36,12 +36,12 @@ test("Allow and revoke persist in order and gates stay closed during a pending w
   const allow = approvals.allow("new");
   const revoke = approvals.revoke("new");
   await Promise.resolve();
-  assert.equal(approvals.has("new"), false);
+  assert.equal(approvals.approval("new"), "unknown");
   saving.resolve();
   await Promise.all([allow, revoke]);
   assert.deepEqual(writes, [["new"], []]);
-  assert.equal(approvals.has("new"), false);
-  assert.equal(approvals.has("unknown"), false);
+  assert.equal(approvals.approval("new"), "unapproved");
+  assert.equal(approvals.approval("unknown"), "unapproved");
 });
 
 test("storage failures surface, Allow fails closed, and revoke remains effective in memory", async () => {
@@ -49,8 +49,8 @@ test("storage failures surface, Allow fails closed, and revoke remains effective
   const approvals = createApprovalLifecycle({ load: async () => ["old"], save: async () => { throw new Error("disk"); } }, (e) => errors.push(e));
   await approvals.ready;
   await assert.rejects(approvals.allow("new"), /disk/);
-  assert.equal(approvals.has("new"), false);
+  assert.equal(approvals.approval("new"), "unapproved");
   await assert.rejects(approvals.revoke("old"), /disk/);
-  assert.equal(approvals.has("old"), false);
+  assert.equal(approvals.approval("old"), "unapproved");
   assert.equal(errors.length, 2);
 });

@@ -16,11 +16,10 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { id } from "./flcm.js";
-import { render } from "./render.js";
 import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { append } from "./structure.js";
+import { render, append } from "./structure.js";
 import { get } from "./read.js";
 
 let figma = createFigmaMock();
@@ -223,6 +222,43 @@ test("a bag may rename onto a name it deletes, whatever order its keys are writt
   assert.deepEqual(names.sort(), ["Icon", "Trailing"]);
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Icon")].type, "TEXT");
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Icon"));
+});
+
+test("a bag that lands two properties on one name refuses whatever its key order, and a swap lands either way", async () => {
+  const { comp, icon, label } = await chipComponent();
+  const before = figma.undoLog.length;
+  for (const bag of [
+    { Label: { name: "Caption" }, Caption: { type: "boolean" as const } },
+    { Caption: { type: "boolean" as const }, Label: { name: "Caption" } },
+  ]) {
+    await assert.rejects(
+      editMany([{ id: comp.id, propertyDefinitions: bag }, { id: icon.id, componentPropertyReferences: { visible: "Caption" } }]),
+      /another entry of this bag also lands on "Caption"/,
+    );
+  }
+  assert.deepEqual(figma.undoLog.slice(before), []);
+  const iconFull = fullName(comp, "Icon");
+  const labelFull = fullName(comp, "Label");
+  await edit(id(comp.id), { propertyDefinitions: { Icon: { name: "Label" }, Label: { name: "Icon" } } });
+  assert.equal(comp.componentPropertyDefinitions[icon.componentPropertyReferences.visible].type, "BOOLEAN");
+  assert.equal(bare(icon.componentPropertyReferences.visible), "Label");
+  assert.equal(bare(label.componentPropertyReferences.characters), "Icon");
+  assert.notEqual(icon.componentPropertyReferences.visible, iconFull);
+  assert.notEqual(label.componentPropertyReferences.characters, labelFull);
+});
+
+// The entry naming the deleted property is a NEW declaration, judged as one — never a restatement
+// of the property the same bag deletes, which would drop it without a word.
+test("a bag that deletes a property and declares its name again re-declares it rather than dropping the entry", async () => {
+  const { comp } = await chipComponent();
+  const old = fullName(comp, "Label");
+  const before = figma.undoLog.length;
+  await assert.rejects(
+    edit(id(comp.id), { propertyDefinitions: { [old]: null, Label: { type: "text" } } }),
+    /\["Label"\]: nothing in this call binds "Label"/,
+  );
+  assert.deepEqual(figma.undoLog.slice(before), []);
+  assert.equal(fullName(comp, "Label"), old);
 });
 
 test("propertyDefinitions DELETES a property — the sublayer is freed and instances fall back", async () => {

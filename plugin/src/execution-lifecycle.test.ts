@@ -72,8 +72,8 @@ function host(native: Record<string, unknown> = {}) {
     simulateRemoteEdit() {
       emitNodeChange("REMOTE");
     },
-    ...native,
     clientStorage: { getAsync: async () => [], setAsync: async () => {} },
+    ...native,
     ui: {
       postMessage: record,
       onmessage: (_inbound: Record<string, unknown>) => {},
@@ -239,6 +239,58 @@ test("an Allow given while a session is away reaches only the connection present
   assert(!h.frames.some((f) => f.type === "EXECUTE_CODE_RESULT"));
 });
 
+test("an approved session's write waits out another session's pending Allow instead of re-prompting", async () => {
+  let saving: Promise<void> = Promise.resolve();
+  const h = host({ clientStorage: { getAsync: async () => [], setAsync: () => saving } });
+  await h.connect(1);
+  // Session 2 asks, and the human's Allow for it is still being written when session 1 writes.
+  h.send({ type: "WS_CONNECTED", __connKey: 2 });
+  h.send({ type: "SESSION_INFO", id: "session-2", __connKey: 2, identity: "other" });
+  let landed!: () => void;
+  saving = new Promise((resolve) => { landed = resolve; });
+  h.send({ type: "UI_DECISION", approve: true, __connKey: 2 });
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })";
+  h.send({ type: "EXECUTE_CODE", id: "run", __connKey: 1, preamble, code: "return 'ran';" });
+  h.send({ type: "APPROVAL_STATUS", id: "status", __connKey: 1 });
+  assert(!h.frames.some((f) => f.__connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
+  landed();
+  assert.equal((await h.result("run", 1)).result, "ran");
+  assert.equal((await h.frame((f) => f.id === "status", "the status answer")).type, "APPROVAL_GRANTED");
+  assert(!h.frames.some((f) => f.__connKey === 1 && (f.type === "PENDING_APPROVAL" || f.type === "SESSION_CLAIM")));
+});
+
+test("SESSION_INFO keeps what the connection already holds: its claim and an Allow in flight", async () => {
+  let saving: Promise<void> = Promise.resolve();
+  const h = host({ clientStorage: { getAsync: async () => [], setAsync: () => saving } });
+  await h.frame((f) => f.type === "RENDER", "the first paint");
+  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  // A write that beats the handshake is refused and gives this socket a claim.
+  h.send({ type: "SCREENSHOT", id: "early", __connKey: 1 });
+  const claim = (await h.frame((f) => f.type === "SESSION_CLAIM", "a session claim")).sessionClaim;
+  h.send({ type: "SESSION_INFO", id: "session-1", __connKey: 1, identity: "/proj" });
+  // Its next ask goes on under the claim it already holds; a second would orphan the first.
+  h.send({ type: "APPROVAL_STATUS", id: "ask", __connKey: 1 });
+  assert.deepEqual(h.frames.filter((f) => f.type === "SESSION_CLAIM").map((f) => f.sessionClaim), [claim]);
+  let landed!: () => void;
+  saving = new Promise((resolve) => { landed = resolve; });
+  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  // The server introduces itself again while the Allow is being written.
+  h.send({ type: "SESSION_INFO", id: "session-1b", __connKey: 1, identity: "/proj" });
+  landed();
+  await h.approved(1);
+});
+
+test("a peer that has not been approved learns nothing from PING and can't author a toast", async () => {
+  const toasts: string[] = [];
+  const h = host({ notify: (message: string) => toasts.push(message) });
+  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  h.send({ type: "PING", id: "ping", __connKey: 1, payload: "x" });
+  h.send({ type: "NOTIFY", id: "notify", __connKey: 1, message: "Your file is corrupt — visit evil.example" });
+  assert.deepEqual({ ...h.frames.find((f) => f.id === "ping") }, { type: "PONG", echo: "x", id: "ping", __connKey: 1 });
+  assert.equal(toasts.length, 1);
+  assert(!toasts[0].includes("evil.example"));
+});
+
 test("the panel tells a waiting request from an expired one, connected or away", async () => {
   const h = host();
   await h.frame((f) => f.type === "RENDER", "the first paint");
@@ -331,7 +383,8 @@ test("a server frame can never act as the human's panel input", async () => {
     console,
   });
   vm.runInContext(script, ui);
-  const socket: Socket & { connectionKey?: number } = ui.sockets[9876];
+  // ui.html numbers socket generations in dial order, from 1: 9876 is 1, 9877 is 2.
+  const socket: Socket = ui.sockets[9876];
   socket.onopen();
   const fromServer = (frame: Record<string, unknown>) => socket.onmessage({ data: JSON.stringify(frame) });
   fromServer({ type: "SESSION_INFO", id: "session", identity: "rogue", framelinkOrigin: "https://evil.example" });
@@ -343,15 +396,15 @@ test("a server frame can never act as the human's panel input", async () => {
   fromServer({ type: "UI_OPEN_SIGN_IN" });
   // A barrier: a genuine Allow on a second session. Approval changes land in order, so once its
   // handover is out, any Allow a forged frame had started would have landed before it.
-  const second: Socket & { connectionKey?: number } = ui.sockets[9877];
+  const second: Socket = ui.sockets[9877];
   second.onopen();
   second.onmessage({ data: JSON.stringify({ type: "SESSION_INFO", id: "second", identity: "real" }) });
-  ui.decide(true, second.connectionKey);
-  await h.approved(second.connectionKey!);
+  ui.decide(true, 2);
+  await h.approved(2);
   fromServer({ type: "APPROVAL_STATUS", id: "status" });
   assert.equal(h.frames.find((f) => f.id === "status")?.type, "PENDING_APPROVAL");
   assert.equal(
-    h.frames.some((f) => (f.type === "SESSION_TOKEN" && f.__connKey === socket.connectionKey) || f.type === "WRITE_ACCESS_SIGN_IN"),
+    h.frames.some((f) => (f.type === "SESSION_TOKEN" && f.__connKey === 1) || f.type === "WRITE_ACCESS_SIGN_IN"),
     false,
   );
 });

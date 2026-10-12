@@ -25,7 +25,7 @@
 // own words (a rename must be part of the same step as whatever else the delta says), bindings land
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
-import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit } from "./ir.js";
+import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
 import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
@@ -45,7 +45,7 @@ import { own } from "./validate.js";
  * Applied in this order — deletes, then renames, then adds — so a delta that frees a name and
  * re-declares it lands the way it reads.
  */
-export interface ComponentDefinitionEditPlan {
+interface ComponentDefinitionEditPlan {
   description?: string;
   /** Full (suffixed) names to delete. */
   deletes: string[];
@@ -100,13 +100,36 @@ export function planAddedDefinitions(node: any, words: ComponentEditWords, subje
   if (!authored) return adds;
   const where = subject + ".propertyDefinitions";
   assertNotVariantMember(node, where);
-  const definitions = propertyDefinitionsOf(node);
+  const surviving = survivingDefinitions(node, authored, where).definitions;
   for (const name of Object.keys(authored)) {
     const entry = authored[name];
-    if (entry === null || matchPropertyNames(name, definitions).length) continue;
+    if (entry === null || matchPropertyNames(name, surviving).length) continue;
     adds.set(name, planAddedDefinition(name, entry, where + "[" + JSON.stringify(name) + "]"));
   }
   return adds;
+}
+
+/**
+ * The bag's deletes, resolved, and the live definitions left once they apply. Everything else in
+ * the bag is judged against what is LEFT — that is the order the writes land in — so an entry naming
+ * only a property the same bag deletes re-declares it rather than restating it, whatever the key order.
+ */
+function survivingDefinitions(
+  node: any, authored: ComponentPropertyDefinitionEdits, where: string,
+): { deletes: string[]; definitions: Record<string, any> } {
+  const live = propertyDefinitionsOf(node);
+  const deletes: string[] = [];
+  for (const name of Object.keys(authored)) {
+    if (authored[name] !== null) continue;
+    const at = where + "[" + JSON.stringify(name) + "]";
+    const full = resolvePropertyName(name, live, where);
+    assertNotVariantAxis(live[full], full, at, node);
+    if (deletes.indexOf(full) !== -1) throw new Error(at + ": another entry of this bag already deletes " + JSON.stringify(full) + " — name each property once.");
+    deletes.push(full);
+  }
+  const definitions: Record<string, any> = {};
+  for (const full of Object.keys(live)) if (deletes.indexOf(full) === -1) definitions[full] = live[full];
+  return { deletes, definitions };
 }
 
 /** The definition half of an edit; editMany calls it directly, with binders gathered across its entries. */
@@ -119,21 +142,12 @@ export function planComponentDefinitionEdit(
   if (!authored) return plan;
   const where = subject + ".propertyDefinitions";
   assertNotVariantMember(node, where);
-  const definitions = propertyDefinitionsOf(node);
-  // Every name this call will have made by the time it lands — what a rename must not collide with.
-  // Deletes are accounted FIRST, in their own pass, because that is the order they apply in: a bag
-  // that renames onto a name it also deletes is legal however the agent ordered its keys.
-  const taken = new Set(Object.keys(definitions).map(bareName));
-  const names = Object.keys(authored);
-  for (const name of names) {
-    if (authored[name] !== null) continue;
-    const at = where + "[" + JSON.stringify(name) + "]";
-    const full = resolvePropertyName(name, definitions, where);
-    assertNotVariantAxis(definitions[full], full, at, node);
-    plan.deletes.push(full);
-    taken.delete(bareName(full));
-  }
-  for (const name of names) {
+  const { deletes, definitions } = survivingDefinitions(node, authored, where);
+  plan.deletes = deletes;
+  // Every name the bag introduces (a rename's target, an add), with the entry to blame for it.
+  const introduced: { name: string; at: string }[] = [];
+  const changed = new Map<string, string>();
+  for (const name of Object.keys(authored)) {
     const entry = authored[name];
     if (entry === null) continue;
     const at = where + "[" + JSON.stringify(name) + "]";
@@ -141,17 +155,38 @@ export function planComponentDefinitionEdit(
     if (add) {
       add.defaultValue = agreedDefault(add, bindersOf(add), at, { inherited: FRESH_LAYER_SHOWS[add.figmaType], unboundRemedy: bindInSameBatch(name, add.type) });
       plan.adds.push(add);
-      taken.add(name);
+      introduced.push({ name, at });
       continue;
     }
     const full = resolvePropertyName(name, definitions, where);
-    const rename = planChangedDefinition(full, definitions[full], entry, at, node, taken);
+    const twin = changed.get(full);
+    if (twin !== undefined) throw new Error(at + ": " + twin + " already names " + JSON.stringify(full) + " — name each property once.");
+    changed.set(full, at);
+    const rename = planChangedDefinition(full, definitions[full], entry, at, node);
     if (rename === undefined) continue; // restates what the property already is: nothing to write
-    taken.delete(bareName(full));
-    taken.add(rename);
     plan.renames.push({ full, rename });
+    introduced.push({ name: rename, at });
   }
+  assertNoIntroducedDuplicate(definitions, plan.renames, introduced);
   return plan;
+}
+
+// Judged against the names the bag LEAVES, not one entry at a time, so the outcome can't depend on
+// key order: a swap (A→B, B→A) lands, and a rename and an add landing on one name refuse either way.
+// Only a name this bag introduces is checked — a duplicate already on the canvas isn't this call's.
+function assertNoIntroducedDuplicate(
+  surviving: Record<string, any>, renames: readonly { full: string }[], introduced: readonly { name: string; at: string }[],
+): void {
+  const renamedAway = new Set(renames.map((change) => change.full));
+  const kept = new Set(Object.keys(surviving).filter((full) => !renamedAway.has(full)).map(bareName));
+  introduced.forEach(({ name, at }, i) => {
+    const alsoIntroduced = introduced.some((other, j) => j !== i && other.name === name);
+    if (!kept.has(name) && !alsoIntroduced) return;
+    throw new Error(
+      at + ": " + (kept.has(name) ? "this component already has a property named " : "another entry of this bag also lands on ") + JSON.stringify(name) +
+        ". Figma allows the duplicate (the #suffix is the identity) but flcm doesn't — every later reference names a property by name and a duplicate has no way to say which.",
+    );
+  });
 }
 
 // A variant axis is not a property anyone declared — it comes from the member components' NAMES
@@ -187,7 +222,7 @@ function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdi
 // a read's own `{ type }` written back is a no-op, not a refusal. Returns the new name, or undefined
 // for an entry that changes nothing.
 function planChangedDefinition(
-  full: string, definition: any, entry: ComponentPropertyDefinitionEdit, at: string, node: any, taken: ReadonlySet<string>,
+  full: string, definition: any, entry: ComponentPropertyDefinitionEdit, at: string, node: any,
 ): string | undefined {
   if (definition.type === "VARIANT" && entry.name == null && restatesVariantAxis(definition, entry)) return undefined;
   assertNotVariantAxis(definition, full, at, node);
@@ -212,11 +247,6 @@ function planChangedDefinition(
       throw new Error(at + ".name is the property's new name — a non-empty string. Got " + JSON.stringify(entry.name) + ".");
     }
     const rename = entry.name.trim();
-    if (rename !== bareName(full) && taken.has(rename)) {
-      throw new Error(
-        at + ": this component already has a property named " + JSON.stringify(rename) + ". Figma allows the duplicate (the #suffix is the identity) but flcm doesn't — every later reference names a property by name and a duplicate has no way to say which.",
-      );
-    }
     if (rename !== bareName(full)) return rename;
     return undefined;
   }
@@ -348,7 +378,9 @@ export function prepareComponentBindingEdit(
       writes.push({ field, wire, full: null });
       continue;
     }
-    const add = matchPropertyNames(authored, definitions).length ? undefined : adds?.get(authored);
+    // The add wins over a live match: a name is only ever added when nothing the batch leaves
+    // standing answers to it, so a live match here is a property the same bag deletes.
+    const add = adds?.get(authored);
     if (add) {
       assertBindingFieldMatchesType(field, add.figmaType, authored, at);
       writes.push({ field, wire, full: null, add });
@@ -458,7 +490,7 @@ export interface ExistingPropertyBinding {
 }
 
 /** What the call does to the layers ALREADY bound to the properties it binds. */
-export interface StandingBinderFacts {
+interface StandingBinderFacts {
   /** True when this call rewrites `wire` on `node` (rebinds or unbinds it) or removes the node — its standing binding stops counting. */
   leaves(node: any, wire: string): boolean;
   /** What `node` will show for `field` if this call changes it; undefined when it doesn't. */
@@ -466,7 +498,7 @@ export interface StandingBinderFacts {
 }
 
 /** A default an existing property takes before the call's bindings land. */
-export interface BoundDefaultWrite {
+interface BoundDefaultWrite {
   owner: any;
   full: string;
   value: boolean | string;
@@ -638,7 +670,7 @@ export function prepareInsertBindings(
   subject: string, parent: any, tree: WriteNode, resources: RenderResources, removes: (node: any) => boolean = () => false,
 ): InsertBindingPlan | undefined {
   const bound: { wn: WriteNode; refs: ComponentPropertyBinding }[] = [];
-  collectBoundWriteNodes(tree, bound);
+  collectTreeBindings(tree, bound);
   if (!bound.length) return undefined;
   // A COMPONENT_SET destination is refused before this runs (structure.ts's assertBuiltInsertNotIntoSet),
   // so `component` is a standalone component or a set's VARIANT — the definition the slot rule counts in.
@@ -712,13 +744,13 @@ export function prepareInsertBindings(
   return plan;
 }
 
-// Every bound node in the tree, ROOT INCLUDED — unlike flcm.component's own walk, where the root
+// Every bound node in the tree, ROOT INCLUDED — unlike flcm.component's collectChildBindings, where the root
 // becomes the component and can't point at a property of itself. Here the root is an ordinary child
 // of the component it lands in, so binding it is exactly as meaningful as binding any other layer.
-function collectBoundWriteNodes(wn: WriteChild, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
+function collectTreeBindings(wn: WriteChild, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
   if (!wn || typeof wn !== "object") return;
   if (wn.componentPropertyReferences) out.push({ wn, refs: wn.componentPropertyReferences });
-  for (const child of wn.children || []) collectBoundWriteNodes(child, out);
+  for (const child of wn.children || []) collectTreeBindings(child, out);
 }
 
 /**
@@ -732,7 +764,7 @@ export function applyInsertBindings(plan: InsertBindingPlan, built: readonly Bou
   // Declaring a slot may make Figma materialize its own unpositioned 100×100 placeholder for the
   // hole — it does when a slot is declared through the UI, and whether this API call does it too is
   // an ASSUMPTION until the live probe runs. The frame this insert is binding IS the hole, so a
-  // placeholder beside it would be wrong pixels with no error: mint through declareSlotProperties,
+  // placeholder beside it would be wrong pixels with no error: mint through declareSlotProperty,
   // which sweeps whatever the call left behind.
   for (const name of plan.declaresSlots) suffixed[name] = declareSlotProperty(plan.owner, name);
   writeBindingReferences(built, suffixed);
@@ -742,11 +774,11 @@ export function applyInsertBindings(plan: InsertBindingPlan, built: readonly Bou
 // document with no node it didn't have. Nothing else can add a node during a sealed span, so a node
 // that appears across the call — and whose parent was already there — is Figma's own placeholder.
 function declareSlotProperty(owner: any, name: string): string {
-  const before = subtreeOf(owner);
+  const before = new Set(subtreeOf(owner));
   // "" is the value Figma stores for a slot: its content is the bound frame, never a value.
   const full: string = owner.addComponentProperty(name, "SLOT", "");
   for (const node of subtreeOf(owner)) {
-    if (before.indexOf(node) === -1 && before.indexOf(node.parent) !== -1) node.remove();
+    if (!before.has(node) && before.has(node.parent)) node.remove();
   }
   return full;
 }

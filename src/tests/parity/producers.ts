@@ -9,29 +9,27 @@ import type { LoadedScene } from "./scenes-io.js";
 /**
  * One case in the parity harness: a shared golden and the per-producer inputs
  * that must all reduce to it. `rest` is the REST wire response; `snapshot` is the
- * plan-neutral `NodeSnapshot[]` the plugin adapter produces (committed as the
- * read plan's concrete target — see snapshots/); `scene` is the plugin-native
- * fixture (roots + its token resolver) fed through the real `sceneNodeToSnapshot`
- * (null until a case's fixture lands — see scenes-io.ts).
+ * committed `NodeSnapshot[]` the REST adapter decodes it to (see snapshots/);
+ * `scene` is the plugin-native fixture (roots + its token resolver) fed through
+ * the real `sceneNodeToSnapshot` (see scenes-io.ts).
  */
 export interface ParityCase {
   /** Golden basename in ../goldens/expected and the snapshots/ fixture name. */
   name: string;
   rest: GetFileResponse | GetFileNodesResponse;
   snapshot: NodeSnapshot[];
-  scene: LoadedScene | null;
+  scene: LoadedScene;
 }
 
 /**
  * A producer turns a case into a `SimplifiedDesign` via the ONE shared core. The
  * only thing that varies between producers is how the `NodeSnapshot`s reach the
  * core; everything downstream is identical, which is the whole point of the
- * harness. Returns null when a case carries no input for this producer (the
- * plugin producer will return null until scene fixtures land).
+ * harness.
  */
 export interface ParityProducer {
   id: string;
-  produce(parityCase: ParityCase): Promise<SimplifiedDesign> | null;
+  produce(parityCase: ParityCase): Promise<SimplifiedDesign>;
 }
 
 /**
@@ -46,9 +44,9 @@ const restProducer: ParityProducer = {
 
 /**
  * Assemble a `SimplifiedDesign` from snapshots the way the plugin path does: the
- * one shared core and nothing else. The components sidecar comes from the CORE now, not
+ * one shared core and nothing else. The components sidecar comes from the core, not
  * from a response envelope — both producers fold the same provenance onto their nodes — so
- * it is compared like the tree rather than scoped out (pin 2, retired).
+ * it is compared like the tree.
  */
 async function designFromSnapshots(snapshots: NodeSnapshot[]): Promise<SimplifiedDesign> {
   const { nodes, styles, templates, components } = project(await simplify(snapshots), {
@@ -74,16 +72,13 @@ const snapshotProducer: ParityProducer = {
  * through the REAL `sceneNodeToSnapshot`, then the same core. The token resolver
  * reads the fixture's styles and variables tables, standing in for
  * `figma.getStyleByIdAsync` and `figma.variables.getVariableByIdAsync`.
- * Returns null (case skipped) until a case's fixture exists.
  */
 const sceneProducer: ParityProducer = {
   id: "scene",
-  produce: ({ scene }) => {
-    if (!scene) return null;
-    return Promise.all(
-      scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveToken)),
-    ).then(designFromSnapshots);
-  },
+  produce: ({ scene }) =>
+    Promise.all(scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveToken))).then(
+      designFromSnapshots,
+    ),
 };
 
 /** The registered producers; the harness fans over whatever is here. */

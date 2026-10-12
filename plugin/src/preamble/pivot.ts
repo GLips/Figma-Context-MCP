@@ -17,7 +17,7 @@ import { layoutModeOf } from "./layout-mode.js";
 interface Point { x: number; y: number }
 
 /** Whether the parent's auto-layout owns this node's translation. */
-export function isPlacedByFlow(node: any): boolean {
+function isPlacedByFlow(node: any): boolean {
   const parent = node.parent;
   return !!parent && layoutModeOf(parent).kind !== "free" && node.layoutPositioning !== "ABSOLUTE";
 }

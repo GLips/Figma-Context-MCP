@@ -2,7 +2,15 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-/** Ordered durable approvals. Gates stay closed during restoration and pending changes. */
+
+/**
+ * What the store can say about a token. "unknown" while the stored approvals are still loading or a
+ * change is being written: the gate stays closed, but nothing may treat it as a "no" and prompt the
+ * human — the caller waits for `settled` and asks again.
+ */
+export type ApprovalAnswer = "approved" | "unapproved" | "unknown";
+
+/** Ordered durable approvals. Restoration and every change run in one chain, in order. */
 export function createApprovalLifecycle(storage: {
   load(): Promise<unknown>;
   save(tokens: string[]): Promise<void>;
@@ -34,7 +42,12 @@ export function createApprovalLifecycle(storage: {
 
   return {
     ready,
-    has: (token: string) => loaded && pending === 0 && tokens.has(token),
+    /** Resolves once everything queued so far has landed. A change queued after may make it unknown again. */
+    get settled(): Promise<void> { return tail; },
+    approval(token: string): ApprovalAnswer {
+      if (!loaded || pending > 0) return "unknown";
+      return tokens.has(token) ? "approved" : "unapproved";
+    },
     get size() { return tokens.size; },
     allow(token: string) { return change(() => { tokens.add(token); }, () => { tokens.delete(token); }); },
     revoke(token: string) { return change(() => { tokens.delete(token); }); },

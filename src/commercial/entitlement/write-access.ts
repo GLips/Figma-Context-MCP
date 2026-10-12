@@ -16,8 +16,12 @@
 import { setTimeout as pause } from "node:timers/promises";
 import type { AuthorizingUser } from "~/commercial/plugin-bridge/approval.js";
 import { Logger } from "~/utils/logger.js";
-import { FramelinkApiUnavailableError, type FramelinkApiClient } from "./framelink-api.js";
-import type { WriteAccessState, WriteAccessStore } from "./write-access-store.js";
+import { FramelinkApiError, type FramelinkApiClient } from "./framelink-api.js";
+import type {
+  PersistedWriteAccessState,
+  WriteAccessState,
+  WriteAccessStore,
+} from "./write-access-store.js";
 import {
   allowanceExhaustedNotice,
   authorizeWriteExecution,
@@ -202,7 +206,8 @@ export class WriteAccess {
 
   /**
    * Re-check a signed-in Authorizing User's seat. Only a successful answer changes it: seat:false revokes,
-   * 401 (or a token bound to someone else) drops the token, and an outage leaves it exactly as it was.
+   * 401 (or a token bound to someone else) drops the token, and an outage or any other refusal leaves
+   * it exactly as it was.
    */
   async validateSeat(figmaUserId: string): Promise<void> {
     const cached = this.readState().seats[figmaUserId];
@@ -212,8 +217,8 @@ export class WriteAccess {
     try {
       result = await this.api.getWriteEntitlement(cached.token);
     } catch (err) {
-      if (!(err instanceof FramelinkApiUnavailableError)) throw err;
-      Logger.log(`Seat check unavailable, keeping the last validated seat: ${err.message}`);
+      if (!(err instanceof FramelinkApiError)) throw err;
+      Logger.log(`Seat check ${err.kind}, keeping the last validated seat: ${err.message}`);
       return;
     }
     this.updateState((state) => {
@@ -329,7 +334,9 @@ export class WriteAccess {
   }
 
   /** Every save carries the unsaved Writes along; they're dropped from memory only once one lands. */
-  private updateState(transform: (state: WriteAccessState) => WriteAccessState): WriteAccessState {
+  private updateState(
+    transform: (state: WriteAccessState) => WriteAccessState,
+  ): PersistedWriteAccessState {
     const unsaved = this.unpersistedWrites;
     const saved = this.store.update((state) =>
       transform({ ...state, ledger: mergeWriteLedgers(state.ledger, unsaved) }),
@@ -358,17 +365,21 @@ export class WriteAccess {
     const state = this.readState();
     if (state.seats[figmaUserId]?.seat === true) return;
     const executions = nextUsageReport(state.ledger, figmaUserId);
+    // The first report is what needs an installId, so it's minted here, not on a read.
+    const installId = state.installId ?? this.updateState((current) => current).installId;
     this.lastReportAt.set(figmaUserId, this.now().getTime());
     let response;
     try {
       response = await this.api.reportWriteUsage({
-        installId: state.installId,
+        installId,
         figmaUserId,
         executions,
       });
     } catch (err) {
-      if (!(err instanceof FramelinkApiUnavailableError)) throw err;
-      Logger.log(`Write usage report deferred: ${err.message}`);
+      if (!(err instanceof FramelinkApiError)) throw err;
+      Logger.log(
+        `Write usage report ${err.kind === "rejected" ? "rejected" : "deferred"}: ${err.message}`,
+      );
       return;
     }
     const updated = this.updateState((current) => ({
@@ -410,8 +421,14 @@ export class WriteAccess {
     try {
       signIn = await this.api.requestDeviceSignIn(figmaUserId);
     } catch (err) {
-      if (!(err instanceof FramelinkApiUnavailableError)) throw err;
-      notify({ kind: "sign-in-failed", message: "Couldn't reach Framelink. Try again shortly." });
+      if (!(err instanceof FramelinkApiError)) throw err;
+      notify({
+        kind: "sign-in-failed",
+        message:
+          err.kind === "rejected"
+            ? "Framelink turned down the sign-in request. Make sure Framelink MCP is up to date, then try again."
+            : "Couldn't reach Framelink. Try again shortly.",
+      });
       return;
     }
     if (this.lifetime.signal.aborted) return;
@@ -432,8 +449,10 @@ export class WriteAccess {
       try {
         poll = await this.api.pollDeviceToken(signIn.deviceCode);
       } catch (err) {
-        if (!(err instanceof FramelinkApiUnavailableError)) throw err;
-        continue; // a dropped poll is not an answer; the code is still good until it expires
+        if (!(err instanceof FramelinkApiError)) throw err;
+        // A dropped poll is not an answer; the code is still good until it expires.
+        if (err.kind === "unavailable") continue;
+        poll = { kind: "failed", error: err.message } as const;
       }
       if (this.lifetime.signal.aborted) return;
       if (poll.kind === "pending") continue;
@@ -446,6 +465,11 @@ export class WriteAccess {
         return;
       }
       if (poll.kind === "expired") break;
+      if (poll.kind === "failed") {
+        Logger.log(`Device sign-in failed: ${poll.error}`);
+        notify({ kind: "sign-in-failed", message: "The sign-in didn't go through. Start again." });
+        return;
+      }
       const seat = await this.adoptSignInToken(figmaUserId, poll.accessToken);
       if (!seat) {
         notify({
@@ -471,8 +495,8 @@ export class WriteAccess {
     try {
       result = await this.api.getWriteEntitlement(token);
     } catch (err) {
-      if (!(err instanceof FramelinkApiUnavailableError)) throw err;
-      Logger.log(`Seat check unavailable after sign-in, will re-check: ${err.message}`);
+      if (!(err instanceof FramelinkApiError)) throw err;
+      Logger.log(`Seat check ${err.kind} after sign-in, will re-check: ${err.message}`);
       result = null;
     }
     if (result && (result.kind === "invalid-token" || result.figmaUserId !== figmaUserId))

@@ -2,59 +2,21 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Durable approval: the server's on-disk memory of the sandbox-minted session token, so a single
-// human Allow survives a SERVER PROCESS restart (dev-watch save-restart, or a production
-// crash/respawn) — not just the WS reconnects the in-memory token already handled.
+// Durable approval (ADR-0008): the server's on-disk copy of the sandbox-minted session token, so one
+// Allow survives a server PROCESS restart. The plugin's `approvedTokens` Set stays the real gate; a
+// restarted server re-echoes the persisted token, which the plugin still recognizes.
 //
-// Why this is the whole fix, server-side only: the plugin's `approvedTokens` Set is the real gate
-// and it outlives any socket, so as long as the plugin stays open it still remembers the token. The
-// ONLY thing a restart lost was the SERVER's copy of that token (in-memory `PluginBridge.sessionToken`),
-// so it echoed `null` in SESSION_INFO and the plugin re-prompted. Persisting the token here lets the
-// restarted server re-echo it; the plugin recognizes it and stays approved. The plugin's honor path is
-// untouched.
+// Keyed by (cwd, PORT): same-cwd servers on distinct block ports must not reload each other's token,
+// or a denied sibling could override a human Deny. Accepted residual: a server that takes a dead peer's
+// freed port inherits that slot's approval, deliberately so via bridge.ts's RECLAIM_WINDOW_MS.
 //
-// Keyed by (cwd, PORT), not cwd alone. Multiple server processes can run from one project directory
-// (Cursor + Claude Code both spawn the server at the workspace root; Phase 3 supports N concurrent
-// servers on distinct block ports). Keying by cwd alone would collapse their distinct per-session
-// tokens into one shared file, letting a DENIED or second server reload a sibling's token after a
-// restart and appear approved — silently overriding a human Deny, the exact thing the minted-token
-// model exists to prevent. Adding the bound port to the key isolates each server: a restart that
-// RECLAIMS its port (the common single-server case — it frees the port on exit and re-probes to the
-// same base) reloads its own token; a concurrent sibling on another port inherits nothing and
-// re-prompts (fail-closed). Residual, deliberately accepted: a server that grabs a DEAD peer's exact
-// freed port loads that slot's token and inherits its approval — narrow, requires the peer to have
-// exited, and is "the approval of whoever holds this slot," which the WS_CONNECTED reset + token model
-// already govern.
-//
-// That residual is WIDER than it reads, because of the reclaim wait in bridge.ts (RECLAIM_WINDOW_MS):
-// a starting server no longer merely happens upon a freed approved port, it deliberately waits up to
-// 2s for one to free. So a same-cwd sibling starting while an approved peer is on its way out both
-// pays that wait and is more likely to land on — and inherit — the slot. Same trust boundary (one
-// local user, one project directory), same "approval of whoever holds this slot" semantics; the
-// window it happens in is simply no longer accidental.
-//
-// Security posture (deliberately documented, not just coded): persisting the token WIDENS the replay
-// surface. Before, the token lived only in RAM, harvestable by winning a race to a freed port during a
-// drop window. Now it also lives in a 0600 file, so an attacker can read it and bind the port at
-// leisure. Both reduce to the SAME trust boundary — the local user — who can already do far worse.
-// Consent remains the real gate for the first Allow; the token is defense-in-depth, never cryptographic
-// auth. Mitigations that keep this defensible: 0600 perms (enforced unconditionally via write-temp +
-// chmod + atomic rename, so an existing looser-perm file can't leak the token); a key derived from the
-// server's REAL cwd + port; a sliding TTL; and an explicit revoke path. What this does NOT defend
-// against — a compromised local user — was never in scope and still isn't.
+// The 0600 file widens the replay surface only to the local user, already the trust boundary.
+// Mitigations: forced 0600 via atomic rename, a REAL-cwd key, a sliding TTL, an explicit revoke.
 
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
 import { Logger } from "~/utils/logger.js";
 import { parseAuthorizingUser, type AuthorizingUser } from "./approval.js";
 
@@ -88,16 +50,6 @@ export function keyForCwd(cwd: string): string {
 /** A record is expired once it hasn't been used within the TTL. `now` is injected so this stays pure. */
 export function isExpired(record: ApprovalRecord, now: number, ttlMs: number = TTL_MS): boolean {
   return now - record.lastUsedAt > ttlMs;
-}
-
-// Base dir resolution order: an explicit override (tests, contract harness, unusual setups), then the
-// XDG state home, then ~/.framelink. Approval files land under `<base>/approvals/`.
-export function resolveStateDir(): string {
-  const explicit = process.env.FRAMELINK_STATE_DIR;
-  if (explicit) return explicit;
-  const xdg = process.env.XDG_STATE_HOME;
-  if (xdg) return join(xdg, "framelink");
-  return join(homedir(), ".framelink");
 }
 
 function safeRealpath(cwd: string): string {
@@ -309,24 +261,5 @@ export class ApprovalStore {
     }
     const approval = record as ApprovalRecord;
     return { ...approval, authorizingUser: parseAuthorizingUser(approval.authorizingUser) };
-  }
-}
-
-/**
- * Atomic 0600 write of a small state file: create a per-process temp file, force its mode
- * (guaranteeing 0600 regardless of umask or a pre-existing file's mode), then rename over the target.
- * Rename is atomic on one filesystem, so a concurrent reader sees the old or the new file, never a
- * torn one. Throws on IO failure — each caller decides what a lost write costs it.
- */
-export function writePrivateFileAtomic(file: string, contents: string): void {
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    writeFileSync(tmp, contents, { mode: 0o600 });
-    chmodSync(tmp, 0o600);
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
   }
 }

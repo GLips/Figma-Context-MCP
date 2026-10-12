@@ -286,7 +286,7 @@ A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a 
 | `minHeight` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
 | `maxHeight` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" \| { variable } | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
-| `height` | number \| "fill" \| "hug" \| "N%" \| { variable } | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
+| `height` | number \| "Npx" \| "N%" \| "fill" \| "hug" \| { variable } | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
 | `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
 | `top` | number \| "Npx" \| "N%" | As `left`. |
 | `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`. |
@@ -427,7 +427,7 @@ A LINE takes the placement words from Size & position, but not its size words, p
 | --- | --- | --- |
 | `stroke` | paint \| paint[] \| { style } | The line's paint. A paint { style } takes the whole slot. "none" removes it. |
 | `strokeWidth` | number \| "Npx" \| { variable } | Thickness. Defaults to 1. |
-| `width` | number \| "Npx" \| { variable } | The length: a number or { variable }, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent. |
+| `width` | number \| "Npx" \| "fill" \| { variable } | The length: a number or { variable }, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent. |
 | `rotation` | number (deg) | 90 makes it vertical. Needs a numeric `width`. |
 
 ### VECTOR — path props (`d` / `vectorPaths`)
@@ -629,7 +629,7 @@ Stacks are **top first**, as in CSS: the first shadow in `boxShadow` (or in a `s
 | `blur` | number \| { layer? } | A layer blur (blurs the node itself), in CSS px. |
 | `backgroundBlur` | number \| { background? } | A background blur (frosted glass — blurs what's behind), in CSS px. |
 | `glass` | true \| object | Native glass (refractive frosted pane) — no CSS equivalent, so object form only. `true` for a usable default pane, or { lightIntensity 0–1, lightAngle°, refraction 0–1, depth ≥1, dispersion 0–1, radius (frost px) }. Values are raw Figma units (not CSS-scaled). |
-| `noise` | true \| object | Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"\|"duotone"\|"multitone", color, secondaryColor, opacity, noiseSize, density }. Two fields are scoped to one `type` and are REJECTED on any other: `secondaryColor` is **duotone only**, and `opacity` is **multitone only** — on the default monotone grain it fails, so vary `density`/`color` alpha instead. Note: the running runtime does not accept a per-noise blendMode (typing-ahead-of-runtime), so it is not exposed. |
+| `noise` | true \| object | Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"\|"duotone"\|"multitone", color, secondaryColor, opacity, noiseSize, density }. Two fields are scoped to one `type` and are REJECTED on any other: `secondaryColor` is **duotone only**, and `opacity` is **multitone only** — on the default monotone grain it fails, so vary `density`/`color` alpha instead. |
 | `texture` | true \| object | Textured surface — object form only. `true` for a default, or { noiseSize, radius, clipToShape }. |
 | `progressiveBlur` | number \| object | A layer blur that ramps across the node — object form only. A number is the end radius; or { startRadius, endRadius, startOffset, endOffset }. Offsets are normalized 0–1 object space (default fade top→bottom: {x:0,y:0}→{x:0,y:1}). Raw Figma radii (not CSS-scaled). |
 | `progressiveBackgroundBlur` | number \| object | A background blur that ramps across the node (blurs what's behind, like `backgroundBlur`) — object form only. Same fields and defaults as `progressiveBlur`. |

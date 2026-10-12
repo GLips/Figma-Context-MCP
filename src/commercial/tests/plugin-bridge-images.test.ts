@@ -2,15 +2,22 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The server-side image trust boundary (Phase 3.2). The full guardedFetch needs the network, but its two
-// load-bearing guards are testable off-network: isBlockedAddress (SSRF range classification — the whole
-// point of the guard) against literal IPs, and processImageBytes (magic-byte type check + 4096px downscale)
-// against jimp-built buffers. A regression in either is exactly the silent-hole class the guard exists to
-// stop, so both earn a test. The DNS/redirect/streaming plumbing around them is verified by hand + review.
+// The server-side image trust boundary. Its load-bearing guards are testable without the internet:
+// isBlockedAddress (SSRF range classification) against literal IPs, the connect-time lookup against a
+// loopback hostname, and processImageBytes (magic-byte type check, header pixel cap, 4096px downscale)
+// against built buffers. A regression in any is exactly the silent-hole class the guard exists to stop.
+// Redirect and streaming plumbing is verified by hand and review.
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
-import { isBlockedAddress, processImageBytes } from "~/commercial/plugin-bridge/images.js";
+import {
+  fetchAndProcessImage,
+  isBlockedAddress,
+  processImageBytes,
+} from "~/commercial/plugin-bridge/images.js";
 
 const Jimp = createJimp({ formats: [png] });
 
@@ -80,4 +87,36 @@ test("processImageBytes rejects a decompression bomb by header dimensions before
   new DataView(bomb.buffer).setUint32(16, 8000); // IHDR width
   new DataView(bomb.buffer).setUint32(20, 8000); // IHDR height
   await assert.rejects(() => processImageBytes(bomb), /over the 30MP decode cap/);
+});
+
+test("processImageBytes sizes a JPEG past fill bytes, and refuses one whose header it can't size", async () => {
+  // SOI, then a run of 0xFF fill bytes before an SOF0 declaring 10000×10000 (100MP).
+  const filled = new Uint8Array([
+    0xff, 0xd8, 0xff, 0xff, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x27, 0x10, 0x27, 0x10, 0x03, 0, 0, 0,
+  ]);
+  await assert.rejects(() => processImageBytes(filled), /over the 30MP decode cap/);
+  // No SOF anywhere: jimp would be left to decode a raster of unknown size, so it never gets the bytes.
+  const unsized = new Uint8Array([0xff, 0xd8, 0xff, 0xd9, 0, 0, 0, 0, 0, 0, 0]);
+  await assert.rejects(() => processImageBytes(unsized), /could not read the image's dimensions/);
+});
+
+test("fetchAndProcessImage refuses a host that resolves to loopback without dialing it", async () => {
+  let dialed = false;
+  const server = createServer((_req, res) => {
+    dialed = true;
+    res.end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address() as AddressInfo;
+  try {
+    // "localhost" is not a literal, so only the connect-time lookup can catch it.
+    await assert.rejects(
+      () => fetchAndProcessImage(`http://localhost:${port}/x.png`),
+      /resolves to a blocked .* address/,
+    );
+    assert.equal(dialed, false);
+  } finally {
+    server.close();
+  }
 });

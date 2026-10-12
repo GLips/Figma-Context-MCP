@@ -16,13 +16,13 @@ import {
   shouldEmitFixedDimension,
 } from "./layout/common.js";
 import { buildFlexGap, convertAlignItems, convertJustifyContent } from "./layout/flex.js";
-import { buildGridChildPositioning, isPackedGrid } from "./layout/grid.js";
+import { buildGridChildPositioning, gridFacts, type GridFacts } from "./layout/grid.js";
 import { bindNumber, bindParts } from "./bound-values.js";
 import { variableReference } from "../tokens.js";
 import type { NodeGeometry, SimplifiedDimension, SimplifiedLayout } from "./layout/common.js";
 
 export type { NodeGeometry, SimplifiedDimension, SimplifiedLayout } from "./layout/common.js";
-export { computeGridChildOrder } from "./layout/grid.js";
+export { computeGridChildOrder, gridFacts, type GridFacts } from "./layout/grid.js";
 
 /**
  * Convert Figma's layout config into the canonical hybrid structure: container
@@ -33,26 +33,18 @@ export { computeGridChildOrder } from "./layout/grid.js";
 export function buildSimplifiedLayout(
   n: NodeSnapshot,
   parent?: NodeSnapshot,
+  // The walk passes the facts it computed once for all of `parent`'s children.
+  parentGrid: GridFacts | undefined = gridFacts(parent),
 ): { layout: SimplifiedLayout; geometry: NodeGeometry } {
   const layout = buildSimplifiedFrameValues(n);
-  const parentGridPacked =
-    isFrame(parent) && parent.layoutMode === "GRID" && parent.children
-      ? isPackedGrid(parent.children)
-      : undefined;
-  const parentIsGrid = parentGridPacked !== undefined;
 
   // Grid child properties: positioning, spans, alignment, and z-order
-  if (
-    isLayout(n) &&
-    parentGridPacked !== undefined &&
-    parent &&
-    n.layoutPositioning !== "ABSOLUTE"
-  ) {
-    Object.assign(layout, buildGridChildPositioning(n, parent, parentGridPacked));
+  if (isLayout(n) && parentGrid && parent && n.layoutPositioning !== "ABSOLUTE") {
+    Object.assign(layout, buildGridChildPositioning(n, parent, parentGrid));
   }
 
   // Flow layoutAlign's legacy alignment values do not render; STRETCH is captured by sizing.
-  return { layout, geometry: buildNodeGeometry(n, parent, layout.mode, parentIsGrid) };
+  return { layout, geometry: buildNodeGeometry(n, parent, layout.mode, !!parentGrid) };
 }
 
 function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
@@ -148,12 +140,10 @@ function buildNodeGeometry(
   const isRoot = parent === undefined;
   const geometry: NodeGeometry = {};
   const bound = n.boundVariables;
-  if (n.minWidth != null) geometry.minWidth = bindNumber(pixelRound(n.minWidth), bound?.minWidth);
-  if (n.maxWidth != null) geometry.maxWidth = bindNumber(pixelRound(n.maxWidth), bound?.maxWidth);
-  if (n.minHeight != null)
-    geometry.minHeight = bindNumber(pixelRound(n.minHeight), bound?.minHeight);
-  if (n.maxHeight != null)
-    geometry.maxHeight = bindNumber(pixelRound(n.maxHeight), bound?.maxHeight);
+  if (n.minWidth != null) geometry.minWidth = bindNumber(n.minWidth, bound?.minWidth);
+  if (n.maxWidth != null) geometry.maxWidth = bindNumber(n.maxWidth, bound?.maxWidth);
+  if (n.minHeight != null) geometry.minHeight = bindNumber(n.minHeight, bound?.minHeight);
+  if (n.maxHeight != null) geometry.maxHeight = bindNumber(n.maxHeight, bound?.maxHeight);
 
   // Per-axis width/height. Emit a concrete number only when the child isn't
   // stretching that axis and the sizing flag permits it. Stretch detection and
@@ -212,13 +202,12 @@ function buildNodeGeometry(
   if (horizontal.designed !== undefined) geometry.designedWidth = horizontal.designed;
   if (vertical.designed !== undefined) geometry.designedHeight = vertical.designed;
 
-  // Preserves historical behavior: aspectRatio is emitted only for
-  // column-parent children. Likely should apply more broadly — pre-existing.
-  // Measured on the OWN size, the same box width/height come from: the ratio sits
+  // Emitted only for children of a column parent; a proportion-locked node anywhere else
+  // reads without it. Measured on the OWN size, the same box width/height come from: the ratio sits
   // beside them and describes the same node, so reading it off the page-space AABB
   // would put a rotated node's shadow ratio next to its authored dimensions.
   if (!isRoot && axis === "column" && n.preserveRatio && size.height !== 0) {
-    geometry.aspectRatio = size.width / size.height;
+    geometry.aspectRatio = pixelRound(size.width / size.height);
   }
 
   // Emit positioning relative to parent unless the parent's auto-layout already

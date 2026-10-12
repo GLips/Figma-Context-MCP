@@ -5,8 +5,7 @@ import { loadScene } from "./scenes-io.js";
 
 /**
  * The parity cases: every golden fixture, each paired with its committed
- * plan-neutral snapshot and (where one exists yet) its plugin-native scene
- * fixture. The producer inputs must all reduce to the same shared view of the
+ * plan-neutral snapshot and its plugin-native scene fixture. The producer inputs must all reduce to the same shared view of the
  * golden. Reuses GOLDEN_FIXTURES so the parity target can never drift from the
  * byte-exact regression goldens.
  */

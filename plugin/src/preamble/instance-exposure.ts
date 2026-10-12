@@ -7,6 +7,8 @@ import type { WriteNode } from "./ir.js";
 export interface ExposureWrite { node: InstanceNode; value: boolean }
 export interface ExposureContext { destination?: BaseNode; componentRoot?: boolean }
 
+// The nearest INSTANCE or COMPONENT/SET above decides. An instance's sublayers are its component's
+// copies, and exposure is a definition fact: written there, it would have to go on the definition.
 function hasEditableComponentOwner(node: BaseNode | null | undefined): boolean {
   for (let parent = node; parent; parent = parent.parent) {
     if (parent.type === "INSTANCE") return false;
@@ -23,7 +25,7 @@ export function assertExposureTarget(node: SceneNode, subject: string): void {
 
 export function assertExposureTree(tree: WriteNode, context: ExposureContext = {}): void {
   function visit(node: WriteNode, owner: boolean): void {
-    if (node.exposed !== undefined && !owner) throw new Error("flcm: exposed needs an instance inside a component definition. Build it with flcm.component or insert it into an existing component.");
+    if (node.exposed !== undefined && !owner) throw new Error((node.sourcePath ?? "INSTANCE") + ": exposed needs an instance inside a component definition, and this one isn't — build it with flcm.component or insert it into an existing component.");
     for (const child of node.children || []) if (child && typeof child === "object") visit(child, owner && node.type !== "INSTANCE");
     for (const delta of Object.values(node.overrides || {})) {
       if (Array.isArray(delta.children)) for (const child of delta.children) if (child && typeof child === "object") visit(child as WriteNode, false);

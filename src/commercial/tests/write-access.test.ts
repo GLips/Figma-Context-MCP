@@ -214,7 +214,7 @@ describe("write authorization", () => {
     expect(notices.at(-1)).toMatchObject({ kind: "allowance-exhausted", signedIn: false });
   });
 
-  it("counts an execution id once, and takes the server's higher count from other devices", async () => {
+  it("counts an execution id once, and adds Writes not yet reported to the server's all-device count", async () => {
     const { app, writeAccess } = await setup();
     const executionId = randomUUID();
     writeAccess.recordWriteExecution(ALLOWANCE_AUTHORIZATION, executionId);
@@ -224,9 +224,12 @@ describe("write authorization", () => {
       usedThisMonth: 1,
     });
 
-    app.otherDeviceWrites = FREE_WRITE_ALLOWANCE - 1;
+    app.otherDeviceWrites = FREE_WRITE_ALLOWANCE - 2;
     await writeAccess.reportWriteUsage(TEST_AUTHORIZING_USER.figmaUserId);
     expect(app.reportedExecutionIds).toEqual([executionId]);
+    // During an outage the server's count can't grow, so the Writes it hasn't seen add to it.
+    app.down = true;
+    writeAccess.recordWriteExecution(ALLOWANCE_AUTHORIZATION, randomUUID());
     expect(await gateAnswer(writeAccess)).toMatchObject({
       kind: "refused",
       reason: "allowance-exhausted",
@@ -300,6 +303,26 @@ describe("write authorization", () => {
     expect(await gateAnswer(writeAccess)).toMatchObject({ kind: "refused" });
     await writeAccess.reportWriteUsage(USER_ID);
     expect(app.reportedExecutionIds.filter((id) => id === "late-writer")).toHaveLength(1);
+  });
+
+  it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {
+    const { writeAccess, store } = await setup();
+    await writeAccess.startDeviceSignIn(TEST_AUTHORIZING_USER);
+    chmodSync(store.file, 0o000);
+    cleanups.push(async () => chmodSync(store.file, 0o600));
+    await expect(gateAnswer(writeAccess)).rejects.toThrow(/EACCES/);
+    chmodSync(store.file, 0o600);
+    expect(store.read().seats[USER_ID]).toMatchObject({ token: "tok-1", seat: true });
+
+    // A state dir that has never taken a file and can't: the gate still answers from an empty state.
+    const fresh = createTestWriteAccess();
+    const freshDir = dirname(fresh.store.file);
+    chmodSync(freshDir, 0o500);
+    cleanups.push(async () => chmodSync(freshDir, 0o700));
+    expect(await gateAnswer(fresh.writeAccess)).toMatchObject({
+      kind: "authorized",
+      via: "allowance",
+    });
   });
 
   it("ends the seat on seat:false, and drops the token on a 401", async () => {

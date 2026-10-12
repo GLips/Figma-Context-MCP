@@ -109,14 +109,12 @@ export type SimplifiedPatternFill = {
  */
 export function translateScaleMode(
   scaleMode: "FILL" | "FIT" | "TILE" | "STRETCH",
-  hasChildren: boolean,
+  isBackground: boolean,
   scalingFactor?: number,
 ): {
   css: Partial<SimplifiedImageFill>;
   processing: NonNullable<SimplifiedImageFill["imageDownloadArguments"]>;
 } {
-  const isBackground = hasChildren;
-
   switch (scaleMode) {
     case "FILL":
       // Image covers entire container, may be cropped

@@ -12,20 +12,7 @@
 // any live node the guard let through (notably a logged node) to a stable { id, name, type }. Everything
 // else — a render Handle, a read POJO, an agent's own data — round-trips WHOLE.
 
-/**
- * The one true "is this a live Figma node" test. The id+type pair alone is too loose (an agent's own
- * `{ id, type }` data object, a render Handle, or a read POJO would all trip it), so we also require
- * `removed` — present on every BaseNode, absent on plain JSON the agent builds or any POJO the read/render
- * verbs return. This single discriminator is what lets safeSerialize collapse a live node while passing
- * every agent/handle/read shape through untouched.
- */
-export function looksLikeNode(
-  value: unknown,
-): value is { id: string; type: string; name?: unknown; removed: unknown } {
-  if (!value || typeof value !== "object") return false;
-  const o = value as Record<string, unknown>;
-  return typeof o.id === "string" && typeof o.type === "string" && "removed" in o;
-}
+import { looksLikeNode } from "./preamble/live-node.js";
 
 function findLiveNode(value: unknown, path: string, seen: Set<object>): { path: string; type: string } | null {
   if (value === null || typeof value !== "object" || seen.has(value)) return null;

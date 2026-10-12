@@ -6,7 +6,7 @@ import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js"
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
-import { createApprovalLifecycle } from "./approval-lifecycle.js";
+import { createApprovalLifecycle, type ApprovalAnswer } from "./approval-lifecycle.js";
 import {
   APPROVAL_WAITING_GRACE_MS,
   approvalRequestState,
@@ -51,41 +51,28 @@ figma.showUI(__html__, {
   title: "Framelink",
 });
 
-// Versions reported to the server over the frozen envelope on connect (server-initiated
-// GET_VERSION handshake). These are the SOURCE OF TRUTH for the plugin's wire identity:
-//   • PROTOCOL_VERSION — the envelope contract, plus the FlcmHost interface this host hands the
-//     preamble (preamble/host.ts). The server GATES on this; bump it ONLY on a breaking change to
-//     either (and the server's MIN with it). v2 = the mid-run image protocol (plugin-issued
-//     reverse image requests + run-scoped CANCEL). v3 = the server ships the flcm std-lib
-//     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object. v6 = the host
-//     answers isRunFinished, so a runtime the agent stored past its reply refuses instead of writing,
-//     and every CANCEL is answered (CANCEL_RESULT) with what this plugin knew about the run — the
-//     server has no other way to tell a caller whether its cancelled run ever executed.
+// The plugin's wire identity, answered to the server's GET_VERSION on connect.
+//   • PROTOCOL_VERSION — the envelope contract plus the FlcmHost interface this host hands the
+//     preamble (preamble/host.ts). The server GATES on it, so bump it only on a breaking change to
+//     either, in the same change as the server's MIN_PROTOCOL_VERSION — whose comment
+//     (src/commercial/plugin-bridge/version.ts) records what each version added.
+//     src/commercial/tests/protocol-version.test.ts fails a one-sided bump.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
-// v7 replaces image-specific host/wire methods with the opaque server channel.
-// v8 meters writes: EXECUTE_CODE_RESULT carries documentChanged (a later RUN_CHANGED corrects a "no"),
-// the Allow handover names its Authorizing User (figma.currentUser), SESSION_INFO names the Framelink origin,
-// and the panel speaks WRITE_ACCESS / WRITE_ACCESS_SIGN_IN with the server.
-// v9: RUN_STATE carries `at`, when the phase began by this plugin's clock, and FlcmHost hands the
-// preamble the same runStartedAt, so the server's inactivity deadline and the run's own copy of it
-// count from one instant.
 const PROTOCOL_VERSION = 9;
 const PLUGIN_VERSION = "0.1.0";
 
-// Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
-// approval decision and refuses to run writes for a session the human hasn't approved. The
-// server only introduces itself (SESSION_INFO) and formats the pending reply — it does not
-// own the approval bit.
+const SKEW_NOTICE =
+  `Framelink: a connected server needs a newer plugin than this one (v${PLUGIN_VERSION}), so nothing ` +
+  "was run. Re-import the latest Framelink plugin (Plugins → Development → Import plugin from " +
+  "manifest…), re-open it, then retry.";
+
+// The consent gate. The sandbox is the SOLE ARBITER: it holds the durable approval decision and
+// refuses to run writes for a session the human hasn't approved. The server only introduces itself
+// (SESSION_INFO) and formats the pending reply — it does not own the approval bit.
 //
-// Sticky approval is keyed on a TOKEN this sandbox mints on Allow — NOT on the server's
-// identity (project path), which is a human-readable label and therefore forgeable: a squatter
-// that grabbed the freed port could announce the same path and inherit a prior Allow. The token
-// is the auth key (Invariant "Approval keys on a minted session token, not a forgeable
-// identity"): minted here on Allow, handed to the approved server, and echoed back by that
-// server in every SESSION_INFO. A same-path squatter never received an Allow handover, so it
-// has no token and falls back to PENDING.
-//
-// Startup restoration and all approval changes share an ordered durable lifecycle.
+// Approval keys on a TOKEN this sandbox mints on Allow, never on the server's identity (a project
+// path — a forgeable label). The token is handed to the approved server and echoed back in every
+// SESSION_INFO; a same-path squatter never got the handover, so it has no token and is PENDING.
 const APPROVED_TOKENS_STORAGE_KEY = "code-mode:approved-tokens";
 let approvalStorageError: string | null = null;
 const approvedTokens = createApprovalLifecycle({
@@ -229,29 +216,44 @@ function scheduleExpiryRender(): void {
 // isApproved() first, so a token-less squatter grabbing the freed port inherits nothing.
 let activeKey: ConnKey | null = null;
 
+/** A connection with no token is definitely unapproved; one with a token waits on the store. */
+function approvalOf(key: ConnKey | undefined): ApprovalAnswer {
+  const conn = key === undefined ? undefined : connections.get(key);
+  if (!conn || conn.token === null) return "unapproved";
+  return approvedTokens.approval(conn.token);
+}
+
+type SettledApproval = Exclude<ApprovalAnswer, "unknown">;
+
+/** The connection's approval once the store has a definite answer. */
+async function settledApprovalOf(key: ConnKey | undefined): Promise<SettledApproval> {
+  for (;;) {
+    const answer = approvalOf(key);
+    if (answer !== "unknown") return answer;
+    await approvedTokens.settled;
+  }
+}
+
+/** Act on a definite answer: synchronously when the store already has one, else once it settles. */
+function whenApprovalKnown(key: ConnKey, then: (approval: SettledApproval) => void): void {
+  const answer = approvalOf(key);
+  if (answer !== "unknown") then(answer);
+  else void settledApprovalOf(key).then(then);
+}
+
 function isApproved(key: ConnKey): boolean {
-  const conn = connections.get(key);
-  return conn != null && conn.token !== null && approvedTokens.has(conn.token);
+  return approvalOf(key) === "approved";
 }
 
 /**
- * Mint a session token on Allow. Unlike the pairing code (a deliberately low-entropy
- * glance-and-compare check), this token is the sticky-approval key: it is handed to the approved
- * server and echoed back in SESSION_INFO to re-key approval on reconnect. What it buys: a squatter
- * that merely announces the same (forgeable) project-path identity no longer inherits approval —
- * it holds no token, so it re-prompts. That is the Slice 2.1b win.
+ * Mint a session token on Allow, or a session claim. The token is the sticky-approval key; a squatter
+ * that announces the same project path holds none, so it re-prompts.
  *
- * What it does NOT buy — and why Math.random is fine: the token is a localhost BEARER value, not a
- * cryptographic secret. The server re-discloses it in SESSION_INFO to whatever client currently
- * holds the slot, so an active local attacker that connects during a drop window can HARVEST the
- * token and later replay it from the freed port. Closing that needs cryptographic server auth,
- * which is explicitly out of scope for v1 (consent stays the real gate) — see the plan's "Left
- * open". Because an attacker who defeats this has already observed the value, generator strength
- * is moot; Math.random (no crypto in Figma's QuickJS sandbox) suffices to stop blind guessing.
- *
- * Session claims come from here too, and those reach UNAPPROVED servers, so a local process can draw
- * generator output on demand. That still buys nothing new: any local process can dial a real server
- * and read its token or claim straight from SESSION_INFO, the residual above.
+ * Why Math.random is fine (QuickJS has no crypto): the token is a localhost BEARER value. The server
+ * re-discloses it in SESSION_INFO, so a local attacker connecting during a drop window can harvest
+ * and replay it — closing that needs cryptographic server auth, out of scope; consent is the gate.
+ * An attacker who beats this has already seen the value, so generator strength is moot. Claims reach
+ * unapproved servers, so a local process can sample the generator — no worse than that residual.
  */
 function mintToken(): string {
   return (
@@ -338,7 +340,7 @@ function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
 }
 
-// ---- Mid-run server calls: the plugin→server reverse-request direction (protocol 7). ----
+// ---- Mid-run server calls: the plugin→server reverse-request direction. ----
 // The preamble suspends on an await while the server works; these tables
 // correlate the plugin-ISSUED requests with the server's responses. Deliberately a separate id
 // namespace ("preq-") and a separate pending table from the server's own requests: each side owns
@@ -413,8 +415,8 @@ function settleServerCall(msg: InboundMessage, connKey: ConnKey): void {
   pending.reject(error);
 }
 
-// Run cancellation (protocol 2's CANCEL made real). The policy, the run phase it reads, and the key
-// semantics live on the registry module — run-cancellation.ts — not here.
+// Run cancellation. The policy, the run phase it reads, and the key semantics live on the registry
+// module — run-cancellation.ts — not here.
 const cancelledRuns = createRunCancellationRegistry();
 
 /**
@@ -461,9 +463,8 @@ function rejectServerCalls(match: (p: PendingServerCall) => boolean, reason: str
 // First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
 // approve sessions you started") the FIRST time it is ever expanded, then never again. Durable via
 // clientStorage, same as approvedTokens above. Read once at startup into a sync flag so expanding
-// stays synchronous (no await in the hot path); the write-back is fire-and-forget. The startup read
-// resolves long before any session connects (it's local; SESSION_INFO needs a WS round-trip), so
-// the flag is settled by the first expand.
+// stays synchronous (no await in the hot path); the write-back is fire-and-forget. An expand that
+// beats the startup read shows the orientation once more — harmless, so nothing waits for it.
 const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 let hasSeenOrientation = false;
 void figma.clientStorage.getAsync(ORIENTATION_STORAGE_KEY).then((seen) => {
@@ -497,7 +498,7 @@ function sessionLabel(identity: string | null): string {
  * One row per live session, derived from the connection map. Forwards {identity, label, pairingCode}
  * plus the per-row state the UI renders from — `approved` (token in approvedTokens) and `active`
  * (holds the driving baton) — and `key` so the row's Allow/Deny/Revoke routes back to the right
- * connection. NEVER the session token, a localhost bearer credential (Slice 2.1b) not for display.
+ * connection. NEVER the session token, a localhost bearer credential not for display.
  */
 function panelSessions(): Array<{
   key: ConnKey;
@@ -513,6 +514,8 @@ function panelSessions(): Array<{
   // The session's latest approval request: still waiting on a call, or expired with nothing waiting
   // to run. Null for an approved session or one that has never asked.
   request: ApprovalRequestState | null;
+  // The human rejected this connected session; its calls are refused until an Allow.
+  rejected: boolean;
   // An away request the human already allowed; it applies when that session next connects.
   allowedWhileAway: boolean;
 }> {
@@ -531,6 +534,7 @@ function panelSessions(): Array<{
       connected: true,
       // A rejected session's call is being refused, not waiting; it isn't an open request either.
       request: approved || conn.rejected ? null : approvalRequestState(conn.askedAt, now),
+      rejected: !approved && conn.rejected === true,
       allowedWhileAway: false,
     });
   }
@@ -545,6 +549,7 @@ function panelSessions(): Array<{
       writeAccess: null,
       connected: false,
       request: "expired" as const,
+      rejected: false,
       allowedWhileAway: away.allowed !== undefined,
     });
   }
@@ -608,22 +613,27 @@ function resizeWindow(height: number): void {
  * The single write-gate decision and the enforcement point for the consent Invariant — owned in one
  * place so EXECUTE_CODE and SCREENSHOT (and any future write verb) can't drift. Consent is the ONLY
  * human decision: an unapproved session (or one with no source port — the fail-closed default) is
- * refused with PENDING_APPROVAL, and the strip expands so the human can Allow.
+ * refused with PENDING_APPROVAL, and the strip expands so the human can Allow — unless the human
+ * already rejected it, when the reply alone sends the agent to the REJECTED its status poll answers.
  *
- * An approved session that isn't the current driver simply TAKES the baton. Why NOT the old
- * INACTIVE_SESSION refusal: it made handoff reactive — the second session had to bump into a wall
- * before the human was even shown that it wanted to drive, and the human then had to click a switch
- * they never asked to arbitrate. Approval is the security boundary; ordering between the human's own
- * approved agents is a lock, and locks are the machine's job (see enqueueWrite).
+ * "unknown" (stored approvals loading, or a change being written) is admitted into the queue but
+ * never run: the dequeue gate asks again once the store settles. Prompting on it would ask an
+ * approved session to be approved again.
+ *
+ * An approved session that isn't the current driver simply TAKES the baton: approval is the security
+ * boundary, and ordering between the human's own approved agents is a lock (see enqueueWrite).
  */
-function gateWrite(to: ReplyTo): boolean {
-  if (to.connKey === undefined || !isApproved(to.connKey)) {
-    noteApprovalAsked(to.connKey);
-    setExpanded(true);
+function gateWrite(to: ReplyTo, approval: ApprovalAnswer): boolean {
+  if (approval === "unapproved") {
+    const conn = to.connKey === undefined ? undefined : connections.get(to.connKey);
+    if (!conn?.rejected) {
+      noteApprovalAsked(to.connKey);
+      setExpanded(true);
+    }
     reply(to, { type: "PENDING_APPROVAL" });
     return false;
   }
-  if (to.connKey !== activeKey) takeBaton(to.connKey);
+  if (approval === "approved" && to.connKey !== undefined && to.connKey !== activeKey) takeBaton(to.connKey);
   return true;
 }
 
@@ -671,11 +681,26 @@ async function applyDecision(key: ConnKey, approve: boolean): Promise<void> {
   conn.decisionRevision = revision;
   if (!approve) {
     conn.rejected = true;
-    setExpanded(false);
+    // The request is answered; left in place it would read as still waiting until its grace lapsed.
+    conn.askedAt = undefined;
+    setExpanded(anySessionAwaitingDecision());
     return;
   }
-  if (!isApproved(key) && !(await grantSession(key, conn, revision, currentAuthorizingUser()))) return;
-  setExpanded(false);
+  const authorizingUser = currentAuthorizingUser();
+  if (
+    (await settledApprovalOf(key)) !== "approved" &&
+    !(await grantSession(key, conn, revision, authorizingUser))
+  ) return;
+  setExpanded(anySessionAwaitingDecision());
+}
+
+/**
+ * Whether a connected session still needs the human: neither approved nor rejected. A decision on
+ * one row must not collapse a list another row opened.
+ */
+function anySessionAwaitingDecision(): boolean {
+  for (const [key, conn] of connections) if (!conn.rejected && !isApproved(key)) return true;
+  return false;
 }
 
 /**
@@ -694,7 +719,12 @@ async function grantSession(
   const token = mintToken();
   try { await approvedTokens.allow(token); }
   catch { renderUi(); return false; }
-  if (connections.get(key) !== conn || conn.decisionRevision !== revision) return false;
+  if (connections.get(key) !== conn || conn.decisionRevision !== revision) {
+    // Overtaken (Reject, Revoke, or the socket closed): the token is durable but reached no session,
+    // so it would sit in storage approving nobody and keep "Revoke all approvals" on screen.
+    void approvedTokens.revoke(token).catch(() => {});
+    return false;
+  }
   conn.rejected = false;
   conn.token = token;
   // The server spends its claim on this handover, so the request it named is over.
@@ -720,15 +750,10 @@ function decideAwayRequest(key: ConnKey, approve: boolean): void {
 }
 
 /**
- * The human clicked "Revoke access" on an approved row. Forget the token so this session (and any
- * later reconnect echoing it) is no longer approved, drop its baton, and tell that row's server to
- * delete its PERSISTED copy (REVOKE_SESSION over the same relay as the Allow handover) — otherwise a
- * durable on-disk token would silently re-approve on the next connect. Deleting the token from
- * approvedTokens (and persisting that deletion, fig-61) is what actually closes the gate: a
- * reconnect re-binds the token, but isApproved is false once the Set no longer holds it — including
- * after this plugin itself reopens. The row stays in the list, now unapproved (Allow/Deny again) —
- * this is a de-authorization, not a disconnect, which is why the button doesn't say "Disconnect":
- * the socket is untouched and the agent can ask again.
+ * The human clicked "Revoke access" on an approved row. Forget the token durably — that is what
+ * closes the gate, including for a reconnect echoing it and after this plugin reopens — drop its
+ * baton, and tell the row's server to delete its persisted copy (REVOKE_SESSION). A
+ * de-authorization, not a disconnect: the socket and row stay, and the agent can ask again.
  */
 async function revokeSession(key: ConnKey): Promise<void> {
   const conn = connections.get(key);
@@ -746,14 +771,11 @@ async function revokeSession(key: ConnKey): Promise<void> {
 /**
  * The human clicked "Revoke all approvals" — a global action distinct from per-row Revoke access:
  * it forgets EVERY token this plugin remembers, including ones for sessions that aren't currently
- * connected (a persisted approval, by definition, can outlive its connection). This is the explicit
- * escape hatch fig-61 asks for: since approval now survives a plugin close/reopen, there must be a
- * way to durably undo that survival — one that itself survives the same reopen, which persisting an
- * empty Set gives for free (the startup load above finds nothing to restore).
+ * connected. Approval survives a plugin reopen, so this is the durable way to undo that survival;
+ * persisting an empty Set survives the same reopen.
  *
- * Every currently-connected row is also told to drop its server-side persisted copy, exactly like
- * revokeSession, so an active session's next write re-prompts immediately rather than waiting for a
- * reconnect to discover the plugin no longer recognizes its token.
+ * Every connected row is also told to drop its server-side copy, like revokeSession, so an active
+ * session's next write re-prompts at once rather than on its next reconnect.
  */
 async function revokeAllApprovals(): Promise<void> {
   const persistence = approvedTokens.revokeAll();
@@ -872,8 +894,8 @@ function handlePanelControl(msg: InboundMessage): void {
 
 /**
  * A frame one server sent over its socket (`key` names the socket generation). Server REQUESTS all
- * carry ids (PluginBridge.request) and each gets exactly one reply; since protocol 2 the server also
- * emits ONE id-less one-way frame, CANCEL. An id-CARRYING message falls through to the reverse-reply
+ * carry ids (PluginBridge.request) and each gets exactly one reply; the server also emits ONE id-less
+ * one-way frame, CANCEL. An id-CARRYING message falls through to the reverse-reply
  * intercept and then the envelope path below (ERROR reply for unknown types).
  */
 function handleServerFrame(frame: unknown, key: ConnKey): void {
@@ -899,7 +921,7 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
     }
     return;
   }
-  // Reverse-direction replies (protocol 2): typed answers to PLUGIN-issued requests, matched by
+  // Reverse-direction replies: typed answers to PLUGIN-issued requests, matched by
   // type + plugin id and consumed here. They are replies, so they must not fall through to the
   // envelope dispatch below — its contract is "every id-carrying SERVER request gets one reply",
   // and its ids are a different namespace.
@@ -909,74 +931,77 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
   }
   const to: ReplyTo = { id: msg.id, connKey: key };
   if (msg.type === "PING") {
-    // Smoke test: echo back, including a live `figma.*` read to prove the API is
-    // reachable from inside the sandbox (not just that the bytes round-tripped).
-    reply(to, { type: "PONG", echo: msg.payload, page: figma.currentPage.name });
+    // Smoke test: echo back. Any local process can send it before consent, so it reads nothing
+    // from the document — not even the page name.
+    reply(to, { type: "PONG", echo: msg.payload });
   } else if (msg.type === "SESSION_INFO") {
     // The server introduces its session: the identity (project path) the human approves, the
-    // per-connection pairing code shown in the panel, and — on a reconnect of an already-approved
-    // server — the session token it was handed on the prior Allow — plus the Framelink origin its
-    // sign-in pages must be on. Bind them for this port's
-    // connection (the echoed token re-keys sticky approval) and ack immediately — we must NOT block
-    // on the human here; approval arrives later via UI_DECISION. A squatter that never got an Allow
-    // echoes no token, so the entry's token stays null and the gate re-prompts.
+    // per-connection pairing code shown in the panel, the Framelink origin its sign-in pages must be
+    // on, and — from an already-approved server — the session token it was handed on a prior Allow
+    // (it re-keys sticky approval; a squatter has none, so the gate re-prompts). Ack immediately:
+    // approval arrives later via UI_DECISION, never by blocking here.
     let handover: Promise<boolean> | undefined;
-    if (to.connKey !== undefined) {
-      const conn: SessionConn = {
-        token: typeof msg.sessionToken === "string" ? msg.sessionToken : null,
-        identity: typeof msg.identity === "string" ? msg.identity : null,
-        pairingCode: typeof msg.pairingCode === "string" ? msg.pairingCode : null,
-        framelinkOrigin: typeof msg.framelinkOrigin === "string" ? msg.framelinkOrigin : null,
-      };
-      connections.set(to.connKey, conn);
-      // A session back from away presents the claim its last request was given. It takes over that
-      // request: allowed while away, it gets its token now; otherwise the request stays expired on
-      // this connection, under the same claim the server still holds. A session whose echoed token
-      // is already approved just retires the request.
-      const away = typeof msg.sessionClaim === "string"
-        ? awayRequests.claim(msg.sessionClaim, conn.identity)
-        : undefined;
-      if (away && !isApproved(to.connKey)) {
-        const { key: awayKey, request } = away;
-        if (request.allowed) {
-          const revision = (conn.decisionRevision ?? 0) + 1;
-          conn.decisionRevision = revision;
-          // A handover that fails (storage, or a newer decision) puts the request back, Allow and all,
-          // rather than losing the human's click without a trace.
-          handover = grantSession(to.connKey, conn, revision, request.allowed.authorizingUser)
-            .then((granted) => {
-              if (!granted) awayRequests.retain(awayKey, request);
-              return granted;
-            });
-          conn.handover = handover;
-        } else {
-          conn.askedAt = request.askedAt;
-          conn.sessionClaim = request.sessionClaim;
-        }
+    const label = {
+      token: typeof msg.sessionToken === "string" ? msg.sessionToken : null,
+      identity: typeof msg.identity === "string" ? msg.identity : null,
+      pairingCode: typeof msg.pairingCode === "string" ? msg.pairingCode : null,
+      framelinkOrigin: typeof msg.framelinkOrigin === "string" ? msg.framelinkOrigin : null,
+    };
+    // Merged into the connection, never replacing it: a write that beat the handshake may already have
+    // sent this socket a session claim, and an Allow in flight holds this object (grantSession).
+    const existing = connections.get(key);
+    const conn: SessionConn = existing ? Object.assign(existing, label) : label;
+    connections.set(key, conn);
+    // A session back from away presents the claim its last request was given. It takes over that
+    // request: allowed while away, it gets its token now; otherwise the request stays expired on
+    // this connection, under the same claim the server still holds. A session whose echoed token
+    // is already approved just retires the request.
+    const away = typeof msg.sessionClaim === "string"
+      ? awayRequests.claim(msg.sessionClaim, conn.identity)
+      : undefined;
+    if (away && !isApproved(key)) {
+      const { key: awayKey, request } = away;
+      if (request.allowed) {
+        const revision = (conn.decisionRevision ?? 0) + 1;
+        conn.decisionRevision = revision;
+        // A handover that fails (storage, or a newer decision) puts the request back, Allow and all,
+        // rather than losing the human's click without a trace.
+        handover = grantSession(key, conn, revision, request.allowed.authorizingUser)
+          .then((granted) => {
+            if (!granted) awayRequests.retain(awayKey, request);
+            return granted;
+          });
+        conn.handover = handover;
+      } else {
+        conn.askedAt = request.askedAt;
+        conn.sessionClaim = request.sessionClaim;
       }
     }
     reply(to, { type: "SESSION_INFO_ACK" });
-    // Open the list for an unapproved session so the human can Allow/Deny; for an already-approved
-    // reconnect (its token echoed back here) or one collecting an Allow given while it was away, just
-    // refresh, so it does NOT re-prompt (Done-when #3) and doesn't disturb a list another session opened.
+    // Open the list for an unapproved session so the human can Allow/Deny. An already-approved
+    // reconnect, or one collecting an Allow given while away, only refreshes: no re-prompt, and no
+    // disturbing a list another session opened.
     if (handover) void handover.then(() => renderUi());
-    else if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
-    else renderUi();
+    else whenApprovalKnown(key, (approval) => {
+      if (approval === "unapproved" && connections.get(key) === conn) setExpanded(true);
+      else renderUi();
+    });
   } else if (msg.type === "APPROVAL_STATUS") {
-    const conn = to.connKey === undefined ? undefined : connections.get(to.connKey);
-    const answer = () => {
+    const conn = connections.get(key);
+    const answer = (approval: SettledApproval) => {
       const type = conn?.rejected ? "APPROVAL_REJECTED" :
-        to.connKey !== undefined && isApproved(to.connKey) ? "APPROVAL_GRANTED" : "PENDING_APPROVAL";
+        approval === "approved" ? "APPROVAL_GRANTED" : "PENDING_APPROVAL";
       if (type === "PENDING_APPROVAL") {
-        noteApprovalAsked(to.connKey);
+        noteApprovalAsked(key);
         setExpanded(true);
       }
       reply(to, { type });
     };
+    const decide = () => whenApprovalKnown(key, answer);
     // The first poll can beat the handover of an Allow given while away; answering pending then would
     // pop the panel open and mint a fresh claim, a second prompt for a session already allowed.
-    if (conn?.handover) void conn.handover.then(answer);
-    else answer();
+    if (conn?.handover) void conn.handover.then(decide);
+    else decide();
   } else if (msg.type === "EXECUTE_CODE") {
     // Protocol validation comes BEFORE the consent gate, deliberately: a malformed request can never
     // execute, so making the human click Allow for it would be asking consent for nothing. An empty
@@ -993,15 +1018,15 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
       });
       return;
     }
-    // Sandbox-side gate (the consent Invariant's enforcement point): gateWrite runs the write only
-    // for an approved session — otherwise it replies PENDING_APPROVAL and the write never reaches the
-    // executor. Queued, not awaited here, so a second session's write can't interleave with this one.
-    if (gateWrite(to)) {
+    // Sandbox-side gate (the consent Invariant's enforcement point): an unapproved session is
+    // answered PENDING_APPROVAL and its write never reaches the executor; executeCode gates again at
+    // dequeue. Queued, not awaited here, so a second session's write can't interleave with this one.
+    if (gateWrite(to, approvalOf(key))) {
       acceptRun(to);
       enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : "", preamble));
     }
   } else if (msg.type === "SCREENSHOT") {
-    if (gateWrite(to)) {
+    if (gateWrite(to, approvalOf(key))) {
       acceptRun(to);
       enqueueWrite(() =>
         screenshot(
@@ -1032,17 +1057,17 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
     // answer over the frozen envelope — no extra ui.html→code.ts connect plumbing.
     reply(to, { type: "VERSION", pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION });
   } else if (msg.type === "NOTIFY") {
-    // Human channel of the skew nudge: figma.notify is a figma.* call, so the toast MUST
-    // originate here in the sandbox, not the server or iframe. A spike-era plugin predating
-    // this handler falls through to the ERROR path below and the toast is silently dropped —
-    // by design: that plugin still gets the agent channel, which suffices (see the plan).
-    figma.notify(typeof msg.message === "string" ? msg.message : "", { timeout: 15_000 });
+    // Human channel of the server's version-skew refusal (it is the only sender). The skew is found
+    // at connect, before any consent, so any local process can send this frame: the toast speaks in
+    // the plugin's words and ignores the server's, so a peer can't put its own text in front of the
+    // human. The agent still gets the server's full refusal on every call it tries.
+    figma.notify(SKEW_NOTICE, { timeout: 15_000 });
     reply(to, { type: "NOTIFY_RESULT" });
   } else if (typeof msg.id === "string") {
     // Frozen-envelope contract: every id-carrying inbound gets a reply. An unrecognized
-    // type returns a loud, correlated error instead of the silent drop that used to hang
-    // the server to its 15s timeout — this is the path a newer server hits against this
-    // (older) plugin, so the message names the version skew as the likely cause.
+    // type returns a loud, correlated error rather than leaving the server to its 15s timeout —
+    // this is the path a newer server hits against this (older) plugin, so the message names the
+    // version skew as the likely cause.
     reply(to, {
       type: "ERROR",
       error: `Unsupported message type ${JSON.stringify(msg.type)} — the server may be newer than this plugin. Update the plugin.`,
@@ -1069,6 +1094,8 @@ const STALE_RUNTIME_REFUSAL =
  * `eval(code)` would break the moment the agent writes `await`.
  */
 async function executeCode(to: ReplyTo, code: string, preamble: string): Promise<void> {
+  // First, so a CANCEL landing while the store settles is still honoured just below.
+  const approval = await settledApprovalOf(to.connKey);
   // The dequeue refusal — the queued-zombie case (run-cancellation.ts): a run cancelled while it
   // sat queued behind writeChain must not execute now, mutating a canvas the agent was told is
   // unchanged. Nothing waits for this reply — the caller was answered the moment the CANCEL landed
@@ -1086,7 +1113,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     });
     return;
   }
-  if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
+  if (!gateWrite(to, approval)) { cancelledRuns.settle(to); return; }
   const runStartedAt = beginRun(to);
   const traceStarted = Date.now();
   const trace = (stage: string, operation?: string) => {
@@ -1122,7 +1149,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   let errorMessage: string | null = null;
   // Flipped once this run has nothing left to do — after the queue drain below, so a verb that was
   // legitimately queued by this run's code is not refused as another run's leftover. Every host
-  // method reads it, which is what contains a runtime the agent stored across calls (§8).
+  // method reads it, which is what contains a runtime the agent stored across calls.
   let settled = false;
   let runtime: typeof SandboxRuntime | undefined;
   let landedAfterReturn = 0;
@@ -1131,25 +1158,14 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   try {
     // Watching starts before anything of the agent's can run, and ends after the drain below.
     documentChanges = observeDocumentChanges();
-    // Two evals, and the split is the point. The std-lib the server sent is a FACTORY expression
-    // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the { flcm, session } bindings
-    // back, hand those to the agent's code as named parameters. Nothing HERE knows how the preamble
-    // binds its host — the one identifier that crosses that eval boundary lives wholly inside
-    // preamble/, bound and asserted by the single file that emits both ends of it.
+    // Two evals, and the split is the point. The server's std-lib is a FACTORY expression
+    // (src/preamble/index.mjs): called with the host, it returns { flcm, session }, which the agent's
+    // code receives as named parameters. How the preamble binds its host stays wholly in preamble/.
+    // The agent's own wrapper also keeps its line numbers its own, not offsets into the std-lib.
     //
-    // The host is bound to `to`, so it answers for THIS run's correlation id and source port. Its
-    // methods need no pinning of their own: both sides import FlcmHost, so tsc catches a reshape.
-    //
-    // Giving the agent's code its own wrapper also keeps its line numbers its own — a thrown error
-    // reports where the AGENT wrote it, not an offset into ~230 KiB of std-lib. That wrapper is
-    // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
-    // preload runs inside render(), not at module top level).
-    //
-    // Every service below answers for THIS run, so each refuses once the run has settled rather
-    // than serving a runtime the agent kept past its reply: a stale registerRead would project into
-    // a dead run's egress, a stale server call has no reply address left, and a stale runtime's
-    // cancellation flag can never turn true again. Tracing is the exception — a diagnostic that
-    // refuses would change execution, so it goes quiet instead.
+    // The host answers for THIS run (`to`), so each service refuses once the run has settled rather
+    // than serve a runtime the agent kept past its reply. Tracing goes quiet instead: a diagnostic
+    // that refused would change execution.
     const host: FlcmHost = {
       getSession: (initialize) => agentSession ??= initialize(),
       registerRead: (value, project, decorate) => {
@@ -1178,7 +1194,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     const { flcm, session } = built;
     // Indirect eval gives agent code global scope, never this function's host/transport locals.
     const raw = await (0, eval)("(async function(flcm, session){ " + code + "\n })")(flcm, session);
-    // Return-path node guard (R2): a returned live node would otherwise collapse to
+    // Return-path node guard: a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
     const undefinedFieldPaths: string[] = [];
@@ -1249,8 +1265,9 @@ async function screenshot(
   target: ScreenshotTarget,
   options: CaptureOptions,
 ): Promise<void> {
-  // Same dequeue refusal as executeCode. Avoid exporting for a run the
-  // server already reported dead is wasted work whose reply nothing correlates.
+  const approval = await settledApprovalOf(to.connKey);
+  // Same dequeue refusal as executeCode: exporting for a run the server already reported dead is
+  // wasted work whose reply nothing correlates.
   if (cancelledRuns.takeCancellation(to)) {
     cancelledRuns.settle(to);
     reply(to, {
@@ -1260,12 +1277,12 @@ async function screenshot(
     });
     return;
   }
-  if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
+  if (!gateWrite(to, approval)) { cancelledRuns.settle(to); return; }
   beginRun(to);
   try {
     const node = await resolveScreenshotTarget(target);
     const bytes = await captureScreenshot(node, options, () => cancelledRuns.isCancelled(to));
-    reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes), ...(options.context ? { capture: "contextual" } : {}) });
+    reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
   } catch (err) {
     reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
   } finally {

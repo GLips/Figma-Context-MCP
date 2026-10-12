@@ -9,7 +9,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 
-import { render } from "./render.js";
+import { render } from "./structure.js";
 import { describeRootOverlap } from "./root-overlap.js";
 
 let figma = createFigmaMock();

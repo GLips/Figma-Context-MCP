@@ -28,7 +28,7 @@ export const SEAT_REVALIDATE_MS = 3 * 60 * 60 * 1000;
 export type WriteAuthorization =
   | { kind: "authorized"; via: "seat"; figmaUserId: string }
   | { kind: "authorized"; via: "allowance"; figmaUserId: string; usedThisMonth: number }
-  | { kind: "refused"; reason: "no-authorizingUser" }
+  | { kind: "refused"; reason: "no-authorizing-user" }
   | {
       kind: "refused";
       reason: "allowance-exhausted";
@@ -51,7 +51,7 @@ export function authorizeWriteExecution({
   usedThisMonth: number;
   now: Date;
 }): WriteAuthorization {
-  if (figmaUserId === null) return { kind: "refused", reason: "no-authorizingUser" };
+  if (figmaUserId === null) return { kind: "refused", reason: "no-authorizing-user" };
   if (seat?.seat === true) return { kind: "authorized", via: "seat", figmaUserId };
   if (usedThisMonth < FREE_WRITE_ALLOWANCE)
     return { kind: "authorized", via: "allowance", figmaUserId, usedThisMonth };
@@ -95,7 +95,7 @@ export function allowanceExhaustedNotice(
 
 /** The tool result for a refused execution: nothing ran, why, and what the human does next. */
 export function writeRefusalText(refusal: WriteRefusal, framelinkApiUrl: string): string {
-  if (refusal.reason === "no-authorizingUser")
+  if (refusal.reason === "no-authorizing-user")
     return (
       "Framelink did not start this execution, so nothing ran: the Figma plugin did not report which " +
       "Figma user approved this session, and every write is attributed to that person. In the " +

@@ -35,8 +35,6 @@ export async function buildSandboxPreamble() {
   const bundled = await esbuild.build({
     entryPoints: [resolve(here, "sandbox.ts")],
     bundle: true, write: false, format: "iife", globalName: "sandbox", target: "esnext", platform: "neutral",
-    // The read path bundles the repo-root simplify core, whose internal imports use the root's ~/ alias.
-    alias: { "~": resolve(here, "../../../src") },
     // Powers the zod gate below: it asks the real input graph rather than guessing from the output.
     metafile: true,
   });

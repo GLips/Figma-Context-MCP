@@ -11,13 +11,11 @@ import type { BridgeRequest, PluginBridge } from "~/commercial/plugin-bridge/bri
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
-function connectedServer(capture?: "contextual") {
+function connectedServer() {
   const request = vi
     .fn()
     .mockImplementation(async (payload: BridgeRequest) =>
-      payload.type === "APPROVAL_STATUS"
-        ? { type: "APPROVAL_GRANTED" }
-        : { image: "AQ==", ...(capture ? { capture } : {}) },
+      payload.type === "APPROVAL_STATUS" ? { type: "APPROVAL_GRANTED" } : { image: "AQ==" },
     );
   const bridge = {
     request,
@@ -52,23 +50,17 @@ function connectedServer(capture?: "contextual") {
 }
 
 describe("contextual screenshot boundary", () => {
-  it("forwards opt-in margin and refuses an old host's isolated response", async () => {
-    for (const capture of [undefined, "contextual"] as const) {
-      const { call, request, close } = connectedServer(capture);
-      try {
-        const result = await call("get_screenshot", { nodeId: "1:2", context: true, margin: 0 });
-        expect(request.mock.calls.find(([p]) => p.type === "SCREENSHOT")?.[0]).toMatchObject({
-          context: true,
-          margin: 0,
-        });
-        if (capture) expect(result.content[0].type).toBe("image");
-        else {
-          expect(result.isError).toBe(true);
-          expect(JSON.stringify(result)).toContain("does not support contextual capture");
-        }
-      } finally {
-        await close();
-      }
+  it("forwards opt-in context and margin to the plugin", async () => {
+    const { call, request, close } = connectedServer();
+    try {
+      const result = await call("get_screenshot", { nodeId: "1:2", context: true, margin: 0 });
+      expect(request.mock.calls.find(([p]) => p.type === "SCREENSHOT")?.[0]).toMatchObject({
+        context: true,
+        margin: 0,
+      });
+      expect(result.content[0].type).toBe("image");
+    } finally {
+      await close();
     }
   });
   it("rejects invalid context arguments before touching the bridge", async () => {

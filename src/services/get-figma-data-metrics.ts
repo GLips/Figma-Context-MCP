@@ -1,4 +1,4 @@
-import type { GetFileResponse, GetFileNodesResponse, Node } from "@figma/rest-api-spec";
+import type { GetFileResponse, Node } from "@figma/rest-api-spec";
 import type { SimplifiedDesign, SimplifiedNode } from "@framelink/core";
 import type { SimplifiedFill, StyleReference } from "@framelink/core";
 
@@ -146,20 +146,12 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
 }
 
 /**
- * Count the named (published) styles referenced in the raw Figma response.
- * `GetFileResponse` carries the full `styles` dict at the root; `GetFileNodesResponse`
- * carries one `styles` dict per requested node entry, so we merge them by style ID
- * so a style referenced by multiple nodes counts once.
+ * Count the named (published) styles defined on the raw Figma response — the
+ * root `styles` dict. Targeted reads come from `/files/{key}?ids=`, so this
+ * covers the ancestor chain's styles too, not only the requested node's.
  */
-export function countNamedStyles(raw: GetFileResponse | GetFileNodesResponse): number {
-  if ("document" in raw) {
-    return Object.keys(raw.styles ?? {}).length;
-  }
-  const seen = new Set<string>();
-  for (const entry of Object.values(raw.nodes)) {
-    for (const id of Object.keys(entry.styles ?? {})) seen.add(id);
-  }
-  return seen.size;
+export function countNamedStyles(raw: GetFileResponse): number {
+  return Object.keys(raw.styles ?? {}).length;
 }
 
 /**
@@ -169,10 +161,7 @@ export function countNamedStyles(raw: GetFileResponse | GetFileNodesResponse): n
  * and component properties — a single check per node is enough for a boolean
  * presence signal. Walking inline Paint/effect structs would be redundant.
  */
-export function detectVariables(raw: GetFileResponse | GetFileNodesResponse): boolean {
-  const roots: Node[] =
-    "document" in raw ? [raw.document] : Object.values(raw.nodes).map((entry) => entry.document);
-
+export function detectVariables(raw: GetFileResponse): boolean {
   const visit = (node: Node): boolean => {
     if (
       "boundVariables" in node &&
@@ -189,8 +178,5 @@ export function detectVariables(raw: GetFileResponse | GetFileNodesResponse): bo
     return false;
   };
 
-  for (const root of roots) {
-    if (visit(root)) return true;
-  }
-  return false;
+  return visit(raw.document);
 }

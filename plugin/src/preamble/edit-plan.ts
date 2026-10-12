@@ -83,7 +83,7 @@ import {
   RenderResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
-import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
+import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotEmpty } from "./validate.js";
 import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens, type ResolvedTokens } from "./tokens.js";
 import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
 import {
@@ -129,15 +129,6 @@ const SLICE_DELTA_KEYS = editableWords(["name", "visible", "locked"]);
 // deltas judged by the same rule at construction), bound to the edit vocabulary.
 export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
   rejectNonDeltaWordsAgainst(changes, EDIT_KEYS, subject);
-}
-
-function assertDeltaNotEmpty(changes: object, subject: string): void {
-  if (Object.keys(changes).length === 0) {
-    throw new Error(
-      subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
-        [...EDIT_KEYS].join(", ") + ".",
-    );
-  }
 }
 
 // The per-type legality gate (a node's type is identity, not a live fact, so this holds whenever it
@@ -399,9 +390,9 @@ export function restatedEditPlan(node: SceneNode): EditPlan {
  */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
   changes = acceptAuthoringProps(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
-  // A delta that was ONLY read-shape identity (`{ id, type }`) folds to nothing — same refusal as an
-  // empty object, now that the prelude has run.
-  assertDeltaNotEmpty(changes, subject);
+  // A delta of ONLY read-only words (`{ type }`) folds to nothing — same refusal as an empty object,
+  // now that the prelude has run.
+  assertDeltaNotEmpty(changes, EDIT_KEYS, subject);
   const legal = assertDeltaLegalForType(node, changes, subject);
   const instanceWords = takeInstanceEditWords(changes, subject);
   const componentWords = takeComponentEditWords(changes, subject);

@@ -114,7 +114,7 @@ export function tokenKey(ref: TokenRef): string {
   return ref.token + "|" + kind + "|" + (ref.id ?? "") + "|" + (ref.name ?? "");
 }
 
-export interface ResolvedVariable {
+interface ResolvedVariable {
   variable: Variable;
   /** The default mode's value, aliases followed — what a node shows unless a mode overrides it. */
   literal: VariableValue;
@@ -367,7 +367,7 @@ export class TokenLookups {
 }
 
 /** One enabled library collection and its variables, or null for one the user can't open. */
-export interface LibraryCollectionListing { collection: LibraryVariableCollection; variables: LibraryVariable[] | null }
+interface LibraryCollectionListing { collection: LibraryVariableCollection; variables: LibraryVariable[] | null }
 
 // Keyed by the teamLibrary object, so a test's fresh mock lists afresh. Live, the preamble is evaluated
 // anew for every run, so this lasts one run: short enough that the enabled set can't change under it.

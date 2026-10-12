@@ -54,7 +54,7 @@ describe("connection-owned execution", () => {
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
     expect(id).not.toBe(old.frames[0].id);
     receive(bridge, old, { id, type: "PONG", echo: "OLD_BODY" });
-    receive(bridge, old, { type: "SESSION_TOKEN", sessionToken: "old-token" });
+    receive(bridge, old, { type: "SESSION_TOKEN", sessionToken: "oldsessiontoken000000" });
     expect(bridge.getSessionToken()).toBeNull();
     receive(bridge, next, { id, type: "PONG", echo: "NEW_BODY" });
     expect(await newCall).toMatchObject({ echo: "NEW_BODY" });

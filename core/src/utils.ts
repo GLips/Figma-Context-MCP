@@ -43,7 +43,9 @@ export function generateCSSShorthand(
     suffix?: string;
   } = {},
 ) {
-  const { top, right, bottom, left } = values;
+  const [top, right, bottom, left] = [values.top, values.right, values.bottom, values.left].map(
+    pixelRound,
+  );
   if (ignoreZero && top === 0 && right === 0 && bottom === 0 && left === 0) {
     return undefined;
   }

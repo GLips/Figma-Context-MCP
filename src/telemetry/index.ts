@@ -1,7 +1,7 @@
 import type { FigmaAuthOptions } from "~/services/figma.js";
 import type { AuthMode } from "./types.js";
 
-export { initTelemetry, shutdown, resolveTelemetryEnabled, withRequestSecrets } from "./client.js";
+export { initTelemetry, shutdown, withRequestSecrets } from "./client.js";
 export {
   captureGetFigmaDataCall,
   captureDownloadImagesCall,

@@ -7,7 +7,7 @@ import { foldPaintStack, paintStyleValue } from "./transformers/style.js";
 import { styleReference } from "./tokens.js";
 import { hasAutoLayout } from "./utils.js";
 import type { SimplifyResult } from "./simplify.js";
-import type { NodeSnapshot } from "./snapshot.js";
+import type { NodeSnapshot, SnapshotPaint, SnapshotTokenRef } from "./snapshot.js";
 import type { SimplifiedNode, StyleTable, Elision } from "./types.js";
 
 export interface ProjectOptions {
@@ -89,14 +89,23 @@ function projectTrees(
       }
       if (d !== undefined) cut(full, "d", d);
       if (vectorPaths !== undefined) cut(full, "vectorPaths", vectorPaths);
-      // Re-folded for the wire, so the style-wins rule must hold here as it does in extraction.
+      // Paint slots are re-folded for the wire, so the style-wins rule must hold here as it does
+      // in extraction.
       const hasChildren = !!snapshot.children?.length;
-      const fill = snapshot.styles?.fill
-        ? styleReference(snapshot.styles.fill, paintStyleValue(snapshot.fills, hasChildren, true))
-        : foldPaintStack(snapshot.fills, hasChildren);
+      const foldSlot = (
+        paints: SnapshotPaint[] | undefined,
+        style: SnapshotTokenRef | undefined,
+      ) =>
+        style
+          ? styleReference(style, paintStyleValue(paints, hasChildren, true))
+          : foldPaintStack(paints, hasChildren);
+      const fill = foldSlot(snapshot.fills, snapshot.styles?.fill);
       if (fill !== undefined) node.fill = fill;
       else if (full.type === "TEXT") node.fill = "none";
       else delete node.fill;
+      // No fold result leaves the runtime value: absent, or a strokeless LINE's "none".
+      const stroke = foldSlot(snapshot.strokes, snapshot.styles?.stroke);
+      if (stroke !== undefined) node.stroke = stroke;
       internStyles(node, table);
       // Notes are collected only for nodes admitted by the wire's visibility/depth rules.
       for (const id of [full.id, full.componentId, snapshot.mainComponent?.set?.id]) {

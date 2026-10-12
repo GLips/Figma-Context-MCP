@@ -20,7 +20,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
-import { resolveStateDir, writePrivateFileAtomic } from "./approval-store.js";
+import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { ImageIntakeError, tooLarge, type ImageUploadStore } from "./image-intake.js";
 import { MAX_IMAGE_BYTES } from "./images.js";

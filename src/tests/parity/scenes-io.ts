@@ -27,8 +27,8 @@ import type {
  * Variable bindings (`boundVariables` on nodes, solid paints and text segments) are plain data
  * on the live API too, so they ride through unrevived.
  *
- * A case without a fixture returns null and the producer skips it (the harness's documented
- * light-up-as-they-land contract).
+ * Every golden needs a scene: a missing one throws, so a new golden can't pass parity with no
+ * plugin check at all.
  */
 import type { SceneTokenIds } from "./shared-subset.js";
 
@@ -81,9 +81,10 @@ function reviveNode(
   return node as unknown as SceneNodeLike;
 }
 
-export function loadScene(name: string): LoadedScene | null {
+export function loadScene(name: string): LoadedScene {
   const file = path.join(SCENES_DIR, `${name}.json`);
-  if (!existsSync(file)) return null;
+  if (!existsSync(file))
+    throw new Error(`No plugin scene fixture for golden "${name}": add parity/scenes/${name}.json`);
   const fixture = JSON.parse(readFileSync(file, "utf8")) as SceneFixtureFile;
   const tables = { style: fixture.styles ?? {}, variable: fixture.variables ?? {} };
   // The fixture's tables are everything its file can reach. Stricter than live, which tells kinds
@@ -108,7 +109,6 @@ export function loadScene(name: string): LoadedScene | null {
 /** The scene's token ids by name — how parity reads a reference the plugin spelled by bare name. */
 export function loadSceneTokenIds(name: string): SceneTokenIds {
   const file = path.join(SCENES_DIR, `${name}.json`);
-  if (!existsSync(file)) return { variable: {}, style: {} };
   const fixture = JSON.parse(readFileSync(file, "utf8")) as SceneFixtureFile;
   return {
     variable: Object.fromEntries(

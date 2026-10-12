@@ -217,7 +217,7 @@ function inlineExclusiveStyles(
     const inlineExclusive = (target: SimplifiedNode | TemplateBody | NodeDelta): void => {
       visitStyleRefSlots(target, (ref, set) => {
         if (typeof ref !== "string") return;
-        if (!(ref in styles)) return;
+        if (!Object.prototype.hasOwnProperty.call(styles, ref)) return;
         if (counts.get(ref) === instanceCount) {
           set(styles[ref]);
           delete styles[ref];

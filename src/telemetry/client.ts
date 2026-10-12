@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { PostHog } from "posthog-node";
 import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 import { redactFigmaIdentifiers } from "./redact-identifiers.js";
@@ -28,12 +29,19 @@ type CommonProperties = {
   proxy_mode: ProxyMode;
 };
 
-let client: PostHog | undefined;
-let sessionId: string | undefined;
-let commonProps: CommonProperties | undefined;
-let disabled = true;
-let initialized = false;
-let redactionSecrets: string[] = [];
+// "off" covers both never-initialized and opted-out: an opted-out init leaves
+// the state untouched, so a later init (tests opting back in) still works.
+type TelemetryState =
+  | { kind: "off" }
+  | {
+      kind: "on";
+      client: PostHog;
+      sessionId: string;
+      commonProps: CommonProperties;
+      redactionSecrets: readonly string[];
+    };
+
+let state: TelemetryState = { kind: "off" };
 
 // Per-request redaction context. The init-time `redactionSecrets` list only
 // covers credentials known at startup; with HTTP `X-Figma-Token` auth the
@@ -59,8 +67,12 @@ function parseNodeMajor(version: string): number {
   return Number.parseInt(version.split(".")[0], 10);
 }
 
-function redactErrorMessage(message: string): string {
-  let result = message;
+// A home directory of "/" (some containers) would turn every slash into "~".
+const HOME_DIR = homedir();
+const scrubbableHomeDir = HOME_DIR.length > 1 ? HOME_DIR : undefined;
+
+function redactTelemetryString(value: string, redactionSecrets: readonly string[]): string {
+  let result = value;
   for (const secret of redactionSecrets) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
@@ -70,58 +82,38 @@ function redactErrorMessage(message: string): string {
   // Credentials first, identifiers second: secret scrubbing is exact-substring
   // and must see the message unmodified, in case a token sits inside a URL
   // fragment that identifier scrubbing would otherwise rewrite around it.
+  //
+  // The home-dir scrub is a backstop, not a path policy: absolute paths carry
+  // the OS username, and a producer that interpolates one shouldn't leak it.
+  if (scrubbableHomeDir) result = result.replaceAll(scrubbableHomeDir, "~");
   return redactFigmaIdentifiers(result);
 }
 
-/**
- * Telemetry is enabled by default. Any single opt-out signal disables it —
- * the `optOut` flag (CLI), FRAMELINK_TELEMETRY=off, or a truthy DO_NOT_TRACK.
- * Signals are OR'd, not prioritized, so users can't accidentally re-enable
- * telemetry by setting one variable when another is already opting out.
- *
- * DO_NOT_TRACK follows the https://consoledonottrack.com/ convention: any
- * non-empty value other than "0" means opt-out.
- */
-export function resolveTelemetryEnabled(optOut?: boolean): boolean {
-  if (optOut === true) return false;
-  if (process.env.FRAMELINK_TELEMETRY === "off") return false;
-  const doNotTrack = process.env.DO_NOT_TRACK;
-  if (doNotTrack && doNotTrack !== "0") return false;
-  return true;
-}
-
-export function initTelemetry(opts?: InitTelemetryOptions): boolean {
-  if (initialized) return !disabled;
-
-  if (!resolveTelemetryEnabled(opts?.optOut)) {
-    disabled = true;
-    // Intentionally do NOT mark `initialized` here. An opted-out init must
-    // not poison subsequent re-init attempts (e.g. tests that opt out then
-    // opt in to verify capture). Re-running resolveTelemetryEnabled is cheap.
-    return false;
-  }
-
-  initialized = true;
-  disabled = false;
-  sessionId = randomUUID();
-  redactionSecrets = (opts?.redactFromErrors ?? []).filter(Boolean);
-
-  commonProps = {
-    server_version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
-    os_platform: process.platform,
-    nodejs_major: parseNodeMajor(process.versions.node),
-    is_ci: Boolean(process.env.CI),
-    proxy_mode: proxyMode(),
-  };
+export function initTelemetry(opts: InitTelemetryOptions): boolean {
+  if (state.kind === "on") return true;
+  if (!opts.enabled) return false;
 
   // disableGeoip: false is load-bearing — the Node SDK defaults GeoIP to off,
   // and our geography analytics depend on it being enabled.
-  client = new PostHog(POSTHOG_API_KEY, {
+  const client = new PostHog(POSTHOG_API_KEY, {
     host: POSTHOG_HOST,
     disableGeoip: false,
-    ...(opts?.immediateFlush ? { flushAt: 1, flushInterval: 0 } : {}),
+    ...(opts.immediateFlush ? { flushAt: 1, flushInterval: 0 } : {}),
   });
 
+  state = {
+    kind: "on",
+    client,
+    sessionId: randomUUID(),
+    redactionSecrets: (opts.redactFromTelemetry ?? []).filter(Boolean),
+    commonProps: {
+      server_version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
+      os_platform: process.platform,
+      nodejs_major: parseNodeMajor(process.versions.node),
+      is_ci: Boolean(process.env.CI),
+      proxy_mode: proxyMode(),
+    },
+  };
   return true;
 }
 
@@ -144,7 +136,8 @@ function truncateForTelemetry(message: string): string {
 }
 
 export function captureEvent(event: string, properties: Record<string, unknown>): void {
-  if (disabled || !client || !sessionId || !commonProps) return;
+  if (state.kind === "off") return;
+  const { client, sessionId, commonProps, redactionSecrets } = state;
 
   // Scrub every string-valued property, not just `error_message`. The
   // signature here is `Record<string, unknown>`, so the next event field that
@@ -163,7 +156,7 @@ export function captureEvent(event: string, properties: Record<string, unknown>)
       processed[key] = value;
       continue;
     }
-    const redacted = redactErrorMessage(value);
+    const redacted = redactTelemetryString(value, redactionSecrets);
     processed[key] = key === "error_message" ? truncateForTelemetry(redacted) : redacted;
   }
 
@@ -179,18 +172,16 @@ export function captureEvent(event: string, properties: Record<string, unknown>)
 }
 
 export async function shutdown(): Promise<void> {
-  if (disabled || !client) return;
+  if (state.kind === "off") return;
 
-  const current = client;
-  client = undefined;
-  disabled = true;
+  const { client } = state;
+  // Back to "off" so the module can be re-initialized in the same process
+  // (relevant for tests; harmless in production where shutdown runs at exit).
+  state = { kind: "off" };
   try {
-    await current.shutdown();
+    await client.shutdown();
   } catch {
     // Telemetry shutdown must never break callers — the server.ts shutdown
     // handler and the fetch.ts cleye chain both depend on this resolving.
   }
-  // Reset so the module can be re-initialized in the same process (relevant
-  // for tests; harmless in production where shutdown runs only at exit).
-  initialized = false;
 }

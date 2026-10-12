@@ -13,14 +13,15 @@
  * user-facing message is *supposed* to name the endpoint and the node — that
  * detail is how someone debugs a 403 or a stale link. Scrubbing here keeps the
  * two audiences separate (humans get the identifiers, PostHog doesn't) and
- * means a new error string somewhere in the codebase is covered by default
- * instead of only when its author remembers this rule.
+ * means a new error string that names a file key or node ID is covered by
+ * default. Only those identifiers are: this is a denylist, not a PII filter.
+ * Other user context (paths, response bodies) needs its own handling — see
+ * `redactTelemetryString` and `fingerprintResponseBody`.
  *
  * Each pattern also accepts the percent-encoded separators (`%2F`, `%3D`,
- * `%3A`, `%3F`, `%26`). Corporate proxies echo the blocked URL into their HTML
- * block page, `buildForbiddenMessage` splices that body verbatim into the 403
- * message, and those pages routinely encode the URL they're quoting — which is
- * precisely the 403-behind-a-proxy case this module exists for.
+ * `%3A`, `%3F`, `%26`). Corporate proxies echo the blocked URL into their
+ * block pages and routinely encode it, and that text can still reach a
+ * telemetry field through an untagged error that quotes the page.
  */
 
 export const REDACTED_FILE_KEY = "[REDACTED_FILE_KEY]";
@@ -46,11 +47,15 @@ const FILE_KEY_REST_PATH =
  * A file key in a figma.com URL, which a user may paste as a tool argument and
  * see echoed back in an error. Anchored to the host on purpose: `design`,
  * `board`, `deck`, `slides` and `file` are all common directory names, and
- * `rest.ts`'s missing-node help text names `/proto/`, `/figjam/` and `/branch/`
- * in prose. Requiring `figma.com` first means only a real URL is rewritten.
+ * `rest.ts`'s missing-node help text names `/proto/` and `/figjam/` in prose.
+ * Requiring `figma.com` first means only a real URL is rewritten.
+ *
+ * Also consumes what follows the key: a `/branch/<branchKey>` segment and the
+ * file-name slug (`/Acme-Rebrand`), which is a document title. The query
+ * string is left for `NODE_ID_QUERY_PARAM`.
  */
 const FILE_KEY_WEB_URL =
-  /(figma\.com(?:\/|%2F)(?:design|file|proto|board|slides|deck|figjam|branch)(?:\/|%2F))[A-Za-z0-9]+/gi;
+  /(figma\.com(?:\/|%2F)(?:design|file|proto|board|slides|deck|figjam)(?:\/|%2F))[A-Za-z0-9]+(?:(?:\/|%2F)branch(?:\/|%2F)[A-Za-z0-9]+)?(?:(?:\/|%2F)(?:(?!%2F|%3F|%23)[^\s/?#&'"<>])+)?/gi;
 
 /**
  * Query params whose value is one or more node IDs. Requires a leading

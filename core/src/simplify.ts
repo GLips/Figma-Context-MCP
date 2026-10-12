@@ -1,5 +1,5 @@
-import { isRectangleCornerRadii, isVisible } from "./utils.js";
-import { buildSimplifiedLayout } from "./transformers/layout.js";
+import { isRectangleCornerRadii, isVisible, pixelRound } from "./utils.js";
+import { buildSimplifiedLayout, gridFacts, type GridFacts } from "./transformers/layout.js";
 import {
   buildSimplifiedStrokes,
   cssBlendKeyword,
@@ -113,6 +113,8 @@ interface SimplifyContext {
   /** Component provenance sink — the components pass reads it after the walk (see ComponentNotes). */
   components: ComponentNotes;
   parent?: NodeSnapshot;
+  /** `parent`'s grid facts, computed once for all its children rather than per child. */
+  parentGrid?: GridFacts;
   read: ReadContext;
   /**
    * Per-call mutable counter shared with the caller. Lives on the context so
@@ -141,9 +143,9 @@ async function maybeYield(
 /** Preserve every node and its sibling order; projection owns traversal cuts. */
 async function walkNodes(
   nodes: NodeSnapshot[],
-  options: SimplifyOptions = {},
-  notes: ComponentNotes = createComponentNotes(),
-  read: ReadContext = { notes, snapshots: new Map(), definitions: [] },
+  options: SimplifyOptions,
+  notes: ComponentNotes,
+  read: ReadContext,
   contextParent?: NodeSnapshot,
 ): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
@@ -156,7 +158,11 @@ async function walkNodes(
   for (const node of nodes) {
     const parent = contextParent && rootParent(node, contextParent);
     processedNodes.push(
-      await extractNode(node, parent ? { ...context, parent } : context, options),
+      await extractNode(
+        node,
+        parent ? { ...context, parent, parentGrid: gridFacts(parent) } : context,
+        options,
+      ),
     );
   }
 
@@ -223,7 +229,7 @@ async function extractNode(
     else result.vectorPaths = node.vectorPaths;
   }
   if (node.children) {
-    const childContext = { ...context, parent: node };
+    const childContext = { ...context, parent: node, parentGrid: gridFacts(node) };
     result.children = [];
     for (const child of node.children)
       result.children.push(await extractNode(child, childContext, options));
@@ -240,7 +246,7 @@ async function extractNode(
  * node top level (hybrid structure) and container config as the `layout` group.
  */
 function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: SimplifyContext): void {
-  const { layout, geometry } = buildSimplifiedLayout(node, context.parent);
+  const { layout, geometry } = buildSimplifiedLayout(node, context.parent, context.parentGrid);
   Object.assign(result, geometry);
   // A free-form container with nothing else to say (`{ mode: "none" }`) is the default and is
   // omitted; a row/column is information even when every other word is at its default.
@@ -258,7 +264,7 @@ function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: Simp
 function extractText(node: NodeSnapshot, result: SimplifiedNode): void {
   // Decoded runs remain in readOnlySource; the authoring field uses markdown and inline run deltas.
   if (isTextNode(node)) {
-    const rich = buildFormattedText(node, (delta) => delta);
+    const rich = buildFormattedText(node);
     if (rich.text !== undefined) {
       result.text = rich.text;
     }
@@ -344,8 +350,8 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   const bound = node.boundVariables;
   if (bound?.opacity) {
     result.opacity = bindNumber(node.opacity ?? 1, bound.opacity);
-  } else if (typeof node.opacity === "number" && node.opacity !== 1) {
-    result.opacity = node.opacity;
+  } else if (typeof node.opacity === "number" && pixelRound(node.opacity) !== 1) {
+    result.opacity = pixelRound(node.opacity);
   }
 
   // border radius — zero is the CSS default, so a literal cornerRadius: 0 (or
@@ -365,9 +371,9 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
     isRectangleCornerRadii(node.rectangleCornerRadii) &&
     node.rectangleCornerRadii.some(Boolean)
   ) {
-    result.borderRadius = `${corners[0]}px ${corners[1]}px ${corners[2]}px ${corners[3]}px`;
-  } else if (typeof node.cornerRadius === "number" && node.cornerRadius !== 0) {
-    result.borderRadius = `${node.cornerRadius}px`;
+    result.borderRadius = corners.map((corner) => `${pixelRound(corner)}px`).join(" ");
+  } else if (typeof node.cornerRadius === "number" && pixelRound(node.cornerRadius) !== 0) {
+    result.borderRadius = `${pixelRound(node.cornerRadius)}px`;
   }
 }
 

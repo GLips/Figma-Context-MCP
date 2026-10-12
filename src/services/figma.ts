@@ -25,6 +25,40 @@ type SvgOptions = {
   simplifyStroke: boolean;
 };
 
+/** One file to save. An `imageRef`/`gifRef` downloads an image fill; a bare `nodeId` renders the node. */
+export type ImageDownloadItem = {
+  imageRef?: string;
+  gifRef?: string;
+  nodeId?: string;
+  fileName: string;
+  needsCropping?: boolean;
+  cropTransform?: Transform;
+  requiresImageDimensions?: boolean;
+};
+
+/** `not_rendered`: Figma returned no URL for the fill or node, so there was nothing to fetch. */
+export type ImageDownloadOutcome =
+  | { status: "written"; result: ImageProcessingResult }
+  | { status: "not_rendered" }
+  | { status: "failed"; error: unknown };
+
+/**
+ * Build an API endpoint: each path segment URI-encoded, the query through URLSearchParams with
+ * unset params dropped. Callers pass ids as given, so nothing they contain can rewrite the URL.
+ */
+function figmaEndpoint(
+  segments: string[],
+  query: Record<string, string | number | boolean | undefined> = {},
+): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  const path = `/${segments.map(encodeURIComponent).join("/")}`;
+  const search = params.toString();
+  return search ? `${path}?${search}` : path;
+}
+
 export class FigmaService {
   private readonly apiKey: string;
   private readonly oauthToken: string;
@@ -88,7 +122,7 @@ export class FigmaService {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
       const headers = this.getAuthHeaders();
 
-      return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
+      return await fetchJSON<T>(`${this.baseUrl}${endpoint}`, {
         headers,
         signal,
         redactFromResponseBody: [this.apiKey, this.oauthToken],
@@ -110,27 +144,14 @@ export class FigmaService {
   }
 
   /**
-   * Builds URL query parameters for SVG image requests.
-   */
-  private buildSvgQueryParams(svgIds: string[], svgOptions: SvgOptions): string {
-    const params = new URLSearchParams({
-      ids: svgIds.join(","),
-      format: "svg",
-      svg_outline_text: String(svgOptions.outlineText),
-      svg_include_id: String(svgOptions.includeId),
-      svg_simplify_stroke: String(svgOptions.simplifyStroke),
-    });
-    return params.toString();
-  }
-
-  /**
    * Gets download URLs for image fills without downloading them.
    *
    * @returns Map of imageRef to download URL
    */
   async getImageFillUrls(fileKey: string): Promise<Record<string, string>> {
-    const endpoint = `/files/${fileKey}/images`;
-    const response = await this.request<GetImageFillsResponse>(endpoint);
+    const response = await this.request<GetImageFillsResponse>(
+      figmaEndpoint(["files", fileKey, "images"]),
+    );
     return response.meta.images || {};
   }
 
@@ -147,166 +168,85 @@ export class FigmaService {
   ): Promise<Record<string, string>> {
     if (nodeIds.length === 0) return {};
 
-    if (format === "png") {
-      const scale = options.pngScale || 2;
-      const endpoint = `/images/${fileKey}?ids=${nodeIds.join(",")}&format=png&scale=${scale}`;
-      const response = await this.request<GetImagesResponse>(endpoint);
-      return this.filterValidImages(response.images);
-    } else {
-      const svgOptions = options.svgOptions || {
-        outlineText: true,
-        includeId: false,
-        simplifyStroke: true,
-      };
-      const params = this.buildSvgQueryParams(nodeIds, svgOptions);
-      const endpoint = `/images/${fileKey}?${params}`;
-      const response = await this.request<GetImagesResponse>(endpoint);
-      return this.filterValidImages(response.images);
-    }
+    const svg = options.svgOptions ?? { outlineText: true, includeId: false, simplifyStroke: true };
+    const formatParams =
+      format === "png"
+        ? { scale: options.pngScale || 2 }
+        : {
+            svg_outline_text: svg.outlineText,
+            svg_include_id: svg.includeId,
+            svg_simplify_stroke: svg.simplifyStroke,
+          };
+    const response = await this.request<GetImagesResponse>(
+      figmaEndpoint(["images", fileKey], { ids: nodeIds.join(","), format, ...formatParams }),
+    );
+    return this.filterValidImages(response.images);
   }
 
   /**
-   * Download images method with post-processing support for cropping and returning image dimensions.
-   *
-   * Supports:
-   * - Image fills vs rendered nodes (based on imageRef vs nodeId)
-   * - PNG vs SVG format (based on filename extension)
-   * - Image cropping based on transform matrices
-   * - CSS variable generation for image dimensions
-   *
-   * @returns Array of local file paths for successfully downloaded images
+   * Download and post-process (crop, measure) every item, each settling on its own: one failure
+   * or unrendered node doesn't sink the rest. Every item comes back paired with its outcome, so
+   * callers match results by item, never by position.
    */
-  async downloadImages(
+  async downloadImages<T extends ImageDownloadItem>(
     fileKey: string,
     localPath: string,
-    items: Array<{
-      imageRef?: string;
-      gifRef?: string;
-      nodeId?: string;
-      fileName: string;
-      needsCropping?: boolean;
-      cropTransform?: Transform;
-      requiresImageDimensions?: boolean;
-    }>,
+    items: T[],
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
-  ): Promise<ImageProcessingResult[]> {
+  ): Promise<Array<{ item: T; outcome: ImageDownloadOutcome }>> {
     if (items.length === 0) return [];
 
-    const resolvedPath = localPath;
     const { pngScale = 2, svgOptions } = options;
-    const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
+    // gifRef takes priority when present — it points to the animated GIF file.
+    // imageRef only points to a static snapshot frame for GIF nodes.
+    const fillRefOf = (item: T) => item.gifRef ?? item.imageRef;
+    const isSvg = (item: T) => item.fileName.toLowerCase().endsWith(".svg");
+    const renderIds = (svg: boolean) =>
+      items.flatMap((item) =>
+        !fillRefOf(item) && item.nodeId && isSvg(item) === svg ? [item.nodeId] : [],
+      );
 
-    // Separate items by type: image/gif fills vs rendered nodes
-    const imageFills = items.filter(
-      (item): item is typeof item & ({ imageRef: string } | { gifRef: string }) =>
-        !!item.imageRef || !!item.gifRef,
+    const [fillUrls, pngUrls, svgUrls] = await Promise.all([
+      items.some(fillRefOf)
+        ? this.getImageFillUrls(fileKey)
+        : Promise.resolve<Record<string, string>>({}),
+      this.getNodeRenderUrls(fileKey, renderIds(false), "png", { pngScale }),
+      this.getNodeRenderUrls(fileKey, renderIds(true), "svg", { svgOptions }),
+    ]);
+
+    const urlFor = (item: T): string | undefined => {
+      const fillRef = fillRefOf(item);
+      if (fillRef) return fillUrls[fillRef];
+      if (item.nodeId) return (isSvg(item) ? svgUrls : pngUrls)[item.nodeId];
+      return undefined;
+    };
+
+    const settled = await Promise.allSettled(
+      items.map((item) => {
+        const imageUrl = urlFor(item);
+        return imageUrl
+          ? downloadAndProcessImage(
+              item.fileName,
+              localPath,
+              imageUrl,
+              item.needsCropping,
+              item.cropTransform,
+              item.requiresImageDimensions,
+            )
+          : null;
+      }),
     );
-    const renderNodes = items.filter(
-      (item): item is typeof item & { nodeId: string } => !!item.nodeId,
-    );
 
-    // Download image fills (static images and animated GIFs) with processing
-    if (imageFills.length > 0) {
-      const fillUrls = await this.getImageFillUrls(fileKey);
-      const fillDownloads = imageFills
-        .map(
-          ({
-            imageRef,
-            gifRef,
-            fileName,
-            needsCropping,
-            cropTransform,
-            requiresImageDimensions,
-          }) => {
-            // gifRef takes priority when present — it points to the animated GIF file.
-            // imageRef only points to a static snapshot frame for GIF nodes.
-            const fillRef = gifRef ?? imageRef;
-            const imageUrl = fillRef ? fillUrls[fillRef] : undefined;
-            return imageUrl
-              ? downloadAndProcessImage(
-                  fileName,
-                  resolvedPath,
-                  imageUrl,
-                  needsCropping,
-                  cropTransform,
-                  requiresImageDimensions,
-                )
-              : null;
-          },
-        )
-        .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
-
-      if (fillDownloads.length > 0) {
-        downloadPromises.push(Promise.all(fillDownloads));
-      }
-    }
-
-    // Download rendered nodes with processing
-    if (renderNodes.length > 0) {
-      const pngNodes = renderNodes.filter((node) => !node.fileName.toLowerCase().endsWith(".svg"));
-      const svgNodes = renderNodes.filter((node) => node.fileName.toLowerCase().endsWith(".svg"));
-
-      // Download PNG renders
-      if (pngNodes.length > 0) {
-        const pngUrls = await this.getNodeRenderUrls(
-          fileKey,
-          pngNodes.map((n) => n.nodeId),
-          "png",
-          { pngScale },
-        );
-        const pngDownloads = pngNodes
-          .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
-            const imageUrl = pngUrls[nodeId];
-            return imageUrl
-              ? downloadAndProcessImage(
-                  fileName,
-                  resolvedPath,
-                  imageUrl,
-                  needsCropping,
-                  cropTransform,
-                  requiresImageDimensions,
-                )
-              : null;
-          })
-          .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
-
-        if (pngDownloads.length > 0) {
-          downloadPromises.push(Promise.all(pngDownloads));
-        }
-      }
-
-      // Download SVG renders
-      if (svgNodes.length > 0) {
-        const svgUrls = await this.getNodeRenderUrls(
-          fileKey,
-          svgNodes.map((n) => n.nodeId),
-          "svg",
-          { svgOptions },
-        );
-        const svgDownloads = svgNodes
-          .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
-            const imageUrl = svgUrls[nodeId];
-            return imageUrl
-              ? downloadAndProcessImage(
-                  fileName,
-                  resolvedPath,
-                  imageUrl,
-                  needsCropping,
-                  cropTransform,
-                  requiresImageDimensions,
-                )
-              : null;
-          })
-          .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
-
-        if (svgDownloads.length > 0) {
-          downloadPromises.push(Promise.all(svgDownloads));
-        }
-      }
-    }
-
-    const results = await Promise.all(downloadPromises);
-    return results.flat();
+    return items.map((item, index) => {
+      const settlement = settled[index];
+      const outcome: ImageDownloadOutcome =
+        settlement.status === "rejected"
+          ? { status: "failed", error: settlement.reason }
+          : settlement.value
+            ? { status: "written", result: settlement.value }
+            : { status: "not_rendered" };
+      return { item, outcome };
+    });
   }
 
   /**
@@ -319,7 +259,7 @@ export class FigmaService {
     fileKey: string,
     depth?: number | null,
   ): Promise<{ data: GetFileResponse; rawSize: number }> {
-    const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
+    const endpoint = figmaEndpoint(["files", fileKey], { depth: depth ?? undefined });
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
 
     const result = await this.requestWithSize<GetFileResponse>(endpoint);
@@ -343,7 +283,9 @@ export class FigmaService {
   ): Promise<{ data: GetFileResponse; rawSize: number }> {
     Logger.log(`Retrieving raw Figma node in context: ${nodeId} from ${fileKey}`);
 
-    const result = await this.requestWithSize<GetFileResponse>(`/files/${fileKey}?ids=${nodeId}`);
+    const result = await this.requestWithSize<GetFileResponse>(
+      figmaEndpoint(["files", fileKey], { ids: nodeId }),
+    );
     writeLogs("figma-raw.json", result.data);
 
     return result;
@@ -360,7 +302,7 @@ export class FigmaService {
     nodeIds: string[],
     depth?: number,
   ): Promise<GetFileNodesResponse> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeIds.join(",")}${depth ? `&depth=${depth}` : ""}`;
+    const endpoint = figmaEndpoint(["files", fileKey, "nodes"], { ids: nodeIds.join(","), depth });
     Logger.log(`Retrieving ${nodeIds.length} node(s) from ${fileKey}`);
     return this.request<GetFileNodesResponse>(endpoint);
   }
@@ -372,7 +314,7 @@ export class FigmaService {
    * Needs read access to the library — a separate grant from access to the file being read.
    */
   async getPublishedComponentSite(key: string): Promise<{ fileKey: string; nodeId: string }> {
-    const response = await this.request<GetComponentResponse>(`/components/${key}`);
+    const response = await this.request<GetComponentResponse>(figmaEndpoint(["components", key]));
     return { fileKey: response.meta.file_key, nodeId: response.meta.node_id };
   }
 
@@ -381,7 +323,10 @@ export class FigmaService {
    * one cheap call. Needs the `file_comments:read` scope, which a file-content-only token lacks.
    */
   async getComments(fileKey: string, signal?: AbortSignal): Promise<GetCommentsResponse> {
-    return this.request<GetCommentsResponse>(`/files/${fileKey}/comments?as_md=true`, signal);
+    return this.request<GetCommentsResponse>(
+      figmaEndpoint(["files", fileKey, "comments"], { as_md: true }),
+      signal,
+    );
   }
 
   /**
@@ -391,7 +336,7 @@ export class FigmaService {
    * Never pass a page id here: its "subtree" is the whole page.
    */
   async getFileSlice(fileKey: string, nodeIds: string[]): Promise<GetFileResponse> {
-    const query = nodeIds.length ? `ids=${nodeIds.join(",")}` : "depth=1";
-    return this.request<GetFileResponse>(`/files/${fileKey}?${query}`);
+    const query = nodeIds.length ? { ids: nodeIds.join(",") } : { depth: 1 };
+    return this.request<GetFileResponse>(figmaEndpoint(["files", fileKey], query));
   }
 }

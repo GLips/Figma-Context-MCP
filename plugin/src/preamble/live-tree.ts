@@ -67,7 +67,7 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       // stating no words (a bare { id } move) has nothing to compare and costs no read.
       if (Object.keys(wn.authoring!).length) await standing.load(node);
       live.push({ wn, node });
-    } catch (cause) { throw new Error(wn.sourcePath! + ": " + String(cause)); }
+    } catch (cause) { throw new Error(wn.sourcePath! + ": " + (cause instanceof Error ? cause.message : String(cause))); }
   }
   // A new parent has no live id; its source path keys its children as siblings all the same.
   const parentKey = (wn: WriteNode): string | undefined => {
@@ -106,7 +106,7 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
       const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
       entries.push({ wn, node, changes, key, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(wn) });
-    } catch (cause) { throw new Error(at + ": " + String(cause)); }
+    } catch (cause) { throw new Error(at + ": " + (cause instanceof Error ? cause.message : String(cause))); }
   }
   const loaded = entries.length ? await loadEditResources(entries.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), entries.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
   return { entries, loaded };

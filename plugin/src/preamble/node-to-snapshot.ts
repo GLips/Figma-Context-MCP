@@ -61,11 +61,11 @@ type SceneTransform = readonly [
 ];
 
 /** Plugin `VariableAlias`: a binding names its variable by id only. */
-export interface SceneVariableAlias {
+interface SceneVariableAlias {
   readonly id: string;
 }
 
-export interface SceneSolidPaint {
+interface SceneSolidPaint {
   type: "SOLID";
   /** Plugin solids carry alpha on the paint's `opacity`, never in the color. */
   color: SceneRGB;
@@ -76,7 +76,7 @@ export interface SceneSolidPaint {
   boundVariables?: { readonly color?: SceneVariableAlias };
 }
 
-export interface SceneGradientPaint {
+interface SceneGradientPaint {
   type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
   /** Normalized object space → gradient space (see handlesFromTransform). */
   gradientTransform: SceneTransform;
@@ -86,7 +86,7 @@ export interface SceneGradientPaint {
   visible?: boolean;
 }
 
-export interface SceneImagePaint {
+interface SceneImagePaint {
   type: "IMAGE";
   imageHash: string | null;
   scaleMode: "FILL" | "FIT" | "CROP" | "TILE";
@@ -99,7 +99,7 @@ export interface SceneImagePaint {
   visible?: boolean;
 }
 
-export interface ScenePatternPaint {
+interface ScenePatternPaint {
   type: "PATTERN";
   sourceNodeId: string;
   scalingFactor: number;
@@ -564,7 +564,7 @@ async function sceneSubtreeToSnapshot(
     componentKey:
       node.type === "COMPONENT" || node.type === "COMPONENT_SET" ? node.key || undefined : undefined,
     componentDescription:
-      node.type === "COMPONENT_SET" ? node.description || undefined : undefined,
+      node.type === "COMPONENT" || node.type === "COMPONENT_SET" ? node.description || undefined : undefined,
     isExposedInstance: node.type === "INSTANCE" ? node.isExposedInstance : undefined,
     componentProperties: decodeComponentProps(node),
     componentPropertyDefinitions: decodePropertyDefinitions(node),
@@ -960,10 +960,32 @@ function styleDelta(style: SnapshotTextStyle, base: SnapshotTextStyle): Snapshot
 // ---------------------------------------------------------------------------
 
 export function decodeSceneEffect(effect: SceneEffect): SnapshotEffect {
-  // SceneEffect carries exactly SnapshotEffect's fields (base + the beyond-CSS bag, all raw Figma-domain),
-  // so spread it through; only `radius` needs a default. The core reads only the fields its per-type
-  // branch needs.
-  return { ...effect, radius: effect.radius ?? 0 };
+  // Field by field like the node itself: a live Effect also carries `boundVariables`, `blendMode`,
+  // `showShadowBehindNode`, which the contract doesn't declare and REST has no counterpart for.
+  // Only `radius` needs a default; every other value is raw Figma-domain already.
+  return {
+    type: effect.type,
+    visible: effect.visible,
+    color: effect.color,
+    offset: effect.offset,
+    radius: effect.radius ?? 0,
+    spread: effect.spread,
+    lightIntensity: effect.lightIntensity,
+    lightAngle: effect.lightAngle,
+    refraction: effect.refraction,
+    depth: effect.depth,
+    dispersion: effect.dispersion,
+    noiseType: effect.noiseType,
+    noiseSize: effect.noiseSize,
+    density: effect.density,
+    secondaryColor: effect.secondaryColor,
+    opacity: effect.opacity,
+    clipToShape: effect.clipToShape,
+    blurType: effect.blurType,
+    startRadius: effect.startRadius,
+    startOffset: effect.startOffset,
+    endOffset: effect.endOffset,
+  };
 }
 
 function decodePerSideWeights(node: SceneNodeLike): NodeSnapshot["individualStrokeWeights"] {

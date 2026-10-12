@@ -11,22 +11,22 @@ import { parityView } from "./parity/shared-subset.js";
 import { loadSceneTokenIds } from "./parity/scenes-io.js";
 
 /**
- * REST↔plugin parity harness — "one output, two producers" (plan Phase 4).
+ * REST↔plugin parity harness — "one output, two producers".
  *
- * Every producer that can produce a design for a case must reduce to the SAME
- * shared view (parityView), and that view must equal the golden's — so the
- * canonical output can't fork between the REST decode and the plugin's future
- * `sceneNodeToSnapshot`. Today two producers run (`rest`, `snapshot`); the read
- * plan registers the plugin producer and it joins the fan-out with no change here.
+ * Every producer must reduce every case to the SAME shared view (parityView), and
+ * that view must equal the golden's — so the canonical output can't fork between
+ * `restNodeToSnapshot` and the plugin's `sceneNodeToSnapshot`. Three parity
+ * producers run: `rest` and `scene` (the two live adapters), plus `snapshot`, which
+ * feeds the committed decode straight to core to localize a failure.
  *
  * The strict byte-exact golden regression gate is separate (goldens.test.ts) —
  * this harness deliberately compares the SHARED SUBSET (via parityView) so a
- * producer's legitimate incidental differences and future plugin enrichments
+ * producer's legitimate incidental differences and plugin-only enrichments
  * don't read as parity failures.
  */
 describe("parity harness", () => {
-  // The committed snapshot fixtures are the read plan's concrete target, so they
-  // must stay faithful to what the REST adapter actually decodes. `toEqual` (not
+  // The committed snapshot fixtures must stay faithful to what the REST adapter
+  // actually decodes. `toEqual` (not
   // `toStrictEqual`) so the JSON round-trip's dropped `undefined` fields — absent
   // in the committed file, present-but-undefined in a live decode — don't matter.
   describe("committed snapshots stay faithful to the REST decode", () => {
@@ -48,9 +48,7 @@ describe("parity harness", () => {
         const target = parityView(golden, tokenIds);
 
         for (const producer of PARITY_PRODUCERS) {
-          const produced = producer.produce(parityCase);
-          if (!produced) continue; // producer has no input for this case (e.g. plugin slot)
-          const design = await produced;
+          const design = await producer.produce(parityCase);
           expect(parityView(design, tokenIds), `producer "${producer.id}"`).toEqual(target);
         }
       });

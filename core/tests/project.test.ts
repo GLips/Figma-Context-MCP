@@ -165,3 +165,42 @@ test("ordinary nodes, empty children and stripped names need no markers", async 
   expect(node.elided).toBeUndefined();
   expect(node.name).toBeUndefined();
 });
+
+test("instances of a donor-sourced component carry overrides at runtime as on the wire", async () => {
+  const instance = (id: string, color: { r: number; g: number; b: number }): NodeSnapshot => ({
+    id,
+    name: "Button",
+    type: "INSTANCE",
+    componentId: "11:1",
+    children: [
+      {
+        id: `I${id};11:9`,
+        name: "Bg",
+        type: "FRAME",
+        fills: [{ type: "SOLID", color: { ...color, a: 1 } }],
+      },
+    ],
+  });
+  const full = await simplify([
+    instance("1:1", { r: 1, g: 0, b: 0 }),
+    instance("2:2", { r: 0, g: 0, b: 0 }),
+  ]);
+  expect(full.components["11:1"].childrenFrom).toBe("1:1");
+  expect(full.nodes[0].overrides).toBeUndefined();
+  expect(Object.keys(full.nodes[1].overrides ?? {})).toEqual(["11:9"]);
+  const wire = project(full);
+  expect(wire.nodes[1].overrides).toEqual({ "11:9": { fill: "#000000" } });
+});
+
+test("a stacked solid stroke folds to the one color a viewer sees, as fill does", async () => {
+  const stack = [
+    { type: "SOLID" as const, color: { r: 1, g: 0, b: 0, a: 1 } },
+    { type: "SOLID" as const, color: { r: 0, g: 0, b: 1, a: 1 } },
+  ];
+  const full = await simplify([
+    { id: "f", name: "Box", type: "FRAME", fills: stack, strokes: stack, strokeWeight: 1 },
+  ]);
+  const [node] = project(full).nodes;
+  expect(typeof node.stroke).toBe("string");
+  expect(node.stroke).toBe(node.fill);
+});

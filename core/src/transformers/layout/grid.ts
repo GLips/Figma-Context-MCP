@@ -1,4 +1,4 @@
-import { hasGridLayout, isLayout } from "../../utils.js";
+import { hasGridLayout, isFrame, isLayout } from "../../utils.js";
 import { anyRectsOverlap } from "../../rect.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 import type { SimplifiedLayout } from "./common.js";
@@ -114,6 +114,28 @@ function gridChildrenOverlap(parent: NodeSnapshot): boolean {
   );
 }
 
+/**
+ * What every child of one GRID parent needs to know about its siblings. Computed once per parent:
+ * packing, the anchor sort and pairwise overlap are each O(n) or worse over the children, so
+ * deriving them per child would make a grid cubic in its child count.
+ */
+export interface GridFacts {
+  packed: boolean;
+  /** `computeGridChildOrder`'s answer: null when the children already sit in anchor order. */
+  order: number[] | null;
+  overlap: boolean;
+}
+
+/** Undefined when `parent` isn't a GRID frame with a child list. */
+export function gridFacts(parent: NodeSnapshot | undefined): GridFacts | undefined {
+  if (!isFrame(parent) || parent.layoutMode !== "GRID" || !parent.children) return undefined;
+  return {
+    packed: isPackedGrid(parent.children),
+    order: computeGridChildOrder(parent),
+    overlap: gridChildrenOverlap(parent),
+  };
+}
+
 function convertGridAlign(align: "MIN" | "CENTER" | "MAX"): "start" | "end" | "center" {
   switch (align) {
     case "MIN":
@@ -136,14 +158,14 @@ function convertGridAlign(align: "MIN" | "CENTER" | "MAX"): "start" | "end" | "c
 export function buildGridChildPositioning(
   n: NodeSnapshot,
   parent: NodeSnapshot,
-  packed: boolean,
+  grid: GridFacts,
 ): Partial<SimplifiedLayout> {
   const out: Partial<SimplifiedLayout> = {};
 
   const colSpan = n.gridColumnSpan ?? 1;
   const rowSpan = n.gridRowSpan ?? 1;
 
-  if (!packed) {
+  if (!grid.packed) {
     const col = (n.gridColumnAnchorIndex ?? 0) + 1; // CSS grid is 1-based
     const row = (n.gridRowAnchorIndex ?? 0) + 1;
     out.gridColumn = colSpan > 1 ? `${col} / span ${colSpan}` : `${col}`;
@@ -168,10 +190,9 @@ export function buildGridChildPositioning(
   //   - sort is a no-op (no reorder happened)
   //   - this child's slot didn't move
   //   - no in-flow siblings overlap (stacking can't affect rendering)
-  const order = computeGridChildOrder(parent);
-  if (order && gridChildrenOverlap(parent)) {
+  if (grid.order && grid.overlap) {
     const originalIndex = parent.children?.indexOf(n) ?? -1;
-    const newIndex = order.indexOf(originalIndex);
+    const newIndex = grid.order.indexOf(originalIndex);
     if (originalIndex !== newIndex) {
       out.zIndex = originalIndex;
     }

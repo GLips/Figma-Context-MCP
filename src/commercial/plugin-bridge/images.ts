@@ -16,7 +16,8 @@
 // Ported in spirit from production figma-mcp (downloadAndProcessImage/jimp), but the guard is net-new:
 // figma-mcp only ever fetches from Figma's own trusted CDN, so it has no SSRF/type defense to port. jimp is
 // the shared piece — the modular @jimp/* build, downscaling to Figma's 4096px createImage cap.
-import { lookup } from "node:dns/promises";
+import { lookup } from "node:dns";
+import { isIP, type LookupFunction } from "node:net";
 import { Agent, fetch, type Response } from "undici";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
@@ -28,15 +29,6 @@ import { CLI_NAME } from "~/utils/cli-help.js";
 import { OutsideAssetRootError, type ContainedFileReader } from "./contained-file.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
-
-// The guard validates addresses with the LOCAL resolver, so this fetch must dial direct. Server startup
-// may install a global proxy dispatcher for Figma API traffic (src/server.ts), and a proxy does its own
-// DNS — a split-horizon hostname could validate as public here yet resolve private at the proxy, walking
-// the request past every range check. Pinning a plain Agent keeps "what we validate is what gets dialed"
-// true regardless of proxy config (and matches the pre-dissolution bridge process, which never proxied).
-// Cost: in a mandatory-egress-proxy environment flcm.image goes direct and may fail loudly — acceptable;
-// routing it through a proxy would need equivalent validation at the proxy's egress, which we can't do.
-const directDispatcher = new Agent();
 
 // Figma's createImage rejects any dimension over 4096px, so downscale the longest side to fit before the
 // bytes ever leave the server — also the mitigation for the multi-MB-base64-over-loopback bridge-timeout risk.
@@ -51,8 +43,8 @@ export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 // generous enough for a real high-res photo, small enough to defang the bomb.
 const MAX_PIXELS = 30_000_000;
 const FETCH_TIMEOUT_MS = 10_000;
-// A redirect re-resolves DNS on a host we haven't validated, so we follow manually and re-guard every hop
-// rather than let fetch chase a 302 into a private range. Bounded so a redirect loop can't spin forever.
+// Redirects are followed manually so every hop gets the literal-IP check and a fresh validated dial.
+// Bounded so a redirect loop can't spin forever.
 const MAX_REDIRECTS = 3;
 
 type ImageType = "image/png" | "image/jpeg" | "image/gif";
@@ -86,8 +78,7 @@ function detectImageType(bytes: Uint8Array): ImageType | null {
 
 // Read the declared pixel dimensions straight from the image header — cheap, and it runs BEFORE the full
 // decode that a decompression bomb weaponizes (see MAX_PIXELS). Returns null when the header can't be read
-// (an exotic/truncated variant); the caller treats null as "can't pre-check" and lets jimp attempt it. PNG
-// and GIF carry dimensions at fixed offsets, so those — the compressible-bomb formats — are always covered.
+// (an exotic/truncated variant), which the caller refuses: an image we can't size is one we can't bound.
 function headerDimensions(
   bytes: Uint8Array,
   type: ImageType,
@@ -111,6 +102,11 @@ function headerDimensions(
       continue;
     }
     const marker = bytes[offset + 1];
+    // Any marker may be preceded by 0xFF fill bytes; step one byte so the last FF pairs with the marker.
+    if (marker === 0xff) {
+      offset++;
+      continue;
+    }
     // SOF0..SOF15 hold [FF][marker][2 len][1 precision][2 height][2 width] — except DHT/JPG/DAC (C4/C8/CC).
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
       return { height: dv.getUint16(offset + 5), width: dv.getUint16(offset + 7) };
@@ -143,27 +139,39 @@ export function isBlockedAddress(ip: string): boolean {
   return addr.range() !== "unicast";
 }
 
-// Resolve the host and reject if ANY resolved address is non-public — a hostname with even one private A
-// record is refused. Uses the same OS resolver (getaddrinfo) fetch/undici will use, so what we validate is
-// what gets dialed. A literal-IP host resolves to itself here, so this doubles as the direct-IP guard.
-//
-// Residual gap (documented, not closed): DNS rebinding — a host that answers public here and private on
-// fetch's own re-resolution. Closing it needs pinning the connection to the validated IP (a custom undici
-// dispatcher); out of scope for v1, where the redirect re-guard below covers the common bypass.
-async function assertPublicHost(hostname: string): Promise<void> {
-  // URL.hostname wraps an IPv6 literal in brackets ("[2606:...]"), which dns.lookup rejects as ENOTFOUND —
-  // strip them so a public IPv6-literal url resolves (and its address hits isBlockedAddress) instead of
-  // failing closed for every v6 literal.
+function blockedAddressError(host: string, address: string): Error {
+  return new Error(
+    `host "${host}" resolves to a blocked (private/loopback/link-local) address ${address}`,
+  );
+}
+
+// The socket's own DNS resolution, validated: every address the host resolves to must be public, and
+// the socket dials only from that validated set. Validating inside the dial, rather than in a separate
+// lookup beforehand, is what defeats DNS rebinding — there is no second resolution for a host to answer
+// differently. A hostname with even one private record is refused outright.
+const lookupPublicAddress: LookupFunction = (hostname, options, callback) => {
+  lookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) return callback(err, "");
+    const blocked = addresses.find(({ address }) => isBlockedAddress(address));
+    if (blocked) return callback(blockedAddressError(hostname, blocked.address), "");
+    if (addresses.length === 0)
+      return callback(new Error(`could not resolve host "${hostname}"`), "");
+    if (options.all) return callback(null, addresses);
+    callback(null, addresses[0].address, addresses[0].family);
+  });
+};
+
+// Dials direct, never through a proxy. Server startup may install a global proxy dispatcher for Figma
+// API traffic (src/server.ts), and a proxy does its own DNS, out of reach of the lookup above. Cost: in a
+// mandatory-egress-proxy environment flcm.image fails loudly; routing it through a proxy would need
+// equivalent validation at the proxy's egress, which we can't do.
+const directDispatcher = new Agent({ connect: { lookup: lookupPublicAddress } });
+
+// A literal-IP host never reaches a lookup function (the socket dials it as written), so it is checked
+// here. URL.hostname wraps an IPv6 literal in brackets, stripped before classifying it.
+function assertPublicLiteralHost(hostname: string): void {
   const host = hostname.replace(/^\[|\]$/g, "");
-  const records = await lookup(host, { all: true });
-  if (records.length === 0) throw new Error(`could not resolve host "${host}"`);
-  for (const { address } of records) {
-    if (isBlockedAddress(address)) {
-      throw new Error(
-        `host "${host}" resolves to a blocked (private/loopback/link-local) address ${address}`,
-      );
-    }
-  }
+  if (isIP(host) && isBlockedAddress(host)) throw blockedAddressError(host, host);
 }
 
 function parseHttpUrl(raw: string): URL {
@@ -217,14 +225,17 @@ async function guardedFetch(rawUrl: string, signal?: AbortSignal): Promise<Uint8
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     signal?.throwIfAborted();
     const url = parseHttpUrl(target);
-    await assertPublicHost(url.hostname);
-    signal?.throwIfAborted();
+    assertPublicLiteralHost(url.hostname);
     const res = await fetch(url, {
       dispatcher: directDispatcher,
       redirect: "manual",
       signal: signal
         ? AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)])
         : AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    }).catch((err: unknown) => {
+      // undici reports every connection failure as a bare "fetch failed" with the reason as `cause`;
+      // surface the reason, which is what names a blocked host.
+      throw err instanceof TypeError && err.cause instanceof Error ? err.cause : err;
     });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
@@ -249,7 +260,12 @@ export async function processImageBytes(bytes: Uint8Array, signal?: AbortSignal)
 
   // Reject a decompression bomb from its header before jimp allocates the raster (see MAX_PIXELS).
   const dims = headerDimensions(bytes, type);
-  if (dims && dims.width * dims.height > MAX_PIXELS) {
+  // A zero side means "size declared later" (a JPEG SOF height of 0 defers to a DNL marker), so the cap
+  // can't vouch for the decode — refuse it like a header we couldn't read.
+  if (!dims || dims.width === 0 || dims.height === 0) {
+    throw new Error("could not read the image's dimensions from its header");
+  }
+  if (dims.width * dims.height > MAX_PIXELS) {
     throw new Error(
       `image is ${dims.width}×${dims.height} (${Math.round((dims.width * dims.height) / 1e6)}MP), over the ` +
         `${Math.round(MAX_PIXELS / 1e6)}MP decode cap`,

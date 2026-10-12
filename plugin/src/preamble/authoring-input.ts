@@ -9,7 +9,7 @@ import { hasContainerLayout } from "./ir.js";
 import { normalizeInputAliases } from "./input-aliases.js";
 import { rejectUnknownKeys, READ_ONLY_WORDS } from "./validate.js";
 
-export interface AuthoringEntry {
+interface AuthoringEntry {
   /** The node kind the bag is authored FOR: a compiler's own type, or the live target's under edit. */
   type: string;
   verb: "create" | "edit";

@@ -13,7 +13,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { image, id } from "./flcm.js";
-import { render } from "./render.js";
+import { render } from "./structure.js";
 import { edit } from "./edit.js";
 
 let figma = createFigmaMock();

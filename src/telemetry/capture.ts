@@ -1,18 +1,43 @@
 import { getErrorMeta } from "~/utils/error-meta.js";
+import { HttpError } from "~/utils/fetch-json.js";
 import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
 import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
 import { captureEvent } from "./client.js";
+import { fingerprintResponseBody } from "./response-body-fingerprint.js";
 import type {
   CommonCallProps,
   GetFigmaDataCall,
   DownloadFigmaImagesCall,
   ToolCallProperties,
   ToolCallContext,
+  ValidationRejectCall,
   ValidationRejectInput,
 } from "./types.js";
 
 function captureToolCall(props: ToolCallProperties): void {
   captureEvent("tool_called", props as unknown as Record<string, unknown>);
+}
+
+/**
+ * The error message with every HTTP response body in its cause chain swapped
+ * for a fingerprint. Producers splice the body into the message verbatim (the
+ * user needs it), so substitution here is what keeps block-page contents —
+ * usernames, client IPs, internal hosts — out of PostHog.
+ */
+function messageWithoutResponseBodies(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error);
+  const seen = new Set<unknown>();
+  for (let current = error; current instanceof Error && !seen.has(current); ) {
+    seen.add(current);
+    if (current instanceof HttpError && current.responseBody) {
+      message = message.replaceAll(
+        current.responseBody,
+        fingerprintResponseBody(current.responseBody),
+      );
+    }
+    current = current.cause;
+  }
+  return message;
 }
 
 function errorFields(
@@ -31,11 +56,10 @@ function errorFields(
 > {
   if (error === undefined) return { is_error: false };
   const meta = getErrorMeta(error);
-  const rawMessage = error instanceof Error ? error.message : String(error);
   return {
     is_error: true,
     error_type: error instanceof Error ? error.constructor.name : "Unknown",
-    error_message: rawMessage,
+    error_message: messageWithoutResponseBodies(error),
     error_phase: meta.phase,
     error_category: meta.category,
     http_status: meta.http_status,
@@ -111,15 +135,15 @@ export function captureDownloadImagesCall(
 
 /**
  * Capture a tool call that was rejected by input validation. Fires a regular
- * `tool_called` event so PostHog dashboards can aggregate it alongside successful
- * calls (filter by `error_phase == "validate"`). Most tool-specific metric
- * fields are absent because the pipeline never ran — only validation context.
+ * `tool_called` event so PostHog dashboards can aggregate it alongside
+ * executed calls (filter by `error_phase == "validate"`), but without run
+ * metrics: the pipeline never ran, so there are none to report.
  */
 export function captureValidationReject(
   input: ValidationRejectInput,
   context: ToolCallContext,
 ): void {
-  const common: CommonCallProps = {
+  const common: CommonCallProps & { error_phase: "validate" } = {
     duration_ms: input.durationMs ?? 0,
     transport: context.transport,
     auth_mode: context.authMode,
@@ -134,19 +158,9 @@ export function captureValidationReject(
     validation_rule: input.rule,
   };
 
-  if (input.tool === "get_figma_data") {
-    captureToolCall({
-      ...common,
-      tool: "get_figma_data",
-      output_format: input.outputFormat ?? "tree",
-      depth: null,
-      has_node_id: false,
-    });
-  } else {
-    captureToolCall({
-      ...common,
-      tool: "download_figma_images",
-      image_count: 0,
-    });
-  }
+  const event: ValidationRejectCall =
+    input.tool === "get_figma_data"
+      ? { ...common, tool: "get_figma_data", output_format: input.outputFormat }
+      : { ...common, tool: "download_figma_images" };
+  captureToolCall(event);
 }

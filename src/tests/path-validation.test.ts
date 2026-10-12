@@ -56,6 +56,8 @@ describe("download path validation (handler)", () => {
     expect(input.tool).toBe("download_figma_images");
     expect(input.field).toBe("localPath");
     expect(input.rule).toBe("outside_image_dir");
+    // The rejected path names the user's directories; only its shape may reach telemetry.
+    expect(input.message).not.toContain("../../etc");
     expect(context.transport).toBe("stdio");
     expect(context.authMode).toBe("api_key");
   });

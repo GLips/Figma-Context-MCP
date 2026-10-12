@@ -5,8 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { render } from "./render.js";
-import { append } from "./structure.js";
+import { render, append } from "./structure.js";
 import { component } from "./component.js";
 import { get } from "./read.js";
 import type { FrameProps } from "./schema.js";

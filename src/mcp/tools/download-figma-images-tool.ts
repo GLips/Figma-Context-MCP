@@ -1,4 +1,3 @@
-import path from "path";
 // zod/v3 — see get-figma-data-tool.ts: classic-API schemas kept as-is across the zod-4 bump.
 import { z } from "zod/v3";
 import {
@@ -10,6 +9,7 @@ import {
 } from "~/telemetry/index.js";
 import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
 import type { FigmaService } from "../../services/figma.js";
+import { FIGMA_NODE_ID_FORMAT_MESSAGE, FIGMA_NODE_ID_PATTERN } from "../../utils/figma-url.js";
 import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
 import { Logger } from "../../utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
@@ -23,10 +23,7 @@ const parameters = {
     .object({
       nodeId: z
         .string()
-        .regex(
-          /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
-          "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
-        )
+        .regex(FIGMA_NODE_ID_PATTERN, FIGMA_NODE_ID_FORMAT_MESSAGE)
         .describe("The ID of the Figma image node to fetch, formatted as 1234:5678"),
       imageRef: z
         .string()
@@ -157,25 +154,36 @@ async function downloadFigmaImages(
     await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
 
     const imagesList = downloads
-      .map(({ result, requestedFileNames }) => {
-        const fileName = path.basename(result.filePath);
-        const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
-        const cropStatus = result.wasCropped ? " (cropped)" : "";
-
-        const dimensionInfo = result.cssVariables
-          ? `${dimensions} | ${result.cssVariables}`
-          : dimensions;
-
-        const aliasText =
-          requestedFileNames.length > 1
-            ? ` (also requested as: ${requestedFileNames.filter((name) => name !== fileName).join(", ")})`
-            : "";
-
-        return `- ${fileName}: ${dimensionInfo}${cropStatus}${aliasText}`;
+      .map(({ fileName, aliases, outcome }) => {
+        const aliasText = aliases.length > 0 ? ` (also requested as: ${aliases.join(", ")})` : "";
+        switch (outcome.status) {
+          case "written": {
+            const { result } = outcome;
+            const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
+            const dimensionInfo = result.cssVariables
+              ? `${dimensions} | ${result.cssVariables}`
+              : dimensions;
+            const cropStatus = result.wasCropped ? " (cropped)" : "";
+            return `- ${fileName}: ${dimensionInfo}${cropStatus}${aliasText}`;
+          }
+          case "not_rendered":
+            return `- ${fileName}: not downloaded, Figma returned no image for it${aliasText}`;
+          case "failed": {
+            const reason =
+              outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+            return `- ${fileName}: failed, ${reason}${aliasText}`;
+          }
+        }
       })
       .join("\n");
 
     return {
+      // Partial failures are listed per file; only a call that wrote nothing because downloads
+      // failed is an error.
+      isError:
+        successCount === 0 && downloads.some(({ outcome }) => outcome.status === "failed")
+          ? true
+          : undefined,
       content: [
         {
           type: "text" as const,
@@ -184,7 +192,7 @@ async function downloadFigmaImages(
           // doesn't match the user's project, this surfaces the mismatch
           // instead of letting it look like a successful no-op. Code-fenced
           // so markdown-rendering clients don't fight separator characters.
-          text: `Downloaded ${successCount} images to \`${resolvedPath}\`:\n${imagesList}`,
+          text: `Downloaded ${successCount} of ${downloads.length} images to \`${resolvedPath}\`:\n${imagesList}`,
         },
       ],
     };
@@ -208,6 +216,20 @@ function getDescription(imageDir?: string) {
   return `Save a Figma file's images to disk: image fills (PNG or GIF), icons and vectors (SVG), or any node rendered as PNG. Copy nodeId, imageRef, gifRef and the crop fields from get_figma_data output. Files are saved under the server's image directory: ${baseDir}`;
 }
 
+/**
+ * What kind of path an agent passed, without the path itself: a rejected path is absolute or
+ * escaping by definition, so it names a user's home and client directories and must not reach
+ * telemetry. The shape alone tells us which contract mistake agents make.
+ */
+function localPathShape(localPath: string): string {
+  if (/^[a-zA-Z]:/.test(localPath)) return "drive_letter";
+  if (/^[/\\]{2}/.test(localPath)) return "unc";
+  if (/^[/\\]/.test(localPath)) return "absolute";
+  if (localPath.startsWith("~")) return "home_tilde";
+  if (/(^|[/\\])\.\.([/\\]|$)/.test(localPath)) return "dotdot";
+  return "relative";
+}
+
 function rejectionDetails(
   reason: ResolveLocalPathFailureReason,
   localPath: string,
@@ -221,7 +243,7 @@ function rejectionDetails(
     case "drive_letter_on_posix":
       return {
         rule: reason,
-        telemetryMessage: `Drive-letter path on POSIX server: ${localPath}`,
+        telemetryMessage: "Drive-letter path on POSIX server",
         userMessage:
           `Invalid path: "${localPath}" starts with a Windows drive letter, but this server is running on POSIX where drive letters don't exist. ` +
           `The server's image directory is "${baseDir}"; pass a path relative to it (e.g., "public/images").`,
@@ -236,7 +258,7 @@ function rejectionDetails(
         : "";
       return {
         rule: reason,
-        telemetryMessage: `Path resolves outside allowed image directory: ${localPath}`,
+        telemetryMessage: `Path resolves outside allowed image directory (path shape: ${localPathShape(localPath)})`,
         userMessage:
           `Invalid path: "${localPath}" resolves outside the allowed image directory. ` +
           `The server's image directory is "${baseDir}". Provide a path relative to this directory (e.g., "public/images" or "assets/icons").` +

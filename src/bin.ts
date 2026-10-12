@@ -115,8 +115,6 @@ if (!argv.command) {
 }
 
 async function main(): Promise<void> {
-  // NODE_ENV=cli is a legacy backdoor for stdio mode
-  const isStdio = argv.flags.stdio === true || process.env.NODE_ENV === "cli";
-  const config = getServerConfig({ ...argv.flags, stdio: isStdio });
+  const config = getServerConfig(argv.flags);
   await startServer(config);
 }

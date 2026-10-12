@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { enterMutatingVerb, committedVerbCount, mutationQueueIdle } from "./mutation-lock.js";
 import { image } from "./flcm.js";
-import { render } from "./render.js";
+import { render } from "./structure.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "./server-deadline.js";
 
 let figma = createFigmaMock();

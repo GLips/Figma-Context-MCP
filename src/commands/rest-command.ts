@@ -1,6 +1,13 @@
-import { loadEnvFile, requireGlobalCredentials, resolveAuth, UsageError } from "~/config.js";
+import {
+  loadEnvFile,
+  requireGlobalCredentials,
+  resolveAuth,
+  resolveProxy,
+  UsageError,
+} from "~/config.js";
 import type { FigmaAuthOptions } from "~/services/figma.js";
-import { parseFigmaUrl } from "~/utils/figma-url.js";
+import { normalizeFigmaNodeId, parseFigmaUrl } from "~/utils/figma-url.js";
+import { installFigmaProxyDispatcher } from "~/utils/proxy-env.js";
 
 /** Flags every REST-backed command takes: where the file is and how to authenticate. */
 export const REST_COMMAND_FLAGS = {
@@ -25,6 +32,12 @@ export const REST_COMMAND_FLAGS = {
     placeholder: "<file>",
     description: "Load environment variables from this file (default ./.env)",
   },
+  proxy: {
+    type: String,
+    placeholder: "<url>",
+    description:
+      "Proxy for Figma API calls, e.g. http://proxy:8080; 'none' ignores HTTP(S)_PROXY (env FIGMA_PROXY)",
+  },
 } as const;
 
 /** The file and node a command targets: flags win over the URL's. */
@@ -44,21 +57,24 @@ export function resolveRestTarget(
     }
   }
   if (!fileKey) throw new UsageError("Either a Figma URL or --file-key is required");
-  // A node id copied from a URL's node-id is dashed; a read matches the API's colon form exactly.
-  return { fileKey, nodeId: nodeId?.replace(/-/g, ":") };
+  return { fileKey, nodeId: nodeId && normalizeFigmaNodeId(nodeId) };
 }
 
 /**
- * A CLI command has no per-request credential channel (unlike HTTP mode), so it fails fast with an
- * actionable error instead of an HTTP-shaped one from `getAuthHeaders`.
+ * The outbound-network bootstrap the server does at startup, for a REST command: load the env file,
+ * route Figma traffic through the configured proxy, and resolve credentials. A CLI command has no
+ * per-request credential channel (unlike HTTP mode), so it fails fast with an actionable error instead
+ * of an HTTP-shaped one from `getAuthHeaders`.
  */
-export function resolveRestAuth(flags: {
+export function prepareRestCommand(flags: {
   env?: string;
   figmaApiKey?: string;
   figmaOauthToken?: string;
+  proxy?: string;
 }): FigmaAuthOptions {
   loadEnvFile(flags.env);
   const auth = resolveAuth(flags);
   requireGlobalCredentials(auth);
+  installFigmaProxyDispatcher(resolveProxy(flags).value);
   return auth;
 }

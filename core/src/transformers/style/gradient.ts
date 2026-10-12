@@ -69,14 +69,9 @@ function mapLinearGradient(
     const mappedStops = gradientStops.map(({ position, color }) => {
       const cssColor = formatRGBAColor(color, paintOpacity);
 
-      // Position along the Figma gradient line (0 = start handle, 1 = end handle)
-      const figmaLinePosition = position;
-
-      // The Figma line spans from t=0 to t=1
-      // The full extended line spans from fullLineStart to fullLineEnd
-      // Map the figma position to the extended line
-      const tOnExtendedLine = figmaLinePosition * (1 - 0) + 0; // This is just figmaLinePosition
-      const extendedPosition = (tOnExtendedLine - fullLineStart) / (fullLineEnd - fullLineStart);
+      // `position` is along the Figma gradient line (0 = start handle, 1 = end handle), which
+      // is the same t the extended line from fullLineStart to fullLineEnd is measured in.
+      const extendedPosition = (position - fullLineStart) / (fullLineEnd - fullLineStart);
       const clampedPosition = Math.max(0, Math.min(1, extendedPosition));
 
       return `${cssColor} ${Math.round(clampedPosition * 100)}%`;

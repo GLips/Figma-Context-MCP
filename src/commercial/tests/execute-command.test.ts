@@ -89,7 +89,7 @@ async function plugin(handle: (frame: Frame, socket: WebSocket) => void, approva
         socket.send(
           JSON.stringify({
             type: "SESSION_TOKEN",
-            sessionToken: "test-token",
+            sessionToken: "clitestsessiontoken0000",
             authorizingUser: { figmaUserId: "cli-test-user", name: "Test User" },
           }),
         );
@@ -271,7 +271,7 @@ describe("saved-script CLI using production plugin services", () => {
         socket.send(
           JSON.stringify({
             type: "SESSION_TOKEN",
-            sessionToken: "late-allow-token",
+            sessionToken: "lateallowsessiontoken0000",
             authorizingUser: { figmaUserId: "cli-test-user", name: "Test User" },
           }),
         );

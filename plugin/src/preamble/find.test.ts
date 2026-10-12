@@ -10,8 +10,8 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { find, findOne, get, selection } from "./flcm.js";
-import { render } from "./render.js";
+import { find, findOne, get, selection } from "./read.js";
+import { render } from "./structure.js";
 import { warnings } from "./warnings.js";
 
 test("find returns matching nodes as slim handles with in-context sizing intent", async () => {

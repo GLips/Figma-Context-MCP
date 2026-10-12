@@ -7,7 +7,8 @@
 // that lets the read verbs return deep canonical shapes across the bridge intact.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { safeSerialize, guardReturnValue, looksLikeNode, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
+import { safeSerialize, guardReturnValue, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
+import { looksLikeNode } from "./preamble/live-node.js";
 
 // A live node is anything carrying id + type + `removed` (present on every BaseNode). We fake the SHAPE the
 // discriminator keys on — serialize.ts never touches figma.*, so a POJO with these fields IS a "live node".

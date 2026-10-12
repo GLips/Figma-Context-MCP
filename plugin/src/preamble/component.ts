@@ -90,7 +90,7 @@ const VARIANTS_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.variantsOpt
 // ---- what an flcm.component call declares, document-blind then resolved ----
 
 /** One `propertyDefinitions` entry as authored: shape-checked, nothing looked up yet. */
-export interface AuthoredDefinition {
+interface AuthoredDefinition {
   name: string;
   /** The read's lowercase word — kept as authored so refusals speak the agent's own vocabulary. */
   type: string;
@@ -194,7 +194,7 @@ export function compilePropertyDefinition(name: string, raw: unknown, at: string
 
 // Every bound node in the tree, ROOT EXCLUDED: the root becomes the component itself, so a binding
 // on it would name a property of a component that is the node — refused rather than dropped.
-function collectBoundWriteNodes(tree: WriteNode): BoundWriteNode[] {
+function collectChildBindings(tree: WriteNode): BoundWriteNode[] {
   if (tree.componentPropertyReferences) {
     throw new Error(
       SUBJECT + ": the tree's ROOT carries `componentPropertyReferences`, and the root is what BECOMES the component — there is no outer component whose property could drive it. Bind a child instead.",
@@ -238,9 +238,6 @@ function assertBindingsResolve(bound: readonly BoundWriteNode[], definitions: re
 // A slot IS a frame in the definition, so exactly one frame must claim it. Neither end is a value
 // flcm can invent: with none, Figma's own createSlot would leave an unpositioned 100×100 box in the
 // component; with two, the slot's content would have two places to land.
-//
-// `form` is what the refusal is FOR: the target form has no authored tree to add a binding to, so telling it
-// to write `componentPropertyReferences` would name a word its own call can't express.
 function assertSlotsAreBound(bound: readonly BoundWriteNode[], definitions: readonly AuthoredDefinition[]): void {
   for (const definition of definitions) {
     if (definition.figmaType !== "SLOT") continue;
@@ -364,7 +361,7 @@ export function agreedDefault(
   );
 }
 
-// The target form carries no authored tree, so it has nowhere to write a binding. Both ways out bind
+// A bare target (a live root with no authored children) has nowhere to write a binding. Both ways out bind
 // live layers without retyping their content.
 function promoteThenBind(definition: AuthoredDefinition): string {
   const binding = "componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }";
@@ -387,11 +384,9 @@ function authoredTextOf(wn: WriteNode): string | undefined {
 
 // ---- the live subject ----
 
-/** Which of the verb's two forms a refusal is speaking to — they can express different fixes. */
-
 // Figma's createComponentFromNode "behaves like the Create component button": handed a node it can't
 // CONVERT it wraps it in a new component frame instead. That is never what the call asked for, and
-// worse it is silent — so both forms refuse the wrappable cases with this one sentence rather than
+// worse it is silent — so a built root and a live one both refuse the wrappable cases with this one sentence rather than
 // hand back a component around the thing the agent wanted to BE the component.
 const WOULD_WRAP =
   "Figma would WRAP it in a new component rather than turn it into one, so flcm refuses rather than build something you didn't ask for";
@@ -507,7 +502,6 @@ export function writeBindingReferences(bound: readonly BoundLiveNode[], suffixed
 }
 
 interface PreparedBuiltComponent {
-  kind: "built";
   tree: WriteNode;
   loaded: LoadedTreeResources;
   bound: BoundWriteNode[];
@@ -515,7 +509,6 @@ interface PreparedBuiltComponent {
 }
 
 interface GatedBuiltComponent {
-  kind: "built";
   tree: WriteNode;
   resources: RenderResources;
   definitions: PreparedDefinition[];
@@ -525,6 +518,12 @@ interface GatedBuiltComponent {
 export function component(specOrTarget: NodeSpec | Target, options?: ComponentOptions): Promise<AuthoredTree> {
   return enterMutatingVerb("component", async (): Promise<PreparedBuiltComponent> => {
     const prepared = compileComponentOptions(options);
+    if (typeof specOrTarget !== "string" && (!specOrTarget || typeof specOrTarget !== "object" || Array.isArray(specOrTarget))) {
+      throw new Error(
+        SUBJECT + ' takes a node to promote: a spec ({ type: "FRAME", … }, or { id, children } for a live frame) or ' + COMPONENT_TARGET_HINT +
+          " — got " + JSON.stringify(specOrTarget) + ".",
+      );
+    }
     const spec = typeof specOrTarget === "string" || "__flcmId" in specOrTarget
       ? { id: (await resolveTarget(specOrTarget as Target)).id } : specOrTarget;
     const tree = compileTree(spec, "flcm.component.spec");
@@ -537,15 +536,15 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
         assertSizingResolvesAgainstParentFrame(tree.layout, true, SUBJECT);
       }
     }
-    const bound = collectBoundWriteNodes(tree);
+    const bound = collectChildBindings(tree);
     assertBindingsResolve(bound, prepared.definitions);
     assertSlotsAreBound(bound, prepared.definitions);
-    return { kind: "built", tree, loaded, bound, options: prepared };
+    return { tree, loaded, bound, options: prepared };
   }, (prepared): GatedBuiltComponent => {
     const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
     const live = resources.live?.get(prepared.tree);
     if (live) assertPromotable(live.node);
-    return { kind: "built", tree: prepared.tree, resources,
+    return { tree: prepared.tree, resources,
       definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live,
         // A live root with no authored children: nothing in the call can carry a binding.
         Boolean(prepared.tree.liveId) && !prepared.tree.children?.length), options: prepared.options };
@@ -570,7 +569,7 @@ function applyBuiltComponent({ tree, resources, definitions, options }: GatedBui
     // Style links, diagnostics and warnings were queued on the frame, which no longer exists.
     retargetReplacedNode(root, comp);
     // The root's own key rides across by hand: createComponentFromNode returns a NEW node, so the
-    // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs
+    // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs:
     // Figma moves the same child nodes into the component.
     if (typeof tree.key === "string") {
       writeKey(comp, tree.key);

@@ -296,7 +296,7 @@ export function resolveFont(fonts: FontMap, family: Bindable<string> | undefined
 }
 
 /** One authored font word the loaded font does not honour, in WarningRecord's prop/authored/realized shape. */
-export interface FontDivergence { prop: "fontFamily" | "fontWeight" | "fontStyle"; authored: string | number; realized: string }
+interface FontDivergence { prop: "fontFamily" | "fontWeight" | "fontStyle"; authored: string | number; realized: string }
 
 // Where the resolved font departs from what was written: an unavailable family falls back, a weight snaps
 // to the nearest style the family has, an italic the family lacks comes out upright. Only AUTHORED words

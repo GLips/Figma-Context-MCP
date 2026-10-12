@@ -56,7 +56,7 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 // we only need enough to identify the origin ("Blocked by Zscaler", etc.).
 const MAX_RESPONSE_BODY_CHARS = 500;
 
-export async function fetchJSON<T extends { status?: number }>(
+export async function fetchJSON<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<{ data: T; rawSize: number }> {

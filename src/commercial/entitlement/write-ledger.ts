@@ -29,8 +29,8 @@ export interface LedgerExecution {
 export interface AuthorizingUserLedger {
   executions: LedgerExecution[];
   /**
-   * The server's last answer for this Authorizing User: its count covers every device and install, so it can
-   * exceed the local one. Only ever used to RAISE the effective count (writesUsedThisMonth).
+   * The server's last answer for this Authorizing User: its count covers every device and install,
+   * including this one's reported Writes but none of its unreported ones (writesUsedThisMonth).
    */
   serverReported: { month: UtcMonth; usedThisMonth: number; reportedAt: string } | null;
 }
@@ -84,13 +84,16 @@ export function mergeWriteLedgers(ledger: WriteLedger, recorded: WriteLedger): W
   return merged;
 }
 
-/** The effective count: max(local Writes this month, the server's last count for this month). */
+/**
+ * The effective count: the server's last count for this month plus this install's Writes it hasn't
+ * seen yet. With no server count for the month, every local Write this month.
+ */
 export function writesUsedThisMonth(ledger: WriteLedger, figmaUserId: string, now: Date): number {
   const current = ledgerFor(ledger, figmaUserId);
   const month = utcMonthOf(now);
-  const local = current.executions.filter((e) => utcMonthOf(new Date(e.at)) === month).length;
-  const server = current.serverReported?.month === month ? current.serverReported.usedThisMonth : 0;
-  return Math.max(local, server);
+  const thisMonth = current.executions.filter((e) => utcMonthOf(new Date(e.at)) === month);
+  if (current.serverReported?.month !== month) return thisMonth.length;
+  return current.serverReported.usedThisMonth + thisMonth.filter((e) => !e.reported).length;
 }
 
 /** The next batch to report: executions the server hasn't accepted yet, oldest first. */

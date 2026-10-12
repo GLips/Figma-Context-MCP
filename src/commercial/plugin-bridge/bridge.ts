@@ -24,9 +24,9 @@ import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/server-deadline";
  * Every request the server can send the plugin, as a closed union rather than `{ type: string }` plus
  * an index signature.
  *
- * The open shape typechecked the one call this whole design exists to forbid: since ADR-0010 the flcm
- * std-lib rides on EXECUTE_CODE, so a `preamble`-less one is a request the plugin must refuse. Making
- * that a compile error is cheaper than discovering it as a runtime ERROR envelope.
+ * Closed so a `preamble`-less EXECUTE_CODE is a compile error: the flcm std-lib rides on EXECUTE_CODE
+ * (ADR-0010), so the plugin must refuse one without it, and a type error is cheaper than discovering
+ * that as a runtime ERROR envelope.
  *
  * The plugin still validates what arrives, and should — JSON off a socket is untrusted however this
  * end is typed. This closes the SENDING side, which is the side a refactor can quietly break.
@@ -84,8 +84,9 @@ export type CapabilityHandler = (
   context: { signal: AbortSignal; run: ChannelRunContext },
 ) => Promise<unknown>;
 /**
- * Unsolicited plugin events the bridge relays but doesn't own. Both arrive only from the current
- * holder. `onSessionApproved` fires on each Allow handover — the moment write access is checked.
+ * Unsolicited plugin events the bridge relays but doesn't own. The first two arrive only from the
+ * current holder once its version handshake passes. `onSessionApproved` fires on each Allow
+ * handover — the moment write access is checked.
  */
 export interface PluginBridgeEvents {
   onSessionApproved?: (authorizingUser: AuthorizingUser | null) => void;
@@ -146,8 +147,8 @@ interface Pending {
   runContext: ChannelRunContext;
 }
 
-// The per-request INACTIVITY deadline, not a hard cap (protocol 2): run-scoped traffic — today,
-// servicing the run's mid-run channel request — suspends and re-arms it (serveChannelRequest), so a
+// The per-request INACTIVITY deadline, not a hard cap: run-scoped traffic — servicing the run's
+// mid-run channel request — suspends and re-arms it (serveChannelRequest), so a
 // run only dies when neither side is doing its work. It measures SILENCE, which is why a queued run
 // has none at all (armInactivityDeadline). Injectable via the constructor so the contract harness
 // can drive timeouts without waiting out 15 real seconds. The run mirrors the default on its own
@@ -214,31 +215,15 @@ const MAX_INFLIGHT_SERVICES_PER_RUN = 4;
 // reconnect cadence so the live plugin reclaims the freed slot on its very next retry.
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
-// How long a starting server keeps re-probing a busy port that THIS project already holds a persisted
-// approval for, before giving up and advancing to the next port in the block.
+// How long a starting server keeps re-probing a busy port that THIS project holds a persisted approval
+// for, before advancing. Durable approval keys on (cwd, PORT), so a restart reloads its token only if
+// it reclaims its own port, and a dev-watch save-restart is a photo finish (the predecessor frees the
+// port ~145ms after SIGTERM, the successor binds ~280ms later). Advancing past it lands on an empty
+// approval slot, and the human is re-prompted after a save they didn't think was a restart.
 //
-// Why this exists: durable approval keys on (cwd, PORT), so a restart only reloads its token if it
-// reclaims its own port — and a dev-watch save-restart is a photo finish. Measured on the real
-// `pnpm dev` loop: the predecessor releases the port ~145ms after SIGTERM and the successor binds
-// ~280ms later. Anything that slows the predecessor's exit past the rebuild+spawn (a telemetry flush
-// on a slow network, a loaded machine, an in-flight request) inverts that margin, the successor
-// probe-advances to the next port, finds an EMPTY approval slot there, echoes `sessionToken: null`,
-// and the plugin — whose own gate is per-connection — correctly treats it as a brand-new session and
-// re-prompts with a fresh pairing code. The human sees "why is it asking again?" after a save they
-// didn't think was a restart.
-//
-// What the gate actually knows, stated exactly: "this project was approved on this port." That is the
-// only evidence available at bind time, and it is weaker than "the holder is my own dying
-// predecessor" — the persistence key has no process in it, so nothing here can tell a predecessor
-// from a live sibling. The consequence, named rather than glossed: a SECOND server started from the
-// same cwd while an approved one holds the base port pays the FULL window (~2s of extra startup)
-// before advancing — the Cursor-plus-Claude-Code case in approval-store.ts. That cost is accepted
-// deliberately; it is a one-time delay on a second session, weighed against re-prompting a human on
-// every save of the first. A server whose cwd holds NO approval for the busy port (a different
-// project, a first-ever run) advances instantly and never pays it.
-//
-// The budget is a single deadline for the whole probe (not per port), so worst-case added startup is
-// bounded by the window once, however many held-and-approved ports the block contains.
+// The gate knows only "this project was approved on this port", which can't tell a dying predecessor
+// from a live sibling. So a SECOND same-cwd server pays the full window once before advancing:
+// accepted, against re-prompting on every save. One deadline for the whole probe, not per port.
 const RECLAIM_WINDOW_MS = 2_000;
 const RECLAIM_RETRY_MS = 100;
 
@@ -264,8 +249,7 @@ const RECENT_APPROVAL_MS = 30 * 60 * 1000;
  *    its own `sandbox="allow-scripts"` iframe (opaque origin). So this only stops the
  *    naive same-origin page, not a crafted one.
  *  - A non-browser local process can send any Origin (or none) it likes.
- * Closing those is Phase 2's job: the in-Figma human-consent gate is the real trust
- * boundary. This check just removes the cheapest drive-by (a visited page's direct
+ * The in-Figma human-consent gate is the real trust boundary. This check just removes the cheapest drive-by (a visited page's direct
  * `new WebSocket`) so consent isn't the only thing standing between a page and the socket.
  */
 function isAllowedOrigin(origin: string | undefined): boolean {
@@ -276,12 +260,11 @@ function isAllowedOrigin(origin: string | undefined): boolean {
  * Owns the single WebSocket connection to the Figma plugin and the request/response
  * correlation. `request()` is the only REQUEST path: it stamps every outbound request
  * with a fresh id and resolves when a reply carrying that same id arrives. Replies
- * without a matching pending id are dropped. This is where the plan's "every WS
- * request carries a correlation id" invariant is enforced — callers never deal with
- * ids themselves. Two server→plugin frames live OUTSIDE it by design: the id-less
- * CANCEL on timeout (whose own answer, CANCEL_RESULT, comes back run-scoped rather than
- * correlated), and CHANNEL_RESPONSE, which answer the PLUGIN's
- * ids (protocol 2's reverse direction, serveChannelRequest).
+ * without a matching pending id are dropped. This is where "every WS request carries a
+ * correlation id" is enforced — callers never deal with ids themselves. Two server→plugin
+ * frames live OUTSIDE it by design: the id-less CANCEL on timeout (whose own answer,
+ * CANCEL_RESULT, comes back run-scoped rather than correlated), and CHANNEL_RESPONSE, which
+ * answers the PLUGIN's ids (the reverse direction, serveChannelRequest).
  *
  * It is also where the version gate lives: every connection runs its own GET_VERSION handshake, and
  * a request that isn't part of that handshake is held until the verdict lands, then sent or refused
@@ -334,19 +317,15 @@ export class PluginBridge {
   // Heartbeat liveness for the current socket. Each ping sets it false; the holder's pong
   // sets it true. A holder that misses a ping is half-open (dead but no FIN) and gets reaped.
   private socketAlive = false;
-  // The session token the sandbox minted on Allow and handed back over the WS. This is the
-  // FIRST bridge field that must SURVIVE reconnects — it is deliberately NOT part of the
-  // connection-scoped cluster above (socket/compatibility/pairingCode/handshaked/socketAlive),
-  // all of which reset on connect/disconnect. It is this server's proof of a prior approval:
-  // echoed in every SESSION_INFO so the sandbox re-keys sticky approval to it. A same-path squatter
-  // is a different process whose token starts null, so it echoes none and the sandbox re-prompts
-  // (Invariant: approval keys on the token, not the forgeable identity). Mirror of the Phase 2
-  // warning that sticky approval can't reuse the connection-scoped pattern — same reasoning, server
-  // side.
+  // The session token the sandbox minted on Allow and handed back over the WS. It SURVIVES
+  // reconnects — deliberately NOT part of the connection-scoped cluster above, all of which resets on
+  // connect/disconnect. It is this server's proof of a prior approval: echoed in every SESSION_INFO so
+  // the sandbox re-keys sticky approval to it. A same-path squatter is a different process whose token
+  // starts null, so it echoes none and the sandbox re-prompts (approval keys on the token, not the
+  // forgeable identity).
   //
-  // Held in memory here AND persisted through `store`, so it survives a server-process RESTART (not
-  // just a WS reconnect). A restart is exactly what used to drop this back to null and re-prompt with
-  // a fresh pairing code; reloading it once the port binds closes that gap (see approval-store.ts).
+  // Held in memory AND persisted through `store`, reloaded once the port binds, so a server-process
+  // restart doesn't re-prompt the human either (see approval-store.ts).
   private sessionToken: string | null = null;
   // Who clicked Allow for `sessionToken` — persisted and cleared with it, never independently.
   private authorizingUser: AuthorizingUser | null = null;
@@ -441,8 +420,8 @@ export class PluginBridge {
   /**
    * Probe-bind the first free port in the block, advancing on `EADDRINUSE`. The OS guarantees no
    * double-bind, so two concurrent servers sharing one block never collide — the second simply
-   * advances to the next free port. This is what lets N sessions coexist on N distinct ports
-   * (Phase 3). The per-connection handlers (verifyClient, connection/close) are attached to every
+   * advances to the next free port. This is what lets N sessions coexist on N distinct ports.
+   * The per-connection handlers (verifyClient, connection/close) are attached to every
    * probe's server, but a probe that loses the race to EADDRINUSE is closed before it accepts, so
    * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
    */
@@ -478,7 +457,7 @@ export class PluginBridge {
           Logger.log(`Refused WS connection from web origin ${origin}`);
           return false;
         }
-        // Anti-hijack (Slice 1.1), now liveness-aware (Slice 1.3). An ESTABLISHED holder —
+        // Anti-hijack, liveness-aware. An ESTABLISHED holder —
         // one that has answered the server over the frozen envelope (handshaked) — is never
         // displaced, so a web page or local process can't steal a live plugin's channel by
         // connecting after it. But a holder that has NOT handshaked must not trap the real
@@ -487,7 +466,7 @@ export class PluginBridge {
         // reclaim the slot — reclaim is triggered by ANY admitted (allowed-origin) connection,
         // gated on the HOLDER being non-established, not on the newcomer proving itself first;
         // the newcomer then completes its own handshake to drive. (Replacing one non-established
-        // holder with another is harmless — consent, Phase 2, is the real write gate.) A
+        // holder with another is harmless — consent is the real write gate.) A
         // half-open holder that DID handshake looks established here and is reaped separately by
         // the heartbeat, freeing the slot.
         if (this.socket && this.socket.readyState === WebSocket.OPEN && this.handshaked) {
@@ -807,11 +786,10 @@ export class PluginBridge {
    * a restart clears to "no plugin has ever been here", which is indistinguishable from a genuine cold
    * start and means the opposite.
    *
-   * WHY RECENCY AND NOT MERE PRESENCE, which is what this first shipped as: the store's own expiry is a
-   * 24h sliding TTL, sized for "don't re-prompt an active human", and reading it as "a plugin is around"
-   * quietly turned approval storage into feature-enable storage — someone who approved code mode once
-   * yesterday, then closed Figma, kept getting write tools advertised on every later server process all
-   * day. A much shorter window answers the question actually being asked.
+   * Recency, not mere presence: the store's own expiry is a 24h sliding TTL, sized for "don't re-prompt
+   * an active human". Reading that as "a plugin is around" would turn approval storage into
+   * feature-enable storage — someone who approved code mode yesterday, then closed Figma, would see
+   * write tools advertised all day. A much shorter window answers the question actually being asked.
    *
    * It is still a PROXY, and deliberately a cheap one. The asymmetry that makes it safe: too generous
    * only shows a few extra tools to someone who used code mode minutes ago, while too strict reports a
@@ -1009,9 +987,9 @@ export class PluginBridge {
   /**
    * A deadline fired — the inactivity timeout or the absolute run ceiling: tell the plugin to
    * cancel the run, then reject the caller — cancel, never silently abandon. Plugin-side the
-   * CANCEL is enforced (Phase 2): the run is recorded as cancelled, a still-queued run is refused
+   * CANCEL is enforced: the run is recorded as cancelled, a still-queued run is refused
    * at dequeue, an executing run is refused before its next mutating verb (the preamble mutation
-   * lock, plan invariant 4), and a run suspended at its server await has that await rejected. The
+   * lock), and a run suspended at its server await has that await rejected. The
    * zombie-refusal in serveChannelRequest stays the server's own half (channel requests naming a
    * dead run are refused). Don't add a second enforcement path here; the lock owns it. The frame
    * is a run-scoped, id-less notification — the reverse mirror of the plugin's
@@ -1148,47 +1126,38 @@ export class PluginBridge {
     // server request), so it's handled here, before the id-match path that would drop it. Persist
     // it OUTSIDE the connection-scoped cluster (the field never clears on disconnect) so every
     // later SESSION_INFO echoes it and the sandbox re-keys sticky approval to the token.
-    if (msg.type === "SESSION_TOKEN" && typeof msg.sessionToken === "string") {
-      this.sessionToken = msg.sessionToken;
-      this.authorizingUser = parseAuthorizingUser(msg.authorizingUser);
-      // Persist so the approval survives a server restart, not just this connection (approval-store.ts).
-      // boundPort is set by `listening`, which precedes any connection, so it is non-null here.
-      if (this.boundPort !== null)
-        this.store.save(
-          this.boundPort,
-          msg.sessionToken,
-          SESSION_IDENTITY,
-          this.authorizingUser,
-          Date.now(),
-        );
-      // The handover spends the claim: approval now rides the token, and a stale claim must not
-      // outlive the request it was minted for.
-      this.sessionClaim = null;
-      if (this.boundPort !== null) this.store.clearSessionClaim(this.boundPort);
-      Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
-      this.events.onSessionApproved?.(this.authorizingUser);
+    if (msg.type === "SESSION_TOKEN" && isPluginMintedToken(msg.sessionToken)) {
+      const { sessionToken, authorizingUser } = msg;
+      this.acceptFromCompatibleConnection(socket, () =>
+        this.acceptSessionToken(sessionToken, authorizingUser),
+      );
       return;
     }
     // The plugin's claim on the approval request this session just made (unsolicited, id-less, like
     // SESSION_TOKEN). Kept so a later connection can present it in SESSION_INFO; see `sessionClaim`.
-    if (msg.type === "SESSION_CLAIM" && isSessionClaim(msg.sessionClaim)) {
-      this.sessionClaim = msg.sessionClaim;
-      if (this.boundPort !== null)
-        this.store.saveSessionClaim(this.boundPort, msg.sessionClaim, Date.now());
+    if (msg.type === "SESSION_CLAIM" && isPluginMintedToken(msg.sessionClaim)) {
+      const { sessionClaim } = msg;
+      this.acceptFromCompatibleConnection(socket, () => {
+        this.sessionClaim = sessionClaim;
+        if (this.boundPort !== null)
+          this.store.saveSessionClaim(this.boundPort, sessionClaim, Date.now());
+      });
       return;
     }
     if (msg.type === "WRITE_ACCESS_SIGN_IN") {
-      this.events.onWriteAccessSignIn?.();
+      this.acceptFromCompatibleConnection(socket, () => this.events.onWriteAccessSignIn?.());
       return;
     }
     // The human revoked in the arbiter panel. Also unsolicited (id-less) — forget the token both in
     // memory and on disk so no future SESSION_INFO can re-approve; the plugin already cleared its own
     // approvedTokens entry, so the next write re-prompts.
     if (msg.type === "REVOKE_SESSION") {
-      this.sessionToken = null;
-      this.authorizingUser = null;
-      if (this.boundPort !== null) this.store.clear(this.boundPort);
-      Logger.log("Session approval revoked by the human — cleared the persisted token");
+      this.acceptFromCompatibleConnection(socket, () => {
+        this.sessionToken = null;
+        this.authorizingUser = null;
+        if (this.boundPort !== null) this.store.clear(this.boundPort);
+        Logger.log("Session approval revoked by the human — cleared the persisted token");
+      });
       return;
     }
     // Reverse direction: the plugin calls a server capability mid-run. Its ids live in the
@@ -1266,7 +1235,51 @@ export class PluginBridge {
   }
 
   /**
-   * Service a plugin-issued CHANNEL_REQUEST (protocol 7). Traffic-as-heartbeat: the run's
+   * Apply a message that changes durable approval state (or starts network work) only once its
+   * connection has passed the version handshake. `verifyClient` admits any Origin-less or `null`-origin
+   * client into a free slot, so "is the current socket" alone would let a page or local process plant
+   * or wipe the persisted approval. Any peer that echoes GET_VERSION passes, so this raises the bar
+   * rather than authenticating; the plugin's own approvedTokens check stays the real gate.
+   *
+   * Deferred, not dropped, while the verdict is pending: the plugin can hand over a token in answer to
+   * SESSION_INFO, which follows GET_VERSION closely enough to arrive before its verdict lands.
+   */
+  private acceptFromCompatibleConnection(socket: WebSocket, apply: () => void): void {
+    if (this.compatibility === "compatible") {
+      apply();
+      return;
+    }
+    if (this.compatibility === "incompatible") return;
+    void this.verdictSettled
+      .then(() => {
+        if (this.socket === socket && this.compatibility === "compatible") apply();
+      })
+      .catch(() => Logger.log("Ignoring invalid plugin message"));
+  }
+
+  private acceptSessionToken(sessionToken: string, authorizingUser: unknown): void {
+    this.sessionToken = sessionToken;
+    this.authorizingUser = parseAuthorizingUser(authorizingUser);
+    // Persist so the approval survives a server restart, not just this connection (approval-store.ts).
+    // boundPort is set by `listening`, which precedes any connection, so it is non-null here.
+    if (this.boundPort !== null)
+      this.store.save(
+        this.boundPort,
+        sessionToken,
+        SESSION_IDENTITY,
+        this.authorizingUser,
+        Date.now(),
+      );
+    // The handover spends the claim: approval now rides the token, and a stale claim must not
+    // outlive the request it was minted for.
+    this.sessionClaim = null;
+    if (this.boundPort !== null) this.store.clearSessionClaim(this.boundPort);
+    Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
+    this.events.onSessionApproved?.(this.authorizingUser);
+  }
+
+  /**
+   * Service a plugin-issued CHANNEL_REQUEST. Traffic-as-heartbeat: the run's
    * inactivity deadline is SUSPENDED while WE are the side doing the work and re-armed when the
    * run's last in-flight service settles. The run ceiling never suspends; the inactivity deadline
    * only counts plugin-side silence.
@@ -1333,9 +1346,9 @@ export class PluginBridge {
       );
       return;
     }
-    // Only a code run may call the server. Server-issued handshake requests (SESSION_INFO, GET_VERSION)
-    // share the req-N id namespace, so without this gate a holder could burn server work — and
-    // hold a suspension — against a pending it was never granted a run for.
+    // Only a code run may call the server. Every server-issued request (GET_VERSION, SESSION_INFO,
+    // APPROVAL_STATUS, …) is in `pending` under a correlation id the holder was sent, so without this
+    // gate a holder could burn server work — and hold a suspension — against a request that is no run.
     if (run.payloadType !== "EXECUTE_CODE") {
       refuse(
         "INVALID_INPUT",
@@ -1469,9 +1482,10 @@ function waitForSignal(promise: Promise<void>, signal?: AbortSignal): Promise<vo
 }
 
 /**
- * A plausible plugin-minted session claim. It arrives off the socket and is written to disk, so its
- * shape is bounded here; the plugin mints base-36 strings of ~30 characters.
+ * A plausible plugin-minted session token or claim (both come from code.ts `mintToken`). They arrive
+ * off the socket and are written to disk, so their shape is bounded here; the plugin mints base-36
+ * strings of ~30 characters.
  */
-function isSessionClaim(value: unknown): value is string {
+function isPluginMintedToken(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-z]{16,64}$/.test(value);
 }

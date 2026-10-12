@@ -20,7 +20,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "start": "node dist/bin.js",
-    "start:cli": "cross-env NODE_ENV=cli node dist/bin.js",
+    "start:cli": "node dist/bin.js --stdio",
     "start:http": "node dist/bin.js",
     "dev": "cross-env NODE_ENV=development tsup",
     "dev:cli": "cross-env NODE_ENV=development tsup -- --stdio",

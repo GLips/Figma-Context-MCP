@@ -1,6 +1,6 @@
 import type { NodeSnapshot, SnapshotColor, SnapshotEffect, SnapshotVector } from "../snapshot.js";
 import { formatRGBAColor, formatSolidColor } from "./style.js";
-import { pixelRound } from "../utils.js";
+import { isVisible, pixelRound } from "../utils.js";
 
 /** Object form of the beyond-CSS effects — read == create (each mirrors its flcm.effects sugar). */
 export interface SimplifiedGlass {
@@ -107,7 +107,7 @@ export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
 export function simplifyEffectStack(stack: SnapshotEffect[], onText: boolean): SimplifiedEffects {
   // Figma stores effects bottom-first; every list below reads top-first, as CSS does (box-shadow's
   // first shadow paints on top), so reverse once here. The plugin's toFigmaEffects reverses back.
-  const effects = stack.filter((e) => e.visible).reverse();
+  const effects = stack.filter(isVisible).reverse();
 
   // Drop and inner shadows share CSS box-shadow, interleaved in their real stacking order.
   const boxShadow = effects
@@ -218,7 +218,9 @@ function simplifyProgressiveBlur(e: SnapshotProgressiveEffect): SimplifiedProgre
 
 function simplifyShadow(effect: SnapshotShadowEffect) {
   const inset = effect.type === "INNER_SHADOW" ? "inset " : "";
-  return `${inset}${effect.offset.x}px ${effect.offset.y}px ${effect.radius}px ${effect.spread ?? 0}px ${formatRGBAColor(effect.color)}`;
+  const { x, y } = effect.offset;
+  const [dx, dy, blur, spread] = [x, y, effect.radius, effect.spread ?? 0].map(pixelRound);
+  return `${inset}${dx}px ${dy}px ${blur}px ${spread}px ${formatRGBAColor(effect.color)}`;
 }
 
 function simplifyBlur(effect: SnapshotEffect) {

@@ -72,13 +72,23 @@ export type DeviceTokenPoll =
   | { kind: "pending" }
   | { kind: "slow-down" }
   | { kind: "denied" }
-  | { kind: "expired" };
+  | { kind: "expired" }
+  // Any other RFC 8628 error code (invalid_client, invalid_grant, …): the flow can't finish.
+  | { kind: "failed"; error: string };
 
-/** A request that didn't produce a usable answer — network, timeout, 5xx, 429, or a malformed body. */
-export class FramelinkApiUnavailableError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+/**
+ * A request that didn't produce a usable answer. `unavailable` is an outage worth retrying later
+ * (network, timeout, 5xx, 429, a malformed or misaddressed body); `rejected` is any other 4xx — the
+ * app understood and refused, so the same request will keep failing.
+ */
+export class FramelinkApiError extends Error {
+  constructor(
+    readonly kind: "unavailable" | "rejected",
+    message: string,
+    options?: { cause?: unknown },
+  ) {
     super(message, options);
-    this.name = "FramelinkApiUnavailableError";
+    this.name = "FramelinkApiError";
   }
 }
 
@@ -97,8 +107,19 @@ export class FramelinkApiClient {
       method: "POST",
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw unavailable(FRAMELINK_API_PATHS.writeUsage, response);
-    return parseBody(WriteUsageResponseBody, response, FRAMELINK_API_PATHS.writeUsage);
+    if (!response.ok) throw httpError(FRAMELINK_API_PATHS.writeUsage, response);
+    const answer = await parseBody(
+      WriteUsageResponseBody,
+      response,
+      FRAMELINK_API_PATHS.writeUsage,
+    );
+    // A count for someone else must not land in this user's ledger.
+    if (answer.figmaUserId !== body.figmaUserId)
+      throw new FramelinkApiError(
+        "unavailable",
+        `${FRAMELINK_API_PATHS.writeUsage}: answered for a different Figma user`,
+      );
+    return answer;
   }
 
   async getWriteEntitlement(token: string): Promise<WriteEntitlementResult> {
@@ -107,7 +128,7 @@ export class FramelinkApiClient {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (response.status === 401) return { kind: "invalid-token" };
-    if (!response.ok) throw unavailable(FRAMELINK_API_PATHS.writeEntitlement, response);
+    if (!response.ok) throw httpError(FRAMELINK_API_PATHS.writeEntitlement, response);
     const body = await parseBody(
       WriteEntitlementResponse,
       response,
@@ -124,7 +145,7 @@ export class FramelinkApiClient {
         scope: deviceScopeFor(figmaUserId),
       }),
     });
-    if (!response.ok) throw unavailable(FRAMELINK_API_PATHS.deviceCode, response);
+    if (!response.ok) throw httpError(FRAMELINK_API_PATHS.deviceCode, response);
     const body = await parseBody(DeviceCodeResponse, response, FRAMELINK_API_PATHS.deviceCode);
     return {
       deviceCode: body.device_code,
@@ -149,12 +170,13 @@ export class FramelinkApiClient {
       return { kind: "token", accessToken: body.access_token };
     }
     // RFC 8628 §3.5: pending and slow_down arrive as 400s carrying an `error` code.
-    if (response.status !== 400) throw unavailable(FRAMELINK_API_PATHS.deviceToken, response);
+    if (response.status !== 400) throw httpError(FRAMELINK_API_PATHS.deviceToken, response);
     const { error } = await parseBody(DeviceTokenError, response, FRAMELINK_API_PATHS.deviceToken);
     if (error === "authorization_pending") return { kind: "pending" };
     if (error === "slow_down") return { kind: "slow-down" };
     if (error === "access_denied") return { kind: "denied" };
-    return { kind: "expired" };
+    if (error === "expired_token") return { kind: "expired" };
+    return { kind: "failed", error };
   }
 
   private async send(path: string, init: RequestInit): Promise<Response> {
@@ -165,17 +187,21 @@ export class FramelinkApiClient {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
-      throw new FramelinkApiUnavailableError(`${path}: ${(err as Error).message}`, { cause: err });
+      throw new FramelinkApiError("unavailable", `${path}: ${(err as Error).message}`, {
+        cause: err,
+      });
     }
   }
 }
 
-function unavailable(path: string, response: Response): FramelinkApiUnavailableError {
-  return new FramelinkApiUnavailableError(`${path}: HTTP ${response.status}`);
+function httpError(path: string, response: Response): FramelinkApiError {
+  const kind = response.status === 429 || response.status >= 500 ? "unavailable" : "rejected";
+  return new FramelinkApiError(kind, `${path}: HTTP ${response.status}`);
 }
 
 async function parseBody<T>(schema: z.ZodType<T>, response: Response, path: string): Promise<T> {
   const parsed = schema.safeParse(await response.json().catch(() => undefined));
-  if (!parsed.success) throw new FramelinkApiUnavailableError(`${path}: unexpected response body`);
+  if (!parsed.success)
+    throw new FramelinkApiError("unavailable", `${path}: unexpected response body`);
   return parsed.data;
 }

@@ -71,8 +71,8 @@
 //     run's id) is answered by typed CHANNEL_RESPONSE; the service window SUSPENDS the
 //     run's deadline (traffic-as-heartbeat); a request naming an untracked run is refused
 //     (zombie-run defense).
-//   • Reverse-channel guards: only an EXECUTE_CODE pending may be drawn on (the req-N namespace
-//     also holds handshake requests), and concurrent services share ONE suspension via a per-run
+//   • Reverse-channel guards: only an EXECUTE_CODE pending may be drawn on (server-issued
+//     handshake requests are pending too), and concurrent services share ONE suspension via a per-run
 //     refcount — the deadline re-arms only when the LAST service settles.
 //
 // Usage:  pnpm contract   (or: npx tsx scripts/bridge-contract.mjs)
@@ -120,7 +120,6 @@ function makeSandbox() {
   return { approvedTokens: new Set(), currentToken: null };
 }
 const sandbox = makeSandbox();
-let mintCounter = 0;
 
 // The version a modeled plugin reports unless the caller says otherwise — CURRENT, so every test
 // that isn't ABOUT version skew gets a plugin the server will actually drive. (Since fig-41 the
@@ -179,7 +178,8 @@ function fakePlugin(
     state.currentToken = null;
   });
   ws.allow = () => {
-    const token = `tok-${++mintCounter}-${Math.random().toString(36).slice(2)}`;
+    // Minted the way code.ts mintToken does: the bridge refuses any token outside that shape.
+    const token = [0, 1, 2].map(() => Math.random().toString(36).slice(2)).join("");
     state.approvedTokens.add(token);
     state.currentToken = token;
     // Hand the token to the server — unsolicited, id-less, like code.ts's figma.ui.postMessage
@@ -299,7 +299,7 @@ plugin.allow();
 await wait(50); // let the handed-over SESSION_TOKEN reach and persist on the bridge
 assert.match(
   String(bridge.getSessionToken()),
-  /^tok-/,
+  /^[0-9a-z]{16,64}$/,
   "the bridge persisted the handed-over session token",
 );
 assert.equal(
@@ -607,7 +607,7 @@ await wait(50);
 const persistedToken = bridgeR1.getSessionToken();
 assert.match(
   String(persistedToken),
-  /^tok-/,
+  /^[0-9a-z]{16,64}$/,
   "the approved server persisted the handed-over token",
 );
 r1.close();
@@ -706,7 +706,7 @@ await wait(50);
 const slipToken = bridgeS1.getSessionToken();
 assert.match(
   String(slipToken),
-  /^tok-/,
+  /^[0-9a-z]{16,64}$/,
   "the pre-restart server on the base port was approved and persisted",
 );
 s1.close();
@@ -794,7 +794,7 @@ d1.allow();
 await wait(50);
 assert.match(
   String(bridgeD1.getSessionToken()),
-  /^tok-/,
+  /^[0-9a-z]{16,64}$/,
   "precondition: the port the successor will wait on is genuinely approved",
 );
 d1.close();
@@ -1569,10 +1569,10 @@ pluginC.on("message", (raw) => {
 });
 await new Promise((res) => pluginC.on("open", res));
 
-// Payload gate: the req-N namespace also holds server-issued handshake requests (SESSION_INFO,
-// GET_VERSION). A CHANNEL_REQUEST naming one of THOSE pendings must be refused — otherwise a
-// hostile holder could burn fetches (and hold a suspension) against a pending it was never
-// granted a run for — and the refusal must not disturb the pending itself.
+// Payload gate: server-issued handshake requests (SESSION_INFO, GET_VERSION) are pending too. A
+// CHANNEL_REQUEST naming one of THOSE pendings must be refused — otherwise a hostile holder could
+// burn fetches (and hold a suspension) against a pending it was never granted a run for — and the
+// refusal must not disturb the pending itself.
 // (GET_VERSION is fired by the bridge itself on connect and answered above, so SESSION_INFO is the
 // handshake pending held open by hand here.)
 const infoP = bridgeC

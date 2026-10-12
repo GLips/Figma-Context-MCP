@@ -5,11 +5,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { render } from "./render.js";
 import { get } from "./read.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { append, measure } from "./structure.js";
+import { render, append, measure } from "./structure.js";
 import { id } from "./flcm.js";
 
 test("grid vocabulary round-trips through render/get/edit/editMany, with parent-dependent alignment", async () => {

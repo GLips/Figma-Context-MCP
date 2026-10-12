@@ -80,13 +80,26 @@ describe("image processing", () => {
         [0, 0.5, 0],
       ];
 
-      await applyCropTransform(filePath, transform);
+      const region = await applyCropTransform(filePath, transform);
 
+      expect(region).toEqual({ left: 0, top: 0, width: 200, height: 200 });
       const dims = await getImageDimensions(filePath);
       expect(dims).toEqual({ width: 200, height: 200 });
     });
 
-    it("returns original image unchanged for invalid crop dimensions", async () => {
+    it("rejects when the image can't be read, rather than reporting a crop", async () => {
+      const filePath = path.join(tmpDir, "not-an-image.png");
+      fs.writeFileSync(filePath, "not a png");
+
+      await expect(
+        applyCropTransform(filePath, [
+          [0.5, 0, 0],
+          [0, 0.5, 0],
+        ]),
+      ).rejects.toThrow();
+    });
+
+    it("leaves the image unchanged for invalid crop dimensions", async () => {
       const filePath = await createTemp("test-crop-invalid.png", 100, 100);
 
       // Zero scale produces invalid (0-width) crop region
@@ -95,8 +108,8 @@ describe("image processing", () => {
         [0, 0, 0],
       ];
 
-      const result = await applyCropTransform(filePath, transform);
-      expect(result).toBe(filePath);
+      const region = await applyCropTransform(filePath, transform);
+      expect(region).toBeNull();
 
       const dims = await getImageDimensions(filePath);
       expect(dims).toEqual({ width: 100, height: 100 });

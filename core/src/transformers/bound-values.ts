@@ -1,5 +1,6 @@
 import type { SnapshotTokenRef } from "../snapshot.js";
 import { variableReference, type VariableReference } from "../tokens.js";
+import { pixelRound } from "../utils.js";
 
 /**
  * Numeric words a variable can stand in for. A bound word emits the reference, carrying its number
@@ -25,7 +26,8 @@ export interface BoundCorners {
 
 /** A number, or the variable bound to it. */
 export function bindNumber(literal: number, ref: SnapshotTokenRef | undefined): BindableNumber {
-  return ref ? variableReference(ref, literal) : literal;
+  const value = pixelRound(literal);
+  return ref ? variableReference(ref, value) : value;
 }
 
 /**
@@ -44,7 +46,7 @@ export function bindParts<K extends string>(
   if (!refs.some(Boolean)) return undefined;
   // Every part on one variable means every part holds its one value.
   if (first && refs.every((ref) => ref?.id === first.id))
-    return variableReference(first, parts[0][1]);
+    return variableReference(first, pixelRound(parts[0][1]));
   const out = {} as Record<K, BindableNumber>;
   for (const [key, literal, ref] of parts) out[key] = bindNumber(literal, ref);
   return out;

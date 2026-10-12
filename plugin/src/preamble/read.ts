@@ -24,6 +24,7 @@ import { registerRead } from "./host.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
+import { FIND_MATERIALIZE_CAP } from "./find-cap.js";
 import { TokenLookups } from "./tokens.js";
 import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
@@ -434,15 +435,6 @@ async function projectHits(hits: readonly SceneNode[], indexRoot: ScanRoot, unre
   return readHits(hits, index, unreadable).map(([node, simplified]) => projectSlim(node, simplified, categories));
 }
 
-// The predicate materialization cap (ratified decision 2). A predicate-only find makes every rendered node a
-// candidate, so without a ceiling it would silently churn a whole real design; past the cap it fails loud,
-// naming the number. The cap is on CANDIDATES (the query survivors the predicate must see a full read shape
-// for), checked BEFORE any simplify so an over-broad find rejects without materializing anything. It is
-// deliberately high and tunable — the fail-loud contract is the point, not the number. If materialization is
-// too slow at that scale the fix is the ALGORITHM, not a lower cap: Figma's live-read speed is the only cost
-// we don't control, so we don't paper over it by refusing to look at real designs.
-const MATERIALIZE_CAP = 5000;
-
 // The predicate path of find (the hybrid filter). The declarative query has already pre-filtered live nodes
 // cheaply; each surviving candidate now needs its FULL EXPANDED read shape to hand to the predicate. That
 // shape is the same core-simplified SimplifiedNode projectHits reads for the slim projection, so ONE
@@ -450,9 +442,9 @@ const MATERIALIZE_CAP = 5000;
 // candidate the core dropped (a collapsed-SVG interior with no standalone read shape) can't satisfy a
 // styling predicate and is excluded rather than handed an `undefined` the closure would crash dereferencing.
 async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: ReadPredicate, unreadable: UnreadableSink): Promise<SlimHandle[]> {
-  if (hits.length > MATERIALIZE_CAP) {
+  if (hits.length > FIND_MATERIALIZE_CAP) {
     throw new Error(
-      `flcm.find: the query matched ${hits.length} candidate nodes, over the ${MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
+      `flcm.find: the query matched ${hits.length} candidate nodes, over the ${FIND_MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
         `Narrow the query so fewer nodes reach the predicate.`,
     );
   }
@@ -491,7 +483,7 @@ function rejectStringQuery(query: unknown, verb: string): void {
  *
  * An optional `predicate` filters by anything in the full read shape ("every frame with a white fill"): the
  * query pre-filters live nodes, then a whole-scope simplify supplies their expanded canonical shapes.
- * A predicate-only find materializes every candidate, up to the admission cap (see MATERIALIZE_CAP).
+ * A predicate-only find materializes every candidate, up to the admission cap (see FIND_MATERIALIZE_CAP).
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   invalidateSceneAccess();

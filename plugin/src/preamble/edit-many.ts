@@ -502,13 +502,6 @@ function assertNoEntryInsideRetargetedInstance(
   }
 }
 
-// Is `node` a descendant of `ancestor`? The ancestor is a live node the batch resolved, so the
-// parent chain is the whole answer — no composite-id reasoning needed.
-function isUnder(node: SceneNode, ancestor: SceneNode): boolean {
-  for (let p = node.parent as BaseNode | null; p; p = p.parent) if (p === (ancestor as BaseNode)) return true;
-  return false;
-}
-
 // Is `node` inside `host`? A sublayer answers by its composite id (`I<host>;<path>`, one leading `I`
 // however deep — core's rule), anything else by the parent chain.
 function isInsideInstance(node: SceneNode, host: SceneNode): boolean {

@@ -35,7 +35,7 @@ function paintIsVisible(paint: LivePaint): boolean {
   return true;
 }
 
-export const BACKGROUND_BLUR_WITHOUT_FILL =
+const BACKGROUND_BLUR_WITHOUT_FILL =
   "backgroundBlur renders nothing on a node with no visible fill — Figma composites the blurred backdrop through the node's own paint, so give the node a fill (a near-transparent one like \"rgba(255,255,255,0.08)\" is enough) for the frost to appear.";
 
 /**

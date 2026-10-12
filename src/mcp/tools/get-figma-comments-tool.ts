@@ -1,14 +1,14 @@
 import { z } from "zod";
 import type { FigmaService } from "~/services/figma.js";
 import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
+import {
+  FIGMA_NODE_ID_FORMAT_MESSAGE,
+  FIGMA_NODE_ID_PATTERN,
+  normalizeFigmaNodeId,
+} from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 
-const nodeId = z
-  .string()
-  .regex(
-    /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
-    "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
-  );
+const nodeId = z.string().regex(FIGMA_NODE_ID_PATTERN, FIGMA_NODE_ID_FORMAT_MESSAGE);
 
 const parameters = {
   fileKey: z
@@ -49,8 +49,7 @@ export function parseGetFigmaCommentsParams(params: GetFigmaCommentsParams): {
   options: GetFigmaCommentsOptions;
 } {
   const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
-  const scopeIds =
-    scope === undefined ? undefined : [scope].flat().map((id) => id.replace(/-/g, ":"));
+  const scopeIds = scope === undefined ? undefined : [scope].flat().map(normalizeFigmaNodeId);
   return { fileKey, options: { scope: scopeIds, include, status, since } };
 }
 

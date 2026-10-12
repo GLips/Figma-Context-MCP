@@ -130,9 +130,9 @@ export interface StyleInput { style: TokenIdentityInput; value?: unknown }
 
 // A node's paint and effect style slots. The text style rides textStyle.style instead, beside the
 // uncovered text words it keeps.
-export interface WriteStyles { fill?: StyleRef; stroke?: StyleRef; effect?: StyleRef }
+interface WriteStyles { fill?: StyleRef; stroke?: StyleRef; effect?: StyleRef }
 
-export interface Rgb { r: number; g: number; b: number }
+interface Rgb { r: number; g: number; b: number }
 export interface Rgba { r: number; g: number; b: number; a: number }
 
 // ---- Paint currency (Figma-domain). A solid carries its alpha on `opacity` (Figma stores paint alpha
@@ -199,7 +199,7 @@ export type WritePaintStack = WritePaint[];
 // via `import type` without dragging css.ts's parsers — and their Figma-typings — into a typecheck. ----
 export interface WriteGradientFill { type: GradientType; gradient: string; blendMode?: string }
 // The read's spelling of a solid that doesn't blend normally — a normal solid is a bare color string.
-export interface ReadSolidFill { type: "SOLID"; color: string; blendMode?: string }
+interface ReadSolidFill { type: "SOLID"; color: string; blendMode?: string }
 // The read shape's image-fill leaf. Named here (rather than sniffed inline at the parser) so the
 // normalizer can type what it hands back; the extra read-only keys it carries (css hints,
 // imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
@@ -208,7 +208,7 @@ export interface ReadImageFill {
   blendMode?: string; opacity?: number; rotation?: number; filters?: WriteImageFilters;
 }
 // A solid whose color is a variable — the read's spelling when a bound solid carries its own opacity or blend.
-export interface BoundSolidFill { type: "SOLID"; color: VariableInput; opacity?: number; blendMode?: string }
+interface BoundSolidFill { type: "SOLID"; color: VariableInput; opacity?: number; blendMode?: string }
 export type FillLeaf = string | WriteGradientFill | ReadSolidFill | BoundSolidFill | ReadImageFill | VariableInput | WritePaint;
 // A paint slot takes one leaf, or an ARRAY of them — a paint stack, top first, the same order a read
 // emits (WritePaintStack). The composite this exists for is a photograph under a legibility scrim:
@@ -284,7 +284,7 @@ export interface WriteTextStyle {
   // on WriteTextRun.hyperlink instead — there the span already IS the range, so it isn't a style leaf.
   hyperlink?: string;
   // The node's text style. A BASE word only (per-run text styles are out of scope), and the compiler
-  // refuses it beside the words it covers — only textAlign, textAlignVertical and hyperlink ride along.
+  // refuses it beside the words it covers — only textAlign, textAlignVertical, hyperlink and lineClamp ride along.
   style?: StyleRef;
 }
 
@@ -488,7 +488,7 @@ export interface ComponentPropertyBinding {
 // One property an flcm.component call declares, in the read's own lowercase words. It carries no
 // default: a property's default IS its bound layer's content (its text, its visibility, its
 // instance's component), so every property is bound in the same call and read off that layer.
-export interface ComponentPropertyDefinitionInput {
+interface ComponentPropertyDefinitionInput {
   type: "boolean" | "text" | "instance_swap" | "slot";
 }
 
@@ -680,14 +680,14 @@ export interface DesignTokenStyle {
   remote?: true;
 }
 /** One collection of an enabled library, counted rather than listed: loading it imports every variable. */
-export interface DesignTokenLibraryCollection { name: string; variables: number }
+interface DesignTokenLibraryCollection { name: string; variables: number }
 export interface DesignTokenLibrary { name: string; collections: DesignTokenLibraryCollection[] }
 /**
  * Library tokens something in the file is bound to, counted. `library` is named only for a collection
  * of an enabled library: Figma tells a plugin nothing else about where a remote token came from.
  */
 export interface DesignTokenUsedCollection { name: string; library?: string; variables: number }
-export interface DesignTokenUsedStyles { type: DesignTokenStyle["type"]; styles: number }
+interface DesignTokenUsedStyles { type: DesignTokenStyle["type"]; styles: number }
 export interface DesignTokensUsed { collections: DesignTokenUsedCollection[]; styles: DesignTokenUsedStyles[] }
 /** The default listing: the file's own tokens in full; used library tokens and enabled libraries counted. */
 export interface DesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[]; used: DesignTokensUsed; libraries: DesignTokenLibrary[] }

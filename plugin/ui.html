@@ -260,11 +260,11 @@
       // UI_REVOKE / UI_REVOKE_ALL / UI_TOGGLE / UI_SIGN_IN / UI_OPEN_SIGN_IN) and its own measured height (UI_HEIGHT). Resizing does
       // not reload the iframe, so the WS connections below survive every expand/collapse.
       //
-      // Opens ONE persistent connection per port in the block from bridge/src/config.ts
-      // (WS_PORT_BLOCK). Each running server probe-binds one block port, so scanning the whole block
-      // discovers every live session at once (Slice 3.2). The persistent relay does double duty:
-      // discovery AND disconnect-detection (onclose ⇒ the session's row leaves the panel) — one
-      // mechanism, not a separate poll. This list MUST mirror config's WS_PORT_BLOCK and the
+      // Opens ONE persistent connection per port in the block from
+      // src/commercial/plugin-bridge/ports.ts (WS_PORT_BLOCK). Each running server probe-binds one
+      // block port, so scanning the whole block discovers every live session at once. The persistent
+      // relay does double duty: discovery AND disconnect-detection (onclose ⇒ the session's row leaves
+      // the panel) — one mechanism, not a separate poll. This list MUST mirror ports.ts and the
       // manifest's networkAccess.devAllowedDomains (the contract harness pins the mirror). We dial
       // `localhost`, not the 127.0.0.1 literal, because Figma's manifest validator rejects raw IP
       // addresses in devAllowedDomains ("must be a valid URL") — and the allowlist host has to match
@@ -317,15 +317,10 @@
         parent.postMessage({ pluginMessage: { from: "panel", control: control } }, "*");
       }
 
+      // Called only at startup and from onclose, which has already dropped this port's socket.
       function connect(port) {
-        var previous = sockets[port];
-        if (previous && previous.connectionKey) {
-          delete routes[previous.connectionKey];
-          toSandbox({ type: "WS_CLOSED", connKey: previous.connectionKey });
-        }
         var ws = new WebSocket("ws://localhost:" + port);
         var connectionKey = ++nextConnectionKey;
-        ws.connectionKey = connectionKey;
         sockets[port] = ws;
         // Did THIS socket ever open? Most block ports have no server, so their connect fails and fires
         // onclose without ever opening. We must NOT tell the sandbox about those dead ports — a
@@ -383,8 +378,8 @@
         };
       }
 
-      // Sandbox → server relay, EXCEPT local control messages (RENDER, and the panel-control
-      // SHOW/HIDE verbs it replaced), which the sandbox addresses to THIS iframe, not a server.
+      // Sandbox → server relay, EXCEPT the one local control message (RENDER), which the sandbox
+      // addresses to THIS iframe, not a server.
       // Everything else carries __connKey — the socket generation it must go out on (a reply, or the
       // SESSION_TOKEN Allow handover). Strip __connKey before ws.send so this LOCAL routing key never
       // rides onto the frozen envelope.
@@ -405,7 +400,7 @@
 
       // Allow / Deny → the sandbox (sole arbiter), tagged with the row's connection key so the
       // sandbox routes the decision to the right session. The button carries NO approval logic: it
-      // just reports the human's choice; the sandbox mints the token (Slice 2.1b / 3.2).
+      // just reports the human's choice; the sandbox mints the token.
       function decide(approve, key) {
         toSandbox({ type: "UI_DECISION", approve: approve, connKey: key });
       }
@@ -446,7 +441,9 @@
         var writesSpent = false;
         sessions.forEach(function (s) {
           if (s.approved) approved++;
-          else if (s.request === "expired") {
+          else if (s.rejected) {
+            // Already answered: a rejected session owes the human nothing.
+          } else if (s.request === "expired") {
             if (!s.allowedWhileAway) expired++;
           } else wants++;
           if (s.active) active = s;
@@ -561,7 +558,9 @@
         } else if (!s.approved) {
           // A session that has never asked needs no line — Allow and Reject sitting there already say
           // it. One that has asked says whether a call is still waiting on the answer.
-          if (s.request === "waiting")
+          if (s.rejected)
+            lines.appendChild(el("div", "status-line", "Rejected — its calls are refused. Allow approves it after all."));
+          else if (s.request === "waiting")
             lines.appendChild(el("div", "status-line", "Waiting for approval — its call runs once you allow it."));
           else if (s.request === "expired")
             lines.appendChild(
@@ -662,8 +661,7 @@
       // Shown whenever the sandbox reports ANY remembered approval (msg.hasApprovals), independent of
       // what's in `sessions` above it — a persisted approval can outlive its connection, so this is
       // often the only surface for one the human never sees a row for. One control, not one per
-      // session: it revokes everything this plugin remembers, which is the whole point of the
-      // "explicit revocation" fig-61 asks for.
+      // session: it revokes everything this plugin remembers.
       function revokeAllFooter() {
         var footer = el("div", "footer");
         var button = el("button", "revoke-all", "Revoke all approvals");
@@ -693,8 +691,6 @@
       // at whatever size it really has: collapse reports 40, the resize is dropped, and the next
       // expand measures 220, matches the cache, and sends nothing. A redundant resize costs nothing;
       // a suppressed one strands the window.
-      // Measured inside rAF — after the browser has laid the new DOM out, rather than forcing a
-      // synchronous reflow the instant we mutate it.
       function reportHeight() {
         // Measured inside rAF — after the browser has laid the new DOM out, rather than forcing a
         // synchronous reflow the instant we mutate it. #root, never document.body: see the note on

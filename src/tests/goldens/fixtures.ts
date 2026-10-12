@@ -444,7 +444,12 @@ const componentInstance: GetFileNodesResponse = {
         ],
       }),
       components: {
-        "6:2": { key: "compkey123", name: "Product Card", componentSetId: undefined },
+        "6:2": {
+          key: "compkey123",
+          name: "Product Card",
+          componentSetId: undefined,
+          description: "Shows one product with an optional sale ribbon",
+        },
       },
       componentSets: {},
       styles: {},

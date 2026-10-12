@@ -7,11 +7,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 
-import { render } from "./render.js";
 import { get, find, selection, resolveTarget } from "./read.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { clone } from "./structure.js";
+import { render, clone } from "./structure.js";
 
 test("a deeply nested task is found and completed, preserving the same-text survivor and its pins", async () => {
   createFigmaMock();

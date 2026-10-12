@@ -14,7 +14,7 @@
 
 import { WriteEffect, WriteShadow, WriteBlur, WriteGlass, WriteNoise, WriteTexture, WriteProgressiveBlur, Rgba } from "./ir.js";
 
-export interface ShadowParts {
+interface ShadowParts {
   inner: boolean;
   color: Rgba;
   x: number;
@@ -45,10 +45,10 @@ export function backgroundBlurFromCssPx(cssRadius: number): WriteBlur {
 // 1, no throw). Silent-clamp is a silent-wrong divergence (ADR-0003), so we guard depth ourselves below;
 // every other bound is left to the runtime's loud rejection rather than duplicated here.
 
-export type GlassParts = Omit<WriteGlass, "kind">;
-export type TextureParts = Omit<WriteTexture, "kind">;
-export type ProgressiveBlurParts = Omit<WriteProgressiveBlur, "kind">;
-export interface NoiseParts {
+type GlassParts = Omit<WriteGlass, "kind">;
+type TextureParts = Omit<WriteTexture, "kind">;
+type ProgressiveBlurParts = Omit<WriteProgressiveBlur, "kind">;
+interface NoiseParts {
   noiseType: "monotone" | "duotone" | "multitone";
   color: Rgba;
   noiseSize: number;

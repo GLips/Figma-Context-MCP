@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../harness/figma-mock.mjs";
 
-import { render } from "./preamble/render.js";
+import { render } from "./preamble/structure.js";
 import { resolveScreenshotTarget } from "./screenshot-target.js";
 
 test("resolves by nodeId, by key, and falls back to the page only with no target", async () => {
