@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { HostTraceStage, NativeOperation } from "@framelink/plugin/protocol";
+import type { HostTraceStage, NativeOperation, PluginEvent } from "@framelink/plugin/protocol";
 
 /** Bounded diagnostic metadata, deliberately independent of request promises, clocks and sockets. */
 type Stage =
@@ -27,11 +27,7 @@ export interface TraceEvent {
   operation?: NativeOperation;
 }
 /** A RUN_TRACE as the protocol admitted it — only a known stage and a bounded elapsed time. */
-export interface HostTrace {
-  stage: HostTraceStage;
-  elapsedMs: number;
-  operation?: NativeOperation;
-}
+export type HostTrace = Omit<Extract<PluginEvent, { type: "RUN_TRACE" }>, "type" | "runId">;
 interface RecordEntry {
   owner: object;
   started: number;
