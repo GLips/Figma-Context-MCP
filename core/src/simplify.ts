@@ -1,11 +1,6 @@
-import { isRectangleCornerRadii, isVisible, pixelRound } from "./utils.js";
+import { isRectangleCornerRadii, pixelRound } from "./utils.js";
 import { buildSimplifiedLayout, gridFacts, type GridFacts } from "./transformers/layout.js";
-import {
-  buildSimplifiedStrokes,
-  cssBlendKeyword,
-  paintStyleValue,
-  parsePaint,
-} from "./transformers/style.js";
+import { buildStrokeGeometry, cssBlendKeyword, paintSlot } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
 import { bindNumber, bindParts } from "./transformers/bound-values.js";
 import { styleReference } from "./tokens.js";
@@ -298,52 +293,16 @@ function extractText(node: NodeSnapshot, result: SimplifiedNode): void {
  * Extracts visual appearance properties (fills, strokes, effects, opacity, border radius).
  */
 function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
-  // Check if node has children to determine CSS properties
-  const hasChildren = !!node.children && node.children.length > 0;
+  const fill = paintSlot(node, "fill", { fold: false });
+  if (fill !== undefined) result.fill = fill;
 
-  // The authoring field keeps visible paint layers in CSS order; readOnlySource also keeps disabled layers.
-  // A paint style names the whole slot, so it wins over the layers — and over any paint variable
-  // under it, which live Figma reports for the style's own paint.
-  const paints = node.fills
-    ?.filter(isVisible)
-    .map((paint) => parsePaint(paint, hasChildren))
-    .reverse();
-  const fill = node.styles?.fill
-    ? styleReference(node.styles.fill, paintStyleValue(node.fills, hasChildren, false))
-    : paints?.length
-      ? paints.length === 1
-        ? paints[0]
-        : paints
-      : undefined;
-  if (fill !== undefined) {
-    result.fill = fill;
-  } else if (node.type === "TEXT") {
-    // Figma paints a new TEXT black, and flcm.text keeps that default when no `fill` is passed (a text
-    // with no paint is invisible), so an ABSENT fill would rebuild as black. The no-paint state is
-    // stated with the removal word the write side already takes. Frames and shapes need no such word:
-    // their constructors clear the default paint when `fill` is absent.
-    result.fill = "none";
-  }
-
-  // stroke
   // Only the stroke paint is interned as a shared style. A paint style covers the
   // paint alone, not stroke width / dashes / per-side weights, so those stay as
   // plain sibling fields beside a `{ style }` and are never deduplicated.
-  const strokes = buildSimplifiedStrokes(node, hasChildren);
-  const strokeStyle = node.styles?.stroke;
-  if (strokeStyle || strokes.colors.length) {
-    result.stroke = strokeStyle
-      ? styleReference(strokeStyle, paintStyleValue(node.strokes, hasChildren, false))
-      : strokes.colors.length === 1
-        ? strokes.colors[0]
-        : strokes.colors;
-    if (strokes.strokeWidth) result.strokeWidth = strokes.strokeWidth;
-    if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
-    if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
-  } else if (node.type === "LINE") {
-    // Same as the TEXT fill above: a LINE is nothing but its stroke, so flcm.line keeps Figma's default
-    // black when `stroke` is absent, and only an explicit "none" rebuilds the strokeless state.
-    result.stroke = "none";
+  const stroke = paintSlot(node, "stroke", { fold: false });
+  if (stroke !== undefined) {
+    result.stroke = stroke;
+    if (stroke !== "none") Object.assign(result, buildStrokeGeometry(node));
   }
 
   // effects — an effect style replaces the whole slot. Variable-bound effect fields are out of

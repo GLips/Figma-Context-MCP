@@ -4,12 +4,11 @@ import { createComponentNotes, extractComponents } from "./components.js";
 import { readContext, type ReadContext } from "./read-context.js";
 import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import { computeGridChildOrder } from "./transformers/layout.js";
-import { foldPaintStack, paintStyleValue } from "./transformers/style.js";
-import { styleReference } from "./tokens.js";
+import { paintSlot } from "./transformers/style.js";
 import { hasAutoLayout } from "./utils.js";
 import { componentPath, liveSublayerId } from "./instance-path.js";
 import type { SimplifyResult } from "./simplify.js";
-import type { NodeSnapshot, SnapshotPaint, SnapshotTokenRef } from "./snapshot.js";
+import type { NodeSnapshot } from "./snapshot.js";
 import type { SimplifiedNode, StyleTable, Elision } from "./types.js";
 
 export interface ProjectOptions {
@@ -87,23 +86,12 @@ function projectTrees(
       }
       if (d !== undefined) cut(full, "d", d);
       if (vectorPaths !== undefined) cut(full, "vectorPaths", vectorPaths);
-      // Paint slots are re-folded for the wire, so the style-wins rule must hold here as it does
-      // in extraction.
-      const hasChildren = !!snapshot.children?.length;
-      const foldSlot = (
-        paints: SnapshotPaint[] | undefined,
-        style: SnapshotTokenRef | undefined,
-      ) =>
-        style
-          ? styleReference(style, paintStyleValue(paints, hasChildren, true))
-          : foldPaintStack(paints, hasChildren);
-      const fill = foldSlot(snapshot.fills, snapshot.styles?.fill);
-      if (fill !== undefined) node.fill = fill;
-      else if (full.type === "TEXT") node.fill = "none";
-      else delete node.fill;
-      // No fold result leaves the runtime value: absent, or a strokeless LINE's "none".
-      const stroke = foldSlot(snapshot.strokes, snapshot.styles?.stroke);
-      if (stroke !== undefined) node.stroke = stroke;
+      // The wire folds each paint slot; a slot that folds to nothing is absent.
+      for (const slot of ["fill", "stroke"] as const) {
+        const value = paintSlot(snapshot, slot, { fold: true });
+        if (value !== undefined) node[slot] = value;
+        else delete node[slot];
+      }
       internStyles(node, table);
       // Notes are collected only for nodes admitted by the wire's visibility/depth rules.
       for (const id of [full.id, full.componentId, snapshot.mainComponent?.set?.id]) {

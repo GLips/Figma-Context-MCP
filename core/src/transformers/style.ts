@@ -4,8 +4,9 @@ import type {
   SnapshotImagePaint,
   SnapshotPaint,
 } from "../snapshot.js";
+import type { SimplifiedNode } from "../types.js";
 import { generateCSSShorthand, isVisible, pixelRound } from "../utils.js";
-import { variableReference, type VariableReference } from "../tokens.js";
+import { styleReference, variableReference, type VariableReference } from "../tokens.js";
 import { bindParts, type BoundSides } from "./bound-values.js";
 
 import {
@@ -147,8 +148,8 @@ function imageAdjustments(raw: SnapshotImagePaint): ImageAdjustments {
   return out;
 }
 
-export type SimplifiedStroke = {
-  colors: SimplifiedFill[];
+/** Stroke geometry: what sits beside the stroke paint, even under a paint style (which covers only the paint). */
+export type StrokeGeometry = {
   /**
    * CSS metric string: "1px", or per-side shorthand "1px 2px 3px 4px". Once a side is bound: one
    * variable on all four sides is its reference, otherwise per side.
@@ -159,26 +160,8 @@ export type SimplifiedStroke = {
   strokeAlign?: "outside" | "center";
 };
 
-/**
- * Build simplified stroke information from a Figma node
- *
- * @param n - The Figma node to extract stroke information from
- * @param hasChildren - Whether the node has children (affects paint processing)
- * @returns Simplified stroke object with colors and properties
- */
-export function buildSimplifiedStrokes(
-  n: NodeSnapshot,
-  hasChildren: boolean = false,
-): SimplifiedStroke {
-  let strokes: SimplifiedStroke = { colors: [] };
-  if (n.strokes && n.strokes.length) {
-    // Reverse to match CSS stacking order (Figma layers bottom-to-top, CSS top-to-bottom)
-    strokes.colors = n.strokes
-      .filter(isVisible)
-      .map((stroke) => parsePaint(stroke, hasChildren))
-      .reverse();
-  }
-
+export function buildStrokeGeometry(n: NodeSnapshot): StrokeGeometry {
+  const strokes: StrokeGeometry = {};
   if (typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
     strokes.strokeWidth = `${pixelRound(n.strokeWeight)}px`;
   }
@@ -249,13 +232,48 @@ export function paintStyleValue(
   const literal = raw?.map((paint) =>
     paint.type === "SOLID" && paint.colorVariable ? { ...paint, colorVariable: undefined } : paint,
   );
-  if (fold) return foldPaintStack(literal, hasChildren);
-  const parsed = (literal ?? [])
+  return fold ? foldPaintStack(literal, hasChildren) : paintLayers(literal, hasChildren);
+}
+
+/** Every visible layer, unfolded, in CSS top-first order; a lone layer unwraps to a scalar. */
+function paintLayers(
+  raw: SnapshotPaint[] | undefined,
+  hasChildren: boolean,
+): SimplifiedFill | SimplifiedFill[] | undefined {
+  const parsed = (raw ?? [])
     .filter(isVisible)
     .map((paint) => parsePaint(paint, hasChildren))
     .reverse();
   if (parsed.length === 0) return undefined;
   return parsed.length === 1 ? parsed[0] : parsed;
+}
+
+/**
+ * The one paint-slot policy, for `fill` and `stroke` alike. A paint style names the whole slot, so
+ * it wins over the layers — and over any paint variable under it, which live Figma reports for the
+ * style's own paint. `fold` is the only difference between the two reads: the runtime keeps every
+ * layer, so a re-authored stack is lossless; the wire folds a solid stack into the one color a
+ * viewer sees.
+ *
+ * An empty slot is absent, except on the one node each slot defines: a TEXT is nothing without its
+ * fill and a LINE nothing without its stroke, and the write side keeps Figma's default black when
+ * the word is absent, so the no-paint state is spelled with the removal word "none".
+ */
+export function paintSlot(
+  node: NodeSnapshot,
+  slot: "fill" | "stroke",
+  { fold }: { fold: boolean },
+): NonNullable<SimplifiedNode["fill"]> | undefined {
+  const hasChildren = !!node.children?.length;
+  const paints = slot === "fill" ? node.fills : node.strokes;
+  const style = node.styles?.[slot];
+  const value = style
+    ? styleReference(style, paintStyleValue(paints, hasChildren, fold))
+    : fold
+      ? foldPaintStack(paints, hasChildren)
+      : paintLayers(paints, hasChildren);
+  if (value !== undefined) return value;
+  return node.type === (slot === "fill" ? "TEXT" : "LINE") ? "none" : undefined;
 }
 
 /**
