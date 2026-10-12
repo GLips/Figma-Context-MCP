@@ -19,6 +19,7 @@ import {
 } from "./ir.js";
 import { isVariableInput, isStyleInput, compileVariableRef } from "./tokens.js";
 import { rejectUnknownKeys } from "./validate.js";
+import { NESTED_WORDS } from "./vocabulary.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
 
@@ -116,7 +117,7 @@ function withPaintBlend(paint: WritePaint, blendMode: unknown): WritePaint {
 }
 
 // ---- Image paint adjustments: the read's image-fill words, and flcm.image's matching options. ----
-const IMAGE_FILTER_KEYS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
+const IMAGE_FILTER_KEYS: readonly string[] = NESTED_WORDS.imageFilters;
 
 // `where` names the input in every refusal ("fill", "flcm.image opts"). Out-of-range values fail here
 // rather than at Figma's set_fills, whose error names neither the node nor the word.

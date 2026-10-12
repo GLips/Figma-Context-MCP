@@ -18,6 +18,7 @@
 // warning about byte-equality is for a future read side, not the render path.
 
 import { rejectUnknownKeys } from "./validate.js";
+import { NESTED_WORDS, WORD_VALUES } from "./vocabulary.js";
 
 // Returns [c1x, c1y, c2x, c2y, endX, endY] cubic segments approximating the arc from (x1,y1) to (x2,y2).
 // Standard endpoint→center parameterization (SVG impl notes F.6) + split into ≤90° segments, each a cubic.
@@ -420,8 +421,8 @@ export function normalizePathData(d: string): string {
   return out.join(" ");
 }
 
-const VECTOR_PATH_KEYS: ReadonlySet<string> = new Set(["data", "windingRule"]);
-const WINDING_RULES = ["NONZERO", "EVENODD", "NONE"];
+const VECTOR_PATH_KEYS: ReadonlySet<string> = new Set(NESTED_WORDS.vectorPath);
+const WINDING_RULES: readonly unknown[] = WORD_VALUES.windingRule;
 
 /** Validate every path before a verb starts mutating the document. */
 export function normalizeVectorPaths(value: unknown): VectorPaths {

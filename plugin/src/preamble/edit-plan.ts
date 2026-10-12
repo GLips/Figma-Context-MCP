@@ -70,7 +70,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 
 import {
   WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
-  ComponentPropertyBindingEdit, EDIT_TYPE_WORD_GROUPS, namesFontIdentity,
+  ComponentPropertyBindingEdit, namesFontIdentity,
 } from "./ir.js";
 import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
@@ -87,43 +87,24 @@ import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotE
 import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens, type ResolvedTokens } from "./tokens.js";
 import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
 import {
-  KNOWN_KEYS, compileNodeLocalProps, compileNodeLayout,
+  compileNodeLocalProps, compileNodeLayout,
   compileLineWidth, compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount, fetchImagesForTrees,
   compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, compilePropertyDefinitionEditBag,
   INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
 } from "./flcm.js";
 import type { EditDelta } from "./schema.js";
+import { EDIT_WORDS, WORD_GROUPS, editWordsOf } from "./vocabulary.js";
 
-const EDIT_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.edit);
+const EDIT_KEYS: ReadonlySet<string> = EDIT_WORDS;
 
-// A create-verb's word groups, intersected with the current edit surface. The intersection is what
-// makes later slices additive: when a word group's members join KNOWN_KEYS.edit (size/layout in 2.4,
-// text in 2.5), each type's gate widens to create's exact shape with no edits here.
-function editableWords(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
-  return new Set(groups.flat().filter((k) => EDIT_KEYS.has(k)));
-}
-
-// What each node type's delta may name — composed from EDIT_TYPE_WORD_GROUPS (ir.ts), the single
-// source the generated per-type doc lists also render, so edit accepts on a node exactly the words
-// create accepts for its type (invariant 1: one vocabulary, no permissive edit dialect — `fill` on
-// a LINE rejects here the way LINE rejects it, instead of landing on a property Figma never
-// renders). VECTOR uses VECTOR's words: an svg-born vector shares the type, but path's words
-// are the only authored vocabulary the type has.
-const DELTA_KEYS_BY_TYPE = Object.fromEntries(
-  (Object.keys(EDIT_TYPE_WORD_GROUPS) as EditableType[]).map((t) => [
-    t,
-    editableWords(...EDIT_TYPE_WORD_GROUPS[t].map((g) => KNOWN_KEYS[g])),
-  ]),
-) as Record<EditableType, ReadonlySet<string>>;
-
-// A node type with no per-type vocabulary (GROUP, SECTION, POLYGON, …) takes the shared words (minus `key`,
-// which isn't editable anywhere). Deliberately a conservative floor, not a mixin-derived ceiling:
-// effects/rotation on a GROUP would land but wait for a deliberate widening.
-const SHARED_DELTA_KEYS = editableWords(KNOWN_KEYS.shared);
+// A node type with no row of its own (GROUP, SECTION, …) takes the shared words minus `key`. A
+// conservative floor, not a mixin-derived ceiling: effects/rotation on a GROUP would land but wait for
+// a deliberate widening.
+const SHARED_DELTA_KEYS: ReadonlySet<string> = new Set(WORD_GROUPS.shared.filter((word) => EDIT_KEYS.has(word)));
 // A SLICE is the one SceneNode with no MinimalBlendMixin — opacity/mixBlendMode don't exist on it,
 // so accepting them would commit an undo step that changed nothing (the silent no-op the surface
 // rejects everywhere else). The appliers' `in node` guards are belt for the same fact.
-const SLICE_DELTA_KEYS = editableWords(["name", "visible", "locked"]);
+const SLICE_DELTA_KEYS: ReadonlySet<string> = new Set(["name", "visible", "locked"]);
 
 // Stage 1 — the document-blind gate (validate.ts owns it: an instance's `overrides` entries are
 // deltas judged by the same rule at construction), bound to the edit vocabulary.
@@ -135,9 +116,9 @@ export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
 // runs; an illegal word rejects with zero writes). Returns the type's word set so the compile step
 // can flag radius/clip from it.
 function assertDeltaLegalForType(node: SceneNode, changes: EditDelta, subject: string): ReadonlySet<string> {
-  const legal =
-    (DELTA_KEYS_BY_TYPE as Record<string, ReadonlySet<string>>)[node.type] ||
-    (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
+  // edit accepts on a node exactly its type's create row minus the create-only words (vocabulary.ts)
+  // — one vocabulary, no permissive edit dialect: `fill` on a LINE rejects here as LINE rejects it.
+  const legal = editWordsOf(node.type) ?? (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
   for (const prop of Object.keys(changes)) {
     if (!legal.has(prop)) {
       throw new Error(
@@ -389,7 +370,7 @@ export function restatedEditPlan(node: SceneNode): EditPlan {
  * before the round trip, against the document as it stood then.
  */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
-  changes = acceptAuthoringProps(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
+  changes = acceptAuthoringProps<EditDelta>(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
   // A delta of ONLY read-only words (`{ type }`) folds to nothing — same refusal as an empty object,
   // now that the prelude has run.
   assertDeltaNotEmpty(changes, EDIT_KEYS, subject);

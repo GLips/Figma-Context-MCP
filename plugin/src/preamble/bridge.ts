@@ -5,7 +5,7 @@
 import { warnings } from "./warnings.js";
 import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type ChildLayout } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
-import { hasContainerLayout } from "./ir.js";
+import { hasContainerLayout } from "./vocabulary.js";
 import type { LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";

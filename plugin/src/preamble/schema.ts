@@ -3,12 +3,15 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import type { WarningRecord } from "./warnings.js";
-// schema — THE single source of the agent-facing authoring surface. Every verb, every prop, its type,
-// and its one-line doc live here exactly once, as zod field schemas carrying `.describe()` (the note a
-// human/agent reads) and `.meta({ type })` (the displayed type label where the real TS type is looser
-// than what we want to show, e.g. a `number | string` we document as `number | "Npx"`).
+// schema — the TYPE and DOC of the agent-facing authoring surface. Which words exist, their enum values
+// and which groups compose each node type are vocabulary.ts's (zod-free runtime data the sandbox gates
+// read); this module gives each word its type and one-line doc, as zod field schemas carrying
+// `.describe()` (the note a human/agent reads) and `.meta({ type })` (the displayed type label where the
+// real TS type is looser than what we want to show, e.g. a `number | string` documented as `number | "Npx"`).
+// Every field table is typed against its vocabulary group with an exact-key check (`fieldsFor`), so a
+// word one side has and the other lacks fails to compile.
 //
-// THREE consumers, ONE source:
+// THREE consumers:
 //   1. TYPES — flcm.ts infers its Props (`FrameProps`, `TextProps`, …) from these schemas via `z.infer`
 //      and imports them as `import type` ONLY. Type-only imports are erased by esbuild, so this module's
 //      zod NEVER enters the sandbox bundle (acceptance: `grep zod plugin/dist/code.js` is empty). The
@@ -27,10 +30,14 @@ import type { WarningRecord } from "./warnings.js";
 
 import { z } from "zod";
 import { INPUT_ALIASES } from "./input-aliases.js";
+import {
+  WORD_GROUPS, NESTED_WORDS, WORD_VALUES, TYPE_WORD_GROUPS, SVG_WORD_GROUPS, BINDABLE_FIELDS,
+  type WordGroup, type NestedWord, type EditWord,
+} from "./vocabulary.js";
 export { INPUT_ALIASES };
 import type {
-  FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
-  ConstraintX, ConstraintY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult,
+  FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, Handle,
+  ConstraintX, ConstraintY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult, ReadNode,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
   VariableInput, StyleInput, TokenIdentityInput, DesignTokens, DesignTokenLibraryQuery, LibraryDesignTokens, DesignTokenUsedQuery, UsedDesignTokens,
@@ -49,14 +56,14 @@ export type PadInput =
   | number
   | string // the CSS box shorthand, in read's spelling: "12px" | "12px 16px" | "8px 8px 0px 0px"
   | VariableInput
-  | { x?: BindableLength; y?: BindableLength; top?: BindableLength; right?: BindableLength; bottom?: BindableLength; left?: BindableLength };
-type GapInput = number | string | VariableInput | { row: BindableLength; column: BindableLength };
-type SidesInput = { top: BindableLength; right: BindableLength; bottom: BindableLength; left: BindableLength };
-type CornersInput = { topLeft: BindableLength; topRight: BindableLength; bottomRight: BindableLength; bottomLeft: BindableLength };
+  | { [K in NestedWord<"pad">]?: BindableLength };
+type GapInput = number | string | VariableInput | { [K in NestedWord<"gap">]: BindableLength };
+type SidesInput = { [K in NestedWord<"sides">]: BindableLength };
+type CornersInput = { [K in NestedWord<"corners">]: BindableLength };
 
 export type GradientStopInput = string | { color: string; pos?: number; position?: number };
 export type GradientSugar = {
-  type?: "linear" | "radial";
+  type?: (typeof WORD_VALUES.gradientType)[number];
   stops?: GradientStopInput[];
   angle?: number;
   at?: { x?: number; y?: number };
@@ -70,7 +77,7 @@ export type BlurSugar = number | { layer?: number; background?: number; radius?:
 export type GlassSugar = true | { lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number; radius?: number };
 export type NoiseSugar =
   | true
-  | { type?: "monotone" | "duotone" | "multitone"; color?: string; secondaryColor?: string; opacity?: number; noiseSize?: number; density?: number };
+  | { type?: (typeof WORD_VALUES.noiseType)[number]; color?: string; secondaryColor?: string; opacity?: number; noiseSize?: number; density?: number };
 export type TextureSugar = true | { noiseSize?: number; radius?: number; clipToShape?: boolean };
 export type ProgressiveBlurSugar = number | { startRadius?: number; endRadius?: number; startOffset?: { x: number; y: number }; endOffset?: { x: number; y: number } };
 export type EffectsSugar = {
@@ -89,6 +96,12 @@ export type EffectsSugar = {
 // "none" is the surface-wide removal word (CSS's own absence spelling): effects:"none" clears the
 // node's effects, the same way fill/stroke:"none" clear paint.
 export type EffectsInput = WriteEffect[] | WriteCssEffects | EffectsSugar | "none";
+
+// ---- fieldsFor(words)(fields) — a field table holding exactly the vocabulary's words: a missing word
+// fails the `Record`, an extra one (spread in or written) fails the `never`. ----
+function fieldsFor<W extends readonly string[]>(_words: W) {
+  return <F extends { [K in W[number]]: z.ZodType }>(fields: F & { [K in Exclude<keyof F, W[number]>]: never }): F => fields;
+}
 
 // ---- prop() — one optional field carrying its note (.describe) and, when the shown type should differ
 // from the inferred one, a display label (.meta.type). The generator reads .description + .meta().type. ----
@@ -116,15 +129,15 @@ const degrees = (note: string) => prop(z.number(), note, "number (deg)");
 // ---- Field groups. Each verb schema is composed from these by spread, so a field is authored once and
 // reused across every verb it appears on. The reference tables render these same groups. ----
 
-const ANNOTATION_FIELDS = {
-  annotations: prop(z.array(z.object({
+const ANNOTATION_FIELDS = fieldsFor(WORD_GROUPS.annotation)({
+  annotations: prop(z.array(z.object(fieldsFor(NESTED_WORDS.annotationEntry)({
     text: z.string().optional(),
     category: z.string().trim().min(1).optional(),
     properties: z.array(z.string()).optional(),
-  })), "Native annotations. Omitted leaves annotations untouched; a supplied array replaces the whole collection; [] clears every one.", "{ text?: string; category?: string; properties?: string[] }[]"),
-};
+  }))), "Native annotations. Omitted leaves annotations untouched; a supplied array replaces the whole collection; [] clears every one.", "{ text?: string; category?: string; properties?: string[] }[]"),
+});
 
-const SHARED_FIELDS = {
+const SHARED_FIELDS = fieldsFor(WORD_GROUPS.shared)({
   name: prop(z.string(), "Layer name."),
   key: prop(z.string(), "Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity."),
   opacity: prop(z.union([z.number(), variable]), "", "number (0–1) | { variable }"),
@@ -135,7 +148,7 @@ const SHARED_FIELDS = {
   ),
   visible: prop(z.boolean(), "get and find still return hidden nodes, with their annotations."),
   locked: prop(z.boolean(), "Locks against pointer edits in Figma's UI; flcm.edit still writes to it."),
-};
+});
 
 // Native aliases describe the same authored values; normalization removes them before compilation.
 const GRID_CHILD_ALIASES = {
@@ -160,20 +173,20 @@ const GRID_CONTAINER_ALIASES = {
 
 // One read layout bag combines the node's own container settings and its placement in its parent.
 // Leaves take only child fields; frame-like types compose both groups. Parent mode decides cell vs flow.
-const CHILD_LAYOUT_FIELDS = {
+const CHILD_LAYOUT_FIELDS = fieldsFor(WORD_GROUPS.childLayout)({
   ...GRID_CHILD_ALIASES,
   gridColumn: prop(z.string(), 'Only "N", "span N" or "N / span N", 1-based. Omitted, Figma auto-places. A grid child sizes in px, "fill" (the cell) or "hug", never "N%".'),
   gridRow: prop(z.string(), 'As gridColumn. Rows the grid did not name grow to hold the placement.'),
-  justifySelf: prop(z.enum(["start", "center", "end", "auto", "stretch"]), 'Grid children only. "stretch" is rewritten to width: "fill" (Figma has no stretch alignment); "auto" restores Figma\'s.'),
-  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'In a grid, as justifySelf but vertical ("stretch" → height: "fill"). Flow children take only "stretch" (counter-axis fill): Figma has no other per-child alignment, so set the parent\'s alignItems or wrap the child in a fill-sized frame.'),
+  justifySelf: prop(z.enum(WORD_VALUES.justifySelf), 'Grid children only. "stretch" is rewritten to width: "fill" (Figma has no stretch alignment); "auto" restores Figma\'s.'),
+  alignSelf: prop(z.enum(WORD_VALUES.alignSelf), 'In a grid, as justifySelf but vertical ("stretch" → height: "fill"). Flow children take only "stretch" (counter-axis fill): Figma has no other per-child alignment, so set the parent\'s alignItems or wrap the child in a fill-sized frame.'),
   zIndex: prop(z.number(), 'Not stacking order: a grid child\'s sibling index (a non-negative integer). Named indices reserve slots; the rest keep their relative order.'),
-};
+});
 
-const CONTAINER_LAYOUT_FIELDS = {
+const CONTAINER_LAYOUT_FIELDS = fieldsFor(WORD_GROUPS.containerLayout)({
   ...GRID_CONTAINER_ALIASES,
   gridTemplateColumns: prop(z.string(), "Tracks are Npx, Nfr, auto or fit-content(100%); repeat() and minmax(0, Nfr) expand to native tracks, which is what reads return. Required to create a grid. Fr tracks divide this frame's own width, so give it a number or \"fill\" in the same call; a hugging width is refused."),
   gridTemplateRows: prop(z.string(), 'Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing.'),
-  mode: prop(z.enum(["row", "column", "grid", "none"]), '"row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns.'),
+  mode: prop(z.enum(WORD_VALUES.mode), '"row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns.'),
   gap: prop(
     z.custom<GapInput>(),
     'Unequal "row-gap column-gap" (or { row, column }) needs grid or wrap. A variable binds a row or column gap, not a grid\'s.',
@@ -186,22 +199,22 @@ const CONTAINER_LAYOUT_FIELDS = {
     'number | "12px 16px" | { variable } | { x?, y? } | { top?, right?, bottom?, left? }',
   ),
   justifyContent: prop(
-    z.enum(["flex-start", "flex-end", "center", "space-between"]),
+    z.enum(WORD_VALUES.justifyContent),
     'Figma has no space-around or space-evenly: use space-between, or gap and padding, never spacer nodes.',
   ),
   alignItems: prop(
-    z.enum(["flex-start", "flex-end", "center", "stretch", "baseline"]),
+    z.enum(WORD_VALUES.alignItems),
     '"baseline" needs a row. "stretch" leaves a fixed cross-axis size alone.',
   ),
-};
+});
 
-const LAYOUT_FIELDS = { ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS };
+const LAYOUT_FIELDS = fieldsFor(WORD_GROUPS.layout)({ ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS });
 
 // One note for all four bounds: they differ only in axis and direction.
 const SIZE_BOUND_NOTE =
   'Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning.';
 
-const SIZE_FIELDS = {
+const SIZE_FIELDS = fieldsFor(WORD_GROUPS.size)({
   ...GRID_CHILD_ALIASES,
   layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   minWidth: prop(z.union([z.number(), z.literal("none"), variable]), SIZE_BOUND_NOTE, 'number | "none" | { variable }'),
@@ -232,27 +245,27 @@ const SIZE_FIELDS = {
   ),
   top: prop(z.union([z.number(), z.string()]), "As `left`.", 'number | "Npx" | "N%"'),
   position: prop(
-    z.enum(["absolute", "none"]),
+    z.enum(WORD_VALUES.position),
     '"absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can\'t sit beside `left`/`top`.',
   ),
   constraints: prop(
-    z.custom<{ x?: ConstraintX; y?: ConstraintY } | "none">(),
+    z.custom<{ [K in NestedWord<"constraints">]?: K extends "x" ? ConstraintX : ConstraintY } | "none">(),
     'Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow.',
     '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
-};
+});
 
 // The placement words alone — what a LINE takes beside its width, and what edit compiles for one.
-const PLACEMENT_FIELDS = {
+const PLACEMENT_FIELDS = fieldsFor(WORD_GROUPS.placement)({
   ...GRID_CHILD_ALIASES,
   layout: SIZE_FIELDS.layout,
   left: SIZE_FIELDS.left,
   top: SIZE_FIELDS.top,
   position: SIZE_FIELDS.position,
   constraints: SIZE_FIELDS.constraints,
-};
+});
 
-const APPEARANCE_FIELDS = {
+const APPEARANCE_FIELDS = fieldsFor(WORD_GROUPS.appearance)({
   fill: color('A CSS color or gradient string, flcm.gradient() or flcm.image(), a color { variable }, or an array stacked top first (see the values section). A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
   stroke: color('Border paint, or a stack. A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
   strokeWidth: prop(
@@ -260,11 +273,7 @@ const APPEARANCE_FIELDS = {
     'Per-side widths (the shorthand, or { top, right, bottom, left } whose sides may be variables) work on frames, rectangles, components and instances only; other types take one value.',
     'number | "Npx" | CSS shorthand | { variable } | { top, right, bottom, left }',
   ),
-  strokeAlign: prop(
-    z.custom<"inside" | "outside" | "center">(),
-    'Default "inside", like a CSS border.',
-    '"inside" | "outside" | "center"',
-  ),
+  strokeAlign: prop(z.enum(WORD_VALUES.strokeAlign), 'Default "inside", like a CSS border.'),
   borderRadius: prop(
     z.union([z.number(), z.string(), variable, z.custom<CornersInput>()]),
     'Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. Per-corner { topLeft, topRight, bottomRight, bottomLeft } takes variables per corner.',
@@ -272,30 +281,30 @@ const APPEARANCE_FIELDS = {
   ),
   effects: prop(z.custom<EffectsInput | StyleInput>(), 'flcm.effects() or a bag of CSS strings (see the values section), or an effect { style }. An effect\'s own fields don\'t bind variables. "none" removes all.', "effects value | { style }"),
   rotation: degrees("Applied after layout sizing, about the centre: it turns the box, never resizes it."),
-};
+});
 
 // An ELLIPSE has no corners, so its appearance vocabulary is the shared one minus `borderRadius` — a
 // separate group (not a runtime filter) so the edit gate and the per-type doc list both compose it.
-const ELLIPSE_FIELDS = {
+const ELLIPSE_FIELDS = fieldsFor(WORD_GROUPS.ellipse)({
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,
   strokeWidth: APPEARANCE_FIELDS.strokeWidth,
   strokeAlign: APPEARANCE_FIELDS.strokeAlign,
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,
-};
+});
 
-const FRAME_FIELDS = {
+const FRAME_FIELDS = fieldsFor(WORD_GROUPS.frame)({
   ...GRID_CONTAINER_ALIASES,
   ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: inputAlias(z.boolean()),
   layout: prop(z.object(LAYOUT_FIELDS), 'Container settings plus placement under the parent; both tables follow.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   clip: prop(z.boolean(), "Default false."),
-};
+});
 
 // Text style — the base every run layers over. The hybrid structure groups these under a `textStyle`
 // object (canonical names: fontFamily/fontWeight/fontSize/textAlign), mirroring the read side. The text's
 // paint is NOT here — it is the node-level `fill`, like every other node's (see TEXT_FIELDS).
-const TEXTSTYLE_FIELDS = {
+const TEXTSTYLE_FIELDS = fieldsFor(WORD_GROUPS.textStyle)({
   style: prop(
     z.custom<TokenIdentityInput>(),
     "A shared text style, by name or id. It sets the font, size and spacing words itself, so only textAlign, textAlignVertical, hyperlink and lineClamp ride beside it, and runs may set only color and hyperlink.",
@@ -309,7 +318,7 @@ const TEXTSTYLE_FIELDS = {
   ),
   fontSize: prop(z.union([z.number(), variable]), "", "number | { variable }"),
   fontStyle: prop(
-    z.enum(["italic", "normal"]),
+    z.enum(WORD_VALUES.fontStyle),
     'No oblique; snaps to the family\'s italic. "normal" only matters on a run, clearing an italic base.',
   ),
   lineHeight: prop(
@@ -323,20 +332,20 @@ const TEXTSTYLE_FIELDS = {
     'number(px) | "Npx" | "N%" | "Nem" | { variable }',
   ),
   textDecoration: prop(
-    z.enum(["underline", "line-through", "none"]),
+    z.enum(WORD_VALUES.textDecoration),
     '"none" only matters on a run, clearing an inherited decoration. Also inline: ~~text~~.',
   ),
-  textAlign: prop(z.enum(["left", "center", "right", "justify"]), ""),
+  textAlign: prop(z.enum(WORD_VALUES.textAlign), ""),
   textAlignVertical: prop(
-    z.enum(["top", "center", "bottom"]),
+    z.enum(WORD_VALUES.textAlignVertical),
     'Whole node only, never per run.',
   ),
   textTransform: prop(
-    z.enum(["uppercase", "lowercase", "capitalize", "none"]),
+    z.enum(WORD_VALUES.textTransform),
     'Changes the displayed case, not the characters. Shares a Figma slot with fontVariant, so "none" clears both.',
   ),
   fontVariant: prop(
-    z.enum(["small-caps", "all-small-caps"]),
+    z.enum(WORD_VALUES.fontVariant),
     'Shares a slot with textTransform, so naming both is refused.',
   ),
   paragraphSpacing: bindableMetric("Space between paragraphs."),
@@ -352,10 +361,10 @@ const TEXTSTYLE_FIELDS = {
     'Ellipsis after N lines. Needs a `width` the text wraps against (a number, "fill" or "N%"); a hugging text is refused. "none" removes it.',
     'number (≥1) | "none"',
   ),
-};
+});
 
 // text is content; fill is paint. boldWeight controls markdown emphasis, not base text style.
-const TEXT_FIELDS = {
+const TEXT_FIELDS = fieldsFor(WORD_GROUPS.text)({
   ["fontSize" satisfies keyof typeof INPUT_ALIASES]: inputAlias(z.number()),
   text: prop(
     z.custom<string | TextRunInput[]>(),
@@ -373,7 +382,7 @@ const TEXT_FIELDS = {
     "What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`.",
     "number (100–900) | name",
   ),
-};
+});
 
 // The rich-text run's style delta — the second element of a `[text, style]` run tuple (the array form of
 // TEXT). Every field overrides the node-level `textStyle` base for just that span, so a run carries
@@ -382,7 +391,7 @@ const TEXT_FIELDS = {
 // `textAlignVertical` and `lineClamp` are absent: alignment and clamping are whole-node properties in
 // Figma (no setRange* exists for them), not per-run. `color` is the one delta-only field the base
 // lacks — base color lives in the node's `fills`, like every other node's.
-const RUN_FIELDS = {
+const RUN_FIELDS = fieldsFor(WORD_GROUPS.run)({
   fontWeight: TEXTSTYLE_FIELDS.fontWeight,
   fontSize: TEXTSTYLE_FIELDS.fontSize,
   fontFamily: TEXTSTYLE_FIELDS.fontFamily,
@@ -403,7 +412,7 @@ const RUN_FIELDS = {
     'A URL over THIS span — inline `[text](url)` is usually simpler. Links to a NODE are read-only and fail loud.',
     'string (url) | { type: "URL", url }',
   ),
-};
+});
 
 const RunStyleSchema = z.object(RUN_FIELDS);
 export type StyleDeltaInput = z.infer<typeof RunStyleSchema>;
@@ -419,7 +428,7 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 // spread the full SIZE_FIELDS — typing props the compiler drops would let a compile-checked example
 // pass while rendering wrong (a real hole, since the example's whole job is to fail the build on API
 // mismatch). It carries exactly what `line` reads.
-const LINE_FIELDS = {
+const LINE_FIELDS = fieldsFor(WORD_GROUPS.line)({
   stroke: color('The line\'s paint. A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
   strokeWidth: bindableMetric("Thickness. Defaults to 1."),
   width: prop(
@@ -429,7 +438,7 @@ const LINE_FIELDS = {
   ),
   rotation: degrees('90 makes it vertical. Needs a numeric `width`.'),
   ...PLACEMENT_FIELDS,
-};
+});
 
 // A single themeable vector (VECTOR with `d`/`vectorPaths`): the shared appearance vocabulary MINUS
 // `borderRadius` (a vector has no corner radius — accepting it would be a documented no-op, which ADR-0003
@@ -440,8 +449,8 @@ const LINE_FIELDS = {
 // bounding box — so a canvas-shaped size has nothing to mean but a non-uniform stretch of the art.
 // `scale` is the size word that survives that; `svg` is the form that has a canvas. (The words are
 // still accepted from a `get` round-trip and ignored with a warning — see flcm.ts compilePath.)
-const PATH_FIELDS = {
-  vectorPaths: prop(z.array(z.object({ data: z.string(), windingRule: z.enum(["NONZERO", "EVENODD", "NONE"]) })), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg.", 'Array<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>'),
+const PATH_FIELDS = fieldsFor(WORD_GROUPS.path)({
+  vectorPaths: prop(z.array(z.object(fieldsFor(NESTED_WORDS.vectorPath)({ data: z.string(), windingRule: z.enum(WORD_VALUES.windingRule) }))), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg.", 'Array<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>'),
   d: z
     .string()
     .optional()
@@ -459,7 +468,7 @@ const PATH_FIELDS = {
   strokeAlign: APPEARANCE_FIELDS.strokeAlign,
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,
-};
+});
 
 // An SVG import (VECTOR with `svg`): a canvas of art, so it takes the size/position words — and these
 // two theme words. Figma parses the markup into a frame of vectors and flcm simply never touched them
@@ -467,13 +476,14 @@ const PATH_FIELDS = {
 // Negative space: no `strokeWidth`/`effects`/`borderRadius`. Stroke weight is part of the ART's proportions
 // (the markup's own stroke-width is what makes a 1.5px icon a 1.5px icon), so overriding it per-import
 // would silently redraw the drawing rather than recolour it.
-const SVG_FIELDS = {
+const SVG_FIELDS = fieldsFor(WORD_GROUPS.svg)({
+  svg: prop(z.string(), "The SVG markup to import: a whole <svg> document, parsed by Figma into a frame of vectors. Use exactly one of svg, d or vectorPaths."),
   fill: color('Repaints every vector inside the imported markup, overriding the colors written into it — how an icon takes your theme. "none" clears their fills.'),
   stroke: color('Repaints every vector\'s stroke inside the imported markup. "none" clears them.'),
-};
+});
 
 // Instance controls use the read vocabulary. The component target is grouped separately below.
-const INSTANCE_FIELDS = {
+const INSTANCE_FIELDS = fieldsFor(WORD_GROUPS.instance)({
   exposed: prop(z.boolean(), "Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it."),
   componentProperties: prop(
     z.custom<Record<string, ComponentPropertyInput>>(),
@@ -485,105 +495,71 @@ const INSTANCE_FIELDS = {
     "Sublayer deltas keyed by component-relative path as `get` keys them (`\"11:9\"`, or `\"11:9;11:14\"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`.",
     "{ [path]: delta }",
   ),
-};
+});
 
 // The fill word — the one word that exists ONLY inside an `overrides` entry, and only at a SLOT's
 // path. Read words are write words: `get` republishes a filled slot's content as `children` under
 // the slot's path, and that is exactly the spelling that fills one. Not an edit word on any node
 // type (edit-plan's per-type gate never sees it): a SLOT's content is stated whole from the
 // instance, or grown with the structural verbs, and the definition's bound frame grows with `append`.
-const SLOT_CONTENT_FIELDS = {
+const SLOT_CONTENT_FIELDS = fieldsFor(WORD_GROUPS.slotContent)({
   children: prop(
     z.custom<NodeSpec[]>(),
     "Plain child specs. Ids move and edit; omitted ids create. Unmentioned children remain. Use remove to delete content.",
     "node[]",
   ),
-};
+});
 
 // The same target selects a new instance’s component and swaps a live instance’s component.
-const SWAP_FIELDS = {
+const SWAP_FIELDS = fieldsFor(WORD_GROUPS.swap)({
   componentId: prop(
     z.custom<Target>(),
     "Required on a new INSTANCE: its COMPONENT or COMPONENT_SET target. On a live instance, swaps to that component. See Changing an instance.",
     "component target",
   ),
-};
+});
 
 // The BINDING word, on every node compiler: which component property drives which of this node's
 // fields. The read's own `componentPropertyReferences`, with the read's own field spellings — so a
 // component's children read back and author back in one vocabulary. It means something ONLY inside
 // flcm.component (the verb that declares the properties in the same call); every other verb refuses
-// a tree carrying one, by name. Which FIELDS a given compiler may bind is per-type and enforced
-// at construction (flcm.ts compileBindingBag), not spelled in the type — a `slot` on a TEXT would be
-// a frame's word on a node with no children.
-const BINDING_FIELDS = {
+// a tree carrying one, by name. Which FIELDS a given type may bind is vocabulary.ts BINDABLE_FIELDS,
+// enforced at construction (flcm.ts compileBindingBag), not spelled in the type — a `slot` on a TEXT
+// would be a frame's word on a node with no children.
+const BINDING_FIELDS = fieldsFor(WORD_GROUPS.binding)({
   componentPropertyReferences: prop(
-    z.object({
+    z.object(fieldsFor(Object.keys(BINDABLE_FIELDS) as (keyof typeof BINDABLE_FIELDS)[])({
       visible: z.string().optional(),
       text: z.string().optional(),
       componentId: z.string().optional(),
       slot: z.string().optional(),
-    }),
+    })),
     "Which declared property drives this node's `visible`, `text`, `componentId` or `slot` (see Properties).",
     "{ visible?, text?, componentId?, slot? } — property names",
   ),
-};
+});
 
-// ---- Composed verb schemas → inferred Props. flcm.ts imports these types (import type only). The Base/
-// Size/Appearance sub-schemas exist so flcm.ts's shared compilers (base/applySizing/appearance) type
-// against the same fields the verbs are built from. ----
-const BaseSchema = z.object(SHARED_FIELDS);
-export const SizeSchema = z.object(SIZE_FIELDS);
-// Appearance carries the shared base fields too (name/key/opacity) — flcm.ts's appearance() compiler runs
-// base() over the same value, so the type it accepts must include them.
-const AppearanceSchema = z.object({ ...SHARED_FIELDS, ...APPEARANCE_FIELDS });
-export type BaseProps = z.infer<typeof BaseSchema>;
-export type SizeProps = z.infer<typeof SizeSchema>;
-export type AppearanceProps = z.infer<typeof AppearanceSchema>;
-
-export const FrameSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-export const TextSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...TEXT_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-// The compiler dispatch consumes the `svg` markup itself before these props.
-export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...SVG_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-// An instance takes a FRAME's words — its root is a frame-like container, and naming one of them
-// sets a root-level override (an unnamed word keeps tracking the component) — plus the component
-// words. No `children`: an instance's content is its component's.
-export const InstanceSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...INSTANCE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-
-export type FrameProps = z.infer<typeof FrameSchema>;
-export type InstanceProps = z.infer<typeof InstanceSchema>;
-export type TextProps = z.infer<typeof TextSchema>;
-export type ShapeProps = z.infer<typeof ShapeSchema>;
-export type EllipseProps = z.infer<typeof EllipseSchema>;
-export type LineProps = z.infer<typeof LineSchema>;
-export type PathProps = z.infer<typeof PathSchema>;
-export type SvgProps = z.infer<typeof SvgSchema>;
 
 // The two words that reach a COMPONENT / COMPONENT_SET's own DEFINITION under edit — what the
 // component declares, as opposed to what its root frame looks like. Edit-only: at create they ride
 // flcm.component's options bag (COMPONENT_FIELDS below reuses `description` from here), and the
 // per-type gate keeps them off every other node type by name.
-const COMPONENT_DEFINITION_FIELDS = {
+const COMPONENT_DEFINITION_FIELDS = fieldsFor(WORD_GROUPS.componentDefinition)({
   description: prop(z.string(), "Shown beside the component in Figma's assets panel."),
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitionEdits>(),
     "COMPONENT / COMPONENT_SET, under edit: add (bound in the same editMany), rename or delete a property; a read's own entry restates as a no-op. See Changing a component.",
     "{ [name]: { type?, name?, variantOptions? } | null }",
   ),
-};
+});
 
 // The flcm.edit(target, changes) delta — the ONE authoring vocabulary (no second dialect,
 // invariant: same spellings, same parsers as create). Entries REUSE the create field objects (the
 // RUN_FIELDS pattern), so a prop can't mean something different under edit. Which words apply to
-// which node type is the runtime's per-type gate (edit-plan.ts DELTA_KEYS_BY_TYPE, composed from the
-// same KNOWN_KEYS atoms) — this schema is the flat closed set an unknown key fails loud against.
-// One absence is the contract, not an oversight: `key` is immutable under edit (a delta naming it
-// fails loud — re-keying could mint a duplicate address).
-const EDIT_FIELDS = {
+// which node type is the runtime's per-type gate (edit-plan.ts, from vocabulary.ts TYPE_WORD_GROUPS) —
+// this schema holds exactly the flat edit vocabulary (EditWord): every row's words minus the
+// CREATE_ONLY_WORDS, whose absence is the contract (`key` is immutable under edit, …).
+const EDIT_FIELDS = fieldsFor([] as EditWord[])({
   ...GRID_CONTAINER_ALIASES,
   ...ANNOTATION_FIELDS,
   name: SHARED_FIELDS.name,
@@ -630,7 +606,7 @@ const EDIT_FIELDS = {
     "{ visible?, text?, componentId?, slot? } — property names, or null to unbind",
   ),
   ...COMPONENT_DEFINITION_FIELDS,
-};
+});
 const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
 type CloneProps = Omit<EditDelta, "componentId" | "componentProperties" | "overrides" | "exposed" | "componentPropertyReferences" | "description" | "propertyDefinitions">;
@@ -646,7 +622,7 @@ export type EditEntry = { id: string } & EditDelta;
 // and `componentPropertyReferences` are what a `get` reports on a COMPONENT, spelled the same way. ----
 
 // flcm.component(nodeOrTarget, options?) options.
-const COMPONENT_FIELDS = {
+const COMPONENT_FIELDS = fieldsFor(WORD_GROUPS.componentOptions)({
   name: prop(z.string(), "Defaults to the authored node's or promoted node's own name."),
   description: COMPONENT_DEFINITION_FIELDS.description,
   propertyDefinitions: prop(
@@ -654,12 +630,12 @@ const COMPONENT_FIELDS = {
     "The properties it exposes, by name — non-empty, unique in the call, each bound in it. See Properties.",
     '{ [name]: { type } }',
   ),
-};
+});
 
 // One entry of `propertyDefinitions` — its own table, since the bag above documents only the map.
-const PROPERTY_DEFINITION_FIELDS = {
+const PROPERTY_DEFINITION_FIELDS = fieldsFor(WORD_GROUPS.propertyDefinition)({
   type: z
-    .enum(["boolean", "text", "instance_swap", "slot"])
+    .enum(WORD_VALUES.propertyType)
     .describe("Required; each type drives one field (see Properties). No default: it is the bound layer's content."),
   // Deliberately absent at create: there the KEY is the name, and a `name` beside it would be two
   // names for one property. It exists only so an edit can rename — see COMPONENT_DEFINITION_FIELDS.
@@ -667,10 +643,10 @@ const PROPERTY_DEFINITION_FIELDS = {
     z.string(),
     "Edit only: renames the property. At create the key IS the name, so this fails loud.",
   ),
-};
+});
 
 // One entry of flcm.variants — both fields required, so neither rides prop() (which optionals).
-const VARIANT_ENTRY_FIELDS = {
+const VARIANT_ENTRY_FIELDS = fieldsFor(WORD_GROUPS.variantEntry)({
   component: z
     .custom<Target>()
     .describe("The standalone local COMPONENT that becomes this variant.")
@@ -679,12 +655,12 @@ const VARIANT_ENTRY_FIELDS = {
     .custom<Record<string, string>>()
     .describe('Which member of the set this component IS: { Size: "Large", State: "Default" }.')
     .meta({ type: "{ [axis]: value }" }),
-};
+});
 
-const VARIANTS_FIELDS = {
+const VARIANTS_FIELDS = fieldsFor(WORD_GROUPS.variantsOptions)({
   name: z.string().describe("Required."),
   description: COMPONENT_FIELDS.description,
-};
+});
 
 const ComponentOptionsSchema = z.object(COMPONENT_FIELDS);
 export type ComponentOptions = z.infer<typeof ComponentOptionsSchema>;
@@ -692,9 +668,9 @@ const VariantsOptionsSchema = z.object(VARIANTS_FIELDS);
 export type VariantsOptions = z.infer<typeof VariantsOptionsSchema>;
 
 // Image sources are URLs or local paths under the server’s asset root; options control paint mapping.
-const IMAGE_FIELDS = {
+const IMAGE_FIELDS = fieldsFor(WORD_GROUPS.image)({
   scaleMode: prop(
-    z.enum(["FILL", "FIT", "CROP", "TILE"]),
+    z.enum(WORD_VALUES.scaleMode),
     'How the image maps into the node box. Default "FILL" (cover). "FIT" contains it, "CROP" uses the crop transform, "TILE" repeats it.',
   ),
   placeholder: prop(
@@ -708,10 +684,10 @@ const IMAGE_FIELDS = {
     "0 | 90 | 180 | 270",
   ),
   filters: prop(
-    z.object({
+    z.object(fieldsFor(NESTED_WORDS.imageFilters)({
       exposure: z.number(), contrast: z.number(), saturation: z.number(), temperature: z.number(),
       tint: z.number(), highlights: z.number(), shadows: z.number(),
-    }).partial(),
+    })).partial(),
     "Figma's image adjustments, each -1 to 1 (0 is untouched). Unnamed ones stay 0.",
     "{ exposure?, contrast?, saturation?, temperature?, tint?, highlights?, shadows? }",
   ),
@@ -720,23 +696,23 @@ const IMAGE_FIELDS = {
     "How this paint blends with the paints beneath it — a CSS blend name, as in mixBlendMode. Default \"normal\".",
     '"multiply" | "screen" | "overlay" | … (CSS blend name)',
   ),
-};
+});
 const ImageSchema = z.object(IMAGE_FIELDS);
 export type ImageOpts = z.infer<typeof ImageSchema>;
 
 // ---- gradient() / effects() sugar, documented as their own field tables. ----
-const GradientSchema = z.object({
-  type: prop(z.enum(["linear", "radial"]), 'Gradient type. Default "linear".'),
+const GRADIENT_FIELDS = fieldsFor(WORD_GROUPS.gradient)({
+  type: prop(z.enum(WORD_VALUES.gradientType), 'Gradient type. Default "linear".'),
   stops: prop(
     z.custom<GradientStopInput[]>(),
     'Color stops. Each is a color string ("#0B1020") or { color, pos } where pos is a percentage. With no pos, stops spread evenly. Required, non-empty.',
     "array of color strings or { color, pos }",
   ),
   angle: prop(z.number(), "Linear only. Degrees; 180 = top→bottom (default).", "number (deg)"),
-  at: prop(z.object({ x: z.number().optional(), y: z.number().optional() }), "Radial only — the center, in percent. Default { x: 50, y: 50 }.", "{ x?, y? } percent"),
+  at: prop(z.object(fieldsFor(NESTED_WORDS.gradientAt)({ x: z.number().optional(), y: z.number().optional() })), "Radial only — the center, in percent. Default { x: 50, y: 50 }.", "{ x?, y? } percent"),
 });
 
-const EffectsSchema = z.object({
+const EFFECTS_FIELDS = fieldsFor(WORD_GROUPS.effects)({
   shadow: prop(
     z.custom<ShadowSugar | ShadowSugar[]>(),
     "A drop (or inner) shadow. `true` for the default, or { x?, y?, blur?, spread?, color?, inner? }. Defaults: x:0, y:4, blur:8, spread:0, color:\"rgba(0,0,0,0.25)\". `blur` is 1:1 with CSS.",
@@ -772,8 +748,27 @@ const EffectsSchema = z.object({
   ),
 });
 
-export type NodeSpec = (Omit<Partial<SimplifiedNode>, "children"> & { children?: NodeSpec[] }) | ({ id?: string; type?: string; children?: NodeSpec[] } & Partial<FrameProps & TextProps & LineProps & PathProps & InstanceProps & { svg: string; componentId: Target }>);
-export type AuthoredTree = NodeSpec & { warnings?: WarningRecord[]; id: string; children?: AuthoredTree[] };
+// A spec is one of three shapes. A NEW node is discriminated by `type`, and takes exactly its type's
+// row (vocabulary.ts TYPE_WORD_GROUPS) — `{ type: "LINE", height: 10 }` is a type error, as it is a
+// runtime refusal. A LIVE node (`id`) is edited in place, so it takes the edit words, judged against
+// its live type when it resolves. A READ node is a `get` result passed back whole or spread: its
+// words are the read's, and the prelude judges them at runtime.
+type NewNode<T extends string, P> = { type: T; id?: undefined } & P;
+export type NodeSpec =
+  | (NewNode<"FRAME", FrameProps> & { children?: NodeSpec[] })
+  | NewNode<"TEXT", TextProps>
+  | NewNode<"RECTANGLE", ShapeProps>
+  | NewNode<"ELLIPSE", EllipseProps>
+  | NewNode<"LINE", LineProps>
+  | NewNode<"VECTOR", PathProps & { svg?: undefined }>
+  | NewNode<"VECTOR", SvgProps & { svg: string }>
+  | NewNode<"INSTANCE", InstanceProps & { componentId: Target }>
+  | ({ id: string; type?: string; children?: NodeSpec[] } & EditDelta)
+  | ReadNode;
+// What a placement verb returns: the spec copied, with an id on every node.
+interface AuthoredIdentity { id: string; warnings?: WarningRecord[]; children?: AuthoredTree[] }
+type AuthoredOf<S> = S extends unknown ? Omit<S, "id" | "children"> & AuthoredIdentity : never;
+export type AuthoredTree = AuthoredOf<NodeSpec>;
 
 // ---- The typed public surface. flcm.ts's real exports are asserted `satisfies Flcm`, so this can't
 // drift from them; the example files author against it and fail the build if a signature moves. ----
@@ -898,41 +893,89 @@ export const VERBS: VerbDoc[] = [
   {"category": "page", "signature": "await flcm.page.new(name)", "builds": "{ fileName, page, pages }", "args": "Create a uniquely named page and switch to it."},
 ];
 
-// Re-exported for the doc generator: which FIELD_GROUPS compose each node type's edit surface —
-// the same table edit-plan.ts builds its runtime legality gate from, so the per-type doc lists and the
-// gate cannot drift. (A runtime value, but from zod-free ir.ts — the purity gate is unaffected.)
-export { EDIT_TYPE_WORD_GROUPS } from "./ir.js";
+// Re-exported for the doc generator: the composition rows and create-only words the runtime gates
+// read, so the per-type doc lists and the gates cannot drift. (Runtime values, but from zod-free
+// vocabulary.ts — the purity gate is unaffected.)
+export { TYPE_WORD_GROUPS, CREATE_ONLY_WORDS, editWordsOf, wordsOf } from "./vocabulary.js";
 
-// ---- Field-group registry — how the reference groups props into tables. Each verb's full schema drives
-// its TYPE; these groups drive its DOC layout (shared/size tables once, verb-specific tables per verb). ----
-export const FIELD_GROUPS = {
+// ---- Field-group registry — one field table per vocabulary group (exactly those, plus edit's flat
+// table). The reference renders them as its prop tables (shared/size tables once, verb-specific tables
+// per verb); the composed verb schemas below are built from the row groups.
+//
+// The row groups are their own object because a spec's TYPE is built from them, and `slotContent`'s
+// field is typed by NodeSpec: composing from the whole registry would make NodeSpec its own input. ----
+type RowGroup = (typeof TYPE_WORD_GROUPS)[keyof typeof TYPE_WORD_GROUPS][number] | (typeof SVG_WORD_GROUPS)[number];
+const ROW_FIELD_GROUPS = {
   annotation: ANNOTATION_FIELDS,
   shared: SHARED_FIELDS,
   size: SIZE_FIELDS,
-  placement: PLACEMENT_FIELDS,
   appearance: APPEARANCE_FIELDS,
   ellipse: ELLIPSE_FIELDS,
   frame: FRAME_FIELDS,
-  layout: LAYOUT_FIELDS,
-  childLayout: CHILD_LAYOUT_FIELDS,
-  containerLayout: CONTAINER_LAYOUT_FIELDS,
   text: TEXT_FIELDS,
-  textStyle: TEXTSTYLE_FIELDS,
-  run: RUN_FIELDS,
   line: LINE_FIELDS,
   path: PATH_FIELDS,
   svg: SVG_FIELDS,
-  edit: EDIT_FIELDS,
   instance: INSTANCE_FIELDS,
   swap: SWAP_FIELDS,
-  slotContent: SLOT_CONTENT_FIELDS,
   binding: BINDING_FIELDS,
-  componentOptions: COMPONENT_FIELDS,
   componentDefinition: COMPONENT_DEFINITION_FIELDS,
+} as const satisfies Record<RowGroup, Record<string, z.ZodType>>;
+
+export const FIELD_GROUPS = {
+  ...ROW_FIELD_GROUPS,
+  placement: PLACEMENT_FIELDS,
+  layout: LAYOUT_FIELDS,
+  childLayout: CHILD_LAYOUT_FIELDS,
+  containerLayout: CONTAINER_LAYOUT_FIELDS,
+  textStyle: TEXTSTYLE_FIELDS,
+  run: RUN_FIELDS,
+  edit: EDIT_FIELDS,
+  slotContent: SLOT_CONTENT_FIELDS,
+  componentOptions: COMPONENT_FIELDS,
   propertyDefinition: PROPERTY_DEFINITION_FIELDS,
   variantEntry: VARIANT_ENTRY_FIELDS,
   variantsOptions: VARIANTS_FIELDS,
   image: IMAGE_FIELDS,
-  gradient: GradientSchema.shape,
-  effects: EffectsSchema.shape,
-} as const;
+  gradient: GRADIENT_FIELDS,
+  effects: EFFECTS_FIELDS,
+} as const satisfies Record<WordGroup | "edit", Record<string, z.ZodType>>;
+
+// ---- Composed verb schemas → inferred Props, one per composition row, spread in row order so a
+// later group's field wins a shared word (FRAME's full `layout` over size's placement-only one), exactly
+// as the type below computes. flcm.ts imports these types (import type only). The Base/Size/Appearance
+// sub-schemas exist so flcm.ts's shared compilers type against the same fields the verbs are built from. ----
+type RowFields = typeof ROW_FIELD_GROUPS;
+type ComposedFields<R extends readonly RowGroup[], Acc = object> = R extends readonly [infer H extends RowGroup, ...infer T extends readonly RowGroup[]]
+  ? ComposedFields<T, Omit<Acc, keyof RowFields[H]> & RowFields[H]>
+  : Acc;
+function composeRow<const R extends readonly RowGroup[]>(row: R): ComposedFields<R> {
+  return Object.assign({}, ...row.map((group) => ROW_FIELD_GROUPS[group])) as ComposedFields<R>;
+}
+
+const BaseSchema = z.object(SHARED_FIELDS);
+export const SizeSchema = z.object(SIZE_FIELDS);
+// Appearance carries the shared base fields too (name/key/opacity) — flcm.ts's appearance() compiler runs
+// base() over the same value, so the type it accepts must include them.
+const AppearanceSchema = z.object({ ...SHARED_FIELDS, ...APPEARANCE_FIELDS });
+export type BaseProps = z.infer<typeof BaseSchema>;
+export type SizeProps = z.infer<typeof SizeSchema>;
+export type AppearanceProps = z.infer<typeof AppearanceSchema>;
+
+export const FrameSchema = z.object(composeRow(TYPE_WORD_GROUPS.FRAME));
+export const TextSchema = z.object(composeRow(TYPE_WORD_GROUPS.TEXT));
+export const ShapeSchema = z.object(composeRow(TYPE_WORD_GROUPS.RECTANGLE));
+export const EllipseSchema = z.object(composeRow(TYPE_WORD_GROUPS.ELLIPSE));
+export const LineSchema = z.object(composeRow(TYPE_WORD_GROUPS.LINE));
+export const PathSchema = z.object(composeRow(TYPE_WORD_GROUPS.VECTOR));
+export const SvgSchema = z.object(composeRow(SVG_WORD_GROUPS));
+export const InstanceSchema = z.object(composeRow(TYPE_WORD_GROUPS.INSTANCE));
+
+export type FrameProps = z.infer<typeof FrameSchema>;
+export type InstanceProps = z.infer<typeof InstanceSchema>;
+export type TextProps = z.infer<typeof TextSchema>;
+export type ShapeProps = z.infer<typeof ShapeSchema>;
+export type EllipseProps = z.infer<typeof EllipseSchema>;
+export type LineProps = z.infer<typeof LineSchema>;
+export type PathProps = z.infer<typeof PathSchema>;
+export type SvgProps = z.infer<typeof SvgSchema>;

@@ -44,8 +44,9 @@ import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPag
 import { beginMutatingApply } from "./verb-error.js";
 import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
-import { KNOWN_KEYS, isTargetShaped, COMPONENT_TARGET_HINT, defaultValueHint } from "./flcm.js";
+import { isTargetShaped, COMPONENT_TARGET_HINT, defaultValueHint } from "./flcm.js";
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
+import { BINDABLE_FIELDS, wordsOf, type BindableField, type WordValue } from "./vocabulary.js";
 
 const SUBJECT = "flcm.component";
 const VARIANTS_SUBJECT = "flcm.variants";
@@ -54,7 +55,7 @@ export const quoted = (names: readonly string[]): string => names.map((n) => JSO
 
 // The read's lowercase property types → Figma's own enum. `variant` is deliberately absent: an axis
 // is minted by combining components into a SET, never declared on one (see the refusal below).
-export const PROPERTY_TYPES: Record<string, "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT"> = {
+export const PROPERTY_TYPES: Record<WordValue<"propertyType">, "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT"> = {
   boolean: "BOOLEAN",
   text: "TEXT",
   instance_swap: "INSTANCE_SWAP",
@@ -65,27 +66,32 @@ const PROPERTY_TYPE_WORDS = Object.keys(PROPERTY_TYPES);
 // Figma's enum → the read's lowercase word, for a refusal that has only a LIVE definition to go on
 // (an edit resolves against `componentPropertyDefinitions`, which speaks the enum).
 export const PROPERTY_TYPE_WORD_FOR: Record<string, string> = {};
-for (const word of PROPERTY_TYPE_WORDS) PROPERTY_TYPE_WORD_FOR[PROPERTY_TYPES[word]] = word;
+for (const word of PROPERTY_TYPE_WORDS) PROPERTY_TYPE_WORD_FOR[PROPERTY_TYPES[word as WordValue<"propertyType">]] = word;
 
-// Each binding field: the property type it demands, and the key Figma actually stores it under.
-// The author writes the READ's spelling on both sides of the surface; only this table knows the
-// wire keys — which is the whole reason a binding is authored rather than hand-written.
-export const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: string }> = {
-  visible: { wire: "visible", type: "boolean" },
-  text: { wire: "characters", type: "text" },
-  componentId: { wire: "mainComponent", type: "instance_swap" },
-  slot: { wire: SLOT_CONTENT_WIRE_KEY, type: "slot" },
+// The key Figma actually stores each binding field under. The author writes the READ's spelling on
+// both sides of the surface; only this table knows the wire keys — which is the whole reason a
+// binding is authored rather than hand-written.
+const BINDING_WIRE: Record<BindableField, string> = {
+  visible: "visible",
+  text: "characters",
+  componentId: "mainComponent",
+  slot: SLOT_CONTENT_WIRE_KEY,
 };
+
+// Each binding field: its wire key, and the property type it demands (vocabulary.ts BINDABLE_FIELDS).
+export const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: WordValue<"propertyType"> }> = Object.fromEntries(
+  (Object.keys(BINDING_WIRE) as BindableField[]).map((field) => [field, { wire: BINDING_WIRE[field], type: BINDABLE_FIELDS[field].propertyType }]),
+);
 
 // Which binding field carries a property of each type — the table above inverted, for the
 // derived-default lookup ("which node binds this property?"). One field per type is the invariant.
 export const FIELD_FOR_TYPE: Record<string, string> = {};
 for (const field of Object.keys(BINDING_FIELD_WIRE_KEYS)) FIELD_FOR_TYPE[BINDING_FIELD_WIRE_KEYS[field].type] = field;
 
-const COMPONENT_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.componentOptions);
-const DEFINITION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.propertyDefinition);
-const VARIANT_ENTRY_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.variantEntry);
-const VARIANTS_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.variantsOptions);
+const COMPONENT_OPTION_KEYS = wordsOf(["componentOptions"]);
+const DEFINITION_KEYS = wordsOf(["propertyDefinition"]);
+const VARIANT_ENTRY_KEYS = wordsOf(["variantEntry"]);
+const VARIANTS_OPTION_KEYS = wordsOf(["variantsOptions"]);
 
 // ---- what an flcm.component call declares, document-blind then resolved ----
 

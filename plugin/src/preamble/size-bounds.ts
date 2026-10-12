@@ -4,14 +4,14 @@
  */
 import { isTokenRef, type WriteLayout } from "./ir.js";
 import { isVariableInput, compileVariableRef, writeBindable, unbindField, type ResolvedTokens } from "./tokens.js";
+import { BOUND_WORDS } from "./vocabulary.js";
 
-export const BOUND_KEYS = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;
 type Bounds = NonNullable<WriteLayout["bounds"]>;
-type LiveBounds = Partial<Record<typeof BOUND_KEYS[number], number | null>>;
+type LiveBounds = Partial<Record<typeof BOUND_WORDS[number], number | null>>;
 
-export function compileBounds(props: Partial<Record<typeof BOUND_KEYS[number], unknown>>): Bounds | undefined {
+export function compileBounds(props: Partial<Record<typeof BOUND_WORDS[number], unknown>>): Bounds | undefined {
   const bounds: Bounds = {};
-  for (const key of BOUND_KEYS) {
+  for (const key of BOUND_WORDS) {
     const value = props[key];
     if (value === undefined) continue;
     if (isVariableInput(value)) { bounds[key] = compileVariableRef(value, key, "FLOAT"); continue; }
@@ -27,7 +27,7 @@ export function compileBounds(props: Partial<Record<typeof BOUND_KEYS[number], u
 export function assertBounds(bounds: Bounds | undefined, live: LiveBounds, subject: string): void {
   if (!bounds) return;
   // A bound value is the variable's to decide (per mode), so it can't be ordered here; it's skipped.
-  const effective = (key: typeof BOUND_KEYS[number]) => {
+  const effective = (key: typeof BOUND_WORDS[number]) => {
     const value = bounds[key];
     return value === "none" ? null : isTokenRef(value) ? null : value ?? live[key];
   };
@@ -42,8 +42,8 @@ export function assertBounds(bounds: Bounds | undefined, live: LiveBounds, subje
 export function applyBounds(node: any, bounds: Bounds, tokens: ResolvedTokens | undefined): void {
   // Clear supplied bounds first so moving a valid interval cannot hit a transient contradiction.
   // An omitted bound is never assigned, including on an instance with its own overrides.
-  for (const key of BOUND_KEYS) if (bounds[key] !== undefined) { unbindField(node, key); node[key] = null; }
-  for (const key of BOUND_KEYS) {
+  for (const key of BOUND_WORDS) if (bounds[key] !== undefined) { unbindField(node, key); node[key] = null; }
+  for (const key of BOUND_WORDS) {
     const value = bounds[key];
     if (value !== undefined && value !== "none") writeBindable(node, key, value, tokens);
   }

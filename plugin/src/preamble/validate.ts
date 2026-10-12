@@ -12,6 +12,7 @@
 // reaches Object.prototype: `{ type: "toString" }` would pass a type gate and `{ compiler: 1 }` a
 // field gate, both silently. Own-property only — a closed set has to actually be closed.
 import { normalizeInputAliases } from "./input-aliases.js";
+import { nodeWordDisposition } from "./vocabulary.js";
 
 export function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
@@ -60,8 +61,6 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
   }
 }
 
-// Contextual read dimensions need their measured fallback. Identity is interpreted by verbs.
-export const READ_ONLY_WORDS: ReadonlySet<string> = new Set(["type", "children", "designedWidth", "designedHeight", "warnings", "comments"]);
 
 // The pure, document-blind half of a DELTA's validation (invariant 2's validate-then-mutate: this
 // runs before any target is resolved, so a misspelled word reads "unknown prop" no matter what it
@@ -83,12 +82,13 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
       subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
     );
   }
-  // The read shape's read-only words (`type`, `children`, a root's `designedWidth`) are judged
-  // later, where the live node's TYPE is known. They pass this document-blind gate unjudged;
-  // everything else is judged now, against the edit vocabulary alone.
+  // The read shape's non-authoring words (`type`, `children`, a root's `designedWidth`, a refused
+  // `strokeDashes`) are judged later, by the prelude, where the live node's TYPE is known. They pass
+  // this document-blind gate unjudged; everything else is judged now, against the edit vocabulary alone.
   const foreign: Record<string, unknown> = {};
   for (const key of Object.keys(changes)) {
-    if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
+    const disposition = nodeWordDisposition(key);
+    if (disposition === undefined || disposition === "author") foreign[key] = (changes as Record<string, unknown>)[key];
   }
   rejectUnknownKeys(normalizeInputAliases(foreign, subject), known, subject);
   assertDeltaNotEmpty(changes, known, subject);

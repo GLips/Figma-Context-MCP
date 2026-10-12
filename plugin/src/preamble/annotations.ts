@@ -4,6 +4,7 @@
  */
 import type { SnapshotAnnotation } from "@framelink/core/snapshot";
 import { rejectUnknownKeys } from "./validate.js";
+import { NESTED_WORDS } from "./vocabulary.js";
 
 // https://developers.figma.com/docs/plugins/api/AnnotationProperty/
 // Validate property names before any file-scoped category can be created.
@@ -15,7 +16,7 @@ const ANNOTATION_PROPERTIES = [
   "gridRowCount", "gridColumnCount", "gridRowAnchorIndex", "gridColumnAnchorIndex", "gridRowSpan", "gridColumnSpan",
 ] as const;
 type WriteAnnotationProperty = (typeof ANNOTATION_PROPERTIES)[number];
-const ANNOTATION_KEYS = new Set(["text", "category", "properties"]);
+const ANNOTATION_KEYS: ReadonlySet<string> = new Set(NESTED_WORDS.annotationEntry);
 export interface WriteAnnotation {
   text?: string;
   category?: string;

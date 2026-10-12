@@ -67,7 +67,6 @@ export const INPUT_ALIASES = {
   gridTemplateRows: { keys: ["gridRowsSizing", "gridRowSizes"], path: ["layout", "gridTemplateRows"], group: "container", combine: templateAlias },
 } as const satisfies Record<string, AliasRule>;
 const rules: readonly AliasRule[] = Object.values(INPUT_ALIASES);
-export const gridAliasKeys = (group: "child" | "container" | "all"): string[] => rules.filter(rule => rule.group && (group === "all" || rule.group === group)).flatMap(rule => [...rule.keys]);
 
 function sameInput(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;

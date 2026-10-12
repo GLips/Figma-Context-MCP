@@ -8,7 +8,7 @@ import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
 import { readCommentCounts, type CommentCounts } from "./comment-counts.js";
-import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
+import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult, ReadNode } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
 import {
   sceneNodeToSnapshot,
@@ -310,6 +310,10 @@ function reportUnreadable(verb: string, unreadable: UnreadableSink): void {
   });
 }
 
+// The one place a ReadNode is minted: only a get result carries the brand that lets a read pass
+// whole as a NodeSpec (ir.ts ReadNode).
+const asReadNode = (node: SimplifiedNode): ReadNode => node as ReadNode;
+
 /** Read the complete subtree, including hidden targets and instance descendants. */
 export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
@@ -317,11 +321,11 @@ export async function get(target: Target): Promise<GetResult> {
   const full = await simplifyScene(node, unreadable, undefined, true);
   reportUnreadable("get", unreadable);
   const { nodes, components } = full;
-  const result: GetResult = { node: nodes[0] };
+  const result: GetResult = { node: asReadNode(nodes[0]) };
   if (Object.keys(components).length > 0) result.components = components;
   registerRead(result, () => {
     const projected = project(full);
-    const output: GetResult = { node: projected === full ? result.node : projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full)) };
+    const output: GetResult = { node: projected === full ? result.node : asReadNode(projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full))) };
     if (Object.keys(projected.components).length) output.components = projected.components;
     return output;
   });

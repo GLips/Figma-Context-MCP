@@ -446,6 +446,7 @@ A canvas of art, so it takes the shared and size/position props too. These two r
 
 | Prop | Type | Notes |
 | --- | --- | --- |
+| `svg` | string | The SVG markup to import: a whole <svg> document, parsed by Figma into a frame of vectors. Use exactly one of svg, d or vectorPaths. |
 | `fill` | paint \| paint[] | Repaints every vector inside the imported markup, overriding the colors written into it — how an icon takes your theme. "none" clears their fills. |
 | `stroke` | paint \| paint[] | Repaints every vector's stroke inside the imported markup. "none" clears them. |
 
@@ -704,6 +705,7 @@ Create words that edit refuses:
 
 - `key` — immutable, since re-keying could mint a duplicate address; rename with `name`.
 - `vectorPaths`, `d`, `scale` (VECTOR) — path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values).
+- `svg` (VECTOR) — imported markup becomes a frame of vectors; to change the art, `replace` the node with a new svg VECTOR.
 
 Types you can edit but never create:
 
@@ -1041,10 +1043,11 @@ const screen = {
     ],
 };
 const out = await flcm.render(screen);
+const title = out.children[1]; // the result mirrors the spec, so narrow by type to read a TEXT word
 return {
     node: out.id, // the login frame's id
     card: out.children[2].id,
-    title: out.children[1].text, // "Welcome back"
+    title: title.type === "TEXT" ? title.text : undefined, // "Welcome back"
 };
 ```
 

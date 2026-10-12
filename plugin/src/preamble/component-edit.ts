@@ -33,7 +33,8 @@ import {
   compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, FRESH_LAYER_SHOWS, writeInheritedDefault, readableComponentOf, describeBinder, boundLayerValue,
 } from "./component.js";
 import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
-import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
+import { compileBindingEditBag, assertNoComponentPropertyBindings } from "./flcm.js";
+import { bindableFieldsOf } from "./vocabulary.js";
 import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
 
@@ -347,7 +348,7 @@ export function prepareComponentBindingEdit(
   }
   const owner = definitionOwnerOf(component);
   const definitions = propertyDefinitionsOf(owner);
-  const refs = compileBindingEditBag(raw, bindingFieldsForType(node.type), subject, "a " + node.type);
+  const refs = compileBindingEditBag(raw, bindableFieldsOf(node.type), subject, "a " + node.type);
   const live: Record<string, string> = node.componentPropertyReferences || {};
   const writes: ComponentBindingEditPlan["writes"] = [];
   const adds = addsOf?.(owner);

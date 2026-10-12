@@ -3,11 +3,14 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { FLOW_ALIGNMENT_GUIDANCE } from "./layout-mode.js";
-import { acceptAuthoringProps } from "./authoring-input.js";
-import { gridAliasKeys } from "./input-aliases.js";
+import type { Accepted } from "./authoring-input.js";
+import {
+  WORD_GROUPS, NESTED_WORDS, WORD_VALUES, EDIT_WORDS, BINDABLE_FIELDS, bindableFieldsOf, wordsOf,
+  type WordValue, type BindableField,
+} from "./vocabulary.js";
 import { parseGridTracks, parseGridPlacement } from "./grid-tracks.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
-import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
+import { compileBounds } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
@@ -36,54 +39,10 @@ import type {
   GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar,
 } from "./schema.js";
 
-// These zod-free key sets mirror schema.ts; the drift test compares every field group.
-export const KNOWN_KEYS = {
-  annotation: ["annotations"],
-  shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: [...gridAliasKeys("all"), "exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "constraints", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
-  size: [...gridAliasKeys("child"), "layout", ...BOUND_KEYS, "width", "height", "left", "top", "position", "constraints"],
-  placement: [...gridAliasKeys("child"), "layout", "left", "top", "position", "constraints"],
-  appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
-  ellipse: ["fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
-  frame: [...gridAliasKeys("container"), "layout", "clip", "clipsContent"],
-  layout: [...gridAliasKeys("all"), "gridTemplateColumns", "gridTemplateRows", "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex", "mode", "gap", "wrap", "padding", "justifyContent", "alignItems"],
-  childLayout: [...gridAliasKeys("child"), "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex"],
-  containerLayout: [...gridAliasKeys("container"), "mode", "gridTemplateColumns", "gridTemplateRows", "gap", "wrap", "padding", "justifyContent", "alignItems"],
-  text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
-  textStyle: ["style", "fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
-  run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
-  line: [...gridAliasKeys("child"), "layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "constraints"],
-  path: ["vectorPaths", "d", "scale", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
-  svg: ["fill", "stroke"],
-  instance: ["componentProperties", "overrides", "exposed"],
-  swap: ["componentId"],
-  slotContent: ["children"],
-  binding: ["componentPropertyReferences"],
-  componentOptions: ["name", "description", "propertyDefinitions"],
-  componentDefinition: ["description", "propertyDefinitions"],
-  propertyDefinition: ["type", "name"],
-  variantEntry: ["component", "variant"],
-  variantsOptions: ["name", "description"],
-  image: ["scaleMode", "placeholder", "opacity", "rotation", "filters", "blendMode"],
-  gradient: ["type", "stops", "angle", "at"],
-  effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur", "progressiveBackgroundBlur"],
-} as const;
-
 function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
   return new Set(groups.flat());
 }
 
-// Per-verb known-key sets, COMPOSED from the guarded group atoms above (so a verb set can't drift once the
-// groups are). Each mirrors the verb's composed schema — FrameSchema = shared+size+appearance+frame, etc.
-// `binding` composes into EVERY node's set: any layer can be bound to a component property, and
-// which FIELDS a given type may bind is the per-compiler list below (compileBindingBag), not the
-// key set — the word itself is universal.
-const FRAME_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.binding);
-const TEXT_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text, KNOWN_KEYS.binding);
-const SHAPE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.binding);
-const ELLIPSE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse, KNOWN_KEYS.binding);
-const LINE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.line, KNOWN_KEYS.binding);
-const INSTANCE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance, KNOWN_KEYS.binding);
 // The words an override delta may name — the edit vocabulary, since an override IS an edit of one
 // sublayer, judged at construction the way edit's stage 1 judges a delta. MINUS the three component
 // words: a path names a sublayer, and re-pointing a NESTED instance from here would need a second
@@ -92,13 +51,13 @@ const INSTANCE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEY
 //
 // INSTANCE_COMPONENT_WORDS is also what edit's stage 2 splits off a delta as the instance half
 // (edit-plan.ts) — one set, so a word added to either group can't be split by one and refused by the other.
-export const INSTANCE_COMPONENT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.instance, KNOWN_KEYS.swap);
+export const INSTANCE_COMPONENT_WORDS: ReadonlySet<string> = wordsOf(["instance", "swap"]);
 // The COMPONENT half of the same split: what the component DECLARES (`description`,
 // `propertyDefinitions`, on a COMPONENT/COMPONENT_SET) and which property drives a SUBLAYER
 // (`componentPropertyReferences`). Live-document questions all — which definition a bare name
 // reaches, which component owns the node — so edit's stage 2 splits them off raw exactly as it
 // splits the instance words, and component-edit.ts resolves them.
-const COMPONENT_EDIT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.componentDefinition, KNOWN_KEYS.binding);
+const COMPONENT_EDIT_WORDS: ReadonlySet<string> = wordsOf(["componentDefinition", "binding"]);
 // Every edit word the sync compile can only judge the SHAPE of. One set, so a word added to either
 // half is split by stage 2 and refused by the override gate below without a second edit.
 export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INSTANCE_COMPONENT_WORDS], [...COMPONENT_EDIT_WORDS]);
@@ -106,30 +65,21 @@ export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INST
 // slot. Not an edit word on any node type — a bound frame in the definition grows through
 // `append`, and the SLOT node's own child list is stated whole, from the instance, or grown
 // with the structural verbs. Which path is a slot is the document's to say (instance.ts).
-export const SLOT_CONTENT_WORD = KNOWN_KEYS.slotContent[0];
-const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)), KNOWN_KEYS.slotContent);
-// The per-type authored vocabulary, checked against the prop schemas in the drift test.
-export const NODE_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
-  FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
-};
-const PATH_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
-const SVG_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.svg, KNOWN_KEYS.binding);
-const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
+export const SLOT_CONTENT_WORD = WORD_GROUPS.slotContent[0];
+const OVERRIDE_DELTA_KEYS = keySet([...EDIT_WORDS].filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)), WORD_GROUPS.slotContent);
+const IMAGE_KEYS = keySet(WORD_GROUPS.image);
 // An edit entry also takes a read's `variantOptions` back, restating a set's axis as a no-op.
-const PROPERTY_DEFINITION_EDIT_KEYS = keySet(KNOWN_KEYS.propertyDefinition, ["variantOptions"]);
-const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
-const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
-// The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. Its keys
-// are an ir.ts interface, not a schema FIELD_GROUP, so no runtime drift test reaches them; but they're the
-// frozen CSS spellings, and this ONE list drives both the is-this-CSS detection and the reject (normalizeEffects).
-const CSS_EFFECTS_WORDS = ["boxShadow", "filter", "backdropFilter", "textShadow"] as const;
-const CSS_EFFECTS_KEYS = keySet(CSS_EFFECTS_WORDS);
+const PROPERTY_DEFINITION_EDIT_KEYS = keySet(WORD_GROUPS.propertyDefinition, ["variantOptions"]);
+const GRADIENT_KEYS = keySet(WORD_GROUPS.gradient);
+const EFFECTS_KEYS = keySet(WORD_GROUPS.effects);
+// The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. This
+// ONE list drives both the is-this-CSS detection and the reject (normalizeEffects).
+const CSS_EFFECTS_KEYS = keySet(NESTED_WORDS.cssEffects);
 // The `effects:` prop accepts EITHER vocabulary in one bag, so its closed set is the union — the reject
 // has to run before the split, or a typo lands in whichever half claims it and gets named by that half's
 // gate instead of by `effects` (which is where the author wrote it).
-const EFFECTS_INPUT_KEYS = keySet(KNOWN_KEYS.effects, CSS_EFFECTS_WORDS);
-// `constraints` is a z.custom in schema.ts, so it has no zod shape for a drift test to reflect on.
-const CONSTRAINT_KEYS = keySet(["x", "y"]);
+const EFFECTS_INPUT_KEYS = keySet(WORD_GROUPS.effects, NESTED_WORDS.cssEffects);
+const CONSTRAINT_KEYS = keySet(NESTED_WORDS.constraints);
 
 // The closed-set reject (rejectUnknownKeys) lives in validate.ts — one gate shared with read.ts's locate
 // query. Every compiler + nested object below passes its verb name / path as the `subject`.
@@ -140,8 +90,8 @@ const CONSTRAINT_KEYS = keySet(["x", "y"]);
 // form is the READ shape's spelling ("12px 16px"): `get` returns padding as a CSS shorthand, and without
 // it here a `get` result's own layout wouldn't re-author. Inside the object form the edges stay NUMBERS — a "24px"
 // there once dropped silently to zero on every side, and that reject stays (ADR-0003 fail-loud).
-const PAD_KEYS = keySet(["x", "y", "top", "right", "bottom", "left"]);
-const GAP_KEYS = keySet(["row", "column"]);
+const PAD_KEYS = keySet(NESTED_WORDS.pad);
+const GAP_KEYS = keySet(NESTED_WORDS.gap);
 
 function padEdges(pad: PadInput): Edges<Bindable> {
   if (typeof pad === "number") return { top: pad, right: pad, bottom: pad, left: pad };
@@ -211,7 +161,7 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
 // `position: "absolute"` alone is the coordinate-free lift and "none" (edit) is the return to flow.
 function applyPlacement(layout: WriteLayout, props: SizeProps): void {
   const { left, top, position } = props;
-  if (position != null && position !== "absolute" && position !== "none") {
+  if (position != null && !(WORD_VALUES.position as readonly string[]).includes(position)) {
     throw new Error('flcm: position must be "absolute" or "none" — got ' + JSON.stringify(position) + ".");
   }
   if (position === "none") {
@@ -245,8 +195,8 @@ function applyPlacement(layout: WriteLayout, props: SizeProps): void {
 
 // `constraints` validates each axis at the boundary (a bad value fails loud, ADR-0003) so the bridge
 // can trust the words it maps to Figma's constraint enum.
-const CONSTRAINT_X = new Set<ConstraintX>(["left", "center", "right", "stretch", "scale", "none"]);
-const CONSTRAINT_Y = new Set<ConstraintY>(["top", "center", "bottom", "stretch", "scale", "none"]);
+const CONSTRAINT_X: ReadonlySet<ConstraintX> = new Set(WORD_VALUES.constraintX);
+const CONSTRAINT_Y: ReadonlySet<ConstraintY> = new Set(WORD_VALUES.constraintY);
 
 // justifyContent (primary-axis distribution) and alignItems (counter-axis alignment) — the two container
 // enums. The author speaks CSS-total value spellings (flex-start/space-between); these tables map them to
@@ -255,18 +205,28 @@ const CONSTRAINT_Y = new Set<ConstraintY>(["top", "center", "bottom", "stretch",
 // also the ONLY runtime gate: schema.ts's zod enum is type/doc-only (never enters the sandbox), and the
 // bridge resolves a miss to a silent MIN — so a valid-CSS-but-unrealizable value (space-around/space-evenly)
 // would silently no-op without this check (ADR-0003). Figma's primaryAxisAlignItems has no space-around/evenly.
-const JUSTIFY_CONTENT: Record<string, Justify> = {
+const JUSTIFY_CONTENT: Record<WordValue<"justifyContent">, Justify> = {
   "flex-start": "start", "flex-end": "end", center: "center", "space-between": "between",
 };
-const ALIGN_ITEMS: Record<string, Align> = {
+const ALIGN_ITEMS: Record<WordValue<"alignItems">, Align> = {
   "flex-start": "start", "flex-end": "end", center: "center", stretch: "stretch", baseline: "baseline",
 };
-const LAYOUT_MODE = new Set<"none" | "row" | "column" | "grid">(["row", "column", "grid", "none"]);
+const JUSTIFY_SELF: Record<WordValue<"justifySelf">, NonNullable<WriteLayout["justifySelf"]>> = {
+  start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO", stretch: "stretch",
+};
+const ALIGN_SELF: Record<WordValue<"alignSelf">, NonNullable<WriteLayout["alignSelf"]>> = {
+  center: "center", stretch: "stretch", start: "start", end: "end", auto: "auto",
+};
+const LAYOUT_MODE: ReadonlySet<WordValue<"mode">> = new Set(WORD_VALUES.mode);
 
 // TS's Set.has doesn't narrow its argument, so wrap it as a real type guard: a hit proves the string is one
 // of the set's literals, letting parseConstraints return the typed axis words with no cast at the call site.
 function oneOf<T extends string>(set: ReadonlySet<T>, v: string): v is T {
   return set.has(v as T);
+}
+// Own keys only: an agent-supplied word must not reach Object.prototype through a lookup table.
+function tableWord<T>(table: Record<string, T>, raw: unknown): T | undefined {
+  return typeof raw === "string" ? own(table, raw) : undefined;
 }
 
 function words(set: ReadonlySet<string>): string {
@@ -300,7 +260,7 @@ function parseConstraints(raw: unknown): { x?: ConstraintX; y?: ConstraintY } | 
 // casing words (textTransform/fontVariant). `hint` appends prop-specific guidance; the shared body
 // names the realizable CSS spellings.
 function mapCssWord<T extends string>(name: string, raw: unknown, table: Record<string, T>, hint = ""): T {
-  const mapped = typeof raw === "string" ? table[raw] : undefined;
+  const mapped = tableWord(table, raw);
   if (!mapped) {
     const allowed = Object.keys(table).map((w) => '"' + w + '"').join(", ");
     throw new Error("flcm: " + name + " must be one of " + allowed + " — got " + JSON.stringify(raw) + "." + hint);
@@ -334,9 +294,9 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
     layout[key] = parseGridPlacement(raw, subject + ": " + key);
   }
   for (const key of ["justifySelf"] as const) {
-    if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], { start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO", stretch: "stretch" } as const);
+    if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], JUSTIFY_SELF);
   }
-  if (cfg.alignSelf !== undefined) layout.alignSelf = mapCssWord(subject + ".alignSelf", cfg.alignSelf, { center: "center", stretch: "stretch", start: "start", end: "end", auto: "auto" } as const, " " + FLOW_ALIGNMENT_GUIDANCE);
+  if (cfg.alignSelf !== undefined) layout.alignSelf = mapCssWord(subject + ".alignSelf", cfg.alignSelf, ALIGN_SELF, " " + FLOW_ALIGNMENT_GUIDANCE);
   if (cfg.zIndex !== undefined) {
     if (!Number.isSafeInteger(cfg.zIndex) || cfg.zIndex < 0) throw new Error(subject + ": zIndex needs a non-negative integer.");
     layout.zIndex = cfg.zIndex;
@@ -509,8 +469,8 @@ function compileStrokeWidth(value: unknown, type: string): Bindable | Edges<Bind
   return sides;
 }
 
-const EDGE_KEYS = keySet(["top", "right", "bottom", "left"]);
-const CORNER_KEYS = keySet(["topLeft", "topRight", "bottomRight", "bottomLeft"]);
+const EDGE_KEYS = keySet(NESTED_WORDS.sides);
+const CORNER_KEYS = keySet(NESTED_WORDS.corners);
 // `value` is the read's resolved literal, ignored: the style binds by identity.
 const STYLE_INPUT_KEYS = keySet(["style", "value"]);
 
@@ -558,14 +518,14 @@ function compileEffectsSlot(wn: WriteProps, value: unknown): void {
 
 // Which side of the edge a border sits on. Lowercase on both sides of the surface (the read shape emits
 // "outside"/"center" and omits the default), uppercased here to Figma's own enum.
-const STROKE_ALIGNS: Record<string, "INSIDE" | "OUTSIDE" | "CENTER"> = {
+const STROKE_ALIGNS: Record<WordValue<"strokeAlign">, "INSIDE" | "OUTSIDE" | "CENTER"> = {
   inside: "INSIDE",
   outside: "OUTSIDE",
   center: "CENTER",
 };
 
 function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
-  const hit = typeof value === "string" ? STROKE_ALIGNS[value.toLowerCase()] : undefined;
+  const hit = typeof value === "string" ? tableWord(STROKE_ALIGNS, value.toLowerCase()) : undefined;
   if (!hit) {
     throw new Error('flcm: strokeAlign is "inside", "outside" or "center" — got ' + JSON.stringify(value) + ".");
   }
@@ -593,11 +553,10 @@ export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, su
   return [parseFill(value, subject)];
 }
 
-function compileFrame(props: FrameProps): WriteNode {
-  props = acceptAuthoringProps(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "FRAME" }) as FrameProps;
+function compileFrame(props: Accepted<FrameProps>): WriteNode {
   const wn: WriteNode = { type: "FRAME" };
   compileNodeLocalProps(wn, props, { type: "FRAME", radius: true, clip: true });
-  compileBindings(wn, props, FRAME_BINDINGS, "FRAME");
+  compileBindings(wn, props, "FRAME");
   wn.layout = buildLayout(props, "FRAME", "FRAME");
   return wn;
 }
@@ -624,23 +583,22 @@ export const COMPONENT_TARGET_HINT = "a component's node id (a read's `component
 // default, no hug default. An instance's root already has every value from its component, and a
 // creation default written onto it would be a root-level override the author never asked for — the
 // instance would stop tracking the component on that field. Only a named word becomes an override.
-function compileInstance(props: InstanceProps & { componentId: Target }): WriteNode {
-  const { componentId: component, ...bag } = props;
+function compileInstance(props: Accepted<InstanceProps>): WriteNode {
+  const component = props.componentId;
   if (!isTargetShaped(component)) {
     throw new Error("INSTANCE: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
   }
-  const accepted = acceptAuthoringProps(bag, { type: "INSTANCE", verb: "create", known: INSTANCE_KEYS, subject: "INSTANCE" }) as InstanceProps;
   const wn: WriteNode = { type: "INSTANCE" };
   wn.component = component;
-  if (accepted.exposed !== undefined) { assertScalarType(accepted.exposed, "boolean", "exposed"); wn.exposed = accepted.exposed; }
-  compileNodeLocalProps(wn, accepted, { type: "INSTANCE", radius: true, clip: true });
-  const layout = compileNodeLayout(accepted, "INSTANCE", "INSTANCE") || {};
+  if (props.exposed !== undefined) { assertScalarType(props.exposed, "boolean", "exposed"); wn.exposed = props.exposed; }
+  compileNodeLocalProps(wn, props, { type: "INSTANCE", radius: true, clip: true });
+  const layout = compileNodeLayout(props, "INSTANCE", "INSTANCE") || {};
   // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
   // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
   if (Object.keys(layout).length) wn.layout = layout;
-  compileBindings(wn, accepted, INSTANCE_BINDINGS, "INSTANCE");
-  if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties, "INSTANCE");
-  if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides, "INSTANCE");
+  compileBindings(wn, props, "INSTANCE");
+  if (props.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(props.componentProperties, "INSTANCE");
+  if (props.overrides != null) wn.overrides = compileOverrideBag(props.overrides, "INSTANCE");
   return wn;
 }
 
@@ -763,43 +721,13 @@ function assertSlotContentShape(raw: unknown, at: string): void {
 // breath, so whether a name exists (and whether its TYPE matches the field) is that verb's prepare
 // to say — the same split `componentProperties` takes.
 
-// Why each field belongs to the one compiler it does, for the refusal's second sentence. `visible`
-// has no entry: every node has one, so it is never the wrong node's word.
-const BINDING_FIELD_OWNERS: Record<string, string> = {
-  text: "`text` drives a TEXT node's content, so it belongs to TEXT",
-  componentId: "`componentId` is an instance-swap property re-pointing an INSTANCE, so it belongs to INSTANCE",
-  slot: "`slot` marks the FRAME that IS the slot (an instance shows it as a SLOT holding that frame's content), so it belongs to FRAME",
-};
-
-// Which fields each compiler may bind — `visible` everywhere, the other three only on the node
-// type whose field they name. Written as arrays (not a set) so a refusal can list them in order.
-const ANY_NODE_BINDINGS: readonly string[] = ["visible"];
-const FRAME_BINDINGS: readonly string[] = ["visible", "slot"];
-const TEXT_BINDINGS: readonly string[] = ["visible", "text"];
-const INSTANCE_BINDINGS: readonly string[] = ["visible", "componentId"];
-// The union of those lists — every field the word can name anywhere. Guarded against the schema's
-// inline object (unknown-props.test.ts): the bag's fields are defined inline in BINDING_FIELDS, not
-// as their own FIELD_GROUP.
-export const BINDING_FIELD_KEYS: ReadonlySet<string> = keySet(FRAME_BINDINGS, TEXT_BINDINGS, INSTANCE_BINDINGS);
-
-/**
- * Which fields a LIVE node of this type may bind — the same per-type rule the compilers carry,
- * read off the document instead of off the verb, so `flcm.edit(sublayer, { componentPropertyReferences })`
- * and `TEXT(…, { componentPropertyReferences })` refuse the same field on the same node.
- */
-export function bindingFieldsForType(type: string): readonly string[] {
-  if (type === "FRAME") return FRAME_BINDINGS;
-  if (type === "TEXT") return TEXT_BINDINGS;
-  if (type === "INSTANCE") return INSTANCE_BINDINGS;
-  return ANY_NODE_BINDINGS;
-}
-
 // The per-field legality half, shared by the create bag and the edit bag so a field on the wrong
 // node type reads the same either way. `what` is what the refusal calls the thing that can't bind
 // it — a compiler name at create ("TEXT"), the live node's type under edit ("a TEXT").
 function assertBindingFieldLegal(field: string, legal: readonly string[], where: string, what: string): void {
   if (legal.indexOf(field) !== -1) return;
-  const owner = BINDING_FIELD_OWNERS[field];
+  const entry: { owner?: string } | undefined = own(BINDABLE_FIELDS as Record<string, { owner?: string }>, field);
+  const owner = entry?.owner;
   throw new Error(
     where + ": `" + field + "` is not one of " + what + "'s binding fields (" + legal.join(", ") + ")" +
       (owner ? " — " + owner : "") + ".",
@@ -859,9 +787,9 @@ export function compileBindingEditBag(raw: unknown, legal: readonly string[], su
 // The compiler-side half: compile the bag (when named) onto the WriteNode. An empty bag lands
 // nothing — a node carrying `componentPropertyReferences: {}` binds nothing and must not read as a
 // bound node to flcm.component's gate.
-function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: unknown }, legal: readonly string[], subject: string): void {
+function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: unknown }, type: WriteType): void {
   if (props.componentPropertyReferences == null) return;
-  const refs = compileBindingBag(props.componentPropertyReferences, legal, subject);
+  const refs = compileBindingBag(props.componentPropertyReferences, bindableFieldsOf(type), type);
   if (Object.keys(refs).length) wn.componentPropertyReferences = refs;
 }
 
@@ -894,10 +822,10 @@ export function compileSwapTarget(raw: unknown, subject: string): Target {
 
 // CSS text-transform / font-variant-caps -> Figma's ONE textCase enum. Two author words, one slot,
 // which is why compileTextCase refuses a style naming both rather than letting the later key win.
-const TEXT_TRANSFORM: Record<string, WriteTextCase> = {
+const TEXT_TRANSFORM: Record<WordValue<"textTransform">, WriteTextCase> = {
   uppercase: "UPPER", lowercase: "LOWER", capitalize: "TITLE", none: "ORIGINAL",
 };
-const FONT_VARIANT: Record<string, WriteTextCase> = {
+const FONT_VARIANT: Record<WordValue<"fontVariant">, WriteTextCase> = {
   "small-caps": "SMALL_CAPS", "all-small-caps": "SMALL_CAPS_FORCED",
 };
 
@@ -913,7 +841,7 @@ function compileTextCase(c: { textTransform?: unknown; fontVariant?: unknown }, 
   return undefined;
 }
 
-const TEXT_ALIGN_VERTICAL = new Set<NonNullable<WriteTextStyle["textAlignVertical"]>>(["top", "center", "bottom"]);
+const TEXT_ALIGN_VERTICAL: ReadonlySet<NonNullable<WriteTextStyle["textAlignVertical"]>> = new Set(WORD_VALUES.textAlignVertical);
 
 // A hyperlink leaf: an author URL string, or the read form ({ type: "URL", url }) so a `get` result
 // round-trips without the caller unwrapping it. A NODE link — Figma's other kind, a jump to another
@@ -954,11 +882,11 @@ const REFUSED_RUN_TEXT_LEAVES: Record<string, string> = {
 };
 
 // The closed set each text-style carrier accepts as INPUT: its own words plus the derived read leaves
-// it drops. Built from KNOWN_KEYS (schema-mirrored, drift-guarded) so the tolerated extras stay
+// it drops. Built from the vocabulary groups so the tolerated extras stay
 // visibly separate from the authoring surface — they are not props, and the docs must not list them.
 // `value` is the read's resolved literal beside a `style`, ignored; compileTextStyleWords refuses it alone.
-const TEXTSTYLE_INPUT_KEYS = keySet(KNOWN_KEYS.textStyle, IGNORED_READ_TEXT_LEAVES, ["value"]);
-const RUN_INPUT_KEYS = keySet(KNOWN_KEYS.run, IGNORED_READ_TEXT_LEAVES);
+const TEXTSTYLE_INPUT_KEYS = keySet(WORD_GROUPS.textStyle, IGNORED_READ_TEXT_LEAVES, ["value"]);
+const RUN_INPUT_KEYS = keySet(WORD_GROUPS.run, IGNORED_READ_TEXT_LEAVES);
 
 function rejectUnauthorableTextLeaves(c: object, subject: string, refused: Record<string, string> = REFUSED_READ_TEXT_LEAVES): void {
   for (const leaf of Object.keys(refused)) {
@@ -1068,12 +996,11 @@ export function compileTextContent(content: unknown, base: WriteTextStyle, boldW
   return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "TEXT run")) };
 }
 
-function compileText(props: TextProps): WriteNode {
-  props = acceptAuthoringProps(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "TEXT" }) as TextProps;
+function compileText(props: Accepted<TextProps>): WriteNode {
   const content = props.text;
   const wn: WriteNode = { type: "TEXT" };
   base(wn, props);
-  compileBindings(wn, props, TEXT_BINDINGS, "TEXT");
+  compileBindings(wn, props, "TEXT");
   // The text's paint is `fill`, like every other node's. "none" is the same removal word edit takes.
   if (props.fill != null) compilePaintSlot(wn, props.fill, "fill");
   const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
@@ -1128,9 +1055,9 @@ function assertLineClamp(lineClamp: unknown, width: TextProps["width"]): number 
 // and never enter the sandbox, so THESE are the runtime fail-loud gates (ADR-0003): a valid-CSS-but-
 // unrealizable value (fontStyle "oblique", textDecoration "overline") is rejected naming the supported set
 // rather than silently dropped.
-const FONT_STYLE = new Set<"italic" | "normal">(["italic", "normal"]);
-const TEXT_DECORATION = new Set<TextDecoration>(["underline", "line-through", "none"]);
-const TEXT_ALIGN = new Set<TextAlign>(["left", "center", "right", "justify"]);
+const FONT_STYLE: ReadonlySet<WordValue<"fontStyle">> = new Set(WORD_VALUES.fontStyle);
+const TEXT_DECORATION: ReadonlySet<TextDecoration> = new Set(WORD_VALUES.textDecoration);
+const TEXT_ALIGN: ReadonlySet<TextAlign> = new Set(WORD_VALUES.textAlign);
 
 // Identity-validate an enum-valued prop against its realizable set, returning the value narrowed to the
 // set's member type via the `oneOf` guard (no cast at the call site). The runtime fail-loud gate for props
@@ -1259,30 +1186,25 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
   return out;
 }
 
-function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps | SimplifiedNode = {}): WriteNode {
-  props = props ?? {};
-  const subject = type === "RECTANGLE" ? "RECTANGLE" : "ELLIPSE";
-  // An ELLIPSE has no corners, so its vocabulary has no radius word (schema ELLIPSE_FIELDS): refused by
-  // the gate, not accepted and dropped on the floor.
-  const known = type === "RECTANGLE" ? SHAPE_KEYS : ELLIPSE_KEYS;
-  props = acceptAuthoringProps(props, { type, verb: "create", known, subject }) as ShapeProps;
+// An ELLIPSE has no corners, so its row has no radius word (vocabulary `ellipse` group): refused by the
+// gate, not accepted and dropped on the floor.
+function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps): WriteNode {
+  const subject = type;
   const wn: WriteNode = { type };
   compileNodeLocalProps(wn, props, { type, radius: type === "RECTANGLE" });
-  compileBindings(wn, props, ANY_NODE_BINDINGS, subject);
+  compileBindings(wn, props, type);
   const layout = buildLayout(props as FrameProps, type, subject);
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
 }
 
-function compileRectangle(props?: ShapeProps | SimplifiedNode): WriteNode { return shape("RECTANGLE", props); }
-function compileEllipse(props?: EllipseProps | SimplifiedNode): WriteNode { return shape("ELLIPSE", props); }
+function compileRectangle(props: Accepted<ShapeProps>): WriteNode { return shape("RECTANGLE", props); }
+function compileEllipse(props: Accepted<EllipseProps>): WriteNode { return shape("ELLIPSE", props); }
 
-function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
-  props = props ?? {};
-  props = acceptAuthoringProps(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "LINE" }) as LineProps;
+function compileLine(props: Accepted<LineProps>): WriteNode {
   const wn: WriteNode = { type: "LINE" };
   base(wn, props);
-  compileBindings(wn, props, ANY_NODE_BINDINGS, "LINE");
+  compileBindings(wn, props, "LINE");
   if (props.stroke != null) compilePaintSlot(wn, props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = compileStrokeWidth(props.strokeWidth, "LINE");
   const layout = compileNodeLayout(props, "LINE", "LINE") || {};
@@ -1302,19 +1224,18 @@ function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
 // SVG markup imports through createNodeFromSvg, which yields a native frame of vectors. The markup must
 // look like an <svg> document (catches a URL/path passed by mistake); the render-time parse (bridge) is
 // the second, authoritative fail-loud.
-function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
-  props = props ?? {};
+function compileSvg(props: Accepted<SvgProps>): WriteNode {
+  const markup = props.svg;
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
     throw new Error("VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
   }
-  props = acceptAuthoringProps(props, { type: "VECTOR", verb: "create", known: SVG_KEYS, subject: "VECTOR" }) as SvgProps;
   const wn: WriteNode = { type: "VECTOR", vector: { kind: "svg", markup } };
   // Compiled like any other node's paints, but the bridge lands them on the vectors INSIDE the imported
   // frame rather than on the frame itself — painting the frame would put a backdrop behind the art.
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   base(wn, props);
-  compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
+  compileBindings(wn, props, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
@@ -1324,26 +1245,19 @@ function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
 // compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect. Path data is
 // normalized HERE, not at render: Figma's parser accepts only absolute M/L/C/Q/Z, and doing the
 // conversion at compile means malformed data fails before anything reaches the canvas.
-function compilePath(props: PathProps): WriteNode {
-  props = acceptAuthoringProps(props, { type: "VECTOR", verb: "create", known: PATH_KEYS, subject: "VECTOR" }) as PathProps;
-  if (!props || typeof props !== "object") {
-    throw new Error("VECTOR: expected a props object with a `d` path string, e.g. { type: \"VECTOR\", d: \"M12 2 L22 20 L2 20 Z\", fill: \"#111\" } — got " + JSON.stringify(props) + ".");
-  }
-  const d = props.d;
-  if (props.vectorPaths === undefined && (typeof d !== "string" || !d.trim())) {
+function compilePath(accepted: Accepted<PathProps>): WriteNode {
+  const d = accepted.d;
+  if (accepted.vectorPaths === undefined && (typeof d !== "string" || !d.trim())) {
     throw new Error("VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
-  rejectUnknownKeys(props, PATH_KEYS, "VECTOR");
-  if (props.vectorPaths !== undefined && d !== undefined) throw new Error("VECTOR needs exactly one of d or vectorPaths.");
-  const { width, height, ...geometryProps } = props;
-  props = geometryProps as PathProps;
+  const { width, height, ...props } = accepted;
   const paths = props.vectorPaths !== undefined
     ? normalizeVectorPaths(props.vectorPaths)
     : [{ windingRule: "NONZERO" as const, data: normalizePathData(d as string) }];
   const wn: WriteNode = { type: "VECTOR", vector: { kind: "path", paths, scale: compileScale(props.scale) } };
   if (width !== undefined || height !== undefined) wn.ignoredSize = { width, height };
   compileNodeLocalProps(wn, props, { type: "VECTOR" }); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
-  compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
+  compileBindings(wn, props, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
@@ -1405,7 +1319,7 @@ function stopPercent(raw: { pos?: number; position?: number }, i: number, n: num
 // real asset (bridge persists it on the node). Fails loud on a non-string/empty source or a scaleMode
 // outside the set — never a silent blank fill.
 
-const IMAGE_SCALE_MODES = new Set(["FILL", "FIT", "CROP", "TILE"]);
+const IMAGE_SCALE_MODES: ReadonlySet<string> = new Set(WORD_VALUES.scaleMode);
 
 function image(url: unknown, opts: ImageOpts = {}): WritePaint {
   if (typeof url !== "string" || !url.trim()) {
@@ -1415,7 +1329,7 @@ function image(url: unknown, opts: ImageOpts = {}): WritePaint {
   rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");
   const scaleMode = opts.scaleMode != null ? opts.scaleMode : "FILL";
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {
-    throw new Error('flcm.image: scaleMode must be one of "FILL", "FIT", "CROP", "TILE" — got ' + JSON.stringify(scaleMode) + ".");
+    throw new Error("flcm.image: scaleMode must be one of " + words(IMAGE_SCALE_MODES) + " — got " + JSON.stringify(scaleMode) + ".");
   }
   return {
     kind: "image", url: url.trim(), scaleMode, placeholder: opts.placeholder === true,

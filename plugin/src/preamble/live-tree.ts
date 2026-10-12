@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { compileBindingBag, bindingFieldsForType } from "./flcm.js";
+import { compileBindingBag } from "./flcm.js";
+import { bindableFieldsOf } from "./vocabulary.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
@@ -86,7 +87,7 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
     try {
       const { key, d, vectorPaths, componentPropertyReferences, ...delta } = changed[i];
       if (componentPropertyReferences !== undefined) {
-        wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindingFieldsForType(node.type), at);
+        wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
       }
       let pathData: VectorPaths | undefined;
       if (d !== undefined) {
