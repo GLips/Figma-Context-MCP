@@ -145,7 +145,7 @@ function refuseIfRunFinished(verb: string): void {
  * is no await left between the decision and the write.
  *
  *   prepare — async, and DOCUMENT-BLIND in what it decides: shape-check the input, resolve every
- *   target the input names to a live node (read.ts createResolvedTargets — the one read that has
+ *   target the input names to a live node (target.ts createResolvedTargets — the one read that has
  *   to be async under dynamic-page), load fonts and image bytes, resolve the annotation categories
  *   the input names. It MAY read the document to learn what to load (which fonts a text edit's live
  *   font implies), and a planner run for that hint may refuse early — the same refusal the gate

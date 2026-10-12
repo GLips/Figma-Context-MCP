@@ -89,10 +89,11 @@ import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFo
 import {
   compileNodeLocalProps, compileNodeLayout,
   compileLineWidth, compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount,
-  compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, compilePropertyDefinitionEditBag,
+  compileComponentPropertyBag, compileOverrideBag, compilePropertyDefinitionEditBag,
   INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
 } from "./flcm.js";
 import { fetchImagesForTrees } from "./image-prefetch.js";
+import { compileSwapTarget } from "./target.js";
 import type { EditDelta } from "./schema.js";
 import { EDIT_WORDS, WORD_GROUPS, editWordsOf } from "./vocabulary.js";
 

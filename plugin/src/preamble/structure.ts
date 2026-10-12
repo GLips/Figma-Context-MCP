@@ -6,7 +6,6 @@ import { registerRead } from "./host.js";
 import type { WarningRecord } from "./warnings.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import { compileTree, treeNodes, placedTreeOf } from "./compile-tree.js";
-import { isTargetShaped } from "./flcm.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 // structure — the tree-shape verbs (sibling to edit.ts, the field-level one). Position is the
 // VERB, DOM-style: `append`/`prepend` take the parent, `insertBefore`/`insertAfter` take a sibling
@@ -30,7 +29,7 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 // enterMutatingVerb expression, so its queue slot is reserved before it can yield.
 
 import { WriteNode, WriteLayout, Target, Handle, RemoveResult } from "./ir.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, isTargetShaped } from "./target.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {

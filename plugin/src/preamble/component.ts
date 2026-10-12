@@ -31,7 +31,7 @@ import {
   WriteNode, BuiltNode, LiveRef, Handle, Target, ComponentPropertyBinding, VariantEntryInput, textOfRuns,
 } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
 import {
   mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
 } from "./bridge.js";
@@ -45,7 +45,7 @@ import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPag
 import { beginMutatingApply } from "./verb-error.js";
 import { instanceAncestorOf, editableComponentOwnerOf, isComponentDefinition, variantSetOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
-import { isTargetShaped, COMPONENT_TARGET_HINT, defaultValueHint } from "./flcm.js";
+import { defaultValueHint } from "./flcm.js";
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
 import { BINDABLE_FIELDS, wordsOf, type BindableField, type WordValue } from "./vocabulary.js";
 

@@ -8,7 +8,7 @@ import { compileDeltaTrees } from "./compile-tree.js";
 // edit-plan.ts, the INSTANCE half in instance.ts, the COMPONENT half in component-edit.ts.
 
 import { Target, Handle } from "./ir.js";
-import { resolveTarget, createResolvedTargets } from "./read.js";
+import { resolveTarget, createResolvedTargets } from "./target.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, settleApplySpan, beginRenderWalk } from "./bridge.js";

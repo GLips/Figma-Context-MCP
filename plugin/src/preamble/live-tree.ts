@@ -9,7 +9,7 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // import the edit orchestration that already depends on the bridge.
 import type { WriteNode, LiveRef, WriteLayout, ComponentPropertyBinding } from "./ir.js";
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
-import { resolveTarget, createResolvedTargets } from "./read.js";
+import { resolveTarget, createResolvedTargets } from "./target.js";
 import { createStandingState } from "./standing-state.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands } from "./edit-plan.js";
 import { applyEditStages } from "./edit-apply.js";

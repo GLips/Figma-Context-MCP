@@ -20,7 +20,7 @@ import { describeRootOverlap } from "./root-overlap.js";
 import { fetchImagesForTrees } from "./image-prefetch.js";
 import { resolveInstanceTreeTargets, planInstanceTree } from "./instance.js";
 import { LoadedResources, InstanceNeeds } from "./edit-plan.js";
-import { createResolvedTargets, ResolvedTargets } from "./read.js";
+import { createResolvedTargets, ResolvedTargets } from "./target.js";
 
 /** What a tree's prepare loaded, for its gate to finish: the resources, plus the targets its instances name. */
 export interface LoadedTreeResources extends LoadedResources {

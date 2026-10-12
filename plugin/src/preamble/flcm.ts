@@ -15,7 +15,7 @@ import { compileAnnotations } from "./annotations.js";
 import {
   BuiltNode, LiveRef, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
   GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, ConstraintX, ConstraintY,
-  Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
+  Justify, Align, TextAlign, TextDecoration, WriteTextCase, WriteType,
   Bindable, CornerRadii, isTokenRef,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
@@ -25,6 +25,7 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseImageAdjustments, parseCssEffects, parseBlendMode, boxShorthand, cornerRadii, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
+import { isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
 import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
 import { pixelRound, type SimplifiedNode } from "@framelink/core";
 
@@ -604,17 +605,6 @@ function compileFrame(props: Accepted<FrameProps>): BuiltNode {
   return wn;
 }
 
-// Component targets share one grammar across instance specs, swaps, and component/variants subjects — so they refuse the same
-// non-targets with the same sentence. Exported for component.ts, which meets the same shapes.
-export function isTargetShaped(value: unknown): value is Target {
-  if (typeof value === "string") return value.trim().length > 0;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const v = value as { __flcmId?: unknown; id?: unknown };
-  return typeof v.__flcmId === "string" || typeof v.id === "string";
-}
-
-export const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
-
 // INSTANCE(component, props) — stamp a component. Document-blind like every compiler: the component
 // target, the property values and the override deltas ride the WriteNode RAW (ir.ts WriteProps on why),
 // and render resolves them against the live document (instance.ts) before any write.
@@ -853,14 +843,6 @@ export function assertNoComponentPropertyBindings(tree: WriteChild, subject: str
     );
   }
   for (const child of tree.children || []) assertNoComponentPropertyBindings(child, subject);
-}
-
-// Component target syntax is shared by new instances and swaps; prepare resolves live identity.
-export function compileSwapTarget(raw: unknown, subject: string): Target {
-  if (!isTargetShaped(raw)) {
-    throw new Error(subject + ".componentId: the component to swap to must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(raw) + ".");
-  }
-  return raw;
 }
 
 // CSS text-transform / font-variant-caps -> Figma's ONE textCase enum. Two author words, one slot,
@@ -1496,17 +1478,6 @@ function normalizeEffects(v: EffectsInput): WriteEffect[] {
   return out;
 }
 
-// flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
-// it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
-// way). A plain POJO compiler like the others; the resolver (read.resolveTarget) unwraps it —
-// production code unwraps `__flcmId` structurally, not via this function.
-function id(nodeId: unknown): RawIdRef {
-  if (typeof nodeId !== "string" || !nodeId.trim()) {
-    throw new Error('flcm.id: expected a node id string, e.g. flcm.id("12:34") — got ' + JSON.stringify(nodeId) + ".");
-  }
-  return { __flcmId: nodeId };
-}
-
-// The compilers serve compile-tree.ts; gradient/image/effects/id are public verbs, which runtime.ts
+// The compilers serve compile-tree.ts; gradient/image/effects are public verbs, which runtime.ts
 // (the bundle entry) imports from here like every other verb from its defining module.
-export { compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileSvg, compilePath, compileInstance, gradient, image, effects, id };
+export { compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileSvg, compilePath, compileInstance, gradient, image, effects };

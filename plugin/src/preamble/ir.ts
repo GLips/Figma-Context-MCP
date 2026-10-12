@@ -717,7 +717,7 @@ export type ReadPredicate = (node: SimplifiedNode) => unknown;
 // string could be read either way. Plain data, like a WriteNode.
 export interface RawIdRef { __flcmId: string }
 
-// What any target-taking verb (get/find/edit) accepts, resolved by shape (read.resolveTarget):
+// What any target-taking verb (get/find/edit) accepts, resolved by shape (target.ts resolveTarget):
 // a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any
 // handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
 // POJO. SlimHandle is named in the union (not just assignable) because it's what the locate verbs

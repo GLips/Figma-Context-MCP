@@ -6,7 +6,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./flcm.js";
+import { id } from "./target.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { find } from "./read.js";

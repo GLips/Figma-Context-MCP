@@ -27,7 +27,7 @@ import { compileDeltaTrees } from "./compile-tree.js";
 // undo boundary per entry (invariant 4).
 
 import { Handle } from "./ir.js";
-import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
+import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./target.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, settleApplySpan, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";

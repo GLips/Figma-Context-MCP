@@ -46,7 +46,7 @@ import { assertBounds } from "./size-bounds.js";
 // facts (the ancestor chain Figma restricts overrides by).
 
 import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, Handle } from "./ir.js";
-import { resolveTarget, ResolvedTargets } from "./read.js";
+import { resolveTarget, ResolvedTargets } from "./target.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { FontMap } from "./fonts.js";
 import {
@@ -109,7 +109,7 @@ export interface InstancePlanning { targets: ResolvedTargets; fonts?: FontMap }
  * through the same path). Two rounds per node, because WHICH property values are targets is a fact
  * of the component the first round resolves: its swap-typed properties. Read here as the document
  * stands now; the gate reads the definitions again, and a value that became a swap during the
- * loads is a miss the lookup refuses (read.ts ResolvedTargets).
+ * loads is a miss the lookup refuses (target.ts ResolvedTargets).
  */
 export async function resolveInstanceTreeTargets(tree: WriteNode, targets: ResolvedTargets): Promise<void> {
   const instances: BuiltNode[] = [];
