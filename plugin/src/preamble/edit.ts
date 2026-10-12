@@ -3,27 +3,9 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { compileDeltaTrees } from "./compile-tree.js";
-// edit — the mutate verb itself. Everything it drives lives elsewhere: the staged pipeline in
-// edit-plan.ts (see that module's header for the stages and why their order is the contract), the
-// INSTANCE half in instance.ts, the COMPONENT half in component-edit.ts. This module is the ORDER
-// those are composed in, once, so `editMany` composes them the same way.
-//
-// An INSTANCE delta brackets the node-local stages rather than joining them, because a swap or a
-// variant change REPLACES the sublayer tree the override paths name:
-//
-//   retarget (swapComponent, setProperties) → 5a writes → 5b sizes → 5c positions → overrides
-//
-// The root words land on the instance the retarget produced (a swapped instance's fill is the new
-// component's until this delta's own `fill` writes over it), and the overrides land last, on
-// sublayers re-acquired after the tree moved.
-//
-// A COMPONENT delta brackets them too, on both sides (component-edit.ts):
-//
-//   definitions → 5a writes → binding → 5b sizes → 5c positions
-//
-// The definitions go first so a rename is part of the same undo step as everything else the delta
-// says; the binding goes right after the writes, so a layer is what this delta makes it before it
-// is wired to a property.
+// edit — the mutate verb itself: prepare and gate one delta, then land it through the one apply
+// driver (edit-apply.ts) that editMany and a placed live node share. The stages live in
+// edit-plan.ts, the INSTANCE half in instance.ts, the COMPONENT half in component-edit.ts.
 
 import { Target, Handle } from "./ir.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
@@ -31,15 +13,11 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, settleApplySpan, beginRenderWalk } from "./bridge.js";
 import {
-  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
-  openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
+  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources, openEditPlanApply,
 } from "./edit-plan.js";
-import {
-  resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
-} from "./instance.js";
-import {
-  planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, applyBoundDefaults, applyBindingRelease, projectedBinderValue, ComponentEditPlan,
-} from "./component-edit.js";
+import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan } from "./instance.js";
+import { planComponentEdit, projectedBinderValue, ComponentEditPlan } from "./component-edit.js";
+import { applyEditStages } from "./edit-apply.js";
 import { createStandingState } from "./standing-state.js";
 import type { EditDelta } from "./schema.js";
 
@@ -95,19 +73,9 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     },
     // Apply — the sealed span: all writes, no awaits.
     ({ plan, instance, component, resources }, span) => {
-      const applying = { ...resources, span };
       const fail = openEditPlanApply("edit", plan, span);
-      if (component && component.binding) applyBindingRelease(fail, plan.node, component.binding);
-      if (instance) applyInstanceRetarget(fail, plan.node, instance);
-      if (component && component.definitions) applyComponentDefinitionEdit(fail, plan.node, component.definitions);
-      applyEditPlanWrites(fail, plan, applying);
-      if (component && component.defaults) applyBoundDefaults(fail, component.defaults);
-      if (component && component.binding) applyComponentBindingEdit(fail, plan.node, component.binding);
-      settleEditPlanSizes(fail, plan);
-      settleEditPlanPositions(fail, plan, span);
-      // Slot content among the overrides is BUILT, so it needs a walk; its percents settle once
-      // the whole delta has landed, as a render's do after its tree.
-      if (instance) applyInstanceOverrides(plan.node, instance, beginRenderWalk(applying), "edit");
+      // The walk builds any slot content among the overrides; its percents settle with the span.
+      applyEditStages([{ node: plan.node, fail, plan, instance, component, subject: "edit" }], beginRenderWalk({ ...resources, span }));
       // Before the handle reads the node's geometry.
       settleApplySpan(span);
       return mintHandle(plan.node);

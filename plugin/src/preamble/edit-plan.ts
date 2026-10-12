@@ -5,9 +5,9 @@
 import { acceptAuthoringProps } from "./authoring-input.js";
 import { loadLiveTree, gateLiveTree, liveChildrenOfNewNodes, LoadedLiveTree, LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
-// edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
-// `flcm.edit` (edit.ts) once, `flcm.editMany` (edit-many.ts) N times over one queue slot, and an
-// INSTANCE's override deltas (instance.ts), which are edits of one sublayer each.
+// edit-plan — the STAGES of the mutate pipeline, with no verb attached. One driver lands them in
+// order (edit-apply.ts) for `flcm.edit`, `flcm.editMany` and a live node a tree places; an
+// INSTANCE's override deltas (instance.ts), edits of one sublayer each, run them directly.
 //
 // The stages live here rather than beside the verb because instance.ts needs them and edit.ts needs
 // instance.ts (an instance delta's component words resolve there) — a cycle if the verb and the
@@ -59,7 +59,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 // An INSTANCE delta adds no stage here. Its three component words are split off by stage 2 and left
 // RAW on the plan (`instanceWords`); the verb resolves their targets in prepare and plans them in
 // its gate through instance.ts, and BRACKETS the stages above with the result — the retarget
-// before 5a, the overrides after 5c (see edit.ts). They bracket rather than join because a swap or
+// before 5a, the overrides after 5c (see edit-apply.ts). They bracket rather than join because a swap or
 // a variant change replaces the very sublayers the override paths name.
 //
 // A COMPONENT delta is split the same way (`componentWords` → component-edit.ts) and brackets the

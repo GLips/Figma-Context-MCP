@@ -12,14 +12,13 @@ import { compileDeltaTrees } from "./compile-tree.js";
 //
 // It is orchestration over edit-plan.ts's staged pipeline (see that module's header for the stages and
 // why their order is the contract). Nothing here compiles or applies a delta itself: a second
-// application path is exactly what invariant 1 forbids. Four things ARE this module's own, and
-// each is a consequence of the set being the unit rather than the entry:
+// application path is exactly what invariant 1 forbids — it lands through the same stage-major
+// driver as edit (edit-apply.ts). Three things ARE this module's own, and each is a consequence of
+// the set being the unit rather than the entry:
 //
 //   • the LEDGER — a failure is recorded against its entry and the batch keeps going, so one
 //     rejection names every offender ACROSS stages, not just the ones that failed together
 //   • the apply ORDER — ancestors before descendants (see applyOrderShallowestFirst)
-//   • the apply PASSES — every entry finishes each of edit's apply stages before any entry starts
-//     the next, so nothing measures a canvas another entry is still writing to (see the seal)
 //   • the PROJECTION — an entry whose parent this same batch is editing is judged against the
 //     parent the batch will produce, not the one on the canvas (see parentDeltasByNodeId)
 //
@@ -36,14 +35,12 @@ import { showValue } from "./validate.js";
 import { createStandingState } from "./standing-state.js";
 import {
   EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
-  openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
+  openEditPlanApply,
 } from "./edit-plan.js";
+import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan, InstancePlanning } from "./instance.js";
+import { applyEditStages } from "./edit-apply.js";
 import {
-  resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan, InstancePlanning,
-} from "./instance.js";
-import {
-  planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, applyComponentDefinitionEdit, applyComponentBindingEdit,
-  applyBoundDefaults, applyBindingRelease, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
+  planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
   ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, PropertyBinder, ExistingPropertyBinding,
 } from "./component-edit.js";
 import { componentAncestorOf, describeBinder } from "./component.js";
@@ -632,53 +629,18 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
     },
     // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.
     ({ plans, instances, components, resources }, span) => {
-      const applying = { ...resources, span };
       // Every entry's failure builder BEFORE the first write of the batch: it snapshots the
       // identity the error will name, and entry 0's rename must not be what entry 0's own later
       // stage reports (see openEditPlanApply).
-      const fails = plans.map((plan, i) => openEditPlanApply("editMany (entry " + i + ")", plan, span));
-      const order = applyOrderShallowestFirst(plans);
-      // Before every other write: a field this batch rebinds or unbinds must be free of its old
-      // property when the retargets, the words and the settled defaults land (see releaseRewiredBindings).
-      for (const i of order) {
-        const component = components[i];
-        if (component && component.binding) applyBindingRelease(fails[i], plans[i].node, component.binding);
-      }
-      // Stage by stage across the WHOLE batch, not entry by entry. Within one entry `edit` already
-      // orders producers before consumers; across entries only the batch can, and it must — an
-      // entry that centers a hugging panel would otherwise read a width the entry editing that
-      // panel's child is about to grow, and center it on the size it used to be.
-      // An INSTANCE entry's component words BRACKET the node-local stages (see edit.ts): the
-      // retarget first, so every later stage measures the tree this batch is producing, and the
-      // overrides last, on sublayers re-acquired after it.
-      for (const i of order) {
-        const instance = instances[i];
-        if (instance) applyInstanceRetarget(fails[i], plans[i].node, instance);
-      }
-      // A COMPONENT entry's definition words come before every entry's writes and its binding words
-      // after them — the same bracket `edit` applies to one delta (see edit.ts), widened to the set.
-      for (const i of order) {
-        const component = components[i];
-        if (component && component.definitions) applyComponentDefinitionEdit(fails[i], plans[i].node, component.definitions);
-      }
-      for (const i of order) applyEditPlanWrites(fails[i], plans[i], applying);
-      for (const i of order) {
-        const component = components[i];
-        if (component && component.defaults) applyBoundDefaults(fails[i], component.defaults);
-      }
-      for (const i of order) {
-        const component = components[i];
-        if (component && component.binding) applyComponentBindingEdit(fails[i], plans[i].node, component.binding);
-      }
-      for (const i of order) settleEditPlanSizes(fails[i], plans[i]);
-      for (const i of order) settleEditPlanPositions(fails[i], plans[i], span);
-      // ONE walk for the batch's slot content (see beginRenderWalk): a key is unique across the set
-      // as it is across a render, and every entry's content settles its percents together.
-      const walk = beginRenderWalk(applying);
-      for (const i of order) {
-        const instance = instances[i];
-        if (instance) applyInstanceOverrides(plans[i].node, instance, walk, "editMany (entry " + i + ")");
-      }
+      const entries = plans.map((plan, i) => ({
+        node: plan.node, fail: openEditPlanApply("editMany (entry " + i + ")", plan, span), plan, instance: instances[i], component: components[i],
+        subject: "editMany (entry " + i + ")",
+      }));
+      // Ancestors first, each stage across the WHOLE batch (edit-apply.ts): within one entry the
+      // stages order producers before consumers; across entries only the batch can. ONE walk for
+      // the batch's slot content (see beginRenderWalk): a key is unique across the set as it is
+      // across a render, and every entry's content settles its percents together.
+      applyEditStages(applyOrderShallowestFirst(plans).map((i) => entries[i]), beginRenderWalk({ ...resources, span }));
       settleApplySpan(span);
       // Handles are minted only once every write has landed: a hug parent reflows when a child in
       // the same batch changes, so geometry read mid-batch would be a number about to move.

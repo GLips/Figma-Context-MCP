@@ -11,9 +11,10 @@ import type { WriteNode, LiveRef, WriteLayout, ComponentPropertyBinding } from "
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { createStandingState } from "./standing-state.js";
-import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
-import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
-import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue, editedBinderValue, releaseRewiredBindings } from "./component-edit.js";
+import { compileEditPlan, loadEditResources, assertEditPlanLands } from "./edit-plan.js";
+import { applyEditStages } from "./edit-apply.js";
+import { resolveInstanceEditTargets, planInstanceEdit } from "./instance.js";
+import { planComponentEdit, projectedBinderValue, editedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
@@ -173,21 +174,21 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         holdPivot(ctx.span, node);
         // Before the node's own writes, so none lands on a property it is leaving (see releaseRewiredBindings).
         if (refs) releaseRewiredBindings(node, Object.keys(refs).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
-        if (instance) applyInstanceRetarget(fail, node, instance);
-        if (component?.definitions) applyComponentDefinitionEdit(fail, node, component.definitions);
-        if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData);
-        if (plan) applyEditPlanWrites(fail, plan, ctx);
-        if (component?.binding) applyComponentBindingEdit(fail, node, component.binding);
-        if (key !== undefined) writeKey(node, key as string);
-        if (refs) {
-          if (!ctx.bindings) throw new Error(at + ": componentPropertyReferences has no declaring component.");
-          ctx.bindings.push({ node, refs });
-        }
-        if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
-        resettleMovedNode(node, words, ctx);
-        if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan, ctx.span); }
-        else settlePivot(ctx.span, node, words);
-        if (instance) applyInstanceOverrides(node, instance, ctx, at);
+        applyEditStages([{
+          node, fail, plan, instance, component, subject: at,
+          beforeWrites() { if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData); },
+          afterBinding() {
+            if (key !== undefined) writeKey(node, key as string);
+            if (refs) {
+              if (!ctx.bindings) throw new Error(at + ": componentPropertyReferences has no declaring component.");
+              ctx.bindings.push({ node, refs });
+            }
+            if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
+            resettleMovedNode(node, words, ctx);
+          },
+        }], ctx);
+        // A delta's positions settle its pivot; a bare move's is settled here.
+        if (!plan) settlePivot(ctx.span, node, words);
         // Inherited slot content lands as Figma's copy, under a new id.
         ctx.placedIds.set(ref.source, node.id);
         return node;

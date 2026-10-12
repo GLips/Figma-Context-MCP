@@ -592,7 +592,7 @@ function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonl
  * One instance delta's component half, resolved. `swapTo` is the component to `swapComponent` to
  * (null when this delta leaves the instance pointing where it points, including when it names the
  * component it already has); `properties` are ready for setProperties; `overrides` are compiled
- * per sublayer. The verb applies them AROUND the node-local stages — see edit.ts.
+ * per sublayer. The verb applies them AROUND the node-local stages — see edit-apply.ts.
  *
  * `retargets` is the fact the rest of the pipeline turns on: this delta REPLACES the sublayer tree
  * (a swap, or a variant change Figma re-points through). It decides which sublayers the override
