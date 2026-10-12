@@ -21,7 +21,7 @@ const FORBIDDEN_INPUTS = [
   /^src\/commercial\//,
   /^plugin\//,
   /^src\/telemetry\//,
-  /^src\/(server|config|bin|index|mcp-server)\.ts$/,
+  /^src\/(server|config|bin|index)\.ts$/,
   /^src\/mcp\/index\.ts$/,
 ];
 // Packages that only make sense process-wide: telemetry, the global dispatcher, HTTP/WS servers.

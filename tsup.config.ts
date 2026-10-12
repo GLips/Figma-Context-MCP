@@ -10,7 +10,7 @@ const packageVersion = process.env.npm_package_version;
 
 export default defineConfig({
   clean: true,
-  entry: ["src/index.ts", "src/bin.ts", "src/mcp-server.ts", "src/read.ts"],
+  entry: ["src/index.ts", "src/bin.ts", "src/read.ts"],
   // @framelink/core and @framelink/plugin are private, unpublished workspace members: the shared
   // read transform and the flcm write-surface SSOT must both be BUNDLED into dist, never left as
   // runtime imports the npm package can't resolve. The plugin's zod import stays external and

@@ -148,7 +148,7 @@ export function resolveTelemetryEnabled(optOut?: boolean): boolean {
  * etc.). CLI entry points catch this and print the bare message with exit 1,
  * distinct from unexpected crashes that get a "Failed to start server:" prefix
  * and stack trace. Throwing (vs. process.exit) keeps validators pure and safe
- * for library consumers of `~/mcp-server`.
+ * for in-process callers such as the hosted read entry.
  */
 export class UsageError extends Error {
   constructor(message: string) {

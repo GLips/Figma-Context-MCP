@@ -19,10 +19,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./dist/mcp-server.js": {
-      "types": "./dist/mcp-server.d.ts",
-      "default": "./dist/mcp-server.js"
-    },
     "./package.json": "./package.json"
   },
   "bin": {

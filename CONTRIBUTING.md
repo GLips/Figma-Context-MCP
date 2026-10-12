@@ -120,7 +120,6 @@ src/                    # figma-developer-mcp — the published package
 ├── bin.ts              # CLI entry: dispatches a subcommand or starts the server
 ├── config.ts           # Configuration management
 ├── index.ts            # Library entry (the npm surface)
-├── mcp-server.ts       # Programmatic createServer/startServer entry
 ├── server.ts           # MCP server startup (stdio or HTTP)
 ├── commands/           # CLI subcommands: fetch, comments
 ├── mcp/                # MCP-specific code
