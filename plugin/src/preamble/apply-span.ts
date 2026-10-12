@@ -4,8 +4,8 @@
  */
 // ApplySpan — what one verb's sealed apply span defers until its writes have landed. The lock opens
 // one per verb (enterMutatingVerb) and hands it to apply; the appliers queue into it; bridge's
-// settleApplySpan settles its geometry in one fixed order (sibling order → percents → ratios →
-// pivots), and the lock flushes its style links last. A verb settles early only where it reads
+// settleApplySpan settles its geometry in one fixed order (sibling order → percents and ratios,
+// shallowest first → pivots), and the lock flushes its style links last. A verb settles early only where it reads
 // geometry before returning (a handle, a component conversion); the lock's own settle then finds
 // nothing left. An applier can't queue outside a verb, because there is no span to queue into.
 

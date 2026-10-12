@@ -22,7 +22,7 @@ declare const ACCEPTED: unique symbol;
 /** A props bag the prelude has judged. A node compiler's only input, so none can skip the prelude. */
 export type Accepted<P> = P & { readonly [ACCEPTED]: true };
 
-const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
+export const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
 
 // THE refusal. Every "flcm has no word for this" message is built here, so the sentence and the
 // remedy can't drift between the node-word gate and the layout-word gate.

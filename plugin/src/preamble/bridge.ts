@@ -12,6 +12,7 @@ import type { ExposureWrite } from "./instance-exposure.js";
 import type { NodeSpec } from "./schema.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
 import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
+import { aspectRatioAgrees, settleAspectRatio } from "./aspect-ratio.js";
 import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js";
 // bridge — the ONE mutation authority: every property lands on a live Figma node through the appliers
 // here, whether the node was just built (the render walk below) or resolved as a live edit target.
@@ -559,16 +560,20 @@ function queueSiblingOrder(span: ApplySpan, parent: any, child: any, index: numb
 
 /**
  * Settle everything the span deferred, in the one order geometry allows: sibling order first (a
- * grid reorder moves cells), then every percent size/position against its parent's REALIZED size
- * (shallowest first, so a percent child of a percent parent reads resolved px), then the aspect
- * ratios a percent axis drives (parents first), then the centre pivots, which read the final box.
- * Each queue is drained, so the lock's closing settle after a verb's own is a no-op.
+ * grid reorder moves cells), then the sizes — percents against the parent's REALIZED size and
+ * aspect ratios — in ONE pass, shallowest first, so a child's percent reads its parent's settled
+ * box, ratio included; a node's own percent lands before its ratio, which it may drive. Then the
+ * centre pivots, which read the final box. Each queue is drained, so the lock's closing settle
+ * after a verb's own is a no-op.
  */
 export function settleApplySpan(span: ApplySpan): void {
   for (const [parent, edits] of span.siblingOrder) applySiblingOrder(parent, [...edits].map(([child, index]) => ({ child, index })));
   span.siblingOrder.clear();
-  for (const p of span.percents.splice(0).sort((a, b) => depthOf(a.node) - depthOf(b.node))) resolvePercentLayout(p.parent, p.node, p.layout);
-  for (const r of span.ratios.splice(0).sort((a, b) => depthOf(a.node) - depthOf(b.node))) settleAspectRatio(r.node, r.layout);
+  const sizes = [
+    ...span.percents.splice(0).map((p) => ({ node: p.node, settle: () => resolvePercentLayout(p.parent, p.node, p.layout) })),
+    ...span.ratios.splice(0).map((r) => ({ node: r.node, settle: () => settleAspectRatio(r.node, r.layout) })),
+  ].map((entry, order) => ({ ...entry, order, depth: depthOf(entry.node) }));
+  for (const s of sizes.sort((a, b) => a.depth - b.depth || a.order - b.order)) s.settle();
   for (const p of span.pivots.splice(0)) settlePivot(span, p.node, p.layout);
 }
 
@@ -667,41 +672,6 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources: { spa
  */
 export function settleLiveNodePercentSize(node: any, wl: WriteLayout): void {
   if (node.parent && wl.percentSize) resolvePercentSize(node.parent, node, wl);
-}
-
-/**
- * Lock the node's proportions at `wl.aspectRatio` ("none" unlocks). Figma locks whatever ratio the box
- * has, so the box is brought to the ratio first: the driving axis — a "fill" or percent one, else the
- * width — keeps its size and the other follows. Runs once the sizes have landed, so it measures the
- * realized box; afterwards Figma's lock carries the pair through layout and constraint resizes.
- */
-export function settleAspectRatio(node: any, wl: WriteLayout): void {
-  const ratio = wl.aspectRatio;
-  if (ratio === undefined) return;
-  if (ratio === "none") {
-    node.unlockAspectRatio();
-    return;
-  }
-  const fills = (axis: "Horizontal" | "Vertical", pct: number | undefined) =>
-    node["layoutSizing" + axis] === "FILL" || pct !== undefined;
-  const heightDrives = fills("Vertical", wl.percentSize?.height) && !fills("Horizontal", wl.percentSize?.width);
-  const follower = heightDrives ? "Horizontal" : "Vertical";
-  // A live hug axis (create refuses an authored one) is sized by its content; resizing it would
-  // silently turn it fixed. Figma can't lock an auto-resizing text at all.
-  if (node["layoutSizing" + follower] === "HUG" || (node.type === "TEXT" && node.textAutoResize !== "NONE")) {
-    throw new Error(
-      "flcm: aspectRatio needs its " + (heightDrives ? "width" : "height") + " free to follow, but this " + node.type +
-        (node.type === "TEXT" ? " sizes itself to its text" : " hugs its content on that axis") +
-        ". Give the node a fixed width and height, or drop aspectRatio.",
-    );
-  }
-  const before = { horizontal: node.layoutSizingHorizontal, vertical: node.layoutSizingVertical };
-  if (heightDrives) resizeWithDiagnostics(node, Math.max(node.height * ratio, 0.01), node.height);
-  else resizeWithDiagnostics(node, node.width, Math.max(node.width / ratio, 0.01));
-  // resize() pins both axes; a driving "fill" axis must keep filling for the lock to follow it.
-  if (before.horizontal === "FILL" && node.layoutSizingHorizontal !== "FILL") node.layoutSizingHorizontal = "FILL";
-  if (before.vertical === "FILL" && node.layoutSizingVertical !== "FILL") node.layoutSizingVertical = "FILL";
-  node.lockAspectRatio();
 }
 
 export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void {
@@ -1461,7 +1431,7 @@ function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?
   if (lockedPath !== undefined) {
     // A path's box is its geometry, so a ratio can only be the one it already has: a paste-back's
     // own locks again, any other is ignored like width/height.
-    if (typeof lockedPath === "number" && Math.abs(node.width / node.height - lockedPath) <= 0.01) node.lockAspectRatio();
+    if (typeof lockedPath === "number" && aspectRatioAgrees(node.width, node.height, lockedPath)) node.lockAspectRatio();
     else warnings.add({
       id: node.id, prop: "aspectRatio", authored: lockedPath, realized: pixelRound(node.width / node.height),
       message: "A VECTOR path is bare geometry; aspectRatio was ignored. Its proportions are the path's own.",

@@ -156,6 +156,28 @@ test("aspectRatio refuses what no box can hold", async () => {
   await assert.rejects(flcm.render({ type: "RECTANGLE", width: 100, height: 100, aspectRatio: 2 }), /width 100 and height 100 are a 1 ratio/);
   await assert.rejects(flcm.render({ type: "FRAME", width: "hug", aspectRatio: 2, layout: { mode: "row" } }), /"hug" axis/);
   await assert.rejects(flcm.render({ type: "TEXT", text: "Hi", aspectRatio: 2 }), /sizes itself to its text/);
+  // Live sizing compile never saw: a hug axis that would drive, two axes filling after an edit.
+  const row = await flcm.render({ type: "FRAME", height: 40, layout: { mode: "row" }, children: [{ type: "RECTANGLE", width: 20, height: 20 }] });
+  await assert.rejects(flcm.edit(row, { aspectRatio: 2 }), /hugs its content on its width/);
+  const column = await flcm.render({ type: "FRAME", width: 300, height: 300, layout: { mode: "column" }, children: [{ type: "RECTANGLE", width: "fill", height: "fill" }] });
+  await assert.rejects(flcm.edit(column.children![0], { aspectRatio: 2 }), /both axes "fill"/);
+});
+
+test("a percent child sizes against its parent's ratio-settled box", async () => {
+  const figma = createFigmaMock();
+  const out = await flcm.render({
+    type: "FRAME",
+    width: 600,
+    layout: { mode: "column" },
+    children: [{ type: "FRAME", width: "fill", height: 400, aspectRatio: 2, children: [{ type: "RECTANGLE", width: 10, height: "50%", position: "absolute" }] }],
+  });
+  const child = await figma.getNodeByIdAsync(out.children![0].children![0].id);
+  assert.equal(child.height, 150);
+});
+
+test("a thin locked node's read pastes back despite the rounding of its sizes", async () => {
+  createFigmaMock();
+  await flcm.render({ type: "RECTANGLE", width: 1000, height: 3.33, aspectRatio: 300.03 });
 });
 
 test("IR words are rejected and no node constructors, fromRead or move are exported", async () => {

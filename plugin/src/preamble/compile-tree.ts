@@ -9,11 +9,9 @@ import { isElision } from "@framelink/core";
 import { assertNoComponentPropertyBindings } from "./compile-component-words.js";
 import { compileFrame, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./compile-nodes.js";
 import { compileText } from "./compile-text.js";
-import { acceptAuthoringProps, withoutReadRecords, type Accepted } from "./authoring-input.js";
+import { acceptAuthoringProps, withoutReadRecords, CLONE_REMEDY, type Accepted } from "./authoring-input.js";
 import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, wordsOf, type WordGroup } from "./vocabulary.js";
 import { own, showValue } from "./validate.js";
-
-const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
 
 // ---- NODE_ENTRY: how a new node of each type is built. Every entry runs the same prelude
 // (acceptAuthoringProps) over its type's row, ONCE, in visit(); a compiler receives only the bag it

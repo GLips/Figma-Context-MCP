@@ -11,6 +11,7 @@ import { keySet, NESTED_WORDS, WORD_VALUES, type WordValue } from "./vocabulary.
 import { parseGridTracks, parseGridPlacement } from "./grid-tracks.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import { compileBounds } from "./size-bounds.js";
+import { compileAspectRatio } from "./aspect-ratio.js";
 import { compileAnnotations } from "./annotations.js";
 import {
   BuiltNode, WriteProps, WriteLayout, WritePaintStack, Sizing, Edges, ConstraintX, ConstraintY, Justify, Align,
@@ -22,7 +23,6 @@ import { parseFill, parseBlendMode, boxShorthand, cornerRadii, length, isPercent
 import { rejectUnknownKeys, own, oneOf, words, assertEnum } from "./validate.js";
 import { isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
 import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
-import { pixelRound } from "@framelink/core";
 import { normalizeEffects } from "./value-sugar.js";
 import { compileBindings, compileComponentPropertyBag, compileOverrideBag } from "./compile-component-words.js";
 
@@ -296,49 +296,6 @@ export function compileNodeLayout(props: Omit<SizeProps, "layout"> & { layout?: 
   applyPlacement(layout, props);
   applyConstraintsProp(layout, props);
   return Object.keys(layout).length ? layout : undefined;
-}
-
-// How far a fixed width ÷ height may sit from an authored ratio and still agree: a read rounds both
-// sizes and the ratio to 2 decimals, so its own paste-back is off by rounding, never by more.
-const ASPECT_RATIO_TOLERANCE = 0.01;
-
-// What can be judged before the node exists: the value, a "hug" axis (its size is its content's,
-// so it can't follow a ratio), two filled axes (neither is free to follow) and two fixed sizes that
-// disagree. A fixed axis beside an unnamed one derives it here, so the node is built at the ratio;
-// the rest settles once every size has landed (bridge.ts settleAspectRatio).
-function compileAspectRatio(raw: unknown, layout: WriteLayout, subject: string): void {
-  if (raw === undefined) return;
-  if (raw === "none") {
-    layout.aspectRatio = "none";
-    return;
-  }
-  if (typeof raw !== "number" || !isFinite(raw) || raw <= 0) {
-    throw new Error(subject + ': aspectRatio must be a positive number, width ÷ height (16 / 9), or "none" to unlock — got ' + JSON.stringify(raw) + ".");
-  }
-  const sizing = (layout.sizing ??= {});
-  if (sizing.horizontal === "hug" || sizing.vertical === "hug") {
-    throw new Error(subject + ': a "hug" axis is sized by its content, so it can\'t follow aspectRatio. Give it a size or "fill", or drop aspectRatio.');
-  }
-  if (sizing.horizontal === "fill" && sizing.vertical === "fill") {
-    throw new Error(subject + ': with both axes "fill" neither is free to follow aspectRatio. Size one of them, or drop aspectRatio.');
-  }
-  const dims = (layout.dimensions ??= {});
-  const width = typeof dims.width === "number" ? dims.width : undefined;
-  const height = typeof dims.height === "number" ? dims.height : undefined;
-  if (width !== undefined && height !== undefined) {
-    if (Math.abs(width / height - raw) > ASPECT_RATIO_TOLERANCE) {
-      throw new Error(subject + ": width " + width + " and height " + height + " are a " + pixelRound(width / height) + " ratio, not aspectRatio " + raw + ". Name one size and the ratio derives the other.");
-    }
-  } else if (width !== undefined && sizing.vertical === undefined) {
-    sizing.vertical = "fixed";
-    dims.height = width / raw;
-  } else if (height !== undefined && sizing.horizontal === undefined) {
-    sizing.horizontal = "fixed";
-    dims.width = height * raw;
-  }
-  if (!sizing.horizontal && !sizing.vertical) delete layout.sizing;
-  if (dims.width === undefined && dims.height === undefined) delete layout.dimensions;
-  layout.aspectRatio = raw;
 }
 
 // A read root's designedWidth/designedHeight, kept by acceptAuthoringProps only beside a "fill" axis.

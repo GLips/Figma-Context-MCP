@@ -50,7 +50,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 //                             node as it stands now, proof the fonts loaded cover it, and the
 //                             live-parent layout gate — every document-reading decision, made once
 //   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
-//   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then the text clamp
+//   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then aspectRatio, then the text clamp
 //   5c. settleEditPlanPositions  what CONSUMES it: percent position, last of all
 //
 // 5a/5b/5c are one span, split only so a BATCH can run each across every entry before starting the
@@ -76,9 +76,10 @@ import { applyAnnotations } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { assertLineFillUnrotated } from "./layout-legality.js";
+import { settleAspectRatio } from "./aspect-ratio.js";
 import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 import {
-  applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize, settleAspectRatio,
+  applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
   ApplyResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
@@ -493,8 +494,8 @@ export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resou
 }
 
 /**
- * Stage 5b — what still PRODUCES geometry after the writes: the percent SIZE, then the clamp that
- * clips against the wrap that size produced (the ordering `edit` has always had, and the reason
+ * Stage 5b — what still PRODUCES geometry after the writes: the percent SIZE, then the aspectRatio
+ * it may drive, then the clamp that clips against the wrap those sizes produced (the ordering `edit` has always had, and the reason
  * clamp isn't simply last).
  */
 export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: EditPlan): void {
