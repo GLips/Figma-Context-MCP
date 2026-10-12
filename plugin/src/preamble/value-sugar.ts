@@ -5,7 +5,7 @@
 // value-sugar — the public value verbs (flcm.gradient, flcm.image, flcm.effects) and the effects
 // sugar the `effects` word accepts. Each returns a plain typed value an author passes as a word.
 
-import { keySet, WORD_GROUPS, NESTED_WORDS, WORD_VALUES } from "./vocabulary.js";
+import { keySet, wordsOf, WORD_GROUPS, NESTED_WORDS, WORD_VALUES } from "./vocabulary.js";
 import { WritePaint, GradientStop, WriteEffect, WriteCssEffects } from "./ir.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
@@ -20,9 +20,9 @@ import type {
   NoiseSugar, TextureSugar, ProgressiveBlurSugar,
 } from "./schema.js";
 
-const IMAGE_KEYS = keySet(WORD_GROUPS.image);
-const GRADIENT_KEYS = keySet(WORD_GROUPS.gradient);
-const EFFECTS_KEYS = keySet(WORD_GROUPS.effects);
+const IMAGE_KEYS = wordsOf(["image"]);
+const GRADIENT_KEYS = wordsOf(["gradient"]);
+const EFFECTS_KEYS = wordsOf(["effects"]);
 // The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. This
 // ONE list drives both the is-this-CSS detection and the reject (normalizeEffects).
 const CSS_EFFECTS_KEYS = keySet(NESTED_WORDS.cssEffects);

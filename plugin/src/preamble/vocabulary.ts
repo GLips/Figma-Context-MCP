@@ -169,11 +169,15 @@ export type NodeWord = RowWord<NodeRow>;
 /** Every word flcm.edit takes on some node type. */
 export type EditWord = Exclude<RowWord<(typeof TYPE_WORD_GROUPS)[EditableType]>, CreateOnlyWord>;
 
-/** One closed key set from several word lists — the shape every compiler's rejectUnknownKeys takes. */
+/**
+ * One closed key set from raw word lists — a nested shape's (NESTED_WORDS) or a gate's input-only
+ * extras beside a group. A set that is exactly whole groups goes through wordsOf instead.
+ */
 export function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
   return new Set(groups.flat());
 }
 
+/** The closed key set of whole WORD_GROUPS — every gate built from groups alone reads them here. */
 export function wordsOf(groups: readonly WordGroup[]): ReadonlySet<string> {
   return new Set(groups.flatMap((group) => WORD_GROUPS[group]));
 }
@@ -205,7 +209,7 @@ export function hasContainerLayout(type: string): boolean {
 // ---- The binding word's fields: which node types may bind each, the component property type it
 // demands, and — for the refusal's second sentence — why it belongs where it does. `visible` has no
 // owner: every node has one, so it is never the wrong node's word. The key Figma stores each under is
-// component.ts's (BINDING_FIELD_WIRE_KEYS), keyed exhaustively by these fields.
+// component-properties.ts's (BINDING_FIELD_WIRE_KEYS), keyed exhaustively by these fields.
 export const BINDABLE_FIELDS = {
   visible: { types: "any", propertyType: "boolean" },
   text: { types: ["TEXT"], propertyType: "text", owner: "`text` drives a TEXT node's content, so it belongs to TEXT" },
