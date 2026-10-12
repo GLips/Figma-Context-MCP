@@ -1480,18 +1480,6 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
   return node;
 }
 
-// The root is the page's child, and the page is a free-form parent — so the SAME child-side
-// appliers run for it that buildFrame runs for a free-form child: `left`/`top` land as canvas
-// coordinates, and an explicit constraint is stored (inert until the root is dragged into a frame,
-// like any page child's constraints). Without this, position words on
-// the root would validate fine and silently not land — while edit applies the same words to a
-// page child, the exact per-verb divergence layout-legality.ts exists to forbid. ("fill" and
-// percents on the root reject upstream in render's page-parent check; they never reach here.)
-export function placeRootOnPage(root: any, wl: WriteLayout): void {
-  if (wl.position === "absolute") applyChildPosition(figma.currentPage, root, wl);
-  if (wl.constraints) applyConstraints(root, wl);
-}
-
 // The props every SceneNode carries (name/blendMode/rotation/visible/locked), applied once after the
 // node is built and sized — never per-builder. Create reaches this through buildNode; edit drives it
 // directly on a resolved target (this is the applier a GROUP/INSTANCE edit lands through — the

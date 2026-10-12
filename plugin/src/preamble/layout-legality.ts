@@ -87,8 +87,9 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
   }
 }
 
-// "fill" and "N%" resolve against a parent frame's bounded size, and a page has none. The two
-// callers that can see a page-shaped parent: render's root check (isRoot) and edit's live gate.
+// "fill" and "N%" resolve against a parent frame's bounded size, and a page has none. `isRoot` is
+// flcm.component's root check, which judges a root before it has a destination; every other caller
+// judges a node against the page it lands under.
 export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: boolean, subject: string): void {
   const s = wl.sizing || {};
   if (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos) {
@@ -96,8 +97,8 @@ export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: 
       subject + ': "fill" and "N%" resolve against a parent frame, and ' +
         (isRoot ? "the root node's" : "this node's") + " parent is the page" +
         " — a page has no bounded size. Use pixel dimensions, or " +
-        // isRoot doubles as the verb tell: only render's root check passes true, so the remedy
-        // can speak to a node being authored vs one already on the canvas.
+        // isRoot doubles as the verb tell: only flcm.component's root check passes true, so the
+        // remedy can speak to a node being authored vs one already on the canvas.
         (isRoot ? "nest the node inside a frame." : "move the node into a frame first."),
     );
   }

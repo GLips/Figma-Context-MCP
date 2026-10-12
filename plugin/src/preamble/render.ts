@@ -2,24 +2,22 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Tree resources — the prepare/gate pair every verb that lands a compiled tree runs before its seal
-// (render and the insert verbs in structure.ts, flcm.component), plus flcm.component's root-on-page
-// build. Split from flcm.ts (the compilers) because the PREPARE reaches the edit compile through
-// instance.ts (an INSTANCE's overrides are edit deltas resolved against the live component), and
-// edit-plan.ts imports the compilers' leaf compilers — so living beside the compilers would close a
-// module cycle.
+// Tree landing — the prepare/gate pair every verb that lands a compiled tree runs before its seal
+// (render and the insert verbs in structure.ts, flcm.component), and landTree, the one path its root
+// takes into a parent. Split from flcm.ts (the compilers) because the PREPARE reaches the edit compile
+// through instance.ts (an INSTANCE's overrides are edit deltas resolved against the live component),
+// and edit-plan.ts imports the compilers' leaf compilers — so living beside the compilers would close
+// a module cycle.
 
 import { requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
-import { WriteNode, Handle } from "./ir.js";
+import { WriteNode } from "./ir.js";
 import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
-import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
 import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens } from "./tokens.js";
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
-import { buildNode, placeRootOnPage, resolvePercents, beginRenderWalk, RenderCtx, RenderResources } from "./bridge.js";
+import { attachBuiltChild, liveParentAttachFacts, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
-import { enterMutatingVerb } from "./mutation-lock.js";
-import { fetchImagesForTrees, assertNoComponentPropertyBindings } from "./flcm.js";
+import { fetchImagesForTrees } from "./flcm.js";
 import { resolveInstanceTreeTargets, planInstanceTree } from "./instance.js";
 import { LoadedResources, InstanceNeeds } from "./edit-plan.js";
 import { createResolvedTargets, ResolvedTargets } from "./read.js";
@@ -113,28 +111,23 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, 
 }
 
 /**
- * The build sequence a compiled ROOT gets when it lands on the page: build the tree (percent children at
- * a provisional size), apply the root's own position words against the page, fold every percent
- * into pixels now that each parent's realized size is readable, and tell the agent when the
- * root landed on top of something.
+ * Land a compiled tree's root in `parent` and settle it: attach it through the same attach-then-size
+ * entry the build walk gives every child, then fold every percent into pixels now that each parent's
+ * realized size is readable. Every tree-placing verb lands through here — render and the insert
+ * verbs into their destination, flcm.component onto the page (or a live root where it stands, with a
+ * `place` that leaves it there) — so a root lands the same way whichever verb placed it.
  *
- * Shared rather than copied because `flcm.component`'s compiled form promises the agent its tree renders
- * "exactly as flcm.render would" — a second hand-rolled copy of these four steps makes that promise
- * false the first time one of them changes. The caller owns the ctx: whether bindings are collected
- * is the caller's declaration, not this function's (see RenderCtx.bindings).
+ * `noteOverlap` is for a root the agent placed on the page without seeing it: the note goes through
+ * the CONSOLE channel, which every installed plugin already returns. A new field on
+ * EXECUTE_CODE_RESULT would be a protocol bump (a manual manifest re-import) for an advisory;
+ * ADR-0010 buys exactly this — placement feedback ships with the server.
  */
-export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
-  const live = ctx.live?.get(tree);
-  const root = live ? live.place(live.node.parent!, () => {}, ctx) : buildNode(tree, ctx);
-  // The root's own position words (absolute x/y, constraints) apply against the page — the walk
-  // above only positions CHILDREN, and edit applies the same words to a page child.
-  if (!live && tree.layout) placeRootOnPage(root, tree.layout);
+export function landTree(parent: any, place: (node: any) => void, tree: WriteNode, ctx: RenderCtx, subject: string, noteOverlap: boolean): any {
+  const root = attachBuiltChild(parent, tree, ctx, liveParentAttachFacts(parent, subject), place);
   resolvePercents(ctx);
-  // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel, which
-  // every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT would be a
-  // protocol bump, i.e. a manual manifest re-import for every user, to say something this advisory.
-  // ADR-0010 buys exactly this: placement feedback ships with the server.
-  const overlap = describeRootOverlap(root);
-  if (overlap) console.log(overlap);
+  if (noteOverlap) {
+    const overlap = describeRootOverlap(root);
+    if (overlap) console.log(overlap);
+  }
   return root;
 }

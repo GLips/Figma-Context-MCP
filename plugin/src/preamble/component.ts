@@ -38,7 +38,7 @@ import {
 import { compileTree } from "./compile-tree.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
-import { loadTreeResources, gateTreeResources, buildTreeOnPage, LoadedTreeResources } from "./render.js";
+import { loadTreeResources, gateTreeResources, landTree, LoadedTreeResources } from "./render.js";
 import { enterMutatingVerb, retargetReplacedNode } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
@@ -516,6 +516,9 @@ interface PreparedBuiltComponent {
 
 interface GatedBuiltComponent {
   tree: WriteNode;
+  /** Where the root lands: the current page for a built root, its own parent for a live one. */
+  parent: any;
+  place: (node: any) => void;
   resources: RenderResources;
   definitions: PreparedDefinition[];
   options: PreparedOptions;
@@ -550,22 +553,24 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
     const live = resources.live?.get(prepared.tree);
     if (live) assertPromotable(live.node);
-    return { tree: prepared.tree, resources,
+    // A live root converts where it stands; a built one lands on the page as flcm.render's would.
+    const parent = live ? live.node.parent! : figma.currentPage;
+    const place = live ? () => {} : (node: any) => parent.appendChild(node);
+    return { tree: prepared.tree, parent, place, resources,
       definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live,
         // A live root with no authored children: nothing in the call can carry a binding.
         Boolean(prepared.tree.liveId) && !prepared.tree.children?.length), options: prepared.options };
   }, applyBuiltComponent);
 }
 
-function applyBuiltComponent({ tree, resources, definitions, options }: GatedBuiltComponent): AuthoredTree {
+function applyBuiltComponent({ tree, parent, place, resources, definitions, options }: GatedBuiltComponent): AuthoredTree {
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
   const ctx = beginRenderWalk(resources, { bindings: true });
-  // render's own build sequence, shared rather than copied (render.buildTreeOnPage): the tree lands
-  // exactly as flcm.render would land it, overlap notice included. Only then is there a laid-out
-  // node to convert.
-  const root = buildTreeOnPage(tree, ctx);
+  // The landing every tree-placing verb shares (render.landTree), overlap notice included. Only
+  // then is there a laid-out node to convert.
+  const root = landTree(parent, place, tree, ctx, SUBJECT, true);
   // The seal opens on the FRAME, before the conversion: createComponentFromNode is the likeliest
   // Figma refusal in this verb, and the frame is the identity the author authored and can act on
   // (the component it would have become doesn't exist to be named).

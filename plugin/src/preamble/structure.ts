@@ -4,7 +4,6 @@
  */
 import { registerRead } from "./host.js";
 import type { WarningRecord } from "./warnings.js";
-import { describeRootOverlap } from "./root-overlap.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import { compileTree, treeNodes } from "./compile-tree.js";
 import { isTargetShaped } from "./flcm.js";
@@ -35,10 +34,10 @@ import { resolveTarget } from "./read.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
-  attachBuiltChild, settleSiblingOrder, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
-  liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
+  settleSiblingOrder, mintHandle, beginRenderWalk, RenderResources,
+  assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
 } from "./bridge.js";
-import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
+import { loadTreeResources, gateTreeResources, landTree } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
@@ -186,21 +185,19 @@ function containerHandle(parent: any): Handle | undefined {
   return parent && parent.type !== "PAGE" ? mintHandle(parent) : undefined;
 }
 
-interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan }
+// `noteOverlap`: render's root lands on the page unseen, so it is told when it buried something (root-overlap.ts).
+interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan; noteOverlap: boolean }
 // `words` is the subject's parent-relative intent read BEFORE the reparent — under the OLD parent's
 // axes, the frame of reference the words were written in. Reading it in apply would be too late.
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
-function applyInsert(verb: string, { dest, tree, resources, bindings }: PreparedInsert): AuthoredTree {
+function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert): AuthoredTree {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
   const ctx = beginRenderWalk(resources, { bindings: !!bindings });
   const fail = beginMutatingApply(verb, dest.parent);
-  let root: any;
   try {
-    root = attachBuiltChild(dest.parent, tree, ctx, liveParentAttachFacts(dest.parent, "flcm." + verb), dest.place);
-    resolvePercents(ctx);
-    if (verb === "render") { const overlap = describeRootOverlap(root); if (overlap) console.log(overlap); }
+    landTree(dest.parent, dest.place, tree, ctx, "flcm." + verb, noteOverlap);
     // After the tree is attached and settled: the property references (and the slot properties this
     // insert declares) land in the same sealed span, so a bound layer is never on the canvas unbound.
     if (bindings) applyInsertBindings(bindings, ctx.bindings!);
@@ -270,7 +267,7 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
       assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
     }
     const bindings = prepareInsertBindings(subject, dest.parent, tree, resources);
-    return { kind: "insert", dest, tree, resources, bindings };
+    return { kind: "insert", dest, tree, resources, bindings, noteOverlap: verb === "render" };
   }, prepared => applyInsert(verb, prepared));
 }
 
@@ -467,7 +464,7 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       }
       return false;
     };
-    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes) };
+    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes), noteOverlap: false };
   }, prepared => {
     const result = applyInsert("replace", prepared);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
