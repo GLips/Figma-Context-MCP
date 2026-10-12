@@ -19,6 +19,7 @@
  * edge whose last segment (the node's own guid) differs from the indexed node's is
  * that retired original, so the copy reads under its own id and the old one refuses.
  */
+import { componentPath, guidOf, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
 type Container = BaseNode & ChildrenMixin;
 interface State {
   native: BaseNode;
@@ -47,11 +48,6 @@ const API_TOPOLOGY_METHODS: ReadonlySet<string> = new Set([
   "createVector", "createPolygon", "createStar", "createSlice", "createComponent",
   "createPage", "createSection", "createBooleanOperation", "createNodeFromSvg",
 ] satisfies (keyof PluginAPI)[]);
-
-// A node's own guid: the last segment of its id, whatever instance path leads to it.
-function guidOf(id: string): string {
-  return id.slice(id.lastIndexOf(";") + 1);
-}
 
 export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; invalidate(): void } {
   let generation = 0;
@@ -100,7 +96,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     }
     state.native = node;
     // Ordinary roots remain addressable after their indexed ID is remapped by a slot.
-    if (!node.id.startsWith("I")) state.anchor = node;
+    if (!isSublayerId(node.id)) state.anchor = node;
     states.set(alias, state);
     states.set(node.id, state);
     return state;
@@ -143,7 +139,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
         const child = edge.ids[edge.next++];
         if (child.type !== node.type) throw new Error("flcm: indexed scene order disagrees with native child types.");
         // A retired original's descendants are listed under its dead path too.
-        copied = edge.retired || (child.id.startsWith("I") && guidOf(child.id) !== guidOf(node.id));
+        copied = edge.retired || (isSublayerId(child.id) && guidOf(child.id) !== guidOf(node.id));
         if (copied) retired.set(child.id, node.id);
         alias = copied ? node.id : child.id;
         parent = edge.record;
@@ -183,7 +179,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
   }
   // Compound IDs mark instance descendants; a scoped state was already acquired by an index.
   function insideInstance(state: State): boolean {
-    return !!state.scope || state.native.type === "INSTANCE" || state.id.startsWith("I");
+    return !!state.scope || state.native.type === "INSTANCE" || isSublayerId(state.id);
   }
   function childViews(state: State): BaseNode[] {
     if (insideInstance(state)) return tree(state).children.map(child => child.state.view);
@@ -271,7 +267,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
           const page = node as PageNode;
           // A selected instance descendant reads under its public ID and parent only once
           // its outermost instance is indexed. Ordinary selected nodes need no index.
-          const outer = new Set(page.selection.map(child => /^I([^;]+);/.exec(child.id)?.[1]).filter(Boolean));
+          const outer = new Set(page.selection.map(child => outermostInstanceId(child.id)).filter(Boolean));
           if (outer.size) {
             for (const instance of page.findAllWithCriteria({ types: ["INSTANCE"] })) {
               if (outer.has(instance.id)) tree(stateOf(instance), true);
@@ -319,9 +315,9 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
   async function byId(id: string): Promise<BaseNode | null> {
     // Compound IDs name descendants of an independently addressable instance.
     // Resolve that bounded root before asking its index for either public ID form.
-    const compound = /^I([^;]+);/.exec(id);
-    if (compound) {
-      const root = await nativeApi().getNodeByIdAsync(compound[1]);
+    const outermost = outermostInstanceId(id);
+    if (outermost) {
+      const root = await nativeApi().getNodeByIdAsync(outermost);
       if (!root || root.removed) return null;
       const anchor = stateOf(root);
       tree(anchor, true);
@@ -329,8 +325,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       // Figma keeps the ordinary instance ID addressable after a slot import,
       // but after reopen its native ID may be the new compound path. Keep the
       // component-relative suffix and resolve it under that current native root.
-      const suffix = id.slice(id.indexOf(";") + 1);
-      const currentId = (root.id.startsWith("I") ? root.id : "I" + root.id) + ";" + suffix;
+      const currentId = liveSublayerId(root.id, componentPath(id, outermost));
       const record = scope.byId.get(currentId);
       const copy = record ? undefined : scope.retired.get(currentId) ?? copies.get(id);
       if (copy) {

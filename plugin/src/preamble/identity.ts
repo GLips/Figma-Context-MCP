@@ -7,6 +7,7 @@
 // accessors one home is what keeps write-stamp and read-scan from disagreeing on the string.
 
 import { Identity } from "./ir.js";
+import { isSublayerId } from "@framelink/core";
 
 // The pluginData key under which flcm stamps a node's author-chosen `key` (the one identity field write adds
 // over read). Change it here and both sides move together.
@@ -68,7 +69,7 @@ export function slotOwnerOf<T extends ParentedNode>(node: T, countSelf: boolean)
 // instance. Figma gives an override node a plain id of its own; definition content reads through
 // the instance path, so it alone carries a compound id while sitting in an open slot.
 export function isInheritedSlotContent(node: ParentedNode & { id: string }): boolean {
-  return node.id.startsWith("I") && !!slotOwnerOf(node, false);
+  return isSublayerId(node.id) && !!slotOwnerOf(node, false);
 }
 
 // The wire key a FRAME's `componentPropertyReferences` carries when it IS a slot property's frame —

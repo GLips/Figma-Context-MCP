@@ -1,4 +1,5 @@
 import { stableStringify } from "./utils.js";
+import { componentPath, definitionId } from "./instance-path.js";
 import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode, StyleValue } from "./types.js";
 
 /**
@@ -86,37 +87,6 @@ export function noteComponent(
       (existing as unknown as Record<string, unknown>)[key] = value;
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
-
-/**
- * A node's COMPONENT-RELATIVE path — its id with the enclosing instance stripped, which is the
- * same string in every instance of a component and in the definition itself.
- *
- * Figma spells an instance sublayer `I<root>;<segment>;…` with exactly ONE leading `I`, however
- * deep the nesting (see the `nodeId` regex on `get_figma_data`). So three shapes collapse to one
- * path here: a plain descendant of a definition (`11:9`), a sublayer of a nested instance inside
- * a definition (`I11:9;11:14`), and a sublayer of the instance we're diffing
- * (`I11:12;11:9;11:14`).
- */
-export function componentPath(id: string, rootId: string): string {
-  // A nested instance's own id already carries the leading `I` (`I19:1;16:2`), a top-level
-  // instance's does not (`11:12`). Both address their sublayers the same way — one `I`, then
-  // the chain — so the prefix is built rather than assumed.
-  const insidePrefix = rootId.startsWith("I") ? `${rootId};` : `I${rootId};`;
-  if (id.startsWith(insidePrefix)) return id.slice(insidePrefix.length);
-  return id.startsWith("I") ? id.slice(1) : id;
-}
-
-/**
- * The inverse, back onto the definition's own id space — what a published `children` node is
- * keyed by. One leading `I` iff the path crosses an instance boundary.
- */
-export function definitionId(path: string): string {
-  return path.includes(";") ? `I${path}` : path;
 }
 
 // ---------------------------------------------------------------------------

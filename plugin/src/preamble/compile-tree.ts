@@ -5,7 +5,7 @@
 // Trees cross the authoring boundary once. Only this private compile produces IR.
 import type { WriteNode, WriteChild } from "./ir.js";
 import type { NodeSpec, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
-import { isElision } from "@framelink/core";
+import { isElision, outermostInstanceId, sublayerPrefix } from "@framelink/core";
 import type { SimplifiedLayout } from "@framelink/core";
 import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
 import { own, showValue } from "./validate.js";
@@ -235,7 +235,7 @@ const ECHO_IDENTITY_WORDS = ["componentPropertyReferences"];
  * echo is discarded — omitting children preserves the live ones — but any word an author changed on
  * one would go with it, so each is lifted here to `overrides[<component-relative path>]`, the only
  * route that reaches an inherited layer. The composite id IS the path prefixed by `I<instance>;`
- * (instance.ts liveSublayerIdOf), so the rewrite is a string slice, not a read.
+ * (core's liveSublayerId), so the rewrite is a string slice, not a read.
  *
  * Returns undefined when the children are not an inherited echo — those stay children.
  */
@@ -244,8 +244,8 @@ function liftInheritedChildEdits(id: unknown, children: unknown, at: string): Re
   if (!Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
   // Removing an instance's root id makes a template; its echo still names one source instance.
   const first = children.find(child => !isElision(child));
-  const sourceId = id ?? (first && typeof first.id === "string" && first.id.startsWith("I") ? first.id.slice(1, first.id.indexOf(";")) : undefined);
-  const prefix = typeof sourceId === "string" ? (sourceId.startsWith("I") ? sourceId : "I" + sourceId) + ";" : undefined;
+  const sourceId = id ?? (first && typeof first.id === "string" ? outermostInstanceId(first.id) : undefined);
+  const prefix = typeof sourceId === "string" ? sublayerPrefix(sourceId) : undefined;
   const lifted: Record<string, Record<string, unknown>> = {};
   const owned = (child: unknown, where: string): boolean => {
     if (isElision(child)) return true;

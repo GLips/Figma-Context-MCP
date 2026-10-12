@@ -1,11 +1,8 @@
 import { z } from "zod";
 import type { FigmaService } from "~/services/figma.js";
 import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
-import {
-  FIGMA_NODE_ID_FORMAT_MESSAGE,
-  FIGMA_NODE_ID_PATTERN,
-  normalizeFigmaNodeId,
-} from "~/utils/figma-url.js";
+import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
+import { FIGMA_NODE_ID_FORMAT_MESSAGE, normalizeFigmaNodeId } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 
 const nodeId = z.string().regex(FIGMA_NODE_ID_PATTERN, FIGMA_NODE_ID_FORMAT_MESSAGE);

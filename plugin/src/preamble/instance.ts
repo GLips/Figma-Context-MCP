@@ -4,6 +4,7 @@
  */
 import { assertExposureTree, assertExposureTarget } from "./instance-exposure.js";
 import { assertBounds } from "./size-bounds.js";
+import { componentPath, definitionId, liveSublayerId } from "@framelink/core";
 // instance — the component half of the write path, for BOTH verbs that touch one:
 //
 //   • CREATE (INSTANCE): everything an INSTANCE carries raw (ir.ts WriteProps on why)
@@ -362,7 +363,7 @@ function resolveComponentProperties(
     // A slot has no value: its content is stated at the slot's PATH, and the path is the bound
     // frame's in THIS variant — walked so the refusal hands over the exact key to write.
     const hole = slotFrameBoundTo(component, slotNamed.full);
-    const path = hole ? JSON.stringify(componentPathOfDefinitionId(hole.id)) : '"<slotPath>"';
+    const path = hole ? JSON.stringify(componentPath(hole.id)) : '"<slotPath>"';
     throw new Error(
       slotNamed.where + ": " + JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
         subject + ".overrides[" + path + "] = { children: [ …nodes ] } (FRAME/text/instance…; [] empties it).",
@@ -397,18 +398,6 @@ function selectVariant(resolved: ResolvedComponent, variant: Record<string, stri
 
 // ---- the overrides ----
 
-// A path is component-relative (core's rule, mirrored: a single segment IS the definition node's
-// id, two or more take one leading `I`). The node it names must exist AND sit inside the resolved
-// component — a path from a sibling variant resolves to a real node that this instance won't have.
-function definitionIdOf(path: string): string {
-  return path.indexOf(";") !== -1 ? "I" + path : path;
-}
-
-// The inverse: a definition node's own id, as the path `get` keys an instance's `overrides` by.
-function componentPathOfDefinitionId(id: string): string {
-  return id.charAt(0) === "I" && id.indexOf(";") !== -1 ? id.slice(1) : id;
-}
-
 // The frame bound to a slot property in ONE definition, or null. The variant's own subtree, not
 // the set's: each variant realizes the set's slot with its own frame.
 function slotFrameBoundTo(definition: any, full: string): any | null {
@@ -417,18 +406,11 @@ function slotFrameBoundTo(definition: any, full: string): any | null {
 
 // The slot paths a definition HAS — what a `children` at the wrong path is told instead.
 function slotPathsSentence(definition: any): string {
-  const paths = (definition.findAll((n: any) => isSlotHole(n)) as any[]).map((n) => JSON.stringify(componentPathOfDefinitionId(n.id)));
+  const paths = (definition.findAll((n: any) => isSlotHole(n)) as any[]).map((n) => JSON.stringify(componentPath(n.id)));
   if (paths.length) return "The slot" + (paths.length > 1 ? "s" : "") + " of " + describeNodeIdentity(definition) + " " + (paths.length > 1 ? "are" : "is") + " at " + paths.join(", ") + ".";
   return describeNodeIdentity(definition) + " has no slot — declare one on the component first (a frame bound with componentPropertyReferences: { slot }), then fill it here.";
 }
 
-// The live sublayer a path names inside one instance — the composite id Figma mints and `get`
-// documents (`I<instanceId>;<path>`). Exactly ONE leading `I` however deep: a NESTED instance's own
-// id already carries it (`I12:3;4:5`), so its sublayer is `I12:3;4:5;6:7`, not `II12:3;…`. Same rule
-// as core's componentPath/definitionId, which is the read side of this string.
-export function liveSublayerIdOf(instanceId: string, path: string): string {
-  return (instanceId.charAt(0) === "I" ? instanceId : "I" + instanceId) + ";" + path;
-}
 
 
 
@@ -440,7 +422,7 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
   const plans: OverridePlan[] = [];
   for (const path of Object.keys(overrides)) {
     const where = subject + ".overrides[" + JSON.stringify(path) + "]";
-    const id = definitionIdOf(path);
+    const id = definitionId(path);
     const definition: any = component.findOne((n: any) => n.id === id);
     if (!definition) {
       throw new Error(
@@ -543,7 +525,7 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
   const subject = "flcm." + verb;
   const live = overrides.map(({ path, delta, slotContent }) => {
     const where = subject + ".overrides[" + JSON.stringify(path) + "]";
-    const liveId = liveSublayerIdOf(instance.id, path);
+    const liveId = liveSublayerId(instance.id, path);
     const node = instance.findOne((n: any) => n.id === liveId);
     if (!node) {
       throw new Error(
@@ -697,7 +679,7 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
 
 // `current` is the one handle the gate takes from prepare rather than reading live: the main
 // component has no sync read under dynamic-page. So the gate proves it by the one sync fact that
-// mirrors it — an instance's sublayers carry its component's ids, prefixed (liveSublayerIdOf), and
+// mirrors it — an instance's sublayers carry its component's ids, prefixed (liveSublayerId), and
 // a swap or variant change during the loads re-points every one of them. Without this, a delta
 // naming the component the instance HAD would plan as a no-op against the one it has now, and
 // report success for a swap that never happened.
@@ -707,7 +689,7 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
 // against the component the delta names.
 function assertInstanceStillOf(instance: any, current: any, subject: string): void {
   const live: string[] = instance.children.map((c: any) => c.id);
-  const expected: string[] = current.children.map((c: any) => liveSublayerIdOf(instance.id, componentPathOfDefinitionId(c.id)));
+  const expected: string[] = current.children.map((c: any) => liveSublayerId(instance.id, componentPath(c.id)));
   if (live.length === expected.length && live.every((id, i) => id === expected[i])) return;
   throw new Error(
     subject + ": the main component of " + describeNodeIdentity(instance) + " changed while this call was resolving targets and loading resources (it was " +
@@ -730,7 +712,7 @@ function planLiveOverrides(
   const plans: OverridePlan[] = [];
   for (const path of Object.keys(overrides)) {
     const where = subject + ".overrides[" + JSON.stringify(path) + "]";
-    const liveId = liveSublayerIdOf(instance.id, path);
+    const liveId = liveSublayerId(instance.id, path);
     const live: any = instance.findOne((n: any) => n.id === liveId);
     if (!live) {
       throw new Error(

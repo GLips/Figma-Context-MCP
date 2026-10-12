@@ -10,9 +10,8 @@
 // Only while the call leaves alone what the read described the word against: a parent re-flowing,
 // a sibling restacking, an instance swapping, a property being renamed, a text's runs rewritten.
 // Then restating is a write.
-import { stableStringify, type SimplifiedNode } from "@framelink/core";
+import { liveSublayerId, stableStringify, type SimplifiedNode } from "@framelink/core";
 import { readStandingState } from "./read.js";
-import { liveSublayerIdOf } from "./instance.js";
 
 /** One live node a verb writes words to, and its parent within the call (a node id, or any key). */
 interface StatedNode {
@@ -175,10 +174,10 @@ function retargets(instance: InstanceNode, words: Record<string, unknown>): bool
 function changedOverrides(instanceId: string, overrides: Record<string, unknown>, standing: ReadonlyMap<string, SimplifiedNode[]>): Record<string, unknown> {
   // A nested swap retargets every path beneath it, as a top-level swap does the whole instance.
   const swapped = Object.entries(overrides).flatMap(([path, delta]) =>
-    isBag(delta) && delta.componentId !== undefined && !standing.get(liveSublayerIdOf(instanceId, path))?.some(read => sameReadValue(read.componentId, delta.componentId)) ? [path + ";"] : []);
+    isBag(delta) && delta.componentId !== undefined && !standing.get(liveSublayerId(instanceId, path))?.some(read => sameReadValue(read.componentId, delta.componentId)) ? [path + ";"] : []);
   const changed: Record<string, unknown> = {};
   for (const [path, delta] of Object.entries(overrides)) {
-    const sublayer = standing.get(liveSublayerIdOf(instanceId, path));
+    const sublayer = standing.get(liveSublayerId(instanceId, path));
     const retargeted = swapped.some(prefix => path.startsWith(prefix));
     if (!sublayer || retargeted || !isBag(delta) || !Object.keys(delta).length) { changed[path] = delta; continue; }
     const words = changedWords(delta, sublayer, NO_CONTEXT);

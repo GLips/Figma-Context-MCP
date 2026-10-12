@@ -6,6 +6,7 @@ import { computeGridChildOrder } from "./transformers/layout.js";
 import { foldPaintStack, paintStyleValue } from "./transformers/style.js";
 import { styleReference } from "./tokens.js";
 import { hasAutoLayout } from "./utils.js";
+import { componentPath, liveSublayerId } from "./instance-path.js";
 import type { SimplifyResult } from "./simplify.js";
 import type { NodeSnapshot, SnapshotPaint, SnapshotTokenRef } from "./snapshot.js";
 import type { SimplifiedNode, StyleTable, Elision } from "./types.js";
@@ -164,9 +165,8 @@ function projectTrees(
   // Markers attach after hashing/diffing so they cannot change template ids or component deltas.
   const mark = (list: SimplifiedNode[], donorId?: string) => {
     for (const node of list) {
-      const fullId = donorId
-        ? `${donorId.startsWith("I") ? donorId : "I" + donorId};${node.id.startsWith("I") ? node.id.slice(1) : node.id}`
-        : node.id;
+      // A donated body is keyed in the definition's id space; its cuts were recorded on the donor.
+      const fullId = donorId ? liveSublayerId(donorId, componentPath(node.id)) : node.id;
       const entries = cuts.get(fullId);
       if (entries && Object.keys(entries).length) node.elided = entries;
       if (node.children) mark(node.children, donorId);

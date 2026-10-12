@@ -88,6 +88,19 @@ export type { Elision } from "./types.js";
 
 export { projectNames } from "./project-names.js";
 
+// Instance sublayer ids are read by core's component diff, built by the plugin's override and
+// selection code, and validated by every tool schema — one grammar for all of them.
+export {
+  FIGMA_NODE_ID_PATTERN,
+  componentPath,
+  definitionId,
+  guidOf,
+  isSublayerId,
+  liveSublayerId,
+  outermostInstanceId,
+  sublayerPrefix,
+} from "./instance-path.js";
+
 // One pin→node guess for both the REST comments tool and the plugin's read counts, so they agree on
 // which node a comment thread belongs to.
 export { hitTestCommentPin } from "./comment-pin.js";

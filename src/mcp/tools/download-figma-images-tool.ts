@@ -5,7 +5,8 @@ import {
   type DownloadImagesOutcome,
 } from "../../services/download-figma-images.js";
 import type { FigmaService } from "../../services/figma.js";
-import { FIGMA_NODE_ID_FORMAT_MESSAGE, FIGMA_NODE_ID_PATTERN } from "../../utils/figma-url.js";
+import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
+import { FIGMA_NODE_ID_FORMAT_MESSAGE } from "../../utils/figma-url.js";
 import { createDiskImageDestination, type ImageDestination } from "../../utils/image-processing.js";
 import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
 import { Logger } from "../../utils/logger.js";

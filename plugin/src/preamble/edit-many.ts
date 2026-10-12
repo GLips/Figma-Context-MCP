@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { compileDeltaTrees } from "./compile-tree.js";
+import { sublayerPrefix } from "@framelink/core";
 // editMany — the atomic batch form of `edit`. It exists for ONE thing a caller loop cannot build:
 // set-level atomicity. Validation lives inside a verb, so `for (const e of entries) await edit(…)`
 // discovers entry 4's invalid delta only after entries 1–3 have already mutated the canvas — each
@@ -505,8 +506,7 @@ function assertNoEntryInsideRetargetedInstance(
 // Is `node` inside `host`? A sublayer answers by its composite id (`I<host>;<path>`, one leading `I`
 // however deep — core's rule), anything else by the parent chain.
 function isInsideInstance(node: SceneNode, host: SceneNode): boolean {
-  const prefix = (host.id.charAt(0) === "I" ? host.id : "I" + host.id) + ";";
-  if (node.id.indexOf(prefix) === 0) return true;
+  if (node.id.startsWith(sublayerPrefix(host.id))) return true;
   for (let p = node.parent as BaseNode | null; p; p = p.parent) if (p === host) return true;
   return false;
 }

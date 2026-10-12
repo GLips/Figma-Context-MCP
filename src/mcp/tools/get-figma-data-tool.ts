@@ -3,11 +3,8 @@
 // accepts both. Migrating them to v4 is its own change, not a side effect of a dependency bump.
 import { z } from "zod/v3";
 import { FigmaService } from "~/services/figma.js";
-import {
-  FIGMA_NODE_ID_FORMAT_MESSAGE,
-  FIGMA_NODE_ID_PATTERN,
-  normalizeFigmaNodeId,
-} from "~/utils/figma-url.js";
+import { FIGMA_NODE_ID_PATTERN } from "@framelink/core";
+import { FIGMA_NODE_ID_FORMAT_MESSAGE, normalizeFigmaNodeId } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import {

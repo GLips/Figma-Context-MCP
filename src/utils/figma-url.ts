@@ -1,11 +1,6 @@
 import { tagError } from "~/utils/error-meta.js";
 
-/**
- * A Figma node id as an agent may pass it: colon form from the API (`1234:5678`), dash form from
- * a URL's `node-id` (`1234-5678`), or a `;`-joined instance-override chain (`I5666:180910;1:10515`).
- * Shared by every tool schema; tools on zod v3 and v4 both build their schema from this pattern.
- */
-export const FIGMA_NODE_ID_PATTERN = /^I?\d+[:-]\d+(?:;\d+[:-]\d+)*$/;
+/** The refusal every tool schema pairs with core's `FIGMA_NODE_ID_PATTERN`. */
 export const FIGMA_NODE_ID_FORMAT_MESSAGE =
   "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'";
 
