@@ -32,7 +32,7 @@ async function listEveryToolName(): Promise<string[]> {
     onFirstConnect: () => {},
   };
   const server = createServer(
-    { figmaApiKey: "test-key", figmaOAuthToken: "", useOAuth: false },
+    { kind: "pat", token: "test-key" },
     { transport: "http", pluginBridge: runtime, codeMode: true },
   );
   const client = new Client({ name: "cli-counterparts-test", version: "1.0.0" });

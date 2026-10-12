@@ -40,7 +40,7 @@ function connectWithPlugin({ connected }: { connected: boolean }) {
     onFirstConnect: (cb) => (everConnected ? cb() : firstConnect.push(cb)),
   };
   const server = createServer(
-    { figmaApiKey: "test-key", figmaOAuthToken: "", useOAuth: false },
+    { kind: "pat", token: "test-key" },
     { transport: "stdio", pluginBridge: runtime },
   );
   const client = new Client({ name: "plugin-read-route-test", version: "1.0.0" });

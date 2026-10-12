@@ -40,7 +40,7 @@ function listToolsWith({
     onFirstConnect: () => {},
   };
   const server = createServer(
-    { figmaApiKey: "test-key", figmaOAuthToken: "", useOAuth: false },
+    { kind: "pat", token: "test-key" },
     { transport: "http", pluginBridge: runtime },
   );
   const client = new Client({ name: "code-mode-test-client", version: "1.0.0" });

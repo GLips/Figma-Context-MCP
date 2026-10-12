@@ -42,7 +42,7 @@ const flush = async () => {
 async function setup() {
   const bridge = new Bridge();
   const server = createServer(
-    { figmaApiKey: "test", figmaOAuthToken: "", useOAuth: false },
+    { kind: "pat", token: "test" },
     {
       transport: "stdio",
       pluginBridge: {

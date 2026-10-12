@@ -30,10 +30,7 @@ describe("validation reject capture (monkey patch)", () => {
   beforeEach(async () => {
     vi.mocked(telemetry.captureValidationReject).mockClear();
 
-    server = createServer(
-      { figmaApiKey: "test-key", figmaOAuthToken: "", useOAuth: false },
-      { transport: "stdio" },
-    );
+    server = createServer({ kind: "pat", token: "test-key" }, { transport: "stdio" });
     client = new Client({ name: "validation-test-client", version: "1.0.0" });
     const [clientT, serverT] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(clientT), server.connect(serverT)]);

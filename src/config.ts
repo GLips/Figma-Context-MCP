@@ -1,6 +1,6 @@
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
-import type { FigmaAuthOptions } from "./services/figma.js";
+import type { FigmaCredential } from "./services/figma.js";
 import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils/serialize.js";
 
 export type Source = "cli" | "env" | "default";
@@ -32,7 +32,8 @@ export interface ServerFlags {
 }
 
 export interface ServerConfig {
-  auth: FigmaAuthOptions;
+  /** Absent only in HTTP mode, where each request may bring its own (see startServer). */
+  credential: FigmaCredential | undefined;
   port: number;
   host: string;
   proxy: string | undefined;
@@ -101,21 +102,22 @@ export function loadEnvFile(envPath?: string): string {
 
 type CredentialFlags = { figmaApiKey?: string; figmaOauthToken?: string };
 
-// The single resolution of the Figma credentials; `getServerConfig` keeps the
-// `Resolved` pair for its source display, everyone else takes `resolveAuth`.
-function resolveFigmaCredentials(flags: CredentialFlags) {
+// The single resolution of the Figma credential: an OAuth token wins over a PAT when both are
+// set. `getServerConfig` keeps the `Resolved` pairs for its source display; everyone else takes
+// `resolveCredential`.
+function resolveFigmaCredential(flags: CredentialFlags) {
   const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
   const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
-  const auth: FigmaAuthOptions = {
-    figmaApiKey: figmaApiKey.value,
-    figmaOAuthToken: figmaOauthToken.value,
-    useOAuth: Boolean(figmaOauthToken.value),
-  };
-  return { auth, figmaApiKey, figmaOauthToken };
+  const credential: FigmaCredential | undefined = figmaOauthToken.value
+    ? { kind: "oauth", token: figmaOauthToken.value }
+    : figmaApiKey.value
+      ? { kind: "pat", token: figmaApiKey.value }
+      : undefined;
+  return { credential, figmaApiKey, figmaOauthToken };
 }
 
-export function resolveAuth(flags: CredentialFlags): FigmaAuthOptions {
-  return resolveFigmaCredentials(flags).auth;
+export function resolveCredential(flags: CredentialFlags): FigmaCredential | undefined {
+  return resolveFigmaCredential(flags).credential;
 }
 
 // Only explicit proxy config: standard env vars (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) are handled by
@@ -162,8 +164,8 @@ export class UsageError extends Error {
  * something resolvable at startup or they'd just defer the failure to the
  * first tool call with a misleading "send X-Figma-Token" message.
  */
-export function requireGlobalCredentials(auth: FigmaAuthOptions): void {
-  if (auth.figmaApiKey || auth.figmaOAuthToken) return;
+export function requireGlobalCredential(credential: FigmaCredential | undefined): FigmaCredential {
+  if (credential) return credential;
   throw new UsageError(
     "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
   );
@@ -175,7 +177,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   const envFileSource: Source = flags.env !== undefined ? "cli" : "default";
 
   // Resolve config values: CLI flag → env var → default
-  const { auth, figmaApiKey, figmaOauthToken } = resolveFigmaCredentials(flags);
+  const { credential, figmaApiKey, figmaOauthToken } = resolveFigmaCredential(flags);
   const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), DEFAULT_HTTP_PORT);
   const host = resolve(flags.host, envStr("FRAMELINK_HOST"), DEFAULT_HTTP_HOST);
   const skipImageDownloads = resolve(
@@ -237,14 +239,14 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   if (!isStdioMode) {
     console.log("\nConfiguration:");
     console.log(`- ENV_FILE: ${envFilePath} (source: ${configSources.envFile})`);
-    if (auth.useOAuth) {
+    if (credential?.kind === "oauth") {
       console.log(
-        `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
+        `- FIGMA_OAUTH_TOKEN: ${maskApiKey(credential.token)} (source: ${configSources.figmaOauthToken})`,
       );
       console.log("- Authentication Method: OAuth Bearer Token");
-    } else if (auth.figmaApiKey) {
+    } else if (credential?.kind === "pat") {
       console.log(
-        `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${configSources.figmaApiKey})`,
+        `- FIGMA_API_KEY: ${maskApiKey(credential.token)} (source: ${configSources.figmaApiKey})`,
       );
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
     } else {
@@ -270,7 +272,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   }
 
   return {
-    auth,
+    credential,
     port: port.value,
     host: host.value,
     proxy: proxy.value,

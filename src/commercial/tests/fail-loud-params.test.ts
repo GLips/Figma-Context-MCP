@@ -40,7 +40,7 @@ function connectedServer(
     onFirstConnect: () => {},
   };
   const server = createServer(
-    { figmaApiKey: "test-key", figmaOAuthToken: "", useOAuth: false },
+    { kind: "pat", token: "test-key" },
     { transport: "stdio", pluginBridge: runtime },
   );
   const client = new Client({ name: "fail-loud-test-client", version: "1.0.0" });

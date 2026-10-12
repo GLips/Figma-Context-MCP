@@ -1,4 +1,4 @@
-import type { FigmaAuthOptions } from "~/services/figma.js";
+import type { FigmaCredential } from "~/services/figma.js";
 import type { AuthMode } from "./types.js";
 
 export { initTelemetry, shutdown } from "./client.js";
@@ -22,8 +22,7 @@ export type {
  * no `X-Figma-Token` on the request — the call will fail in `getAuthHeaders`,
  * and reporting it as `api_key` would skew multi-tenant deployment metrics.
  */
-export function authMode(auth: FigmaAuthOptions): AuthMode {
-  if (auth.useOAuth) return "oauth";
-  if (auth.figmaApiKey) return "api_key";
-  return "none";
+export function authMode(credential: FigmaCredential | undefined): AuthMode {
+  if (!credential) return "none";
+  return credential.kind === "oauth" ? "oauth" : "api_key";
 }

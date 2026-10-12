@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFigmaDataTool } from "./tools/index.js";
-import { FigmaService, staticCredentialSource, type FigmaAuthOptions } from "../services/figma.js";
+import { FigmaService, staticCredentialSource, type FigmaCredential } from "../services/figma.js";
 import {
   authMode,
   captureDownloadImagesCall,
@@ -40,7 +40,8 @@ export type CreateServerOptions = {
 };
 
 function createServer(
-  authOptions: FigmaAuthOptions,
+  /** Absent: an HTTP request with no credential to a server with none; Figma calls fail asking for one. */
+  credential: FigmaCredential | undefined,
   {
     transport,
     outputFormat = "tree",
@@ -51,8 +52,8 @@ function createServer(
   }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(staticCredentialSource(authOptions));
-  const mode = authMode(authOptions);
+  const figmaService = new FigmaService(staticCredentialSource(credential));
+  const mode = authMode(credential);
 
   const getClientInfo = clientInfoReader(server);
   const callContext = (): ToolCallContext => ({

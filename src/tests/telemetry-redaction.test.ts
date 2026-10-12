@@ -61,12 +61,7 @@ describe("per-request telemetry redaction", () => {
   });
 
   it("scrubs per-request X-Figma-Token from telemetry error_message", async () => {
-    httpServer = await startHttpServer(
-      "127.0.0.1",
-      0,
-      { figmaApiKey: "", figmaOAuthToken: "", useOAuth: false },
-      {},
-    );
+    httpServer = await startHttpServer("127.0.0.1", 0, undefined, {});
     const port = (httpServer.address() as AddressInfo).port;
 
     client = new Client({ name: "redaction-test", version: "1.0.0" });
@@ -156,9 +151,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
 
     const { FigmaService, staticCredentialSource } = await import("~/services/figma.js");
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
-    const service = new FigmaService(
-      staticCredentialSource({ figmaApiKey: "figd_test", figmaOAuthToken: "", useOAuth: false }),
-    );
+    const service = new FigmaService(staticCredentialSource({ kind: "pat", token: "figd_test" }));
 
     const error = await captureThrown(() => service.getRawNodeInContext(FILE_KEY, NODE_ID));
 
@@ -227,9 +220,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
 
     const { FigmaService, staticCredentialSource } = await import("~/services/figma.js");
     const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
-    const service = new FigmaService(
-      staticCredentialSource({ figmaApiKey: "figd_test", figmaOAuthToken: "", useOAuth: false }),
-    );
+    const service = new FigmaService(staticCredentialSource({ kind: "pat", token: "figd_test" }));
     const error = await captureThrown(() => service.getRawFile(FILE_KEY));
     expect(String((error as Error).message)).toContain("jane.doe@acme-corp.com");
 

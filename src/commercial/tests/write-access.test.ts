@@ -166,7 +166,7 @@ class MeteredBridge extends PluginBridge {
 async function connectTools(writeAccess: WriteAccess) {
   const bridge = new MeteredBridge();
   const server = createMcpServer(
-    { figmaApiKey: "test", figmaOAuthToken: "", useOAuth: false },
+    { kind: "pat", token: "test" },
     {
       transport: "stdio",
       pluginBridge: {

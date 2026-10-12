@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { envBool, envInt, envStr, resolve } from "~/config.js";
+import { envBool, envInt, envStr, resolve, resolveCredential } from "~/config.js";
 
 describe("resolve", () => {
   it("CLI flag wins over env and default", () => {
@@ -85,5 +85,25 @@ describe("envBool", () => {
 
   it("returns undefined when not set", () => {
     expect(envBool("TEST_BOOL_MISSING")).toBeUndefined();
+  });
+});
+
+describe("resolveCredential", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("resolves one credential: an OAuth token wins over a PAT, an empty one is no token", () => {
+    vi.stubEnv("FIGMA_API_KEY", "");
+    vi.stubEnv("FIGMA_OAUTH_TOKEN", "");
+    expect(resolveCredential({ figmaApiKey: "pat", figmaOauthToken: "oauth" })).toEqual({
+      kind: "oauth",
+      token: "oauth",
+    });
+    expect(resolveCredential({ figmaApiKey: "pat", figmaOauthToken: "" })).toEqual({
+      kind: "pat",
+      token: "pat",
+    });
+    expect(resolveCredential({})).toBeUndefined();
   });
 });

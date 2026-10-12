@@ -23,12 +23,6 @@ import {
   isCredentialRejection,
 } from "./errors/index.js";
 
-export type FigmaAuthOptions = {
-  figmaApiKey: string;
-  figmaOAuthToken: string;
-  useOAuth: boolean;
-};
-
 /** One Figma credential: a personal access token or an OAuth bearer token. */
 export type FigmaCredential = { kind: "pat" | "oauth"; token: string };
 
@@ -55,16 +49,16 @@ export type FigmaServiceOptions = {
   images?: ImageLimits;
 };
 
-/** The startup credential as a source: missing credentials fail the call that needed them. */
-export function staticCredentialSource({
-  figmaApiKey,
-  figmaOAuthToken,
-  useOAuth,
-}: FigmaAuthOptions): FigmaCredentialSource {
+/**
+ * A credential resolved up front as a source. Absent is a real state — an HTTP server with no
+ * global credential, serving a request that sent none — and fails the call that needed one.
+ */
+export function staticCredentialSource(
+  credential: FigmaCredential | undefined,
+): FigmaCredentialSource {
   return {
     async resolve() {
-      if (useOAuth && figmaOAuthToken) return { kind: "oauth", token: figmaOAuthToken };
-      if (figmaApiKey) return { kind: "pat", token: figmaApiKey };
+      if (credential) return credential;
       tagError(
         new Error(
           "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",

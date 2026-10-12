@@ -2,14 +2,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startHttpServer, stopHttpServer } from "../server.js";
 import type { AddressInfo } from "net";
-import type { FigmaAuthOptions } from "../services/figma.js";
+import type { FigmaCredential } from "../services/figma.js";
 import { spawn, type ChildProcess } from "child_process";
 
-const dummyAuth: FigmaAuthOptions = {
-  figmaApiKey: "test-key-not-used",
-  figmaOAuthToken: "",
-  useOAuth: false,
-};
+const dummyAuth: FigmaCredential = { kind: "pat", token: "test-key-not-used" };
 
 describe("StreamableHTTP transport", () => {
   let port: number;

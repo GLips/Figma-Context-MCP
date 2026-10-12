@@ -77,9 +77,9 @@ export async function runComments(flags: CommentsFlags, positionals: string[]): 
     status: flags.all ? "all" : "unresolved",
     since: flags.since,
   });
-  const auth = prepareRestCommand(flags);
+  const credential = prepareRestCommand(flags);
   const result = await getFigmaComments(
-    new FigmaService(staticCredentialSource(auth)),
+    new FigmaService(staticCredentialSource(credential)),
     fileKey,
     options,
   );

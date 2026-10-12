@@ -1,11 +1,11 @@
 import {
   loadEnvFile,
-  requireGlobalCredentials,
-  resolveAuth,
+  requireGlobalCredential,
+  resolveCredential,
   resolveProxy,
   UsageError,
 } from "~/config.js";
-import type { FigmaAuthOptions } from "~/services/figma.js";
+import type { FigmaCredential } from "~/services/figma.js";
 import { normalizeFigmaNodeId, parseFigmaUrl } from "~/utils/figma-url.js";
 import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
 
@@ -71,10 +71,9 @@ export function prepareRestCommand(flags: {
   figmaApiKey?: string;
   figmaOauthToken?: string;
   proxy?: string;
-}): FigmaAuthOptions {
+}): FigmaCredential {
   loadEnvFile(flags.env);
-  const auth = resolveAuth(flags);
-  requireGlobalCredentials(auth);
+  const credential = requireGlobalCredential(resolveCredential(flags));
   installFigmaProxyDispatcher(resolveProxy(flags).value);
-  return auth;
+  return credential;
 }

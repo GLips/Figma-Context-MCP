@@ -5,7 +5,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import { startHttpServer, stopHttpServer } from "~/server.js";
-import type { FigmaAuthOptions } from "~/services/figma.js";
+import type { FigmaCredential } from "~/services/figma.js";
 
 const figmaFileResponse = {
   name: "Auth Test File",
@@ -30,12 +30,6 @@ const figmaFileResponse = {
   componentSets: {},
   schemaVersion: 0,
   styles: {},
-};
-
-const emptyAuth = {
-  figmaApiKey: "",
-  figmaOAuthToken: "",
-  useOAuth: false,
 };
 
 describe("HTTP header Figma API key authentication", () => {
@@ -65,7 +59,7 @@ describe("HTTP header Figma API key authentication", () => {
 
   async function connectClient(
     headers?: Record<string, string>,
-    baseAuth: FigmaAuthOptions = emptyAuth,
+    baseAuth: FigmaCredential | undefined = undefined,
   ) {
     httpServer = await startHttpServer("127.0.0.1", 0, baseAuth, {});
     const port = (httpServer.address() as AddressInfo).port;
@@ -109,10 +103,7 @@ describe("HTTP header Figma API key authentication", () => {
   });
 
   it("uses X-Figma-Token from the HTTP request instead of the server API key", async () => {
-    await connectClient(
-      { "X-Figma-Token": "request-key" },
-      { figmaApiKey: "server-key", figmaOAuthToken: "", useOAuth: false },
-    );
+    await connectClient({ "X-Figma-Token": "request-key" }, { kind: "pat", token: "server-key" });
 
     const result = await client.request(
       {
@@ -152,7 +143,7 @@ describe("HTTP header Figma API key authentication", () => {
   it("uses HTTP Authorization bearer tokens instead of the server API key", async () => {
     await connectClient(
       { Authorization: "Bearer request-oauth-token" },
-      { figmaApiKey: "server-key", figmaOAuthToken: "", useOAuth: false },
+      { kind: "pat", token: "server-key" },
     );
 
     const result = await client.request(

@@ -8,8 +8,8 @@ import { withRequestSecrets } from "./utils/request-secrets.js";
 import { installFigmaProxyDispatcher } from "./utils/figma-proxy-dispatcher.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
-import { requireGlobalCredentials, type ServerConfig } from "./config.js";
-import type { FigmaAuthOptions } from "./services/figma.js";
+import { requireGlobalCredential, type ServerConfig } from "./config.js";
+import type { FigmaCredential } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as telemetry from "./telemetry/index.js";
@@ -29,17 +29,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
   enableLogging({ http: !config.isStdioMode });
   // Stdio has no per-request credential channel, so the server is unusable
   // without something resolved at startup. Fail fast BEFORE any side effects
-  // (proxy install, telemetry init) — preserves the pre-PR behavior where
-  // resolveAuth() exited early during config resolution.
-  if (config.isStdioMode) {
-    requireGlobalCredentials(config.auth);
-  }
+  // (proxy install, telemetry init).
+  const credential = config.isStdioMode
+    ? requireGlobalCredential(config.credential)
+    : config.credential;
 
   installFigmaProxyDispatcher(config.proxy);
 
   const telemetryEnabled = telemetry.initTelemetry({
     enabled: config.telemetryEnabled,
-    redactFromTelemetry: [config.auth.figmaApiKey, config.auth.figmaOAuthToken],
+    redactFromTelemetry: credential ? [credential.token] : [],
   });
 
   if (telemetryEnabled) {
@@ -91,13 +90,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
           `MCP clients often launch the server outside your project root — set FRAMELINK_ASSET_ROOT or pass --asset-root to choose the boundary deliberately.\n`,
       );
     }
-    const server = createServer(config.auth, serverOptions);
+    const server = createServer(credential, serverOptions);
     const transport = new StdioServerTransport();
     await server.connect(transport);
     registerShutdownHandlers(async () => {});
   } else {
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
-    await startHttpServer(config.host, config.port, config.auth, serverOptions);
+    await startHttpServer(config.host, config.port, credential, serverOptions);
 
     registerShutdownHandlers(async () => {
       Logger.log("Shutting down server...");
@@ -137,7 +136,8 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
 export async function startHttpServer(
   host: string,
   port: number,
-  baseAuth: FigmaAuthOptions,
+  /** The server's own credential, used when a request brings none. */
+  baseCredential: FigmaCredential | undefined,
   serverOptions: Omit<CreateServerOptions, "transport">,
 ): Promise<Server> {
   if (httpServer) {
@@ -151,7 +151,7 @@ export async function startHttpServer(
     Logger.log("Received StreamableHTTP request");
     const requestKey = getRequestApiKey(req);
     const requestBearerToken = getRequestBearerToken(req);
-    const auth = resolveRequestAuth(baseAuth, requestKey, requestBearerToken);
+    const credential = requestCredential(requestKey, requestBearerToken) ?? baseCredential;
     const requestSecrets = [requestKey, requestBearerToken].filter(
       (secret): secret is string => !!secret,
     );
@@ -160,7 +160,7 @@ export async function startHttpServer(
     // redaction list, so make them available only for this request scope.
     await withRequestSecrets(requestSecrets, async () => {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const mcpServer = createServer(auth, { ...serverOptions, transport: "http" });
+      const mcpServer = createServer(credential, { ...serverOptions, transport: "http" });
       const conn: ActiveConnection = { transport, server: mcpServer };
       activeConnections.add(conn);
       res.on("close", () => {
@@ -217,28 +217,14 @@ export async function startHttpServer(
   });
 }
 
-function resolveRequestAuth(
-  baseAuth: FigmaAuthOptions,
+/** A request's own credential: `X-Figma-Token` wins over `Authorization: Bearer`. */
+function requestCredential(
   requestKey: string | undefined,
   requestBearerToken: string | undefined,
-): FigmaAuthOptions {
-  if (requestKey) {
-    return {
-      figmaApiKey: requestKey,
-      figmaOAuthToken: "",
-      useOAuth: false,
-    };
-  }
-
-  if (requestBearerToken) {
-    return {
-      figmaApiKey: "",
-      figmaOAuthToken: requestBearerToken,
-      useOAuth: true,
-    };
-  }
-
-  return baseAuth;
+): FigmaCredential | undefined {
+  if (requestKey) return { kind: "pat", token: requestKey };
+  if (requestBearerToken) return { kind: "oauth", token: requestBearerToken };
+  return undefined;
 }
 
 function getRequestApiKey(req: Request): string | undefined {

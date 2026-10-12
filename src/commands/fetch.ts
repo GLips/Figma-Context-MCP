@@ -83,17 +83,17 @@ async function run(
     );
   }
   const { fileKey, nodeId, depth } = parsed.data;
-  const auth = prepareRestCommand(flags);
+  const credential = prepareRestCommand(flags);
 
   // Initialize telemetry only after input validation succeeds, so every
   // captured event corresponds to an actual fetch attempt (not a usage error).
   initTelemetry({
     enabled: resolveTelemetryEnabled(flags.noTelemetry),
     immediateFlush: true,
-    redactFromTelemetry: [auth.figmaApiKey, auth.figmaOAuthToken],
+    redactFromTelemetry: [credential.token],
   });
 
-  const mode = authMode(auth);
+  const mode = authMode(credential);
   // The fetch CLI stays yaml-by-default (unlike the MCP server, which defaults
   // to tree): its output is piped into standard tooling (`> out.yaml`, `| jq`),
   // where tree's bespoke indented format isn't parseable. Tree's token-efficiency
@@ -102,7 +102,7 @@ async function run(
     parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 
   const result = await getFigmaData(
-    new FigmaService(staticCredentialSource(auth)),
+    new FigmaService(staticCredentialSource(credential)),
     { fileKey, nodeId, depth },
     outputFormat,
     {

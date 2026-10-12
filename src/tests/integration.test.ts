@@ -21,11 +21,7 @@ describeOrSkip("Figma MCP Server Tests", () => {
     figmaFileKey = process.env.FIGMA_FILE_KEY || "";
 
     server = createServer(
-      {
-        figmaApiKey,
-        figmaOAuthToken: "",
-        useOAuth: false,
-      },
+      { kind: "pat", token: figmaApiKey },
       { transport: "stdio", outputFormat: "yaml" },
     );
 

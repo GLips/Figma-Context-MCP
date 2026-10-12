@@ -60,9 +60,7 @@ describe("download_figma_images", () => {
   });
 
   it("attaches each file's aliases and outcome to that file, whatever order Figma resolves them in", async () => {
-    const service = new FigmaService(
-      staticCredentialSource({ figmaApiKey: "figd_test", figmaOAuthToken: "", useOAuth: false }),
-    );
+    const service = new FigmaService(staticCredentialSource({ kind: "pat", token: "figd_test" }));
 
     // Render nodes and fills interleaved, so input order differs from fetch grouping.
     const result = await downloadFigmaImagesTool.handler(
