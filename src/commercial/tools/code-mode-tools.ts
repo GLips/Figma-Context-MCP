@@ -453,7 +453,9 @@ Returns a PNG image.`,
   // the plugin redialed, a stateless-HTTP request built a server with the write tools disabled and the
   // call came back "Tool figma_execute_code disabled" — a hard MCP error (-32602) with no path
   // forward. A hidden tool has no handler in which to say anything better.
-  if (codeMode) return;
+  // A caller without the plugin grant always sees the tools, so a call meets the loopback refusal
+  // rather than "disabled", and the list reveals nothing of the operator's plugin.
+  if (codeMode || !runtime) return;
   // disable() before the transport connects is a silent flag flip (the SDK skips the list_changed
   // notification when disconnected), so clients never see a flap.
   bindPluginAdvertisement(presence, transport, (expected) => {

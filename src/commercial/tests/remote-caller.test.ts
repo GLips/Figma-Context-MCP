@@ -43,6 +43,7 @@ afterEach(async () => {
   client = undefined;
   if (httpServer) await stopHttpServer();
   httpServer = undefined;
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -94,6 +95,14 @@ describe("a non-loopback bind", () => {
     }
     expect(request).not.toHaveBeenCalled();
     expect(readSavedScript).not.toHaveBeenCalled();
+  });
+
+  it("refuses the plugin tools by name before any plugin has connected, revealing nothing of it", async () => {
+    vi.spyOn(plugin, "pluginPresence").mockReturnValue("absent");
+    const client = await connect("0.0.0.0", { "X-Figma-Token": "caller-token" });
+
+    const reply = await callText(client, "get_screenshot", {});
+    expect(reply.text).toContain("Local writes need a loopback server");
   });
 });
 
