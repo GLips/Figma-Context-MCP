@@ -228,10 +228,12 @@ export async function fetchAndProcessImage(url: string, signal?: AbortSignal): P
  * the bytes land in a cloud-synced Figma document. The reverse channel's EXECUTE_CODE payload gate makes
  * every path attributable to an approved run — defense in depth, not a substitute for containment.
  */
+export type LocalImageReader = (source: string, signal?: AbortSignal) => Promise<string>;
+
 export function createLocalImageReader(
   readContained: ContainedFileReader,
   { uploadsAccepted }: { uploadsAccepted: boolean },
-): (source: string, signal?: AbortSignal) => Promise<string> {
+): LocalImageReader {
   // Only a runtime that holds uploads can send the agent to the upload command; a CLI execute run
   // reads its own --asset-root, which the agent chose on the command line.
   const outOfRootRemedy = uploadsAccepted

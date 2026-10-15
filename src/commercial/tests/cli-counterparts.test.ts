@@ -27,11 +27,12 @@ async function listEveryTool(): Promise<Map<string, string[]>> {
     bridge,
     writeMeter: createTestWriteAccess().writeMeter,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
+    readLocalImage: () => Promise.reject(new Error("no local images in this test")),
     pluginPresence: () => "absent",
     onFirstConnect: () => {},
   };
   const server = createServer(
-    { kind: "pat", token: "test-key" },
+    { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd(), plugin: runtime },
     { transport: "http", extensions: [codeModeExtension(runtime, { codeMode: true })] },
   );
   const client = new Client({ name: "cli-counterparts-test", version: "1.0.0" });

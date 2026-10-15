@@ -468,10 +468,7 @@ it("hands each channel request the credentials of the request that started its r
         { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
         undefined,
         undefined,
-        {
-          figma,
-          uploadHandles: new Set(),
-        },
+        { figma, uploadHandles: new Set(), readLocalImage: null },
       )
       .catch((e) => e),
   );

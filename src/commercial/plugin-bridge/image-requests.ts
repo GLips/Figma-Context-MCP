@@ -85,7 +85,7 @@ export class ImageByteCache {
 export interface ImagesRequestDeps {
   /**
    * The guarded server-side byte source, dispatched by scheme (plugin-bridge/index.ts): https urls
-   * through fetchAndProcessImage (SSRF allowlist, byte caps), local paths through readLocalImage
+   * through fetchAndProcessImage (SSRF allowlist, byte caps), local paths through the run's readLocalImage
    * (asset-root containment), upload handles through the upload store (redeemable only by a run
    * submitted naming them). All return validated, downscaled base64.
    */
@@ -180,21 +180,26 @@ async function mapWithConcurrency<T>(
 }
 
 /**
- * The flcm.image source dispatch: urls through the guarded fetch, paths through the contained read,
+ * The flcm.image source dispatch: urls through the guarded fetch, paths through the run's contained read,
  * upload handles through the store under the run's grant. `uploads` is null for a runtime that takes
  * no uploads (CLI execute), whose store could only ever answer "unknown".
  */
 export function createImageSourceFetcher({
-  readLocalImage,
   uploads,
 }: {
-  readLocalImage: (source: string, signal?: AbortSignal) => Promise<string>;
   uploads: { store: ImageUploadStore; port: () => number | null } | null;
 }): ImagesRequestDeps["fetchImage"] {
   return async (source, run, signal) => {
     const kind = imageSourceKind(source);
     if (kind === "url") return fetchAndProcessImage(source, signal);
-    if (kind === "path") return readLocalImage(source, signal);
+    if (kind === "path") {
+      if (!run.readLocalImage)
+        throw new Error(
+          `flcm.image could not load ${JSON.stringify(source)}: this run may not read local ` +
+            "files. Pass an https url instead",
+        );
+      return run.readLocalImage(source, signal);
+    }
     if (!uploads) {
       throw new Error(
         "flcm.image could not load an upload handle: handles only work on the MCP server that " +

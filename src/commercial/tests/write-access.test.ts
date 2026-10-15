@@ -18,6 +18,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer as createMcpServer } from "~/mcp/index.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import type {
@@ -166,23 +167,17 @@ class MeteredBridge extends PluginBridge {
 
 async function connectTools(writeMeter: WriteMeter) {
   const bridge = new MeteredBridge();
+  const runtime: PluginBridgeRuntime = {
+    bridge,
+    writeMeter,
+    readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
+    readLocalImage: () => Promise.reject(new Error("no local images in this test")),
+    pluginPresence: () => "connected",
+    onFirstConnect: () => {},
+  };
   const server = createMcpServer(
-    { kind: "pat", token: "test" },
-    {
-      transport: "stdio",
-      extensions: [
-        codeModeExtension(
-          {
-            bridge,
-            writeMeter,
-            readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-            pluginPresence: () => "connected",
-            onFirstConnect: () => {},
-          },
-          { codeMode: false },
-        ),
-      ],
-    },
+    { credential: { kind: "pat", token: "test" }, imageDir: process.cwd(), plugin: runtime },
+    { transport: "stdio", extensions: [codeModeExtension(runtime, { codeMode: false })] },
   );
   const client = new Client({ name: "write-access-test", version: "1" });
   const [c, s] = InMemoryTransport.createLinkedPair();

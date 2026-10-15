@@ -28,10 +28,14 @@ import {
   type GetFigmaDataParams,
 } from "./tools/index.js";
 
-/** Where download_figma_images puts images, or that it isn't offered at all. */
+/**
+ * Where download_figma_images puts images. `none` doesn't offer it; `refused` offers it only to
+ * explain, when called, that this caller may not write to the server's disk.
+ */
 export type ImageOutput =
   | { kind: "none" }
-  | { kind: "disk"; imageDir?: string }
+  | { kind: "refused" }
+  | { kind: "disk"; imageDir: string }
   | { kind: "destination"; destination: ImageDestination; retentionDays: number };
 
 /**
@@ -155,6 +159,21 @@ export function registerReadTools(
               onReject: call.reject,
             }),
           ),
+      },
+      observe,
+    );
+  } else if (images.kind === "refused") {
+    registerFramelinkTool(
+      server,
+      {
+        name: downloadFigmaImagesTool.name,
+        title: "Download Figma Images",
+        description: downloadFigmaImagesTool.refusedDescription,
+        inputSchema: {},
+        unknownParams: "strip",
+        annotations: READ_ANNOTATIONS,
+        handler: async (_params: object, _call: FramelinkToolCall<DownloadImagesOutcome>) =>
+          downloadFigmaImagesTool.refusedReply(),
       },
       observe,
     );

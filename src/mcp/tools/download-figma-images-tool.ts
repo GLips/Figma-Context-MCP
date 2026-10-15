@@ -198,7 +198,7 @@ async function downloadFigmaImages(
     onReject,
     ...options
   }: DownloadHandlerOptions & {
-    imageDir: string | undefined;
+    imageDir: string;
     onReject: (rejection: LocalPathRejection) => void;
   },
 ): Promise<TextToolResult> {
@@ -209,13 +209,12 @@ async function downloadFigmaImages(
     // accepts relative paths and absolute paths that fall under imageDir; it
     // rejects absolute paths pointing elsewhere (which would silently miswrite
     // under the previous join-based logic). See utils/local-path.ts.
-    const baseDir = imageDir ?? process.cwd();
-    const resolution = resolveLocalPath(localPath, baseDir);
+    const resolution = resolveLocalPath(localPath, imageDir);
     if (!resolution.ok) {
       // Path-traversal rejection happens after schema validation, so the SDK's
       // validation hook never sees it. Report it here as a validation reject so we
       // can track how often LLMs trip over the localPath contract.
-      const details = rejectionDetails(resolution.reason, localPath, baseDir);
+      const details = rejectionDetails(resolution.reason, localPath, imageDir);
       onReject({ field: "localPath", rule: details.rule, detail: details.detail });
       return {
         isError: true,
@@ -267,9 +266,18 @@ async function downloadFigmaImagesToDestination(
   }
 }
 
-function getDescription(imageDir?: string) {
-  const baseDir = imageDir ?? process.cwd();
-  return `Save a Figma file's images to disk: image fills (PNG or GIF), icons and vectors (SVG), or any node rendered as PNG. Copy nodeId, imageRef, gifRef and the crop fields from get_figma_data output. Files are saved under the server's image directory: ${baseDir}`;
+function getDescription(imageDir: string) {
+  return `Save a Figma file's images to disk: image fills (PNG or GIF), icons and vectors (SVG), or any node rendered as PNG. Copy nodeId, imageRef, gifRef and the crop fields from get_figma_data output. Files are saved under the server's image directory: ${imageDir}`;
+}
+
+// Writing images means writing to the server's own disk, which belongs to the operator alone.
+const REFUSED_TEXT =
+  "download_figma_images is unavailable to remote callers: it writes to the server's own disk, " +
+  "which only a server listening on a loopback address grants, to the person running it. To " +
+  "save images into your project, run Framelink on your own machine.";
+
+function refusedReply(): TextToolResult {
+  return { isError: true, content: [{ type: "text", text: REFUSED_TEXT }] };
 }
 
 /**
@@ -327,6 +335,8 @@ function rejectionDetails(
 export const downloadFigmaImagesTool = {
   name: "download_figma_images",
   getDescription,
+  refusedDescription: REFUSED_TEXT,
+  refusedReply,
   parametersSchema,
   handler: downloadFigmaImages,
 } as const;

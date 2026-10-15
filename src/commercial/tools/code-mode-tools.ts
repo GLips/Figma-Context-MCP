@@ -16,6 +16,7 @@ import { z } from "zod";
 import {
   bindPluginAdvertisement,
   type PluginBridgeRuntime,
+  type PluginPresenceSource,
 } from "~/commercial/plugin-bridge/index.js";
 import { APPROVAL_WAIT_MS, ApprovalWaitError } from "~/commercial/plugin-bridge/await-approval.js";
 import {
@@ -28,7 +29,7 @@ import {
 } from "~/commercial/plugin-bridge/execution.js";
 import { BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import type { ApprovedSession } from "~/commercial/plugin-bridge/approval-session.js";
-import type { ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
+import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
 import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
 import { retryableToolReply } from "~/mcp/fail-loud-params.js";
@@ -52,22 +53,42 @@ import { formatExecuteCodeReply } from "./token-tree.js";
 // get_flcm_reference.
 const EXECUTE_CODE_DESCRIPTION = buildQuickStart(MCP_DOCS_CHANNEL);
 
+/** The caller context the write path reads: the read grants plus the operator's plugin. */
+export interface CodeModeCallerContext extends CallerContext {
+  /**
+   * The operator's plugin relay, with the asset root it reads scripts and images under. Null
+   * refuses figma_execute_code and get_screenshot when called.
+   */
+  plugin: PluginBridgeRuntime | null;
+}
+
+// A permanent boundary, not a missing feature: the plugin, its approvals and the asset root are the
+// operator's, and a remote caller is by definition someone else. Shared writes are the hosted service's.
+const LOCAL_WRITES_NEED_LOOPBACK =
+  "Local writes need a loopback server. This server listens on a network address, so it gives " +
+  "remote callers none of its operator's plugin, files or Figma token, and this call did not run. " +
+  "To edit Figma, run Framelink on the machine where Figma is open, bound to 127.0.0.1 (the default).";
+
 /**
  * The commercial write path as an extension of the MIT read server: the code-mode tools, plus the
- * plugin route get_figma_data's description and failures point at.
+ * plugin route get_figma_data's description and failures point at. `presence` only decides what is
+ * advertised; every use of the plugin goes through the caller's own grant.
  */
 export function codeModeExtension(
-  runtime: PluginBridgeRuntime,
+  presence: PluginPresenceSource,
   { codeMode }: { codeMode: boolean },
-): ServerExtension {
+): ServerExtension<CodeModeCallerContext> {
   return {
-    describeReadRecovery: (error, request) => describePluginReadRecovery(runtime, error, request),
+    describeReadRecovery: ({ plugin }) =>
+      plugin && ((error, request) => describePluginReadRecovery(plugin, error, request)),
     register(server, context) {
-      advertisePluginReadRoute(context.getFigmaData, runtime, {
-        baseDescription: getFigmaDataTool.description,
-        transport: context.transport,
-      });
-      registerCodeModeTools(server, runtime, { ...context, codeMode });
+      // A remote caller can't use the plugin, so get_figma_data mustn't point it there.
+      if (context.caller.plugin)
+        advertisePluginReadRoute(context.getFigmaData, presence, {
+          baseDescription: getFigmaDataTool.description,
+          transport: context.transport,
+        });
+      registerCodeModeTools(server, presence, { ...context, codeMode });
     },
   };
 }
@@ -122,8 +143,8 @@ async function answeringExpectedFailures(
 }
 
 type CodeModeToolsOptions = Pick<
-  ServerExtensionContext,
-  "figmaService" | "transport" | "observe"
+  ServerExtensionContext<CodeModeCallerContext>,
+  "caller" | "figmaService" | "transport" | "observe"
 > & {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
   codeMode: boolean;
@@ -142,18 +163,18 @@ type CodeModeToolsOptions = Pick<
  */
 function registerCodeModeTools(
   server: McpServer,
-  runtime: PluginBridgeRuntime,
-  { codeMode, transport, figmaService, observe }: CodeModeToolsOptions,
+  presence: PluginPresenceSource,
+  { codeMode, transport, caller, figmaService, observe }: CodeModeToolsOptions,
 ): void {
-  const { bridge } = runtime;
+  const runtime = caller.plugin;
 
   /** A pre-submission outage uses bounded reconnect guidance; in-flight errors come from the bridge. */
-  function pluginUnavailableReply(): CallToolResult | null {
+  function pluginUnavailableReply({ bridge }: PluginBridgeRuntime): CallToolResult | null {
     if (bridge.isPluginConnected()) return null;
     return retryableToolReply(pluginDisconnectedNotSubmittedText(bridge.disconnectedDurationMs()));
   }
 
-  function approvalOptions(extra: ToolExtra) {
+  function approvalOptions({ bridge }: PluginBridgeRuntime, extra: ToolExtra) {
     return {
       signal: extra.signal,
       onWaiting: () =>
@@ -173,7 +194,9 @@ function registerCodeModeTools(
   }
 
   /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
-  function pendingApprovalResult(): { content: { type: "text"; text: string }[] } {
+  function pendingApprovalResult({ bridge }: PluginBridgeRuntime): {
+    content: { type: "text"; text: string }[];
+  } {
     return {
       content: [
         {
@@ -219,6 +242,11 @@ function registerCodeModeTools(
           extra: ToolExtra,
         ) => {
           const source = { script_source: code === undefined ? "script_path" : "code" };
+          // Before scriptPath is read: the asset root is part of the grant.
+          if (!runtime) {
+            call.record({ ...source, outcome: "refused", failure: "remote_caller" });
+            return localWritesRefusal();
+          }
           call.record({ ...source, outcome: "not_run" });
           if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
           let script: string;
@@ -244,19 +272,22 @@ function registerCodeModeTools(
               );
             }
           } else return scriptSourceReply("neither");
-          const unavailable = pluginUnavailableReply();
+          const unavailable = pluginUnavailableReply(runtime);
           if (unavailable) return unavailable;
           return answeringExpectedFailures(call, extra, source, async () => {
-            const outcome = await executePluginCode(runtime, script, approvalOptions(extra), {
-              figma: figmaService,
-            });
+            const outcome = await executePluginCode(
+              runtime,
+              script,
+              approvalOptions(runtime, extra),
+              { figma: figmaService },
+            );
             if (outcome.kind === "refused") {
               call.record({ ...source, outcome: "refused", failure: outcome.refusal.reason });
               return { content: [{ type: "text", text: outcome.message }], isError: true };
             }
             if (outcome.kind === "pending") {
               call.record({ ...source, outcome: "pending_approval" });
-              return pendingApprovalResult();
+              return pendingApprovalResult(runtime);
             }
             call.record({
               ...source,
@@ -304,12 +335,15 @@ function registerCodeModeTools(
         ) => {
           call.record({ section_count: sections?.length ?? 0 });
           // Docs still serve on a stale plugin — but lead with the refusal text so the agent learns
-          // the re-import fix here, before its first (refused) write.
-          const note = await referenceSessionGuidance({
-            pairingCode: bridge.getPairingCode(),
-            protocolRefusal: bridge.protocolRefusal(),
-            status: (signal) => bridge.approvalStatus(signal),
-          });
+          // the re-import fix here, before its first (refused) write. The session itself is the
+          // operator's: a caller without the plugin grant learns nothing of it.
+          const note =
+            runtime &&
+            (await referenceSessionGuidance({
+              pairingCode: runtime.bridge.getPairingCode(),
+              protocolRefusal: runtime.bridge.protocolRefusal(),
+              status: (signal) => runtime.bridge.approvalStatus(signal),
+            }));
           return {
             content: [
               ...(note ? [{ type: "text" as const, text: note }] : []),
@@ -372,6 +406,10 @@ Returns a PNG image.`,
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
+          if (!runtime) {
+            call.record({ outcome: "refused", failure: "remote_caller" });
+            return localWritesRefusal();
+          }
           call.record({ outcome: "not_run" });
           // Known params are type-checked by the SDK; their value-level misuse is checked here, in
           // the same retryable shape as an unknown param, so the agent fixes the call and retries.
@@ -382,13 +420,17 @@ Returns a PNG image.`,
               `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
             );
           }
-          const unavailable = pluginUnavailableReply();
+          const unavailable = pluginUnavailableReply(runtime);
           if (unavailable) return unavailable;
           return answeringExpectedFailures(call, extra, {}, async () => {
-            const outcome = await capturePluginScreenshot(bridge, target, approvalOptions(extra));
+            const outcome = await capturePluginScreenshot(
+              runtime.bridge,
+              target,
+              approvalOptions(runtime, extra),
+            );
             if (outcome.kind === "pending") {
               call.record({ outcome: "pending_approval" });
-              return pendingApprovalResult();
+              return pendingApprovalResult(runtime);
             }
             const reply = outcome.reply;
             const failed = "errors" in reply;
@@ -414,12 +456,16 @@ Returns a PNG image.`,
   if (codeMode) return;
   // disable() before the transport connects is a silent flag flip (the SDK skips the list_changed
   // notification when disconnected), so clients never see a flap.
-  bindPluginAdvertisement(runtime, transport, (expected) => {
+  bindPluginAdvertisement(presence, transport, (expected) => {
     for (const tool of tools) {
       if (expected) tool.enable();
       else tool.disable();
     }
   });
+}
+
+function localWritesRefusal(): CallToolResult {
+  return { isError: true, content: [{ type: "text", text: LOCAL_WRITES_NEED_LOOPBACK }] };
 }
 
 /** Leaves an ordinary path bare so the suggested command reads cleanly; quotes anything a shell would split. */

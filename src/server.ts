@@ -12,7 +12,10 @@ import {
 import { installFigmaProxyDispatcher } from "./utils/figma-proxy-dispatcher.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
-import { codeModeExtension } from "./commercial/tools/code-mode-tools.js";
+import {
+  codeModeExtension,
+  type CodeModeCallerContext,
+} from "./commercial/tools/code-mode-tools.js";
 import { requireGlobalCredential, type ServerConfig } from "./config.js";
 import type { FigmaCredential } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -66,12 +69,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
     acceptUploads: true,
   });
 
-  const serverOptions: CreateServerOptions = {
+  const serverOptions: CreateServerOptions<CodeModeCallerContext> = {
     transport: config.isStdioMode ? "stdio" : "http",
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
-    imageDir: config.imageDir,
     extensions: [codeModeExtension(pluginBridge, { codeMode: config.codeMode })],
+  };
+  // Everything this machine's operator may spend. Only a caller proven to be the operator gets it.
+  const operator: CodeModeCallerContext = {
+    credential,
+    imageDir: config.imageDir,
+    plugin: pluginBridge,
   };
 
   if (config.isStdioMode) {
@@ -96,13 +104,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
           `MCP clients often launch the server outside your project root — set FRAMELINK_ASSET_ROOT or pass --asset-root to choose the boundary deliberately.\n`,
       );
     }
-    const server = createServer(credential, serverOptions);
+    // A stdio client is a child process of the operator's own MCP client: the operator by definition.
+    const server = createServer(operator, serverOptions);
     const transport = new StdioServerTransport();
     await server.connect(transport);
     registerShutdownHandlers(async () => {});
   } else {
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
-    await startHttpServer(config.host, config.port, credential, serverOptions);
+    await startHttpServer(config.host, config.port, operator, serverOptions);
 
     registerShutdownHandlers(async () => {
       Logger.log("Shutting down server...");
@@ -142,9 +151,9 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
 export async function startHttpServer(
   host: string,
   port: number,
-  /** The server's own credential, used when a request brings none. */
-  baseCredential: FigmaCredential | undefined,
-  serverOptions: Omit<CreateServerOptions, "transport">,
+  /** What the operator may spend: granted whole to every caller of a loopback bind, to none otherwise. */
+  operator: CodeModeCallerContext,
+  serverOptions: Omit<CreateServerOptions<CodeModeCallerContext>, "transport">,
 ): Promise<Server> {
   if (httpServer || httpServerStarting) {
     throw new Error("HTTP server is already running");
@@ -166,7 +175,10 @@ export async function startHttpServer(
   };
   if (!loopback) {
     Logger.log(
-      `Warning: listening on ${host}, so the Host header isn't checked against DNS rebinding. Anything that can reach this address can use the server.`,
+      `Listening on ${host}, a network address: each request must bring its own Figma token, ` +
+        `and download_figma_images and the Figma plugin tools are refused. The Host header isn't ` +
+        `checked against DNS rebinding, so anything that can reach this address can read Figma ` +
+        `with its own token.`,
     );
   }
 
@@ -177,7 +189,24 @@ export async function startHttpServer(
     Logger.log("Received StreamableHTTP request");
     const requestKey = getRequestApiKey(req);
     const requestBearerToken = getRequestBearerToken(req);
-    const credential = requestCredential(requestKey, requestBearerToken) ?? baseCredential;
+    const caller = requestCallerContext(
+      loopback,
+      operator,
+      requestCredential(requestKey, requestBearerToken),
+    );
+    if (!caller) {
+      res.status(401).json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32000,
+          message:
+            `This server listens on a network address, so every request must bring its own Figma ` +
+            `token: send X-Figma-Token: <personal access token> or Authorization: Bearer <OAuth token>.`,
+        },
+        id: null,
+      });
+      return;
+    }
     const requestSecrets = [requestKey, requestBearerToken].filter(
       (secret): secret is string => !!secret,
     );
@@ -186,7 +215,7 @@ export async function startHttpServer(
     // redaction list, so make them available only for this request scope.
     await withRequestSecrets(requestSecrets, async () => {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const mcpServer = createServer(credential, { ...serverOptions, transport: "http" });
+      const mcpServer = createServer(caller, { ...serverOptions, transport: "http" });
       const conn: ActiveConnection = { transport, server: mcpServer };
       activeConnections.add(conn);
       res.on("close", () => {
@@ -236,6 +265,21 @@ export async function startHttpServer(
   Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
   Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/sse (backward compat)`);
   return httpServer;
+}
+
+/**
+ * One HTTP request's caller context, or null to refuse it. A loopback bind is reachable only from
+ * this machine, so its caller is the operator, who may still send a token to override their own. Any
+ * other bind can be reached by anyone, so a caller gets only what it brought: its own token.
+ */
+function requestCallerContext(
+  loopback: boolean,
+  operator: CodeModeCallerContext,
+  credential: FigmaCredential | undefined,
+): CodeModeCallerContext | null {
+  if (loopback) return { ...operator, credential: credential ?? operator.credential };
+  if (!credential) return null;
+  return { credential, imageDir: null, plugin: null };
 }
 
 /** A request's own credential: `X-Figma-Token` wins over `Authorization: Bearer`. */

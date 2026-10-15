@@ -19,6 +19,7 @@ import {
   type ServerRequestType,
 } from "@framelink/plugin/protocol";
 import type { FigmaService } from "~/services/figma.js";
+import type { LocalImageReader } from "./images.js";
 
 /**
  * Server-owned facts about the run a channel request serves, fixed when the run was submitted and
@@ -30,9 +31,15 @@ export interface ChannelRunContext {
   figma: FigmaService | null;
   /** Upload handles the submitted code names literally — the only ones this run may redeem. */
   uploadHandles: ReadonlySet<string>;
+  /** flcm.image's read of the operator's asset root. Null: this run may read no local file. */
+  readLocalImage: LocalImageReader | null;
 }
 
-export const NO_RUN_CONTEXT: ChannelRunContext = { figma: null, uploadHandles: new Set() };
+export const NO_RUN_CONTEXT: ChannelRunContext = {
+  figma: null,
+  uploadHandles: new Set(),
+  readLocalImage: null,
+};
 
 export type RequestPhase = "submitted" | RunPhase;
 

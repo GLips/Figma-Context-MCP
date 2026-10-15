@@ -90,6 +90,10 @@ Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink MCP for Figma, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
+## Serving on a network address
+
+By default the HTTP server binds `127.0.0.1`, so every caller is you: it gets the server's Figma token, `download_figma_images` writing to its disk, and the Figma plugin. Bound to any other host (`--host 0.0.0.0`), the server can be reached by other people, so it gives them none of that. Each request must bring its own Figma token (`X-Figma-Token` or `Authorization: Bearer`) and is refused without one. `download_figma_images`, `figma_execute_code` and `get_screenshot` are refused, even while a plugin is connected. This is a permanent boundary: editing Figma needs a server on the machine where Figma is open.
+
 ## Run a saved Figma script
 
 Save JavaScript as an async function body in a `.js` file. The plugin provides `figma` and the current `flcm` runtime; use `await` and `return` directly rather than module imports or exports. `execute --help` ends with the `flcm` quick-start, and `figma-developer-mcp reference <section...>` prints the full authoring reference.

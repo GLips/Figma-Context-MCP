@@ -61,7 +61,12 @@ describe("HTTP header Figma API key authentication", () => {
     headers?: Record<string, string>,
     baseAuth: FigmaCredential | undefined = undefined,
   ) {
-    httpServer = await startHttpServer("127.0.0.1", 0, baseAuth, {});
+    httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: baseAuth, imageDir: null, plugin: null },
+      {},
+    );
     const port = (httpServer.address() as AddressInfo).port;
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
       requestInit: headers ? { headers } : undefined,

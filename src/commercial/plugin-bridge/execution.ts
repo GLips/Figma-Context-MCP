@@ -30,14 +30,22 @@ export type ExecutionOutcome =
 
 /** Shared MCP/CLI submission and accounting boundary. Approval polls never submit code. */
 export async function executePluginCode(
-  { bridge, writeMeter }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter">,
+  {
+    bridge,
+    writeMeter,
+    readLocalImage,
+  }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
   code: string,
   options?: ApprovalOptions,
   { figma }: Pick<ChannelRunContext, "figma"> = { figma: null },
 ): Promise<ExecutionOutcome> {
   // The upload grant comes from the code as submitted here, by the trusted caller — never from the
   // plugin, which executes the code and so could otherwise name any handle it has seen.
-  const runContext: ChannelRunContext = { figma, uploadHandles: uploadHandlesNamedIn(code) };
+  const runContext: ChannelRunContext = {
+    figma,
+    uploadHandles: uploadHandlesNamedIn(code),
+    readLocalImage,
+  };
   const executionId = randomUUID();
   // The charge decided under the admitting session, held in an object because TS can't see the
   // closure assign it. The session itself comes back from the wait.

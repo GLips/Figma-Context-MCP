@@ -15,6 +15,7 @@ import type {
   ServerRequest,
 } from "@framelink/plugin/protocol";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
 import { createTestWriteAccess, TEST_APPROVED_SESSION } from "./fixtures/write-access.js";
 
@@ -61,23 +62,17 @@ const flush = async () => {
 };
 async function setup() {
   const bridge = new Bridge();
+  const runtime: PluginBridgeRuntime = {
+    bridge,
+    writeMeter: createTestWriteAccess().writeMeter,
+    readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
+    readLocalImage: () => Promise.reject(new Error("no local images in this test")),
+    pluginPresence: () => "connected",
+    onFirstConnect: () => {},
+  };
   const server = createServer(
-    { kind: "pat", token: "test" },
-    {
-      transport: "stdio",
-      extensions: [
-        codeModeExtension(
-          {
-            bridge,
-            writeMeter: createTestWriteAccess().writeMeter,
-            readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-            pluginPresence: () => "connected",
-            onFirstConnect: () => {},
-          },
-          { codeMode: false },
-        ),
-      ],
-    },
+    { credential: { kind: "pat", token: "test" }, imageDir: process.cwd(), plugin: runtime },
+    { transport: "stdio", extensions: [codeModeExtension(runtime, { codeMode: false })] },
   );
   const client = new Client({ name: "approval-test", version: "1" });
   const [c, s] = InMemoryTransport.createLinkedPair();

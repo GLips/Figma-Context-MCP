@@ -92,7 +92,6 @@ const capabilityHeaders = () => ({
  */
 async function fetchDuringRun(code: string, source: string): Promise<string> {
   const fetchImage = createImageSourceFetcher({
-    readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
     uploads: { store, port: () => endpoint.port },
   });
   let fetched: Promise<string> | undefined;
@@ -116,7 +115,14 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
   } as unknown as PluginBridge;
-  await executePluginCode({ bridge, writeMeter: createTestWriteAccess().writeMeter }, code);
+  await executePluginCode(
+    {
+      bridge,
+      writeMeter: createTestWriteAccess().writeMeter,
+      readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
+    },
+    code,
+  );
   return fetched!;
 }
 

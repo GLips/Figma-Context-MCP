@@ -83,7 +83,12 @@ describe("per-request telemetry redaction", () => {
   });
 
   it("scrubs a per-request X-Figma-Token from everything sent to PostHog", async () => {
-    httpServer = await startHttpServer("127.0.0.1", 0, undefined, {});
+    httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: undefined, imageDir: null, plugin: null },
+      {},
+    );
     const port = (httpServer.address() as AddressInfo).port;
 
     client = new Client({ name: "redaction-test", version: "1.0.0" });

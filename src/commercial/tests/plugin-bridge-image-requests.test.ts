@@ -13,7 +13,7 @@ import {
   MAX_IMAGES_PER_REQUEST,
 } from "~/commercial/plugin-bridge/image-requests.js";
 
-const RUN = { figma: null, uploadHandles: new Set<string>() };
+const RUN = { figma: null, uploadHandles: new Set<string>(), readLocalImage: null };
 
 test("cache: a repeated url is served without a second fetch", async () => {
   // Real https urls — only remote sources are cached (a bare string classifies as a local path).

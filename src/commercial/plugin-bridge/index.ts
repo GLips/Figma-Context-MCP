@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
-import { createLocalImageReader } from "./images.js";
+import { createLocalImageReader, type LocalImageReader } from "./images.js";
 import { ImageUploadStore } from "./image-intake.js";
 import { startUploadEndpoint, type UploadEndpoint } from "./upload-endpoint.js";
 import { createContainedFileReader } from "./contained-file.js";
@@ -53,10 +53,15 @@ export interface PluginBridgeRuntime {
   writeMeter: WriteMeter;
   /** Read figma_execute_code's scriptPath, contained under the asset root. */
   readSavedScript(scriptPath: string): Promise<string>;
+  /** Read flcm.image's local paths, contained under the asset root; granted to each run it submits. */
+  readLocalImage: LocalImageReader;
   pluginPresence(): PluginPresence;
   /** Run cb on the first plugin connection; runs immediately if one already happened. */
   onFirstConnect(cb: () => void): void;
 }
+
+/** What advertising needs of the runtime: whether a plugin is around, never a way to use it. */
+export type PluginPresenceSource = Pick<PluginBridgeRuntime, "pluginPresence" | "onFirstConnect">;
 
 /**
  * Advertise what depends on a plugin according to its presence: now, and — on stdio, whose one server
@@ -65,7 +70,7 @@ export interface PluginBridgeRuntime {
  * dead closures until first connect.
  */
 export function bindPluginAdvertisement(
-  runtime: PluginBridgeRuntime,
+  runtime: PluginPresenceSource,
   transport: "stdio" | "http",
   advertise: (pluginExpected: boolean) => void,
 ): void {
@@ -95,7 +100,8 @@ export function startPluginBridge({
 }): PluginBridgeRuntime {
   // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
   // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
-  // paths through the asset-root-contained file read (uncached — see image-requests.ts).
+  // paths through the run's grant of the asset-root-contained file read (uncached — see
+  // image-requests.ts).
   // One contained reader per process, shared by flcm.image paths and saved scripts: it pins the
   // canonical asset root on first use, so the authorization boundary can't shift under a retargeted
   // root symlink mid-session.
@@ -137,7 +143,6 @@ export function startPluginBridge({
         "images.fetch",
         createImagesCapability({
           fetchImage: createImageSourceFetcher({
-            readLocalImage,
             uploads: acceptUploads
               ? { store: uploads, port: () => uploadEndpoint?.port ?? null }
               : null,
@@ -192,6 +197,7 @@ export function startPluginBridge({
     bridge,
     writeMeter,
     readSavedScript: createSavedScriptReader(readContained),
+    readLocalImage,
     stop: () => {
       stopped = true;
       uploadEndpoint?.stop();

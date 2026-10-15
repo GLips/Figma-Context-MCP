@@ -5,7 +5,7 @@
 import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   bindPluginAdvertisement,
-  type PluginBridgeRuntime,
+  type PluginPresenceSource,
 } from "~/commercial/plugin-bridge/index.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
 
@@ -32,7 +32,7 @@ function describeGetFigmaDataForPlugin(baseDescription: string, paired: boolean)
  */
 export function advertisePluginReadRoute(
   tool: RegisteredTool,
-  runtime: PluginBridgeRuntime,
+  runtime: PluginPresenceSource,
   { baseDescription, transport }: { baseDescription: string; transport: "stdio" | "http" },
 ): void {
   bindPluginAdvertisement(runtime, transport, (paired) =>
@@ -70,7 +70,7 @@ function pluginReadSnippet(nodeId: string | undefined): string {
  * never seen (install it).
  */
 export function describePluginReadRecovery(
-  runtime: PluginBridgeRuntime,
+  runtime: PluginPresenceSource,
   error: unknown,
   { nodeId }: { nodeId?: string },
 ): string | null {

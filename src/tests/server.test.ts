@@ -12,7 +12,12 @@ describe("StreamableHTTP transport", () => {
   let port: number;
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    const httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: dummyAuth, imageDir: null, plugin: null },
+      {},
+    );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -80,7 +85,12 @@ describe("Method not allowed", () => {
   let port: number;
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    const httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: dummyAuth, imageDir: null, plugin: null },
+      {},
+    );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -118,7 +128,12 @@ describe("Browser requests", () => {
   const listTools = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 });
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    const httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: dummyAuth, imageDir: null, plugin: null },
+      {},
+    );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -185,7 +200,12 @@ describe("Multi-client test", () => {
   let port: number;
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    const httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: dummyAuth, imageDir: null, plugin: null },
+      {},
+    );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -217,7 +237,12 @@ describe("Multi-client test", () => {
 
 describe("Server lifecycle", () => {
   it("starts and listens on assigned port", async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    const httpServer = await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: dummyAuth, imageDir: null, plugin: null },
+      {},
+    );
     const port = (httpServer.address() as AddressInfo).port;
 
     expect(port).toBeGreaterThan(0);
@@ -226,7 +251,12 @@ describe("Server lifecycle", () => {
   }, 15_000);
 
   it("stopHttpServer shuts down cleanly without hanging", async () => {
-    await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    await startHttpServer(
+      "127.0.0.1",
+      0,
+      { credential: dummyAuth, imageDir: null, plugin: null },
+      {},
+    );
 
     const timeout = new Promise<"timeout">((resolve) =>
       setTimeout(() => resolve("timeout"), 5_000).unref(),

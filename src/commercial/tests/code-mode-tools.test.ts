@@ -29,11 +29,12 @@ function listToolsWith(presence: PluginPresence) {
     bridge,
     writeMeter: createTestWriteAccess().writeMeter,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
+    readLocalImage: () => Promise.reject(new Error("no local images in this test")),
     pluginPresence: () => presence,
     onFirstConnect: () => {},
   };
   const server = createServer(
-    { kind: "pat", token: "test-key" },
+    { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd(), plugin: runtime },
     { transport: "http", extensions: [codeModeExtension(runtime, { codeMode: false })] },
   );
   const client = new Client({ name: "code-mode-test-client", version: "1.0.0" });
