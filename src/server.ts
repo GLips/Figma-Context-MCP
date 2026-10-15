@@ -20,6 +20,8 @@ import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as telemetry from "./telemetry/index.js";
 
 let httpServer: Server | null = null;
+// Set across the bind's await, so a second start can't slip past the running check meanwhile.
+let httpServerStarting = false;
 
 type ActiveConnection = {
   transport: StreamableHTTPServerTransport;
@@ -144,7 +146,7 @@ export async function startHttpServer(
   baseCredential: FigmaCredential | undefined,
   serverOptions: Omit<CreateServerOptions, "transport">,
 ): Promise<Server> {
-  if (httpServer) {
+  if (httpServer || httpServerStarting) {
     throw new Error("HTTP server is already running");
   }
   enableLogging({ http: true });
@@ -224,12 +226,16 @@ export async function startHttpServer(
     }
   });
 
-  const server = await listenLocalHttpServer(policy, app, { port, host });
-  httpServer = server;
+  httpServerStarting = true;
+  try {
+    httpServer = await listenLocalHttpServer(policy, app, { port, host });
+  } finally {
+    httpServerStarting = false;
+  }
   Logger.log(`HTTP server listening on port ${port}`);
   Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
   Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/sse (backward compat)`);
-  return server;
+  return httpServer;
 }
 
 /** A request's own credential: `X-Figma-Token` wins over `Authorization: Bearer`. */

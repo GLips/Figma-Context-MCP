@@ -4,7 +4,7 @@
 // rules out before the listener's own handler ever sees the request.
 //
 // Every listener is created AND bound here — nothing else calls `createServer`, `new WebSocketServer`
-// or `.listen(` — so `src/tests/local-listener.test.ts` can fail on a listener opened anywhere else.
+// or `.listen(` — so the lint bans in eslint.config.js can fail on a listener opened anywhere else.
 import {
   createServer,
   type IncomingHttpHeaders,
