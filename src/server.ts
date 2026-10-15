@@ -1,10 +1,14 @@
-import { type NextFunction, type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { Server } from "http";
+import type { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { enableLogging, Logger } from "./utils/logger.js";
 import { withRequestSecrets } from "./utils/request-secrets.js";
+import {
+  listenLocalHttpServer,
+  isLoopbackBindHost,
+  type LocalListenerPolicy,
+} from "./utils/local-listener.js";
 import { installFigmaProxyDispatcher } from "./utils/figma-proxy-dispatcher.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
@@ -145,7 +149,27 @@ export async function startHttpServer(
   }
   enableLogging({ http: true });
 
-  const app = createMcpExpressApp({ host });
+  // No supported MCP client runs in a browser, so any Origin — `null` included — is a web page trying
+  // to drive the tools. The exact media type closes the CORS-safelisted `text/plain` route around it.
+  const loopback = isLoopbackBindHost(host);
+  const policy: LocalListenerPolicy = {
+    browsers: "refuse",
+    checkHost: loopback,
+    postMediaType: "application/json",
+    refusalBody: (message) => ({
+      jsonrpc: "2.0",
+      error: { code: -32000, message },
+      id: null,
+    }),
+  };
+  if (!loopback) {
+    Logger.log(
+      `Warning: listening on ${host}, so the Host header isn't checked against DNS rebinding. Anything that can reach this address can use the server.`,
+    );
+  }
+
+  const app = express();
+  app.use(express.json());
 
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
@@ -200,21 +224,12 @@ export async function startHttpServer(
     }
   });
 
-  return new Promise((resolve, reject) => {
-    const server = app.listen(port, host, () => {
-      Logger.log(`HTTP server listening on port ${port}`);
-      Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
-      Logger.log(
-        `StreamableHTTP endpoint available at http://${host}:${port}/sse (backward compat)`,
-      );
-      resolve(server);
-    });
-    server.once("error", (err) => {
-      httpServer = null;
-      reject(err);
-    });
-    httpServer = server;
-  });
+  const server = await listenLocalHttpServer(policy, app, { port, host });
+  httpServer = server;
+  Logger.log(`HTTP server listening on port ${port}`);
+  Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
+  Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/sse (backward compat)`);
+  return server;
 }
 
 /** A request's own credential: `X-Figma-Token` wins over `Authorization: Bearer`. */

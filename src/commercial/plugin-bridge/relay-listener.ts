@@ -3,8 +3,9 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import type { AddressInfo } from "node:net";
-import { WebSocketServer, type WebSocket } from "ws";
+import type { WebSocket, WebSocketServer } from "ws";
 import { Logger } from "~/utils/logger.js";
+import { createLocalWebSocketServer, type LocalListenerPolicy } from "~/utils/local-listener.js";
 
 // Match the WS inbound ceiling, including the envelope. Image-specific caps remain in its adapter.
 export const MAX_CHANNEL_BYTES = 100 * 1024 * 1024;
@@ -27,22 +28,15 @@ export const RECLAIM_WINDOW_MS = 2_000;
 const RECLAIM_RETRY_MS = 100;
 
 /**
- * Gate connections by `Origin`. A Figma plugin UI runs in a sandboxed iframe, so its WebSocket
- * handshake carries `Origin: null` (or no Origin header for non-browser clients). We accept ONLY that
- * and refuse everything else — any real `http(s)://…` origin is a script running on an identifiable
- * web page, which must not reach the eval socket. A real `figma.com` origin is included in that
- * refusal on purpose: it comes from a non-sandboxed script on a figma.com *page*, exactly the
- * browser-page category we shut out — the plugin itself never presents it.
- *
- * Deliberately WEAK, by design — this is defense-in-depth, NOT authorization:
- *  - A determined web page CAN still present `Origin: null` by nesting its WebSocket in its own
- *    `sandbox="allow-scripts"` iframe (opaque origin). So this only stops the naive same-origin page.
- *  - A non-browser local process can send any Origin (or none) it likes.
- * The in-Figma human-consent gate is the real trust boundary.
+ * A Figma plugin UI runs in a sandboxed iframe, so its handshake carries `Origin: null`; a non-browser
+ * client sends none. Any real origin is a script on an identifiable web page, which must not reach the
+ * eval socket — `figma.com` included, since the plugin itself never presents it. The in-Figma consent
+ * gate, not this, is the trust boundary.
  */
-function isAllowedOrigin(origin: string | undefined): boolean {
-  return !origin || origin === "null";
-}
+export const RELAY_LISTENER_POLICY: LocalListenerPolicy = {
+  browsers: "opaque-origin-only",
+  checkHost: true,
+};
 
 export interface RelayListenerHooks {
   /** Whether a new upgrade may take the slot: false while an established plugin holds it. */
@@ -56,9 +50,9 @@ export interface RelayListenerHooks {
 }
 
 /**
- * The relay's network edge: probe-binds the first free port in the block, refuses web origins and
- * hijack attempts at the upgrade, and drives the heartbeat. It holds no connection state — the bridge
- * owns the slot, and is asked through `hooks`.
+ * The relay's network edge: probe-binds the first free port in the block, refuses web origins (through
+ * the local-listener boundary) and hijack attempts at the upgrade, and drives the heartbeat. It holds
+ * no connection state — the bridge owns the slot, and is asked through `hooks`.
  */
 export class RelayListener {
   // The winning WebSocketServer, retained only so `stop()` can close it (free the port).
@@ -128,32 +122,25 @@ export class RelayListener {
       return;
     }
     const port = ports[index];
-    const wss = new WebSocketServer({
-      maxPayload: MAX_CHANNEL_BYTES,
-      // Loopback only — the eval socket must never be reachable from the LAN. Bound to the IPv4
-      // literal even though the plugin dials `ws://localhost` (the manifest can't use an IP literal —
-      // Figma's validator rejects it): `localhost` resolves to both ::1 and 127.0.0.1, and Chromium
-      // (Figma's runtime) falls back to 127.0.0.1 instantly when the ::1 attempt is refused. Don't
-      // widen this to a non-loopback host to "match" localhost — that would breach the boundary.
-      host: "127.0.0.1",
-      port,
-      // Refuse the upgrade before a socket exists when the Origin is a web page, or when an
-      // ESTABLISHED plugin holds the channel. A holder that has NOT handshaked must not trap the real
-      // plugin — it is a pre-consent squatter or a half-open socket whose plugin died — so the
-      // newcomer is admitted and the bridge reclaims the slot. A half-open holder that DID handshake
-      // looks established here and is reaped by the heartbeat instead, freeing the slot.
-      verifyClient: ({ origin }: { origin?: string }) => {
-        if (!isAllowedOrigin(origin)) {
-          Logger.log(`Refused WS connection from web origin ${origin}`);
-          return false;
-        }
-        if (!this.hooks.admitsNewcomer()) {
-          Logger.log("Refused second WS connection — an established plugin holds the channel");
-          return false;
-        }
-        return true;
+    // Loopback only — the eval socket must never be reachable from the LAN. Bound to the IPv4 literal
+    // even though the plugin dials `ws://localhost` (the manifest can't use an IP literal — Figma's
+    // validator rejects it): `localhost` resolves to both ::1 and 127.0.0.1, and Chromium (Figma's
+    // runtime) falls back to 127.0.0.1 instantly when the ::1 attempt is refused. Don't widen this to
+    // a non-loopback host to "match" localhost — that would breach the boundary.
+    //
+    // Past the policy, refuse the upgrade while an ESTABLISHED plugin holds the channel. A holder that
+    // has NOT handshaked must not trap the real plugin — it is a pre-consent squatter or a half-open
+    // socket whose plugin died — so the newcomer is admitted and the bridge reclaims the slot. A
+    // half-open holder that DID handshake looks established here and is reaped by the heartbeat.
+    const wss = createLocalWebSocketServer(
+      RELAY_LISTENER_POLICY,
+      { maxPayload: MAX_CHANNEL_BYTES, host: "127.0.0.1", port },
+      () => {
+        if (this.hooks.admitsNewcomer()) return true;
+        Logger.log("Refused second WS connection — an established plugin holds the channel");
+        return false;
       },
-    });
+    );
     // EADDRINUSE means another session already holds this port — advance to the next (closing this
     // loser so its half-open listener doesn't linger), EXCEPT while this port still looks like our own
     // former slot: see RECLAIM_WINDOW_MS. Any OTHER bind error (EACCES, EADDRNOTAVAIL …) is genuinely

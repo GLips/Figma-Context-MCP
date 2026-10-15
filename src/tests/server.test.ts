@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startHttpServer, stopHttpServer } from "../server.js";
 import type { AddressInfo } from "net";
+import { request } from "http";
 import type { FigmaCredential } from "../services/figma.js";
 import { spawn, type ChildProcess } from "child_process";
 
@@ -109,6 +110,74 @@ describe("Method not allowed", () => {
   it("DELETE /sse returns 405", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/sse`, { method: "DELETE" });
     expect(res.status).toBe(405);
+  });
+});
+
+describe("Browser requests", () => {
+  let port: number;
+  const listTools = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 });
+
+  beforeAll(async () => {
+    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
+    port = (httpServer.address() as AddressInfo).port;
+  }, 15_000);
+
+  afterAll(async () => {
+    await stopHttpServer();
+  });
+
+  // The cross-site request a page can send without a preflight: a CORS-safelisted content type whose
+  // parameter smuggles in the string `application/json`.
+  it.each([
+    ["/mcp", "https://evil.example"],
+    ["/mcp", "null"],
+    ["/sse", "https://evil.example"],
+    ["/sse", "null"],
+  ])("POST %s with Origin %s is refused", async (path, origin) => {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "text/plain; charset=application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: listTools,
+    });
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain("get_figma_data");
+  });
+
+  it("refuses a POST whose media type only mentions application/json", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain; charset=application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: listTools,
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("refuses a Host that doesn't name this loopback port (DNS rebinding)", async () => {
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port,
+          method: "POST",
+          path: "/mcp",
+          headers: { Host: `rebound.example:${port}`, "Content-Type": "application/json" },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode);
+        },
+      );
+      req.on("error", reject);
+      req.end(listTools);
+    });
+    expect(status).toBe(403);
   });
 });
 

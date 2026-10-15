@@ -4,22 +4,26 @@
  */
 // The HTTP front door to image intake: `POST /uploads` with raw image bytes, answered with a handle.
 // It listens on its own ephemeral loopback port, not the WS relay's: the relay admits `Origin: null`
-// for the plugin iframe, and this route must refuse every browser, so the two don't share a gate.
+// for the plugin iframe, and this route must refuse every browser, so the two don't share a policy.
 //
 // Loopback is not the authorization — any local page can reach loopback. The gates, in order:
-//   1. Any request carrying browser-only headers (Origin, Sec-Fetch-*) is refused before anything
-//      else is read. A browser can't drop them, and the Authorization header below forces a CORS
-//      preflight this server never answers, so a page can neither send nor read an upload.
-//   2. Host must be the loopback literal and our port, which defeats DNS rebinding.
-//   3. A bearer upload capability: 256 random bits, rotated, each living CAPABILITY_TTL_MS, published
+//   1. UPLOAD_LISTENER_POLICY, applied by the local-listener boundary before anything else is read:
+//      every browser request is refused (and the Authorization header below forces a CORS preflight
+//      this server never answers), Host must name this loopback port, and the body is octet-stream.
+//   2. A bearer upload capability: 256 random bits, rotated, each living CAPABILITY_TTL_MS, published
 //      only in a 0600 record in the user's state directory. Holding it proves the caller can read the
 //      user's own files; it grants nothing but uploads to this one server.
 // The request carries bytes and nothing else: no query string, no path or url parameter, ever.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
+import {
+  listenLocalHttpServer,
+  refuseLocalRequest,
+  type LocalListenerPolicy,
+} from "~/utils/local-listener.js";
 import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { ImageIntakeError, tooLarge, type ImageUploadStore } from "./image-intake.js";
@@ -32,8 +36,12 @@ const CAPABILITY_TTL_MS = 10 * 60 * 1000;
 const CAPABILITY_ROTATE_MS = CAPABILITY_TTL_MS / 2;
 // A slow sender can hold an intake slot (image-intake.ts caps those) for at most this long.
 const REQUEST_TIMEOUT_MS = 30_000;
-// How long a refused sender may keep streaming into the void before we hang up on it.
-const REFUSAL_LINGER_MS = 2_000;
+
+const UPLOAD_LISTENER_POLICY: LocalListenerPolicy = {
+  browsers: "refuse",
+  checkHost: true,
+  postMediaType: "application/octet-stream",
+};
 
 /** What a running server publishes for the upload command to find and authenticate to it. */
 export interface UploadEndpointRecord {
@@ -65,21 +73,20 @@ export async function startUploadEndpoint({
   now?: () => number;
 }): Promise<UploadEndpoint> {
   const capabilities = new CapabilitySet(now);
-  let port = 0;
-  const server = createServer(
-    { requestTimeout: REQUEST_TIMEOUT_MS, headersTimeout: 10_000, maxHeaderSize: 8 * 1024 },
+  const server = await listenLocalHttpServer(
+    UPLOAD_LISTENER_POLICY,
     (req, res) => {
-      void serveUpload(req, res, { port, store, capabilities });
+      void serveUpload(req, res, { store, capabilities });
+    },
+    {
+      port: 0,
+      host: "127.0.0.1",
+      requestTimeout: REQUEST_TIMEOUT_MS,
+      headersTimeout: 10_000,
+      maxHeaderSize: 8 * 1024,
     },
   );
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  port = (server.address() as { port: number }).port;
+  const { port } = server.address() as { port: number };
 
   const recordFile = join(uploadRecordsDir(stateDir), `${process.pid}.json`);
   const publish = (): void => {
@@ -161,22 +168,9 @@ class CapabilitySet {
 async function serveUpload(
   req: IncomingMessage,
   res: ServerResponse,
-  {
-    port,
-    store,
-    capabilities,
-  }: { port: number; store: ImageUploadStore; capabilities: CapabilitySet },
+  { store, capabilities }: { store: ImageUploadStore; capabilities: CapabilitySet },
 ): Promise<void> {
   const { headers } = req;
-  if (
-    headers.origin !== undefined ||
-    Object.keys(headers).some((h) => h.startsWith("sec-fetch-"))
-  ) {
-    return refuse(req, res, 403, "browser requests are refused; upload with the CLI");
-  }
-  if (headers.host !== `127.0.0.1:${port}`) {
-    return refuse(req, res, 403, "the Host header must name this loopback endpoint");
-  }
   if (req.method !== "POST" || req.url !== UPLOAD_PATH) {
     return refuse(req, res, 404, `the only route is POST ${UPLOAD_PATH}, with no query string`);
   }
@@ -188,9 +182,6 @@ async function serveUpload(
       401,
       "missing, unknown or expired upload capability; the upload command reads a fresh one",
     );
-  }
-  if (headers["content-type"] !== "application/octet-stream") {
-    return refuse(req, res, 415, "send the image as raw application/octet-stream bytes");
   }
   // An early refusal for an honest oversized declaration; the streamed cap is what actually binds.
   const declared = Number(headers["content-length"]);
@@ -212,16 +203,8 @@ async function serveUpload(
   }
 }
 
-/**
- * Answer and close. The body may be unread (an early refusal) or half-read (a cap crossed mid-stream).
- * Destroying the socket the moment the reply is written can reset the connection before the sender
- * reads the reply, so discard what keeps arriving and close after a short linger instead.
- */
 function refuse(req: IncomingMessage, res: ServerResponse, status: number, error: string): void {
-  req.resume();
-  res.once("finish", () => setTimeout(() => req.destroy(), REFUSAL_LINGER_MS).unref());
-  // No `Connection: close`: Node would end the socket on finish, racing a sender still mid-body.
-  send(res, status, { error });
+  refuseLocalRequest(req, res, status, { error });
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
