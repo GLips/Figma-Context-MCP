@@ -103,7 +103,7 @@ npx figma-developer-mcp execute workflow.js --output artifacts/result.json
 npx figma-developer-mcp execute workflow.js --screenshot artifacts/page.png --scale 2
 ```
 
-Open Framelink in the intended Figma file and approve the pairing code shown on stderr. The command uses the same approval, Authorizing User, seat/free-allowance checks, and runtime as MCP execution. A Figma REST token is optional (`--figma-api-key`, `--figma-oauth-token`, or the server's env vars); with one, a script can read the file's comment pins, as it can through the MCP server.
+Open Framelink in the intended Figma file and click Allow when the panel asks. The plugin must already be paired with this machine: run `npx figma-developer-mcp pair` once, and answer `y` if the code it prints is the code the plugin panel shows. Pairing is remembered for every server and `execute` run sharing this machine's Framelink state directory (`FRAMELINK_STATE_DIR`). The command uses the same approval, plugin owner, seat/free-allowance checks, and runtime as MCP execution. A Figma REST token is optional (`--figma-api-key`, `--figma-oauth-token`, or the server's env vars); with one, a script can read the file's comment pins, as it can through the MCP server.
 
 The execution reply is JSON on stdout; progress and errors go to stderr. `--output` also saves that JSON. `--screenshot` saves a PNG after a completed execution, including a script error; select a target with `--node-id` or `--key`, or omit both for the current page. `--context` also captures the canvas around a target, with `--margin` pixels on each side. Script and transport failures return a nonzero exit status. An interrupted or disconnected execution is never automatically resubmitted.
 
@@ -116,7 +116,7 @@ Results are delivered promptly. When a free-allowance execution reports no docum
 The server sends usage telemetry to PostHog: one event per tool call, with its duration, outcome and sizes. Opt out with `--no-telemetry`, `FRAMELINK_TELEMETRY=off`, or `DO_NOT_TRACK=1`.
 
 - **Reads are anonymous.** Read events carry a per-process random ID, never your identity, file keys, node IDs, or design content.
-- **Writes name the Figma user.** Events from write-path tools (`figma_execute_code`, `get_screenshot`) carry the Figma user ID of the Authorizing User who approved the run. Writes are metered per user, so we need it to tell usage apart. Neither authored code nor returned content is ever sent.
+- **Writes name the Figma user.** Events from write-path tools (`figma_execute_code`, `get_screenshot`) carry the Figma user ID of the plugin owner, the Figma user signed in to the plugin that ran the code. Writes are metered per user, so we need it to tell usage apart. Neither authored code nor returned content is ever sent.
 - **Failures are sent as codes.** Expected failures, such as a 403, a rate limit, a rejected argument, or a declined approval, go out as a category, status and field name, never as the error text.
 - **Unexpected errors go to error tracking.** The error message and stack frames are scrubbed of credentials, your home directory, and Figma file and node IDs. Response bodies are replaced with a fingerprint of who answered.
 
