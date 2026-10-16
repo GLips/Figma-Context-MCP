@@ -4,19 +4,15 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
-import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 
 const bridges: PluginBridge[] = [];
 // A request with a trivial reply, for tests about the ledger rather than the payload.
-const introduce = (bridge: PluginBridge) => bridge.sessionInfo("https://framelink.test");
+const introduce = () => ({ type: "GRANT_STATUS" as const, fileKey: null, prompt: "none" as const });
 
-function create(options: ConstructorParameters<typeof PluginBridge>[1] = {}) {
-  const bridge = new PluginBridge(
-    new ApprovalStore("/test", "/tmp/execution-test-unused"),
-    options,
-  );
+function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
+  const bridge = new PluginBridge(options);
   bridges.push(bridge);
   return bridge;
 }
@@ -30,18 +26,18 @@ describe("link-owned execution", () => {
     const bridge = create();
     const old = await connectFakePlugin(bridge);
     const next = await connectFakePlugin(bridge);
-    const oldCall = bridge.request(old.link, introduce(bridge)).catch((e: unknown) => e);
-    const newCall = bridge.request(next.link, introduce(bridge));
+    const oldCall = bridge.request(old.link, introduce()).catch((e: unknown) => e);
+    const newCall = bridge.request(next.link, introduce());
     const id = next.frames[0].id;
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
     expect(id).not.toBe(old.frames[0].id);
     // A reply naming another link's request id is not that request's answer.
-    old.receive({ id, type: "SESSION_INFO_ACK" });
+    old.receive({ id, type: "GRANT", state: "absent" });
     old.terminate();
-    expect(await oldCall).toMatchObject({ outcome: "unconfirmed" });
-    expect(String(await oldCall)).toContain("disconnected before replying");
-    next.receive({ id, type: "SESSION_INFO_ACK" });
-    expect(await newCall).toMatchObject({ type: "SESSION_INFO_ACK" });
+    // Not a run, so the drop is reported as what it is: nothing was submitted.
+    expect(await oldCall).toMatchObject({ outcome: "not-submitted" });
+    next.receive({ id, type: "GRANT", state: "absent" });
+    expect(await newCall).toMatchObject({ type: "GRANT", state: "absent" });
   });
   it("hedges only when nothing answers the cancellation", async () => {
     vi.useFakeTimers();
@@ -50,6 +46,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
         lateChangeWindowMs: 60_000,
@@ -74,6 +71,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
         lateChangeWindowMs: 60_000,
@@ -100,6 +98,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
         lateChangeWindowMs: 60_000,
@@ -126,6 +125,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
         lateChangeWindowMs: 60_000,
@@ -153,10 +153,10 @@ describe("link-owned execution", () => {
     const socket = await connectFakePlugin(bridge);
     const abort = new AbortController();
     const call = bridge
-      .request(socket.link, introduce(bridge), { signal: abort.signal })
+      .request(socket.link, introduce(), { signal: abort.signal })
       .catch((e: unknown) => e);
     abort.abort();
-    expect(await call).toMatchObject({ outcome: "unconfirmed" });
+    expect(await call).toMatchObject({ outcome: "not-submitted" });
     expect(socket.frames.filter((f) => f.type === "CANCEL")).toHaveLength(1);
   });
   it("withholds a dropped link's image service and leaves another link's run accounting intact", async () => {
@@ -177,6 +177,7 @@ describe("link-owned execution", () => {
     const oldCall = bridge
       .request(old.link, {
         type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
         code: "old",
         preamble: "x",
         lateChangeWindowMs: 60_000,
@@ -192,14 +193,14 @@ describe("link-owned execution", () => {
     });
     await Promise.resolve();
     old.terminate();
-    const newCall = bridge.request(next.link, introduce(bridge));
+    const newCall = bridge.request(next.link, introduce());
     release({ x: "old bytes" });
     await Promise.resolve();
     await Promise.resolve();
     expect(old.frames.some((f) => f.type === "CHANNEL_RESPONSE")).toBe(false);
     expect(next.frames).toHaveLength(1);
-    next.receive({ id: next.frames[0].id, type: "SESSION_INFO_ACK" });
-    expect(await newCall).toMatchObject({ type: "SESSION_INFO_ACK" });
+    next.receive({ id: next.frames[0].id, type: "GRANT", state: "absent" });
+    expect(await newCall).toMatchObject({ type: "GRANT", state: "absent" });
     bridge.stop();
     await oldCall;
   });

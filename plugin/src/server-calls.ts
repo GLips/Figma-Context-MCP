@@ -58,7 +58,7 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
      * Settle a call from the server's response. An unknown id is dropped — that call was already
      * rejected by a CANCEL, a disconnect or a revoke. The reply must arrive on the SAME connection the
      * request went out on: the relay holds a socket per block port, so without this check any other
-     * local server (approval gates writes, not this direction) could answer another server's call.
+     * local server (grants gate writes, not this direction) could answer another server's call.
      */
     settle(msg: Extract<ServerFrame, { type: "CHANNEL_RESPONSE" }>, connKey: ConnKey): void {
       const call = pending.get(msg.id);

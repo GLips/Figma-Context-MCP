@@ -20,7 +20,7 @@ import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
   TEST_PLUGIN_OWNER,
   createTestWriteAccess,
-  grantedTestApproval,
+  targetedTestCall,
   linkedTestResolution,
 } from "./fixtures/write-access.js";
 
@@ -37,8 +37,7 @@ async function connectedServer() {
       errors: null,
       documentChanged: false,
     }),
-    touchApproval: () => {},
-    approvalStatus: grantedTestApproval,
+    targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {

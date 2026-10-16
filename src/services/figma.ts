@@ -316,6 +316,22 @@ export class FigmaService {
   }
 
   /**
+   * A file's name and its root's shared plugin data, and nothing below the root: what a plugin
+   * link's document proof reads back.
+   */
+  async getFileRootSharedPluginData(fileKey: FigmaFileKey): Promise<{
+    name: string;
+    sharedPluginData: Record<string, Record<string, string>>;
+  }> {
+    const endpoint = figmaEndpoint(["files", fileKey], { depth: 1, plugin_data: "shared" });
+    const file = await this.request<{
+      name: string;
+      document: { sharedPluginData?: Record<string, Record<string, string>> };
+    }>(endpoint);
+    return { name: file.name, sharedPluginData: file.document.sharedPluginData ?? {} };
+  }
+
+  /**
    * Get raw Figma API response for a file (for use with flexible extractors).
    *
    * Returns the parsed body alongside the raw body size in bytes so callers

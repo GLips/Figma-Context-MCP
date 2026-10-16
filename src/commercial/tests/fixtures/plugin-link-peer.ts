@@ -8,7 +8,8 @@ import { TEST_PLUGIN_OWNER } from "./write-access.js";
 
 /**
  * Answer the link-setup envelope the way a plugin paired with the current state dir would (or, with
- * `paired: false`, one never paired), for tests that drive a real socket. Returns whether `frame` was a setup frame it answered.
+ * `paired: false`, one never paired), for tests that drive a real socket. The introduction claims no
+ * file. Returns whether `frame` was a setup frame it answered.
  */
 export function answerLinkSetup(
   send: (frame: Record<string, unknown>) => void,
@@ -35,6 +36,10 @@ export function answerLinkSetup(
       proof: linkProof(credential, String(frame.nonce)),
       owner,
     });
+    return true;
+  }
+  if (frame.type === "INTRODUCE") {
+    send({ type: "INTRODUCED", id: frame.id, claim: null });
     return true;
   }
   return false;

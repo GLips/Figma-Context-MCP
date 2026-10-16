@@ -17,7 +17,7 @@ import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
   createTestWriteAccess,
-  grantedTestApproval,
+  targetedTestCall,
   linkedTestResolution,
   TEST_PLUGIN_LINK,
 } from "./fixtures/write-access.js";
@@ -27,8 +27,7 @@ const readSavedScript = vi.fn();
 const plugin: PluginBridgeRuntime = {
   bridge: {
     request,
-    touchApproval: () => {},
-    approvalStatus: grantedTestApproval,
+    targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge,
   writeMeter: createTestWriteAccess().writeMeter,

@@ -68,8 +68,8 @@ function connect(port: number): void {
     opened = true;
     lastOpenAt.set(port, Date.now());
     reconnectDelays.set(port, BASE_RECONNECT_MS);
-    // A FRESH connection: the host starts it unapproved, so a different local server that grabbed a
-    // freed port can't ride the previous socket's approval. onopen fires before any onmessage on this
+    // A FRESH connection: the host starts it unauthenticated and ungranted, so a different local
+    // server that grabbed a freed port can't ride the previous socket's standing. onopen fires before any onmessage on this
     // socket, so the reset lands before the new server's first frame.
     toSandbox({ type: "WS_CONNECTED", connKey });
   };
@@ -106,7 +106,7 @@ window.onmessage = (event: MessageEvent<{ pluginMessage?: HostOutbound }>) => {
 };
 
 // Allow / Deny → the host (sole arbiter), tagged with the row's connection. The button carries NO
-// approval logic: it reports the human's choice; the host mints the token.
+// grant logic: it reports the human's choice; the host records the grant.
 function decide(approve: boolean, connKey: ConnKey): void {
   toSandbox({ type: "UI_DECISION", approve, connKey });
 }
@@ -116,36 +116,31 @@ byId("strip").onclick = () => toSandbox({ type: "UI_TOGGLE" });
 // The whole surface from one render: the always-on strip, plus — when expanded — the session list.
 // Built with textContent, never innerHTML, so a project path can't inject markup.
 function render(state: PanelRender): void {
-  renderStrip(state.pairings, state.sessions, state.expanded);
+  renderStrip(state);
   const detail = byId("detail");
   detail.textContent = "";
   detail.style.display = state.expanded ? "flex" : "none";
   if (state.expanded) {
     if (state.showOrientation) detail.appendChild(orientationBanner());
-    if (state.approvalStorageError) detail.appendChild(el("div", "orientation", state.approvalStorageError));
+    if (state.grantStorageError) detail.appendChild(el("div", "orientation", state.grantStorageError));
+    if (state.document) detail.appendChild(documentCard(state.document));
     if (!state.sessions.length && !state.pairings.length) detail.appendChild(emptyState());
     for (const pairing of state.pairings) detail.appendChild(pairingCard(pairing));
     for (const session of state.sessions) detail.appendChild(sessionCard(session));
-    if (state.hasApprovals) detail.appendChild(revokeAllFooter());
   }
   reportHeight();
 }
 
-// One glanceable line, in priority order: a code to confirm > a decision you owe > who is driving >
-// who is ready.
-function renderStrip(pairings: PanelPairing[], sessions: PanelSession[], expanded: boolean): void {
+// One glanceable line, in priority order: a code to confirm > a decision you owe > a file to
+// identify > spent writes > who is driving > who is ready.
+function renderStrip({ pairings, sessions, document: doc, expanded }: PanelRender): void {
   let wants = 0;
-  let expired = 0;
-  let approved = 0;
+  let granted = 0;
   let active: PanelSession | null = null;
   let writesSpent = false;
   for (const s of sessions) {
-    if (s.approved) approved++;
-    else if (s.rejected) {
-      // Already answered: a rejected session owes the human nothing.
-    } else if (s.request === "expired") {
-      if (!s.allowedWhileAway) expired++;
-    } else wants++;
+    if (s.granted) granted++;
+    if (s.prompt !== null && !s.denied) wants++;
     if (s.active) active = s;
     if (s.writeAccess?.kind === "allowance-exhausted") writesSpent = true;
   }
@@ -157,7 +152,10 @@ function renderStrip(pairings: PanelPairing[], sessions: PanelSession[], expande
     text = offered.length === 1 ? "Pairing code " + offered[0].code : offered.length + " pairing codes to check";
     tone = "wants";
   } else if (wants) {
-    text = wants === 1 ? "A session wants to connect" : wants + " sessions want to connect";
+    text = wants === 1 ? "An agent wants to edit this file" : wants + " agents want to edit this file";
+    tone = "wants";
+  } else if (doc?.kind === "unproven" && doc.asking) {
+    text = "Paste this file's link to use it";
     tone = "wants";
   } else if (writesSpent) {
     // Writes are being refused until the human acts, so it outranks who is driving.
@@ -166,15 +164,12 @@ function renderStrip(pairings: PanelPairing[], sessions: PanelSession[], expande
   } else if (active) {
     text = active.label + " — driving";
     tone = "live";
-  } else if (approved === 1) {
-    text = (sessions.find((s) => s.approved)?.label ?? "A session") + " — ready";
+  } else if (granted === 1) {
+    text = (sessions.find((s) => s.granted)?.label ?? "A project") + " — ready";
     tone = "ready";
-  } else if (approved) {
-    text = approved + " sessions ready";
+  } else if (granted) {
+    text = granted + " projects ready";
     tone = "ready";
-  } else if (expired) {
-    text = expired === 1 ? "An approval request expired" : expired + " approval requests expired";
-    tone = "";
   } else {
     text = "Waiting for a session…";
     tone = "";
@@ -194,12 +189,55 @@ function orientationBanner(): HTMLElement {
     el(
       "div",
       null,
-      "Approving a session lets it run code against this document — only approve sessions " +
-        "you started. Approval is remembered, even after closing and reopening this plugin, " +
-        'until you revoke it here or use "Revoke all approvals".',
+      "Allowing a project lets every agent working in that project run code against this file — " +
+        "only allow projects you started agents in. The grant is remembered, even after closing " +
+        "and reopening this plugin, until you revoke it here.",
     ),
   );
   return intro;
+}
+
+// Which file this is, as a server proved it. Until one has, a server asking for a file can't pick
+// this one, so the human may paste its link: a claim the servers then prove, never an identity.
+function documentCard(doc: NonNullable<PanelRender["document"]>): HTMLElement {
+  const card = el("div", doc.kind === "unproven" && doc.asking ? "session waiting" : "session");
+  const lines = el("div", "session-lines");
+  card.appendChild(lines);
+  if (doc.kind === "proven") {
+    lines.appendChild(el("div", "session-id", doc.fileName));
+    lines.appendChild(el("div", "status-line", "This file is identified to your Framelink servers."));
+    return card;
+  }
+  lines.appendChild(el("div", "session-id", "This file isn't identified yet"));
+  lines.appendChild(
+    el(
+      "div",
+      "status-line",
+      doc.pasted?.refuted
+        ? "That link isn't this file — it may be a copy. Paste this file's own link (Share → Copy link)."
+        : doc.pasted
+          ? "Checking the link you pasted…"
+          : doc.asking
+            ? "An agent wants a file to edit. To offer this one, paste its link (Share → Copy link)."
+            : "Paste this file's link (Share → Copy link) to let agents edit it.",
+    ),
+  );
+  if (doc.pasted && !doc.pasted.refuted) return card;
+  const row = el("div", "actions");
+  const input = el("input", "link-input") as HTMLInputElement;
+  input.placeholder = "https://www.figma.com/design/…";
+  const submit = el("button", "allow", "Use link");
+  const paste = (): void => {
+    if (input.value.trim()) toSandbox({ type: "UI_PASTE_LINK", text: input.value });
+  };
+  submit.onclick = paste;
+  input.onkeydown = (event) => {
+    if (event.key === "Enter") paste();
+  };
+  row.appendChild(input);
+  row.appendChild(submit);
+  card.appendChild(row);
+  return card;
 }
 
 // Someone can land here having never heard of Framelink, so the empty state carries the one link
@@ -241,11 +279,11 @@ function pairingCard(p: PanelPairing): HTMLElement {
   return card;
 }
 
-// A row per live session, and per disconnected one whose request still awaits an answer.
+// A row per connected server, and per project granted this file whose servers are all gone.
 function sessionCard(s: PanelSession): HTMLElement {
-  const card = el("div", s.request ? "session " + s.request : "session");
+  const card = el("div", s.prompt && !s.denied ? "session waiting" : "session");
   const lines = el("div", "session-lines");
-  lines.appendChild(el("div", "session-id", s.identity || "(unknown project)"));
+  lines.appendChild(el("div", "session-id", s.project || "(unknown project)"));
   card.appendChild(lines);
 
   const actions = el("div", "actions");
@@ -254,39 +292,53 @@ function sessionCard(s: PanelSession): HTMLElement {
     node.onclick = onClick;
     actions.appendChild(node);
   };
-  if (s.allowedWhileAway) {
+  const revoke = (): void => {
+    const grant = s.grant;
+    if (!grant) return;
+    // Revoke, not disconnect: the socket and the row both stay. What goes is the PROJECT's grant
+    // on this file, so every agent in it is stopped and its next write asks again.
+    button("deny", "Revoke", () => toSandbox({ type: "UI_REVOKE", ...grant }));
+  };
+  if (s.granted && s.prompt === "select" && s.key !== null) {
+    // Several granted files are open and the agent named none: the human picks which.
+    const key = s.key;
+    lines.appendChild(el("div", "status-line", "An agent wants a file to edit. Use this one?"));
+    button("allow", "Use this file", () => decide(true, key));
+    revoke();
+  } else if (s.granted) {
     lines.appendChild(
-      el("div", "status-line", "Allowed — applies when this session reconnects. Nothing is waiting to run."),
+      el(
+        "div",
+        s.active ? "status-line driving" : "status-line",
+        s.active ? "● Driving this file" : s.connected ? "Allowed to edit this file" : "Allowed — not connected now",
+      ),
     );
-    button("deny", "Cancel", () => decide(false, s.key));
-  } else if (!s.approved) {
-    // A session that has never asked needs no line — Allow and Reject already say it.
-    if (s.rejected)
-      lines.appendChild(el("div", "status-line", "Rejected — its calls are refused. Allow approves it after all."));
-    else if (s.request === "waiting")
-      lines.appendChild(el("div", "status-line", "Waiting for approval — its call runs once you allow it."));
-    else if (s.request === "expired")
-      lines.appendChild(
-        el(
-          "div",
-          "status-line",
-          s.connected
-            ? "Request expired — nothing is waiting to run. Allow approves this session's next call."
-            : "Disconnected, request expired — nothing is waiting to run. Allow approves this session when it reconnects.",
-        ),
-      );
-    button("allow", "Allow", () => decide(true, s.key));
-    button("deny", s.connected ? "Reject" : "Dismiss", () => decide(false, s.key));
+    lines.appendChild(el("div", "status-line", "Revoking stops every agent in this project."));
+    revoke();
+  } else if (s.allowing) {
+    lines.appendChild(el("div", "status-line", "Saving…"));
+  } else if (s.key !== null && s.grant !== null && (s.prompt || s.denied)) {
+    const key = s.key;
+    lines.appendChild(
+      el(
+        "div",
+        "status-line",
+        s.denied
+          ? "Denied — its calls are refused. Allow lets every agent in this project edit this file."
+          : s.prompt === "select"
+            ? "An agent wants a file to edit. Allow picks this one, for every agent in this project."
+            : "Wants to edit this file. Allow lets every agent in this project edit it.",
+      ),
+    );
+    button("allow", "Allow", () => decide(true, key));
+    if (!s.denied) button("deny", "Deny", () => decide(false, key));
+  } else if (s.prompt) {
+    lines.appendChild(el("div", "status-line", "Wants to edit a file. Identify this one above to offer it."));
   } else {
-    lines.appendChild(
-      el("div", s.active ? "status-line driving" : "status-line", s.active ? "● Driving this file" : "Approved — ready to drive"),
-    );
-    // Revoke, not disconnect — the socket and the row both stay. What goes away is this session's
-    // PERMISSION, so its next write asks again.
-    button("deny", "Revoke access", () => toSandbox({ type: "UI_REVOKE", connKey: s.key }));
+    lines.appendChild(el("div", "status-line", "Connected — not allowed to edit this file"));
   }
   card.appendChild(actions);
-  if (s.approved && s.writeAccess) card.appendChild(writeAccessCard(s.key, s.writeAccess));
+  if (s.granted && s.key !== null && s.writeAccess) card.appendChild(writeAccessCard(s.key, s.writeAccess));
   return card;
 }
 
@@ -337,19 +389,6 @@ function writeAccessCard(connKey: ConnKey, notice: WriteAccessNotice): HTMLEleme
     action("Try again", "UI_SIGN_IN");
   }
   return box;
-}
-
-// Shown whenever the host reports ANY remembered approval, independent of the rows above it — a
-// persisted approval can outlive its connection, so this is often the only surface for one.
-function revokeAllFooter(): HTMLElement {
-  const footer = el("div", "footer");
-  const node = el("button", "revoke-all", "Revoke all approvals");
-  node.title =
-    "Forgets every session this plugin has approved — including ones not currently " +
-    "connected — so all of them must Allow again, even after this plugin restarts.";
-  node.onclick = () => toSandbox({ type: "UI_REVOKE_ALL" });
-  footer.appendChild(node);
-  return footer;
 }
 
 function el(tag: string, className: string | null, text?: string): HTMLElement {

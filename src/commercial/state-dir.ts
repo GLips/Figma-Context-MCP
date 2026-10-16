@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The process-wide state root shared by every on-disk store (the plugin link credential, session
-// approvals, image uploads, write access). It reads FRAMELINK_STATE_DIR directly rather than through
+// The process-wide state root shared by every on-disk store (the plugin link credential, the plugin
+// sighting, image uploads, write access). It reads FRAMELINK_STATE_DIR directly rather than through
 // src/config.ts because the stores are constructed deep in the write path, and tests and the contract
 // harness isolate them per process by setting the env var.
 

@@ -20,7 +20,7 @@
 //          the probe needs the build you just made, not whatever Figma has cached)
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:midrun-await               (this script)
-//   5. When the plugin strip shows this session, click Allow.
+//   5. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
 // The probe renders one small frame with two image fills, verifies the suspension, deletes the
 // frame again, and prints PASS/FAIL. Safe to re-run.
 //
@@ -32,8 +32,7 @@
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { linkForProbe } from "./probe-link.mjs";
-import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must
@@ -50,7 +49,7 @@ const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1
 const t0 = Date.now();
 
 let imagesRequests = 0;
-const bridge = new PluginBridge(undefined, {
+const bridge = new PluginBridge({
   capabilities: new Map([
     [
       "images.fetch",
@@ -78,35 +77,21 @@ const built = await flcm.render(
 return { elapsedMs: Date.now() - t0, rootId: built.id };
 `;
 
-let link = null;
+let target = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   try {
-    link = await linkForProbe(bridge, log);
-    log(`sending the probe render — if the strip asks, click Allow`);
+    target = await targetForProbe(bridge, log);
+    log(`sending the probe render`);
 
     const runStart = Date.now();
-    // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
-    // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so the probe
-    // would execute repeatedly and then read its own run's reply as an unexpected approval status.
-    const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(link, signal),
-      () =>
-        bridge.request(link, {
-          type: "EXECUTE_CODE",
-          code: PROBE_CODE,
-          preamble: PREAMBLE,
-          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
-        }),
-    );
-    if (waited.type === "PENDING_APPROVAL") {
-      fail(
-        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
-      );
-    }
-    const reply = waited.result;
+    const reply = await executeOnProbeTarget(bridge, target, {
+      code: PROBE_CODE,
+      preamble: PREAMBLE,
+      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+    });
     if (reply?.errors) {
       fail(`the probe script errored in the sandbox:\n${reply.errors}`);
     }
@@ -132,8 +117,7 @@ async function runProbe() {
     }
 
     // The loop must survive the suspension: run a second script that cleans the probe frame up.
-    const cleanup = await bridge.request(link, {
-      type: "EXECUTE_CODE",
+    const cleanup = await executeOnProbeTarget(bridge, target, {
       code: `const n = await figma.getNodeByIdAsync(${JSON.stringify(rootId)}); if (n) n.remove(); return "cleaned";`,
       preamble: PREAMBLE,
       lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
@@ -165,6 +149,6 @@ function fail(reason) {
 console.log(
   "Framelink step-zero probe: mid-run await across the live WS bridge.\n" +
     "Waiting for the Figma plugin to connect… (import it from THIS worktree's plugin/manifest.json,\n" +
-    "open it in a scratch file, and approve this session when asked; Ctrl-C to abort)\n",
+    "open it in a scratch file, and allow this project when the plugin asks; Ctrl-C to abort)\n",
 );
 bridge.start(WS_PORT_BLOCK, () => void runProbe());

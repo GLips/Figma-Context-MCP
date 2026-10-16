@@ -64,8 +64,8 @@ export class ChannelServer {
       );
       return;
     }
-    // Only a code run may call the server. Every server-issued request (HELLO, SESSION_INFO,
-    // APPROVAL_STATUS, …) is in the ledger under an id the link was sent, so without this gate a
+    // Only a code run may call the server. Every server-issued request (HELLO, INTRODUCE,
+    // GRANT_STATUS, …) is in the ledger under an id the link was sent, so without this gate a
     // link could burn server work — and hold a suspension — against a request that is no run.
     if (run.payloadType !== "EXECUTE_CODE") {
       refuse(

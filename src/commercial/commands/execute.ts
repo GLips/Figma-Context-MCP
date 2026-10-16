@@ -24,9 +24,13 @@ import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
 import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
-  approvalGuidance,
+  GRANT_WAITING_TEXT,
+  callTargetGuidance,
   linkGuidance,
+  notGrantedText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
+import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
+import { FIGMA_FILE_KEY_PATTERN } from "~/utils/figma-url.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
 import { withoutTokenMarks } from "~/commercial/tools/token-tree.js";
 import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
@@ -47,15 +51,18 @@ export const executeCommand: Command = command(
       summary: "Run an flcm script in the Figma file the Framelink plugin has open",
       details: `The script is the body of an async function: use await and return directly, with no imports or
 exports. Open the Framelink plugin in the target file first. The plugin must be paired once (run
-\`pair\`), and the first run from a directory waits for you to click Allow in the plugin. A Figma
-API token is optional: with one, the script can read the file's comment pins, as it can through
-the MCP server.
+\`pair\`), and the first run from a project waits for you to click Allow in the plugin, which lets
+this project edit that file. --file-key runs only in that file; without it, the run goes to the one
+open file this project may edit, or you pick one in the plugin. A Figma API token tells the server
+which file the plugin is in (it reads the file to check), and lets the script read the file's
+comment pins, as it can through the MCP server.
 
-stdout gets the reply as JSON, { result, console, errors }; progress goes to stderr. Exits 0 when
-errors is null, 1 on a script, connection or approval failure, 130 on Ctrl-C. A run is never
+stdout gets the reply as JSON, { file, result, console, errors }; progress goes to stderr. Exits 0
+when errors is null, 1 on a script, connection or grant failure, 130 on Ctrl-C. A run is never
 resubmitted automatically.`,
       exampleArgs: [
         "card.js",
+        "card.js --file-key aBcD1234efGH",
         "card.js --output out/reply.json --screenshot out/card.png --key card --scale 2",
         "card.js --screenshot out/card.png --key card --context --margin 120",
       ],
@@ -64,6 +71,11 @@ resubmitted automatically.`,
       appendix: [{ title: "Writing the script:", body: buildQuickStart(CLI_DOCS_CHANNEL) }],
     }),
     flags: {
+      fileKey: {
+        type: String,
+        placeholder: "<key>",
+        description: "Run only in this Figma file: the key from its URL (figma.com/design/<key>/…)",
+      },
       output: {
         type: String,
         placeholder: "<reply.json>",
@@ -103,7 +115,7 @@ resubmitted automatically.`,
       wait: {
         type: Number,
         placeholder: "<seconds>",
-        description: `Wait this long for the plugin to connect, and again for each approval (default ${DEFAULT_PLUGIN_WAIT_SECONDS}; 0 fails at once)`,
+        description: `Wait this long for the plugin to connect, and again for you to allow this project in it (default ${DEFAULT_PLUGIN_WAIT_SECONDS}; 0 fails at once)`,
       },
       assetRoot: {
         type: String,
@@ -133,6 +145,7 @@ resubmitted automatically.`,
 );
 
 interface ExecuteFlags {
+  fileKey?: string;
   output?: string;
   screenshot?: string;
   nodeId?: string;
@@ -163,6 +176,8 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   };
   const inputError = screenshotInputError(target);
   if (inputError) throw new UsageError(inputError);
+  if (flags.fileKey !== undefined && !FIGMA_FILE_KEY_PATTERN.test(flags.fileKey))
+    throw new UsageError("--file-key must be the alphanumeric key from a Figma file URL.");
   if (!flags.screenshot && Object.values(target).some((value) => value !== undefined)) {
     throw new UsageError(
       "--node-id, --key, --scale, --context, and --margin require --screenshot <file.png>.",
@@ -178,8 +193,8 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   const code = await readFile(file, "utf8");
   for (const path of destinations) await mkdir(dirname(path), { recursive: true });
   loadEnvFile(flags.env);
-  // Optional, unlike the REST commands: only a run's mid-run Figma reads (comment pins) spend it,
-  // and those fail on their own, naming the missing credential, when there is none.
+  // Optional, unlike the REST commands: it proves which file the plugin is in, and pays for a run's
+  // mid-run Figma reads (comment pins). Without one, a plugin no earlier run proved can't be used.
   const credential = resolveCredential(flags);
   if (credential) installFigmaProxyDispatcher(resolveProxy(flags).value);
   const figma = credential ? new FigmaService(staticCredentialSource(credential)) : null;
@@ -188,6 +203,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   const runtime = startPluginBridge({
     assetRoot: config.assetRoot.value,
     framelinkApiUrl: config.framelinkApiUrl.value,
+    figmaCredential: credential,
   });
   const controller = new AbortController();
   let awaitingSettlement = false;
@@ -216,34 +232,48 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
     // may be a pipe or an agent's shell can't count on.
     if (resolution.kind !== "linked") throw new Error(linkGuidance(resolution, "cli"));
-    const { link } = resolution;
     console.error("Figma connected.");
-    const options = {
+    const bound = await runtime.bridge.targetCall(flags.fileKey ?? null, {
+      reader: figma && documentReaderFor(figma),
       waitMs,
       signal: controller.signal,
       onWaiting: () => {
-        console.error(approvalGuidance({ kind: "waiting" }, "cli"));
+        console.error(GRANT_WAITING_TEXT);
         return async () => {};
       },
-    };
-    const outcome = await executePluginCode(runtime, link, code, options, { figma });
+    });
+    if (bound.kind === "blocked") throw new Error(callTargetGuidance(bound.block, "cli", waitMs));
+    const { document } = bound;
+    console.error(`Running in "${document.fileName}" (${document.fileKey}).`);
+    const outcome = await executePluginCode(runtime, bound, code, {
+      figma,
+      signal: controller.signal,
+    });
     if (outcome.kind === "refused") throw new Error(outcome.message);
-    if (outcome.kind === "pending")
-      throw new Error(approvalGuidance({ kind: "expired", waitMs }, "cli"));
+    if (outcome.kind === "not-granted")
+      throw new Error(notGrantedText(outcome.reason, document.fileName));
     try {
-      const reply = withoutTokenMarks(outcome.reply);
+      const reply = {
+        file: { fileKey: document.fileKey, name: document.fileName },
+        ...withoutTokenMarks(outcome.reply),
+      };
       const json = JSON.stringify(reply, null, 2) + "\n";
       process.stdout.write(json);
       if (flags.output) await writeFile(flags.output, json);
       if (reply.errors !== null) console.error(reply.errors);
 
       if (flags.screenshot) {
-        const captured = await capturePluginScreenshot(runtime.bridge, link, target, options);
-        if (captured.kind === "pending")
+        const captured = await capturePluginScreenshot(
+          runtime.bridge,
+          bound,
+          target,
+          controller.signal,
+        );
+        if (captured.kind === "not-granted")
           throw new Error(
-            "The script ran (its reply is above), but session approval was withdrawn before the " +
-              "screenshot, so no PNG was saved. Re-running would repeat the script's writes; report " +
-              "this to the user or coordinating agent instead.",
+            "The script ran (its reply is above), but the plugin refused the screenshot (the grant " +
+              "was revoked or the plugin left the file), so no PNG was saved. Re-running would " +
+              "repeat the script's writes; report this to the user or coordinating agent instead.",
           );
         const screenshot = captured.reply;
         if ("errors" in screenshot) throw new Error(`Screenshot failed: ${screenshot.errors}`);

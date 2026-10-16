@@ -3,12 +3,13 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { promisify } from "node:util";
 import { WebSocket } from "ws";
 import { runExecute } from "~/commercial/commands/execute.js";
@@ -18,6 +19,7 @@ import {
   writesUsedThisMonth,
 } from "~/commercial/entitlement/write-ledger.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import { DOCUMENT_DATA_NAMESPACE, DOCUMENT_PROOF_KEY_PREFIX } from "@framelink/plugin/protocol";
 import { answerLinkSetup } from "./fixtures/plugin-link-peer.js";
 
 // Exercise production startup/handshake/images/execution on an ephemeral test port.
@@ -33,6 +35,18 @@ let dir: string;
 let file: string;
 let stdout: string;
 let sockets: WebSocket[];
+// The Figma file the test plugins are open in: they claim it, and REST shows their proofs in it.
+const FIGMA_FILE = { fileKey: "CLIfile1", name: "CLI file" };
+let proofs: Set<string>;
+let figmaCalls: Array<{ url: string; token: string | null }>;
+const COMMENT = {
+  id: "c1",
+  message: "Tighten this",
+  client_meta: { node_id: "1:2", node_offset: { x: 4, y: 8 } },
+  resolved_at: null,
+  created_at: "2026-01-01T00:00:00Z",
+  user: { handle: "Reviewer" },
+};
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "flcm-execute-"));
@@ -43,6 +57,28 @@ beforeEach(async () => {
   vi.stubEnv("FRAMELINK_API_URL", "http://127.0.0.1:9");
   stdout = "";
   sockets = [];
+  proofs = new Set();
+  figmaCalls = [];
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.startsWith("https://api.figma.com/")) return realFetch(input, init);
+    figmaCalls.push({ url, token: new Headers(init?.headers).get("X-Figma-Token") });
+    if (url.includes(`/v1/files/${FIGMA_FILE.fileKey}/comments`))
+      return Promise.resolve(Response.json({ comments: [COMMENT] }));
+    if (url.includes(`/v1/files/${FIGMA_FILE.fileKey}?`)) {
+      const marks = Object.fromEntries(
+        [...proofs].map((n) => [DOCUMENT_PROOF_KEY_PREFIX + n, "1"]),
+      );
+      return Promise.resolve(
+        Response.json({
+          name: FIGMA_FILE.name,
+          document: { sharedPluginData: { [DOCUMENT_DATA_NAMESPACE]: marks } },
+        }),
+      );
+    }
+    return Promise.resolve(Response.json({ err: "Not found" }, { status: 404 }));
+  });
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     stdout += String(chunk);
     return true;
@@ -62,18 +98,29 @@ afterEach(async () => {
   for (const socket of sockets) socket.terminate();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   await rm(dir, { recursive: true, force: true });
 });
 
 function run(flags: Parameters<typeof runExecute>[0] = {}) {
-  return runExecute({ env: join(dir, ".env"), wait: 2, ...flags }, [file]);
+  return runExecute({ env: join(dir, ".env"), wait: 2, figmaApiKey: "figd_cli_test", ...flags }, [
+    file,
+  ]);
 }
 
 const CLI_TEST_OWNER = { figmaUserId: "cli-test-user", name: "Test User" };
 
+/**
+ * A plugin open in FIGMA_FILE that claims it on introduction, writes each proof there, and answers
+ * every grant poll with `grant`.
+ */
 async function plugin(
   handle: (frame: Frame, socket: WebSocket) => void,
-  { approval = true, owner = CLI_TEST_OWNER as typeof CLI_TEST_OWNER | null, paired = true } = {},
+  {
+    grant = "granted",
+    owner = CLI_TEST_OWNER as typeof CLI_TEST_OWNER | null,
+    paired = true,
+  }: { grant?: string; owner?: typeof CLI_TEST_OWNER | null; paired?: boolean } = {},
 ) {
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
@@ -82,15 +129,16 @@ async function plugin(
     const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
     socket.on("message", (data) => {
       const frame: Frame = JSON.parse(data.toString());
-      answerLinkSetup((reply) => socket.send(JSON.stringify(reply)), frame, { owner, paired });
-      if (frame.type === "SESSION_INFO")
-        socket.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: frame.id }));
-      if (frame.type === "SESSION_INFO" && approval)
-        socket.send(
-          JSON.stringify({ type: "SESSION_TOKEN", sessionToken: "clitestsessiontoken0000" }),
-        );
-      if (frame.type === "APPROVAL_STATUS" && approval)
-        reply(socket, frame, { type: "APPROVAL_GRANTED" });
+      const answer = (value: Frame) => socket.send(JSON.stringify({ id: frame.id, ...value }));
+      if (frame.type === "INTRODUCE") answer({ type: "INTRODUCED", claim: FIGMA_FILE.fileKey });
+      else answerLinkSetup((value) => socket.send(JSON.stringify(value)), frame, { owner, paired });
+      if (frame.type === "PROVE_DOCUMENT") {
+        proofs.add(String(frame.nonce));
+        answer({ type: "PROOF_WRITTEN" });
+      }
+      if (frame.type === "PROOF_SETTLED") answer({ type: "PROOF_SETTLED_ACK" });
+      if (frame.type === "GRANT_STATUS") answer({ type: "GRANT", state: grant });
+      if (frame.type === "GRANT_PROMPT_CLOSED") answer({ type: "GRANT_PROMPT_CLOSED_ACK" });
       handle(frame, socket);
     });
     const opened = await new Promise<boolean>((resolve) => {
@@ -103,7 +151,7 @@ async function plugin(
   throw new Error("CLI relay did not bind its test port");
 }
 
-// The reply type a request is owed; `value` may override it (PENDING_APPROVAL, APPROVAL_GRANTED).
+// The reply type a request is owed; `value` may override it.
 const REPLY_TYPE: Record<string, Frame> = {
   EXECUTE_CODE: { type: "EXECUTE_CODE_RESULT", documentChanged: true },
   SCREENSHOT: { type: "SCREENSHOT_RESULT" },
@@ -113,7 +161,7 @@ function reply(socket: WebSocket, frame: Frame, value: Frame) {
 }
 
 describe("saved-script CLI using production plugin services", () => {
-  it("checks approval, ships the real runtime, serves local images, saves JSON/PNG, and closes", async () => {
+  it("proves the file, ships the real runtime, serves local images, saves JSON/PNG, and closes", async () => {
     const png = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
       "base64",
@@ -126,9 +174,9 @@ describe("saved-script CLI using production plugin services", () => {
     let execution: Frame | undefined;
     let imageReply: Frame | undefined;
     let screenshotRequest: Frame | undefined;
-    let session: Frame | undefined;
+    let introduction: Frame | undefined;
     const { closed } = await plugin((frame, socket) => {
-      if (frame.type === "SESSION_INFO") session = frame;
+      if (frame.type === "INTRODUCE") introduction = frame;
       if (frame.type === "EXECUTE_CODE") {
         attempts++;
         {
@@ -163,14 +211,16 @@ describe("saved-script CLI using production plugin services", () => {
     expect(attempts).toBe(1);
     expect(execution?.code).toBe(await readFile(file, "utf8"));
     expect(execution?.preamble).toContain("(function (__flcmHost) {");
-    expect(session).toMatchObject({ identity: process.cwd() });
+    expect(introduction).toMatchObject({ project: realpathSync(process.cwd()) });
+    expect(execution?.fileKey).toBe(FIGMA_FILE.fileKey);
     expect(imageReply).toMatchObject({
       type: "CHANNEL_RESPONSE",
       ok: true,
       payload: { "./asset.png": png.toString("base64") },
     });
-    expect(screenshotRequest).toMatchObject({ key: "card", scale: 2 });
+    expect(screenshotRequest).toMatchObject({ key: "card", scale: 2, fileKey: FIGMA_FILE.fileKey });
     expect(JSON.parse(stdout)).toEqual({
+      file: FIGMA_FILE,
       result: { answer: 42 },
       console: ["saved workflow"],
       errors: null,
@@ -189,7 +239,11 @@ describe("saved-script CLI using production plugin services", () => {
     });
     expect(await finished).toBe(1);
     await closed;
-    expect(JSON.parse(stdout)).toEqual({ console: ["before throw"], errors: "boom" });
+    expect(JSON.parse(stdout)).toEqual({
+      file: FIGMA_FILE,
+      console: ["before throw"],
+      errors: "boom",
+    });
     expect(await readFile(screenshot, "utf8")).toBe("png");
   });
 
@@ -237,52 +291,32 @@ describe("saved-script CLI using production plugin services", () => {
     expect(stdout).toBe("");
   });
 
-  it("an Allow after the run expired approves the next run, which alone executes", async () => {
-    const claim = "k3claimfromtheplugin0000000000";
+  it("waits for a pick, and a run whose wait ran out sends nothing and says who must pick", async () => {
     const executions: Frame[] = [];
     const expired = expect(run({ wait: 1 })).rejects.toThrow(
-      /did not run. Blocked: session approval is pending, and this run has ended without sending the script. Required before re-running: someone clicks Allow on this run's request/,
+      /Blocked: this project isn't allowed to edit a Figma file yet, so the script did not run. Required before re-running: someone picks the file to edit in the Framelink plugin/,
     );
     const first = await plugin(
-      (frame, socket) => {
+      (frame) => {
         if (frame.type === "EXECUTE_CODE") executions.push(frame);
-        if (frame.type !== "APPROVAL_STATUS") return;
-        socket.send(JSON.stringify({ type: "SESSION_CLAIM", sessionClaim: claim }));
-        reply(socket, frame, { type: "PENDING_APPROVAL" });
       },
-      { approval: false },
+      { grant: "pending" },
     );
     await expired;
     await first.closed;
     expect(stdout).toBe("");
-
-    // The human clicks Allow on the expired request. The next run presents the claim, which is what
-    // lets the plugin hand it the token; that run's call is the first code anything sends.
-    let presented: unknown;
+    expect(executions).toHaveLength(0);
+    // Nothing was stored server-side: the next run asks the plugin again, which now holds the grant.
     const next = run({ wait: 2 });
-    const second = await plugin(
-      (frame, socket) => {
-        if (frame.type === "SESSION_INFO") {
-          presented = frame.sessionClaim;
-          socket.send(
-            JSON.stringify({ type: "SESSION_TOKEN", sessionToken: "lateallowsessiontoken0000" }),
-          );
-        }
-        if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
-        if (frame.type === "EXECUTE_CODE") {
-          executions.push(frame);
-          reply(socket, frame, { result: { answer: 42 }, console: [], errors: null });
-        }
-      },
-      { approval: false },
-    );
+    const second = await plugin((frame, socket) => {
+      if (frame.type === "EXECUTE_CODE") {
+        executions.push(frame);
+        reply(socket, frame, { result: { answer: 42 }, console: [], errors: null });
+      }
+    });
     await expect(next).resolves.toBe(0);
     await second.closed;
-    expect(presented).toBe(claim);
     expect(executions).toHaveLength(1);
-    // The handover spent the claim, so no later connection can present it again.
-    const approvals = await readdir(join(dir, "state", "approvals"));
-    expect(approvals.filter((name) => name.endsWith(".claim.json"))).toEqual([]);
   });
 
   it.each([
@@ -318,61 +352,37 @@ describe("saved-script CLI using production plugin services", () => {
     expect(stdout).toBe("");
   });
 
-  it("reads a run's comment pins over REST with the CLI's Figma token", async () => {
-    const realFetch = globalThis.fetch;
-    const figmaCalls: Array<{ url: string; token: string | null }> = [];
-    vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (!url.startsWith("https://api.figma.com/")) return realFetch(input, init);
-      figmaCalls.push({ url, token: new Headers(init?.headers).get("X-Figma-Token") });
-      return Promise.resolve(
-        Response.json({
-          comments: [
-            {
-              id: "c1",
-              message: "Tighten this",
-              client_meta: { node_id: "1:2", node_offset: { x: 4, y: 8 } },
-              resolved_at: null,
-              created_at: "2026-01-01T00:00:00Z",
-              user: { handle: "Reviewer" },
-            },
-          ],
-        }),
-      );
+  it("reads the run's own file's comment pins over REST with the CLI's Figma token", async () => {
+    const finished = run();
+    let pinsReply: Frame | undefined;
+    let execution: Frame | undefined;
+    await plugin((frame, socket) => {
+      if (frame.type === "EXECUTE_CODE") {
+        execution = frame;
+        socket.send(
+          JSON.stringify({
+            type: "CHANNEL_REQUEST",
+            id: "pins-1",
+            runId: frame.id,
+            capability: "comments.pins",
+            payload: {},
+          }),
+        );
+      }
+      if (frame.type === "CHANNEL_RESPONSE") {
+        pinsReply = frame;
+        reply(socket, execution!, { result: null, console: [], errors: null });
+      }
     });
-    try {
-      const finished = run({ figmaApiKey: "figd_cli_test" });
-      let pinsReply: Frame | undefined;
-      let execution: Frame | undefined;
-      await plugin((frame, socket) => {
-        if (frame.type === "EXECUTE_CODE") {
-          execution = frame;
-          socket.send(
-            JSON.stringify({
-              type: "CHANNEL_REQUEST",
-              id: "pins-1",
-              runId: frame.id,
-              capability: "comments.pins",
-              payload: { fileKey: "abc123" },
-            }),
-          );
-        }
-        if (frame.type === "CHANNEL_RESPONSE") {
-          pinsReply = frame;
-          reply(socket, execution!, { result: null, console: [], errors: null });
-        }
-      });
-      expect(await finished).toBe(0);
-      expect(figmaCalls).toEqual([
-        { url: expect.stringContaining("/v1/files/abc123/comments"), token: "figd_cli_test" },
-      ]);
-      expect(pinsReply).toMatchObject({
-        ok: true,
-        payload: { pins: [{ nodeId: "1:2", x: 4, y: 8 }] },
-      });
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(await finished).toBe(0);
+    expect(figmaCalls).toContainEqual({
+      url: expect.stringContaining(`/v1/files/${FIGMA_FILE.fileKey}/comments`),
+      token: "figd_cli_test",
+    });
+    expect(pinsReply).toMatchObject({
+      ok: true,
+      payload: { pins: [{ nodeId: "1:2", x: 4, y: 8 }] },
+    });
   });
 
   it("rejects invalid screenshot options before connecting or running a script", async () => {
@@ -395,8 +405,9 @@ describe("one-shot bridge lifecycle", () => {
             .resolveLink()
             .then((resolution) => {
               if (resolution.kind !== "linked") throw new Error(`plugin ${resolution.kind}`);
-              return bridge.request(resolution.link, {
+              return bridge.request(resolution.links[0], {
                 type: "EXECUTE_CODE",
+                fileKey: "FAKEfile1",
                 code: "return 1",
                 preamble: "test runtime",
                 lateChangeWindowMs: 60_000,
@@ -429,12 +440,11 @@ it("CLI sends nothing to an unpaired plugin and points at the pair command", asy
   expect(new Set(frames)).toEqual(new Set(["HELLO", "AUTHENTICATE"]));
 });
 
-it("CLI cannot execute without a plugin owner even when approval status claims granted", async () => {
+it("CLI cannot execute without a plugin owner even when the plugin claims a grant", async () => {
   const finished = expect(run()).rejects.toThrow("which Figma user it is signed in as");
   let executions = 0;
   const { closed } = await plugin(
-    (frame, socket) => {
-      if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
+    (frame) => {
       if (frame.type === "EXECUTE_CODE") executions++;
     },
     { owner: null },

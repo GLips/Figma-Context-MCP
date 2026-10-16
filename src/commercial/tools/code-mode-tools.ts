@@ -18,16 +18,24 @@ import {
   type PluginBridgeRuntime,
   type PluginPresenceSource,
 } from "~/commercial/plugin-bridge/index.js";
-import { APPROVAL_WAIT_MS, ApprovalWaitError } from "~/commercial/plugin-bridge/await-approval.js";
+import { GRANT_WAIT_MS } from "~/commercial/plugin-bridge/call-target.js";
 import {
-  approvalGuidance,
+  GRANT_WAITING_TEXT,
+  notGrantedText,
   pairingCodeUnknownText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
   executePluginCode,
   capturePluginScreenshot,
+  type PluginCallTarget,
 } from "~/commercial/plugin-bridge/execution.js";
-import { BridgeRequestError, type PluginLink } from "~/commercial/plugin-bridge/bridge.js";
+import {
+  BridgeRequestError,
+  type CallDocument,
+  type PluginLink,
+} from "~/commercial/plugin-bridge/bridge.js";
+import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
+import { FIGMA_FILE_KEY_PATTERN } from "~/utils/figma-url.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
 import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
@@ -45,10 +53,10 @@ import { CLI_NAME } from "~/utils/cli-help.js";
 import { formatExecuteCodeReply } from "./token-tree.js";
 import {
   PAIRING_GUIDANCE_MIN_LIFE_MS,
-  linkForPluginCall,
   pairPluginLink,
+  targetForPluginCall,
   type PairingCodeAsker,
-  type PluginCallLink,
+  type PluginCallTargeting,
 } from "~/commercial/plugin-bridge/plugin-call-link.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
@@ -68,7 +76,7 @@ export interface CodeModeCallerContext extends CallerContext {
   plugin: PluginBridgeRuntime | null;
 }
 
-// A permanent boundary, not a missing feature: the plugin, its approvals and the asset root are the
+// A permanent boundary, not a missing feature: the plugin, its grants and the asset root are the
 // operator's, and a remote caller is by definition someone else. Shared writes are the hosted service's.
 const LOCAL_WRITES_NEED_LOOPBACK =
   "Local writes need a loopback server. This server listens on a network address, so it gives " +
@@ -106,15 +114,8 @@ export function codeModeExtension(
 type CodeModeFacts = ToolEventProperties & {
   figma_user_id?: string;
   /** How far the call got. */
-  outcome?:
-    | "executed"
-    | "captured"
-    | "paired"
-    | "pending_approval"
-    | "refused"
-    | "failed"
-    | "not_run";
-  /** A failure answered to the agent as a result — the plugin or the approval, never a bug. */
+  outcome?: "executed" | "captured" | "paired" | "refused" | "failed" | "not_run";
+  /** A failure answered to the agent as a result — the plugin or its grant, never a bug. */
   failure?: string;
 };
 
@@ -129,7 +130,6 @@ function ownedBy(link: PluginLink): CodeModeFacts {
  */
 function expectedRunFailure(error: unknown, signal: AbortSignal): string | null {
   if (error instanceof BridgeRequestError) return `bridge_${error.outcome.replace("-", "_")}`;
-  if (error instanceof ApprovalWaitError) return `approval_${error.reason}`;
   if (signal.aborted) return "cancelled";
   return null;
 }
@@ -222,24 +222,28 @@ function registerCodeModeTools(
     };
   }
 
-  /** The call's plugin link, or the reply that explains why there isn't one. Nothing is submitted. */
-  async function pluginCallLink(
+  /**
+   * Where the call runs — its document and link, granted — or the reply that explains why it runs
+   * nowhere. Prompts in the plugin while it waits; submits nothing.
+   */
+  async function pluginCallTarget(
     { bridge }: PluginBridgeRuntime,
     call: FramelinkToolCall<CodeModeFacts>,
     facts: CodeModeFacts,
     extra: ToolExtra,
-  ): Promise<{ link: PluginLink } | { reply: CallToolResult }> {
-    const linked = await linkForPluginCall(bridge, pairingCodeAsker(extra), extra.signal);
-    if (linked.kind === "linked") return { link: linked.link };
-    return { reply: blockedCallReply(call, facts, linked) };
-  }
-
-  function approvalOptions(extra: ToolExtra) {
-    return {
+    fileKey: string | null,
+  ): Promise<PluginCallTarget | { reply: CallToolResult }> {
+    const targeted = await targetForPluginCall(bridge, {
+      fileKey,
+      askPairingCode: pairingCodeAsker(extra),
       signal: extra.signal,
-      onWaiting: () =>
-        startProgressHeartbeat(extra, () => approvalGuidance({ kind: "waiting" }, "mcp"), 3000),
-    };
+      surface: "mcp",
+      reader: documentReaderFor(figmaService),
+      waitMs: GRANT_WAIT_MS,
+      onWaiting: () => startProgressHeartbeat(extra, () => GRANT_WAITING_TEXT, 3000),
+    });
+    if (targeted.kind === "targeted") return targeted;
+    return { reply: blockedCallReply(call, facts, targeted) };
   }
 
   function scriptSourceReply(got: "neither" | "both"): CallToolResult {
@@ -249,15 +253,22 @@ function registerCodeModeTools(
     );
   }
 
-  /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
-  function pendingApprovalResult(): { content: { type: "text"; text: string }[] } {
+  /** The plugin refused a bound call on arrival: its grant was revoked, or it left the file. */
+  function notGrantedReply(
+    call: FramelinkToolCall<CodeModeFacts>,
+    facts: CodeModeFacts,
+    target: PluginCallTarget,
+    reason: "no-grant" | "other-document",
+  ): CallToolResult {
+    call.record({
+      ...facts,
+      ...ownedBy(target.link),
+      outcome: "refused",
+      failure: `not_granted_${reason.replace("-", "_")}`,
+    });
     return {
-      content: [
-        {
-          type: "text",
-          text: approvalGuidance({ kind: "expired", waitMs: APPROVAL_WAIT_MS }, "mcp"),
-        },
-      ],
+      isError: true,
+      content: [{ type: "text", text: notGrantedText(reason, target.document.fileName) }],
     };
   }
 
@@ -279,6 +290,7 @@ function registerCodeModeTools(
             .describe(
               "JavaScript to run in the Figma sandbox. Runs in an async body; use await freely; return a value. Pass code or scriptPath, not both.",
             ),
+          fileKey: FILE_KEY_PARAM,
           scriptPath: z
             .string()
             .optional()
@@ -288,7 +300,7 @@ function registerCodeModeTools(
             ),
         },
         handler: async (
-          { code, scriptPath }: { code?: string; scriptPath?: string },
+          { code, scriptPath, fileKey }: { code?: string; scriptPath?: string; fileKey?: string },
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
@@ -300,6 +312,7 @@ function registerCodeModeTools(
           }
           call.record({ ...source, outcome: "not_run" });
           if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
+          if (fileKey !== undefined && !FIGMA_FILE_KEY_PATTERN.test(fileKey)) return fileKeyReply();
           let script: string;
           if (code !== undefined) script = code;
           else if (scriptPath !== undefined) {
@@ -314,8 +327,8 @@ function registerCodeModeTools(
                 cause instanceof OutsideAssetRootError
                   ? `send the script inline as code, or, with shell access, run ` +
                     `\`npx ${CLI_NAME} execute ${shellQuotedPath(resolvePath(cause.assetRoot, scriptPath))}\`, ` +
-                    `which reads the file on your side with your own permissions (a human approves ` +
-                    `its session in the Figma plugin)`
+                    `which reads the file on your side with your own permissions (a human allows ` +
+                    `this project in the Figma plugin)`
                   : "correct scriptPath, or send the script inline as code";
               call.record({ ...source, outcome: "not_run", failure: "script_unreadable" });
               return retryableToolReply(
@@ -324,12 +337,15 @@ function registerCodeModeTools(
             }
           } else return scriptSourceReply("neither");
           return answeringExpectedFailures(call, extra, source, async () => {
-            const linked = await pluginCallLink(runtime, call, source, extra);
-            if ("reply" in linked) return linked.reply;
-            const { link } = linked;
-            const outcome = await executePluginCode(runtime, link, script, approvalOptions(extra), {
+            const target = await pluginCallTarget(runtime, call, source, extra, fileKey ?? null);
+            if ("reply" in target) return target.reply;
+            const { link } = target;
+            const outcome = await executePluginCode(runtime, target, script, {
               figma: figmaService,
+              signal: extra.signal,
             });
+            if (outcome.kind === "not-granted")
+              return notGrantedReply(call, source, target, outcome.reason);
             if (outcome.kind === "refused") {
               call.record({
                 ...source,
@@ -339,17 +355,20 @@ function registerCodeModeTools(
               });
               return { content: [{ type: "text", text: outcome.message }], isError: true };
             }
-            if (outcome.kind === "pending") {
-              call.record({ ...source, ...ownedBy(link), outcome: "pending_approval" });
-              return pendingApprovalResult();
-            }
             call.record({
               ...source,
               ...ownedBy(link),
               outcome: "executed",
               script_errored: outcome.reply.errors !== null,
             });
-            return { content: [{ type: "text", text: formatExecuteCodeReply(outcome.reply) }] };
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${ranIn(target.document)}\n${formatExecuteCodeReply(outcome.reply)}`,
+                },
+              ],
+            };
           });
         },
       },
@@ -448,9 +467,10 @@ Returns a PNG image.`,
             .describe(
               `Export resolution multiplier, greater than 0 and at most ${MAX_SCREENSHOT_SCALE} (default 1). Raise it to inspect fine detail.`,
             ),
+          fileKey: FILE_KEY_PARAM,
         },
         handler: async (
-          target: ScreenshotOptions,
+          { fileKey, ...target }: ScreenshotOptions & { fileKey?: string },
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
@@ -461,6 +481,7 @@ Returns a PNG image.`,
           call.record({ outcome: "not_run" });
           // Known params are type-checked by the SDK; their value-level misuse is checked here, in
           // the same retryable shape as an unknown param, so the agent fixes the call and retries.
+          if (fileKey !== undefined && !FIGMA_FILE_KEY_PATTERN.test(fileKey)) return fileKeyReply();
           const inputError = screenshotInputError(target);
           if (inputError) {
             call.reject({ field: "(root)", rule: "screenshot_target" });
@@ -469,19 +490,17 @@ Returns a PNG image.`,
             );
           }
           return answeringExpectedFailures(call, extra, {}, async () => {
-            const linked = await pluginCallLink(runtime, call, {}, extra);
-            if ("reply" in linked) return linked.reply;
-            const { link } = linked;
+            const located = await pluginCallTarget(runtime, call, {}, extra, fileKey ?? null);
+            if ("reply" in located) return located.reply;
+            const { link } = located;
             const outcome = await capturePluginScreenshot(
               runtime.bridge,
-              link,
+              located,
               target,
-              approvalOptions(extra),
+              extra.signal,
             );
-            if (outcome.kind === "pending") {
-              call.record({ ...ownedBy(link), outcome: "pending_approval" });
-              return pendingApprovalResult();
-            }
+            if (outcome.kind === "not-granted")
+              return notGrantedReply(call, {}, located, outcome.reason);
             const reply = outcome.reply;
             const failed = "errors" in reply;
             call.record({
@@ -490,7 +509,12 @@ Returns a PNG image.`,
               failure: failed ? "screenshot_failed" : undefined,
             });
             if (failed) return { content: [{ type: "text", text: reply.errors }], isError: true };
-            return { content: [{ type: "image", data: reply.image, mimeType: "image/png" }] };
+            return {
+              content: [
+                { type: "text", text: ranIn(located.document) },
+                { type: "image", data: reply.image, mimeType: "image/png" },
+              ],
+            };
           });
         },
       },
@@ -534,7 +558,10 @@ Returns a PNG image.`,
               "mcp",
             );
             if (pairing.kind === "blocked") return blockedCallReply(call, {}, pairing);
-            call.record({ ...(pairing.link ? ownedBy(pairing.link) : {}), outcome: "paired" });
+            call.record({
+              ...(pairing.kind === "paired" ? ownedBy(pairing.link) : {}),
+              outcome: "paired",
+            });
             return retryableToolReply(PAIRED_TEXT);
           }
           const confirmed = await bridge.confirmPairing(code);
@@ -548,11 +575,8 @@ Returns a PNG image.`,
           }
           // An agent retrying a confirmation that already went through is told so, not sent round.
           const resolution = await bridge.resolveLink(extra.signal);
-          if (resolution.kind === "linked" || resolution.kind === "several") {
-            call.record({
-              ...(resolution.kind === "linked" ? ownedBy(resolution.link) : {}),
-              outcome: "paired",
-            });
+          if (resolution.kind === "linked") {
+            call.record({ outcome: "paired" });
             return retryableToolReply(PAIRED_TEXT);
           }
           call.record({ outcome: "not_run", failure: "pairing_code_unknown" });
@@ -585,11 +609,29 @@ Returns a PNG image.`,
 function blockedCallReply(
   call: FramelinkToolCall<CodeModeFacts>,
   facts: CodeModeFacts,
-  blocked: Extract<PluginCallLink, { kind: "blocked" }>,
+  blocked: Extract<PluginCallTargeting, { kind: "blocked" }>,
 ): CallToolResult {
   call.record({ ...facts, outcome: "not_run", failure: blocked.block });
   const content = [{ type: "text" as const, text: blocked.text }];
   return blocked.isError ? { isError: true, content } : { content };
+}
+
+const FILE_KEY_PARAM = z
+  .string()
+  .optional()
+  .describe(
+    "The Figma file to work in: the key from its URL (figma.com/design/<fileKey>/…). Runs there only, and the user is asked in that file to allow this project if they haven't. Omit to use the one open file this project may edit; with several, or none yet, the user picks one in Figma.",
+  );
+
+function fileKeyReply(): CallToolResult {
+  return retryableToolReply(
+    "fileKey must be the alphanumeric key from a Figma file URL (figma.com/design/<fileKey>/…), so this call did not run. This is NOT a failure: correct fileKey, or omit it, and retry.",
+  );
+}
+
+/** Every reply names the document it ran against, so a wrong file is noticed on the first call. */
+function ranIn({ fileName, fileKey }: CallDocument): string {
+  return `Figma file: "${fileName}" (fileKey ${fileKey})`;
 }
 
 // How long a client's pairing prompt may stay open before the call falls back to agent guidance.

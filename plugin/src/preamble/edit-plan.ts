@@ -22,7 +22,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 // the lock's, not ours: see enterMutatingVerb in mutation-lock.ts.
 //
 // NOT exactly-once: the lock is run-scoped, and the server can re-send a run whose reply was lost
-// after a first PENDING_APPROVAL — a resend is a new run that re-applies the delta. The delta
+// after a first attempt — a resend is a new run that re-applies the delta. The delta
 // vocabulary is ABSOLUTE values (a fill, an opacity — never "+10"), so a duplicate apply converges
 // to the same canvas; the residue is a duplicate undo step, not divergent state. Keep it that way:
 // a relative delta word would turn that accepted race into canvas corruption.

@@ -14,10 +14,11 @@
 //   • Link setup gates everything: HELLO refuses another protocol outright, AUTHENTICATE proves the
 //     installation credential, and an unpaired link is sent nothing but setup frames.
 //   • Pairing: the panel shows the code the server offered, and only that code pairs that link.
-//   • The consent gate: PENDING_APPROVAL before Allow, the minted token persisted and echoed so a
-//     reconnect or a same-port restart stays approved, and a token-less server re-prompted.
-//   • Port-block discovery: first free port, a restart reclaiming its own port, bounded and
-//     cancellable reclaim waits, and the manifest mirroring WS_PORT_BLOCK.
+//   • The grant gate: the plugin refuses a run until a human allows this project on the proven
+//     document; the grant lives in the plugin alone, so a reconnect, a restart or a sibling server in
+//     the same project needs no second Allow, another installation is asked anew, and Revoke ends it.
+//   • Port-block discovery: first free port, a stopped bridge disowning its bind, and the manifest
+//     mirroring WS_PORT_BLOCK.
 //   • Deadlines cancel (never abandon) and are worded from the plugin's answer; the reverse channel
 //     suspends them while serving and refuses requests that aren't a live code run's.
 //
@@ -25,17 +26,18 @@
 
 import { WebSocket } from "ws";
 import assert from "node:assert";
-import net from "node:net";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { ApprovalStore } from "../src/commercial/plugin-bridge/approval-store.ts";
 import { LinkCredentialStore, linkProof } from "../src/commercial/plugin-bridge/link-credential.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
-import { startLoopbackPlugin } from "../src/commercial/tests/fixtures/loopback-plugin.ts";
+import {
+  LoopbackFigma,
+  startLoopbackPlugin,
+} from "../src/commercial/tests/fixtures/loopback-plugin.ts";
 
 const PORT = 19876;
 const URL = `ws://127.0.0.1:${PORT}`;
@@ -48,28 +50,36 @@ const until = async (condition, what, ms = 5_000) => {
   }
 };
 
+// The Figma files the real plugins are open in, and the REST read every bridge proves them with.
+const figmaFiles = new LoopbackFigma();
+const contractFile = figmaFiles.file("CONTRACTfile1", "Contract file");
+
 // The real plugin evals what it is sent, so it gets the real std-lib (ADR-0010).
 const PREAMBLE = await buildSandboxPreamble();
 const execute = (bridge, link, fields = {}) =>
   bridge.request(link, {
     type: "EXECUTE_CODE",
+    fileKey: contractFile.key,
     code: "return 'ok';",
     preamble: PREAMBLE,
     lateChangeWindowMs: 60_000,
     ...fields,
   });
-// What index.ts sends every authenticated link: who this server is, and the token proving an Allow.
-const introduce = (bridge, link) =>
-  bridge.request(link, bridge.sessionInfo("https://app.framelink.ai"));
 const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
-// Every bridge gets its OWN state dir — approvals and the link credential — so nothing one bridge
-// persists is reloaded by another in this one process, and nothing touches the operator's real state
-// root. The restart and shared-dir checks below opt INTO a shared dir on purpose.
+/** Bind a call to `fileKey` (null: let the human pick), waiting `waitMs` for the plugin's answer. */
+const target = (bridge, fileKey, waitMs = 5_000) =>
+  bridge.targetCall(fileKey, { signal: new AbortController().signal, waitMs, pollMs: 20 });
+
+// Every bridge gets its OWN state dir — the link credential — so nothing one bridge persists is
+// reloaded by another in this one process, and nothing touches the operator's real state root. The
+// restart and shared-dir checks below opt INTO a shared dir on purpose.
 const freshStateDir = () => mkdtempSync(join(tmpdir(), "flcm-contract-"));
 function bridgeOn(ports, { stateDir = freshStateDir(), onConnect, ...options } = {}) {
-  const bridge = new PluginBridge(new ApprovalStore(process.cwd(), stateDir), {
+  const bridge = new PluginBridge({
     linkCredentials: new LinkCredentialStore(stateDir),
+    documentReader: figmaFiles.reader,
+    proofTiming: { pollMs: 20, deadlineMs: 1_000 },
     ...options,
   });
   bridge.start([ports].flat(), onConnect);
@@ -91,7 +101,7 @@ async function linkOf(bridge) {
     async () => (resolution = await bridge.resolveLink()).kind === "linked",
     "an authenticated link",
   );
-  return resolution.link;
+  return resolution.links[0];
 }
 
 /** Pair the way a person does: offer, read the code off the real panel, confirm exactly that. */
@@ -109,7 +119,8 @@ async function pairByPanel(bridge, plugin) {
 
 // A socket speaking the plugin's half of link setup by hand. `protocolVersion: null` predates HELLO
 // and ERRORs every request; `credentialDir` names the state dir whose credential it holds (none:
-// unpaired). `received` lists every request type it was sent; `onFrame` sees the rest.
+// unpaired). It claims no document. `received` lists every request type it was sent; `onFrame` sees
+// the rest.
 function rawPeer(
   url,
   {
@@ -146,6 +157,10 @@ function rawPeer(
       );
       return;
     }
+    if (msg.type === "INTRODUCE") {
+      send({ type: "INTRODUCED", id: msg.id, claim: null });
+      return;
+    }
     onFrame(msg);
   });
   return ws;
@@ -159,16 +174,20 @@ const refusedOrOpened = (ws) =>
 const opened = (ws) => new Promise((res) => ws.on("open", res));
 
 let signInRequests = 0;
+let grantChanges = 0;
 let connected = 0;
 const bridge = bridgeOn(PORT, {
   onConnect: () => connected++,
-  events: { onWriteAccessSignIn: () => signInRequests++ },
+  events: {
+    onWriteAccessSignIn: () => signInRequests++,
+    onGrantChanged: () => grantChanges++,
+  },
 });
 await wait(150);
 
 // --- Pairing: an unpaired plugin is sent setup frames only, until its panel's code is confirmed ---
 const pluginStorage = new Map();
-const plugin = await realPlugin(PORT, { storage: pluginStorage });
+const plugin = await realPlugin(PORT, { storage: pluginStorage, file: contractFile });
 assert.equal(connected, 1, "the plugin (Origin:null) connects");
 await until(async () => (await bridge.resolveLink()).kind === "unpaired", "the unpaired verdict");
 const offer = await bridge.offerPairing();
@@ -192,11 +211,8 @@ console.log(
   "✅ The panel shows the offered code, and confirming exactly it pairs and authenticates",
 );
 
-// --- Consent gate ---
-// Until a human approves, a write is GATED (PENDING_APPROVAL) — never run, never a hard error.
-assert.equal(bridge.approvedSession(), null, "no session token before the first Allow");
-await introduce(bridge, link);
-// A request the plugin can't read is refused BEFORE the consent gate — asking a human to approve a
+// --- The grant gate ---
+// A request the plugin can't read is refused BEFORE the grant gate — asking a human to allow a
 // doomed write would be asking consent for nothing. An envelope ERROR rejects: it can never be
 // mistaken for a run that completed with no result.
 await assert.rejects(
@@ -204,22 +220,28 @@ await assert.rejects(
   /can't read the server's "EXECUTE_CODE" request/,
   "an EXECUTE_CODE without its std-lib is refused, not gated",
 );
-assert.equal(
-  (await execute(bridge, link)).type,
-  "PENDING_APPROVAL",
-  "a write before approval is gated",
-);
-console.log("✅ Pre-approval write returns PENDING_APPROVAL");
+// Until a human allows this project on the proven document, the plugin refuses the run outright.
+assert.equal((await execute(bridge, link)).type, "NOT_GRANTED", "a write before Allow is refused");
+console.log("✅ A write before any grant is refused NOT_GRANTED, unrun");
 
+// A call naming the file proves the link is in it (a nonce read back over REST), then waits on Allow.
+const binding = target(bridge, contractFile.key);
 await plugin.allow();
-await until(() => bridge.approvedSession() !== null, "the handed-over token");
-assert.match(
-  String(bridge.approvedSession()?.token),
-  /^[0-9a-z]{16,64}$/,
-  "the token is persisted",
+const bound = await binding;
+assert.equal(bound.kind, "targeted", "Allow binds the call");
+assert.deepEqual(
+  bound.document,
+  { fileKey: contractFile.key, fileName: contractFile.name },
+  "to the proven document, named as REST names it",
 );
-assert.equal((await execute(bridge, link)).result, "ok", "the approved write runs");
-console.log("✅ After Allow, the same write runs");
+assert.equal(grantChanges, 1, "the grant is announced to the server");
+assert.equal((await execute(bridge, bound.link)).result, "ok", "the granted write runs");
+assert.equal(
+  (await execute(bridge, bound.link, { fileKey: "OTHERfile1" })).type,
+  "NOT_GRANTED",
+  "a run naming another document is refused, grant or no",
+);
+console.log("✅ After a proof and an Allow, the same write runs — only in the granted document");
 
 // --- Protocol 8: write-access notices and the panel's sign-in click ---
 const notice = { kind: "sign-in-failed", message: "contract" };
@@ -254,8 +276,10 @@ const stranger = rawPeer(URL, {
 });
 await opened(stranger);
 await wait(100);
-stranger.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: "plantedsessiontoken000000" }));
-stranger.send(JSON.stringify({ type: "REVOKE_SESSION" }));
+stranger.send(
+  JSON.stringify({ type: "GRANT_CHANGED", project: "/p", fileKey: "PLANTEDfile1", granted: true }),
+);
+stranger.send(JSON.stringify({ type: "DOCUMENT_CLAIMED", fileKey: "PLANTEDfile1" }));
 stranger.send(
   JSON.stringify({ type: "CHANNEL_REQUEST", id: "q", runId: "r", capability: "images.fetch" }),
 );
@@ -265,11 +289,7 @@ assert.deepEqual(
   ["HELLO", "AUTHENTICATE"],
   "an unpaired stranger is sent setup frames and nothing else, not even a channel refusal",
 );
-assert.notEqual(
-  bridge.approvedSession()?.token,
-  "plantedsessiontoken000000",
-  "and nothing it sends is heard",
-);
+assert.equal(grantChanges, 1, "and nothing it sends is heard");
 assert.equal((await execute(bridge, link)).result, "ok", "the plugin still drives beside it");
 stranger.close();
 console.log("✅ Web origins are refused; an unpaired stranger beside the plugin gets nothing");
@@ -296,24 +316,15 @@ console.log(
   "✅ A flood of unauthenticated links neither displaces the plugin nor locks out its redial",
 );
 
-// --- Approval is sticky across a reconnect, but only once the server re-introduces itself ---
+// --- The grant holds across a reconnect, with no prompt ---
 // The redial above is a fresh link: it authenticated with no prompt (the plugin kept its pairing),
-// and starts unapproved until the server echoes the token it was handed.
+// re-claimed the file it was proven in, and was proven again on introduction.
 assert.equal(plugin.showsPairingCode(), false, "a paired plugin's redial shows no pairing code");
-assert.equal(
-  (await execute(bridge, link)).type,
-  "PENDING_APPROVAL",
-  "a write before SESSION_INFO is gated",
-);
-await introduce(bridge, link);
-assert.equal(
-  (await execute(bridge, link)).result,
-  "ok",
-  "a reconnect stays approved (token echoed)",
-);
-console.log(
-  "✅ A reconnect authenticates without pairing again, and approval is sticky once re-introduced",
-);
+const rebound = await target(bridge, null);
+assert.equal(rebound.kind, "targeted", "a call naming no file runs in the one granted document");
+assert.equal(plugin.isPrompting(), false, "without asking the human again");
+assert.equal((await execute(bridge, rebound.link)).result, "ok", "a reconnect stays granted");
+console.log("✅ A reconnect authenticates without pairing again, and the grant holds unprompted");
 
 // A disconnect mid-request rejects the in-flight call at once, not at its deadline.
 plugin.close();
@@ -330,30 +341,22 @@ assert.ok(Date.now() - t1 < 1000, "rejects fast on disconnect, not 15s");
 console.log(`✅ Disconnect rejects the in-flight request in ${Date.now() - t1}ms`);
 await wait(150);
 
-// --- A server with no token is re-prompted, by the same approved plugin ---
-// The human approved the server above; a DIFFERENT local server announces the SAME identity but never
-// got an Allow handover, so it echoes no token. The same plugin (same storage) connecting to it must
-// gate: approval keys on the token, never on the forgeable identity.
-const sharedPluginStorage = new Map();
-const owner = await realPlugin(PORT, { storage: sharedPluginStorage });
-const ownerLink = await pairByPanel(bridge, owner);
-await introduce(bridge, ownerLink);
-await owner.allow();
-assert.equal((await execute(bridge, ownerLink)).result, "ok", "precondition: approved");
-owner.close();
+// --- Another installation in the same project is asked anew ---
+// Grants key on the installation credential as well as the project path: a server paired under
+// another state dir announces the same project, and the same plugin (same storage, same file) must
+// still ask. The path alone is forgeable; the pairing is not.
 const PORT_SQUAT = 19878;
 const squatBridge = bridgeOn(PORT_SQUAT);
 await wait(150);
-const squatted = await realPlugin(PORT_SQUAT, { storage: sharedPluginStorage });
-const squatLink = await pairByPanel(squatBridge, squatted);
-assert.equal(squatBridge.approvedSession(), null, "a second server holds no session token");
-await introduce(squatBridge, squatLink);
-assert.equal(
-  (await execute(squatBridge, squatLink)).type,
-  "PENDING_APPROVAL",
-  "a same-identity server with no token is re-prompted",
+const squatted = await realPlugin(PORT_SQUAT, { storage: pluginStorage, file: contractFile });
+await pairByPanel(squatBridge, squatted);
+const squatBinding = await target(squatBridge, contractFile.key, 300);
+assert.deepEqual(
+  squatBinding,
+  { kind: "blocked", block: { kind: "grant-expired", fileName: contractFile.name } },
+  "a same-project server on another installation holds no grant",
 );
-console.log("✅ A same-path server with no token re-prompts, even on the same approved plugin");
+console.log("✅ A same-project server paired under another state dir is asked to Allow anew");
 squatted.close();
 squatBridge.stop();
 await wait(150);
@@ -374,182 +377,53 @@ firstOnDir.stop();
 secondOnDir.stop();
 await wait(150);
 
-// --- Durable approval: a restarted server reloads the persisted token; Revoke clears it ---
-// Persistence keys on (cwd, port), so a restarted server reloads only if it reclaims its own port —
-// what a real single-server restart does. The plugin's storage survives the restart, as in Figma,
-// and so does its pairing: the restarted server's challenge passes with no prompt.
+// --- The grant lives in the plugin: a restart and a sibling find it; Revoke ends it for both ---
+// Nothing about grants is on the server's disk, so any server of this installation and project —
+// restarted, or a sibling on another port — is granted by the one Allow the plugin stored.
 const sharedDir = freshStateDir();
-const RESTART_PORT = 19879;
+const restartFile = figmaFiles.file("RESTARTfile1", "Restart file");
 const restartStorage = new Map();
-const bridgeR1 = bridgeOn(RESTART_PORT, { stateDir: sharedDir });
+const bridgeR1 = bridgeOn(19879, { stateDir: sharedDir });
 await wait(150);
-const r1 = await realPlugin(RESTART_PORT, { storage: restartStorage });
-const r1Link = await pairByPanel(bridgeR1, r1);
-await introduce(bridgeR1, r1Link);
+const r1 = await realPlugin(19879, { storage: restartStorage, file: restartFile });
+await pairByPanel(bridgeR1, r1);
+const r1Binding = target(bridgeR1, restartFile.key);
 await r1.allow();
-await until(() => bridgeR1.approvedSession() !== null, "the persisted token");
-const persistedToken = bridgeR1.approvedSession()?.token;
+assert.equal((await r1Binding).kind, "targeted", "precondition: granted");
 r1.close();
 bridgeR1.stop();
 await wait(150);
 
-const bridgeR2 = bridgeOn(RESTART_PORT, { stateDir: sharedDir });
-await wait(150);
-assert.equal(
-  bridgeR2.approvedSession()?.token,
-  persistedToken,
-  "a restart reloads the persisted token",
-);
-const r2 = await realPlugin(RESTART_PORT, { storage: restartStorage });
-const r2Link = await linkOf(bridgeR2);
-assert.equal(r2.showsPairingCode(), false, "the restarted server needs no pairing");
-await introduce(bridgeR2, r2Link);
-assert.equal(
-  (await execute(bridgeR2, r2Link)).result,
-  "ok",
-  "the reloaded token re-approves: no second Allow",
-);
-console.log("✅ Pairing and approval both survive a same-port server restart");
-
-// A concurrent same-cwd sibling on a DIFFERENT port inherits no approval: its key names another file.
+const bridgeR2 = bridgeOn(19879, { stateDir: sharedDir });
 const bridgeSibling = bridgeOn(19883, { stateDir: sharedDir });
 await wait(150);
-assert.equal(
-  bridgeSibling.approvedSession(),
-  null,
-  "a same-cwd server on another port inherits nothing",
-);
-console.log(
-  "✅ A concurrent same-cwd sibling on another port does not inherit approval (keyed by cwd+port)",
-);
-bridgeSibling.stop();
+const r2 = await realPlugin([19879, 19883], { storage: restartStorage, file: restartFile });
+await linkOf(bridgeR2);
+await linkOf(bridgeSibling);
+assert.equal(r2.showsPairingCode(), false, "the restarted server needs no pairing");
+for (const [server, what] of [
+  [bridgeR2, "the restarted server"],
+  [bridgeSibling, "a sibling on another port"],
+]) {
+  const granted = await target(server, null);
+  assert.equal(granted.kind, "targeted", `${what} is granted by the stored Allow`);
+  assert.equal((await execute(server, granted.link, { fileKey: restartFile.key })).result, "ok");
+}
+assert.equal(r2.isPrompting(), false, "with no second Allow");
+console.log("✅ Pairing and the grant survive a restart, and a same-project sibling shares it");
 
 r2.revoke();
-await until(() => bridgeR2.approvedSession() === null, "the revoke");
+await until(async () => {
+  const after = await target(bridgeSibling, restartFile.key, 0);
+  return after.kind === "blocked";
+}, "the revoke");
+console.log("✅ Revoke in the plugin ends the grant for every server in the project");
 r2.close();
 bridgeR2.stop();
-await wait(150);
-const bridgeR3 = bridgeOn(RESTART_PORT, { stateDir: sharedDir });
-await wait(150);
-assert.equal(bridgeR3.approvedSession(), null, "after Revoke, a restart reloads nothing");
-console.log(
-  "✅ Revoke deletes the persisted token so it can't silently re-approve on the next restart",
-);
-bridgeR3.stop();
-
-// --- A restart that races its own dying predecessor must reclaim its port, not slip to the next ---
-// A dev-watch save-restart is a photo finish: anything that slows the old process's exit makes the
-// successor see EADDRINUSE, and slipping one port means an EMPTY approval slot and a fresh Allow
-// after a save nobody thought was a restart. A plain TCP listener models the not-yet-exited
-// predecessor: the bind fails the same way.
-const SLIP_PORT = 19884;
-const bridgeS1 = bridgeOn([SLIP_PORT, SLIP_PORT + 1], { stateDir: sharedDir });
-await wait(150);
-const s1 = await realPlugin(SLIP_PORT, { storage: restartStorage });
-const s1Link = await linkOf(bridgeS1);
-await introduce(bridgeS1, s1Link);
-await s1.allow();
-await until(() => bridgeS1.approvedSession() !== null, "the pre-restart approval");
-const slipToken = bridgeS1.approvedSession()?.token;
-s1.close();
-bridgeS1.stop();
+bridgeSibling.stop();
 await wait(150);
 
-const predecessor = net.createServer();
-await new Promise((res) => predecessor.listen(SLIP_PORT, "127.0.0.1", res));
-const bridgeS2 = bridgeOn([SLIP_PORT, SLIP_PORT + 1], { stateDir: sharedDir });
-await wait(300);
-// HOLDING OFF, not merely tokenless: had it advanced it would be listening on SLIP_PORT+1 by now.
-assert.equal(
-  await refusedOrOpened(new WebSocket(`ws://127.0.0.1:${SLIP_PORT + 1}`, { origin: "null" })),
-  "refused",
-  "the successor holds off on its own occupied port instead of binding the next one",
-);
-await new Promise((res) => predecessor.close(res));
-await wait(400);
-assert.equal(
-  bridgeS2.approvedSession()?.token,
-  slipToken,
-  "it reclaims its port and reloads its approval",
-);
-console.log(
-  "✅ A restart racing its dying predecessor reclaims its own port — no slip, no fresh Allow",
-);
-bridgeS2.stop();
-await wait(150);
-
-// --- The reclaim wait is bounded on both sides, and cancellable ---
-
-// (a) A busy port this project holds NO approval for is advanced past AT ONCE. The window is injected
-// and long, so only an immediate advance can have bound by the check.
-const NOAPP_PORT = 19880;
-const noAppHolder = net.createServer();
-await new Promise((res) => noAppHolder.listen(NOAPP_PORT, "127.0.0.1", res));
-const bridgeNoApp = bridgeOn([NOAPP_PORT, NOAPP_PORT + 1], {
-  stateDir: sharedDir,
-  reclaimWindowMs: 5_000,
-});
-await wait(250);
-const advancedAtOnce = new WebSocket(`ws://127.0.0.1:${NOAPP_PORT + 1}`, { origin: "null" });
-assert.equal(
-  await refusedOrOpened(advancedAtOnce),
-  "opened",
-  "a busy port with no approval of its own is advanced past immediately, not waited on",
-);
-console.log("✅ A busy port this project never approved is advanced past at once");
-advancedAtOnce.close();
-bridgeNoApp.stop();
-await new Promise((res) => noAppHolder.close(res));
-await wait(150);
-
-// (b) A holder that never lets go is abandoned AT THE DEADLINE, or startup hangs with no error.
-const STUCK_PORT = 19892;
-const bridgeD1 = bridgeOn(STUCK_PORT, { stateDir: sharedDir });
-await wait(150);
-const d1 = await realPlugin(STUCK_PORT, { storage: restartStorage });
-const d1Link = await linkOf(bridgeD1);
-await introduce(bridgeD1, d1Link);
-await d1.allow();
-await until(() => bridgeD1.approvedSession() !== null, "precondition: the port is approved");
-d1.close();
-bridgeD1.stop();
-await wait(150);
-
-const stuck = net.createServer(); // never released
-await new Promise((res) => stuck.listen(STUCK_PORT, "127.0.0.1", res));
-const bridgeD2 = bridgeOn([STUCK_PORT, STUCK_PORT + 1], {
-  stateDir: sharedDir,
-  reclaimWindowMs: 300,
-});
-await wait(700);
-const gaveUp = new WebSocket(`ws://127.0.0.1:${STUCK_PORT + 1}`, { origin: "null" });
-assert.equal(await refusedOrOpened(gaveUp), "opened", "a held port is abandoned at the deadline");
-assert.equal(bridgeD2.approvedSession(), null, "with no approval for the port it settled on");
-console.log(
-  "✅ A port held past the reclaim deadline is abandoned for the next one (startup is bounded)",
-);
-gaveUp.close();
-bridgeD2.stop();
-await wait(150);
-
-// (c) stop() cancels a re-probe in flight, or a discarded bridge silently rebinds its port.
-const bridgeD3 = bridgeOn(STUCK_PORT, { stateDir: sharedDir, reclaimWindowMs: 5_000 });
-await wait(150);
-bridgeD3.stop();
-await new Promise((res) => stuck.close(res));
-await wait(400);
-assert.equal(bridgeD3.approvedSession(), null, "a stopped bridge does not reload an approval");
-assert.equal(
-  await refusedOrOpened(new WebSocket(`ws://127.0.0.1:${STUCK_PORT}`, { origin: "null" })),
-  "refused",
-  "a stopped bridge leaves its port free",
-);
-console.log(
-  "✅ stop() cancels an in-flight reclaim retry (a stopped bridge cannot rebind its port)",
-);
-await wait(150);
-
-// (d) …and disowns a bind the OS already accepted: its `listening` fires after stop() regardless.
+// A bridge stopped mid-bind disowns the bind the OS already accepted: `listening` fires regardless.
 const FREE_PORT = 19886;
 const bridgeD4 = bridgeOn(FREE_PORT, { stateDir: sharedDir });
 bridgeD4.stop();
@@ -873,11 +747,11 @@ const pluginC = rawPeer(`ws://127.0.0.1:${PORT_C}`, {
 });
 const linkC = await linkOf(bridgeC);
 
-// A SESSION_INFO is pending too; drawing on one would let a hostile link burn fetches against a
+// A GRANT_STATUS is pending too; drawing on one would let a hostile link burn fetches against a
 // pending it was never granted a run for. The refusal must leave that pending intact.
-const infoP = introduce(bridgeC, linkC).catch((e) => e);
+const statusP = bridgeC.grantStatus(linkC, null, "none").catch((e) => e);
 await wait(50);
-const infoId = framesC.find((f) => f.type === "SESSION_INFO").id;
+const infoId = framesC.find((f) => f.type === "GRANT_STATUS").id;
 const imageRequest = (id, runId, payload) =>
   pluginC.send(
     JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id, runId, payload }),
@@ -889,8 +763,8 @@ assert.ok(
   gateRefusal?.ok === false && /not a code run/.test(gateRefusal.error.message),
   "an image request against a non-EXECUTE_CODE pending is refused",
 );
-pluginC.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: infoId }));
-assert.equal((await infoP).type, "SESSION_INFO_ACK", "the refusal left the pending intact");
+pluginC.send(JSON.stringify({ type: "GRANT", id: infoId, state: "absent" }));
+assert.equal(await statusP, "absent", "the refusal left the pending intact");
 console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse channel");
 
 // Two overlapping services for ONE run: the deadline re-arms only when the LAST settles, or the

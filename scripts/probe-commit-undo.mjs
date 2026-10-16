@@ -27,7 +27,7 @@
 // Runbook (no plugin rebuild needed — the probe speaks raw figma.*):
 //   1. Open the Framelink plugin in a SCRATCH Figma file (the probe drives real undo history).
 //   2. pnpm probe:commit-undo
-//   3. When the plugin strip shows this session, click Allow.
+//   3. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
 //
 // Run it in a SCRATCH file, really: the probe triggers at most 15 undos (1 in scenario 1; 1 + a
 // capped walk of 3 in 1b; the counting loops in 2/3 walk up to 5 each), every one after a
@@ -59,8 +59,7 @@
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { linkForProbe } from "./probe-link.mjs";
-import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must
@@ -71,7 +70,7 @@ const PREAMBLE = await buildSandboxPreamble();
 const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 const t0 = Date.now();
 
-const bridge = new PluginBridge(undefined, {});
+const bridge = new PluginBridge();
 
 // Shared in-sandbox helpers, prepended to every scenario script. `sample` re-reads liveness after a
 // tick too, because whether triggerUndo applies synchronously within a run is itself part of what
@@ -188,51 +187,30 @@ figma.commitUndo(); // seal the removals so the user's next undo can't resurrect
 return nodes.length;
 `;
 
-// The probe is interactive tooling, not an MCP tool call, so it isn't bound by a client's 60s
-// budget — give the human a long window to notice the strip and click Allow.
-const APPROVAL_WINDOW_MS = 10 * 60_000;
-
 // Set once the first script has actually run — gates the best-effort cleanup on the failure path
-// (an unapproved session can't run cleanup either, and must not hang another approval window).
-let approvedOnce = false;
+// (a run the plugin never admitted created nothing to clean up).
+let ranOnce = false;
 
 async function exec(code) {
-  // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
-  // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so each
-  // scenario would run repeatedly and then read its own run's reply as an unexpected approval status.
-  const waited = await requestUntilApproved(
-    (signal) => bridge.approvalStatus(link, signal),
-    () =>
-      bridge.request(link, {
-        type: "EXECUTE_CODE",
-        code,
-        preamble: PREAMBLE,
-        lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
-      }),
-    { waitMs: APPROVAL_WINDOW_MS },
-  );
-  if (waited.type === "PENDING_APPROVAL") {
-    throw new Error(
-      "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
-    );
-  }
-  const reply = waited.result;
-  // Any execution reply proves the session ran code — set BEFORE the errors check, so a scenario
-  // that created nodes and then threw still gets the failure-path cleanup.
-  approvedOnce = true;
+  const reply = await executeOnProbeTarget(bridge, target, {
+    code,
+    preamble: PREAMBLE,
+    lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+  });
+  // Any execution reply proves code ran — set BEFORE the errors check, so a scenario that created
+  // nodes and then threw still gets the failure-path cleanup.
+  ranOnce = true;
   if (reply?.errors) throw new Error(`a probe script errored in the sandbox:\n${reply.errors}`);
   return reply?.result;
 }
 
-// Re-link on EVERY connect: a mid-wait reconnect (Figma reload, plugin reopen) is a new link, and
-// it needs its own SESSION_INFO or the strip shows an unidentifiable, unapprovable row. Scenarios
-// still start only once.
+// Re-target on EVERY connect: a mid-wait reconnect (Figma reload, plugin reopen) is a new link,
+// proven afresh. Scenarios still start only once.
 async function introduceSession() {
-  link = await linkForProbe(bridge, log);
-  log("if the strip asks, click Allow");
+  target = await targetForProbe(bridge, log);
 }
 
-let link = null;
+let target = null;
 let started = false;
 async function runProbe() {
   try {
@@ -379,8 +357,8 @@ async function runProbe() {
     process.exit(pass ? 0 : 1);
   } catch (err) {
     // Best-effort cleanup before dying — a mid-scenario error must not strand probe nodes. Only
-    // once a script has run (an unapproved session would just hang a second approval window).
-    if (approvedOnce) {
+    // once a script has run.
+    if (ranOnce) {
       log("probe errored — attempting cleanup of probe nodes");
       await exec(CLEANUP).catch(() => {});
     }
@@ -395,7 +373,7 @@ function fail(reason) {
 
 console.log(
   "Framelink undo-contract probe: commitUndo chunking + triggerUndo rollback, live.\n" +
-    "Waiting for the Figma plugin to connect… (open it in a SCRATCH file and approve this session\n" +
-    "when asked; Ctrl-C to abort)\n",
+    "Waiting for the Figma plugin to connect… (open it in a SCRATCH file and allow this project\n" +
+    "when the plugin asks; Ctrl-C to abort)\n",
 );
 bridge.start(WS_PORT_BLOCK, () => void runProbe());

@@ -160,8 +160,8 @@ export class WriteAccess {
   }
 
   /**
-   * Bring a Plugin Owner's seat and counts up to date with the server. `force` is session approval,
-   * which checks unconditionally; otherwise each half runs only once it is stale.
+   * Bring a Plugin Owner's seat and counts up to date with the server. `force` is a grant changing in
+   * the plugin, which checks unconditionally; otherwise each half runs only once it is stale.
    */
   async syncWriteAccess(owner: PluginOwner, { force = false } = {}): Promise<void> {
     const { figmaUserId } = owner;

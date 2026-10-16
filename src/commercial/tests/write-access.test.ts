@@ -30,7 +30,7 @@ import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
 import {
   createTestWriteAccess,
   linkedTestResolution,
-  TEST_APPROVED_SESSION,
+  targetedTestCall,
   TEST_PLUGIN_OWNER,
 } from "./fixtures/write-access.js";
 
@@ -138,22 +138,22 @@ function spendAllowance(writeAccess: WriteAccess, count: number): void {
   for (let i = 0; i < count; i++) writeAccess.recordWrite(USER_ID, randomUUID());
 }
 
-// An approved plugin session whose executions report the document-changed answers queued here.
+// A plugin granted on the test document, whose executions report the document-changed answers queued here.
 class MeteredBridge extends PluginBridge {
   documentChanged: boolean[] = [];
   executions = 0;
   override resolveLink() {
     return linkedTestResolution();
   }
-  override approvedSession() {
-    return TEST_APPROVED_SESSION;
+  override targetCall() {
+    return targetedTestCall();
   }
   override async request<T extends LinkRequest>(
     _link: PluginLink,
     payload: T,
   ): Promise<ReplyFor<T["type"]>> {
     let reply: PluginReply;
-    if (payload.type === "APPROVAL_STATUS") reply = { type: "APPROVAL_GRANTED" };
+    if (payload.type === "GRANT_PROMPT_CLOSED") reply = { type: "GRANT_PROMPT_CLOSED_ACK" };
     else {
       this.executions++;
       reply = {

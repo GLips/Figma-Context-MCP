@@ -226,7 +226,7 @@ export async function fetchAndProcessImage(url: string, signal?: AbortSignal): P
  * pipeline. The path arrives from the untrusted plugin, so containment under the asset root
  * (contained-file.ts) is the control, not the magic-byte check: plenty of real images hold secrets, and
  * the bytes land in a cloud-synced Figma document. The reverse channel's EXECUTE_CODE payload gate makes
- * every path attributable to an approved run — defense in depth, not a substitute for containment.
+ * every path attributable to a granted run — defense in depth, not a substitute for containment.
  */
 export type LocalImageReader = (source: string, signal?: AbortSignal) => Promise<string>;
 

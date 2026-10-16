@@ -128,16 +128,9 @@
         border-radius: 6px;
         padding: 12px;
       }
-      /* A request still holding a call reads as live; one with nothing waiting to run is visibly
-         spent — dashed and muted — so it never passes for a prompt that will unblock something now. */
+      /* A call waiting on the human reads as live. */
       .session.waiting {
         border-color: var(--figma-color-border-brand, #0d99ff);
-      }
-      .session.expired {
-        border-style: dashed;
-      }
-      .session.expired .session-id {
-        color: var(--figma-color-text-secondary, #777);
       }
       .session-lines {
         display: flex;
@@ -168,7 +161,7 @@
         font-weight: 500;
         cursor: pointer;
       }
-      /* A lone action (Revoke access) is a SECONDARY control — stretched to the full card width it
+      /* A lone action (Revoke) is a SECONDARY control — stretched to the full card width it
          reads as the row's primary one. Only a paired Allow/Deny splits the width. */
       #detail button:only-child {
         flex: 0 0 auto;
@@ -214,21 +207,15 @@
         font-variant-numeric: tabular-nums;
         color: var(--figma-color-text, #1e1e1e);
       }
-      /* The global counterpart to a per-row Revoke access — set apart by a rule rather than a card,
-         since it addresses every approval this plugin remembers, not one row in the list above it. */
-      .footer {
-        border-top: 1px solid var(--figma-color-border, #e5e5e5);
-        padding-top: 8px;
-      }
-      #detail button.revoke-all {
-        width: 100%;
-        background: none;
-        color: var(--figma-color-text-secondary, #888);
-        padding: 6px 0;
-      }
-      #detail button.revoke-all:hover {
-        color: var(--figma-color-text-danger, #e0413f);
-        box-shadow: none;
+      .link-input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid var(--figma-color-border, #e5e5e5);
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 12px;
+        background: var(--figma-color-bg, #fff);
+        color: var(--figma-color-text, #1e1e1e);
       }
     </style>
   </head>

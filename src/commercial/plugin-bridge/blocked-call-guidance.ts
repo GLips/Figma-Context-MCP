@@ -3,12 +3,13 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Every sentence a caller (MCP tools, the bridge's own rejections, the CLI commands, the reference
-// tool) gives about linking, pairing and approval, worded from the state it is in. Agents looped on
+// tool) gives about linking, pairing, documents and grants, worded from the state it is in. Agents looped on
 // the older "…then retry" replies: each blocked message names the blocker, the action required, and
 // that retrying sooner cannot help. Submission status is part of the state's sentence where only one
 // is true; nothing outside this module words them.
 import { CLI_NAME } from "~/utils/cli-help.js";
 import type { UnlinkedResolution } from "./bridge.js";
+import type { CallTargetBlock } from "./call-target.js";
 
 /** How long a disconnection counts as a redial blip before the reply escalates to a person. */
 export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
@@ -18,7 +19,7 @@ const REPORT_TO_PERSON = "Report this to the user or coordinating agent, and ret
 /**
  * Who reads it. `mcp` is a tool result on a server that outlives the call; `cli` is a command whose
  * relay ends with the run; `reference` is get_flcm_reference's note above the docs, which never
- * waits on approval, never pairs, and never submits code.
+ * waits on a grant, never pairs, and never submits code.
  */
 export type GuidanceSurface = "mcp" | "cli" | "reference";
 
@@ -33,12 +34,6 @@ export function linkGuidance(resolution: UnlinkedResolution, surface: GuidanceSu
         : pluginDisconnectedNotSubmittedText(resolution.elapsedMs);
     case "unpaired":
       return unpairedGuidance(surface);
-    case "several":
-      return (
-        `Blocked: the Framelink plugin is open in ${resolution.count} Figma files, and this server ` +
-        `can't tell which one you mean, so nothing was submitted. Required before retrying: someone ` +
-        `closes the plugin in every file except the one to work in. ${REPORT_TO_PERSON} only one is open.`
-      );
     case "credential-unusable":
       return (
         `Blocked: this server can't use its Framelink plugin pairing credential, so nothing was ` +
@@ -47,45 +42,85 @@ export function linkGuidance(resolution: UnlinkedResolution, surface: GuidanceSu
   }
 }
 
-/**
- * Where a call on a resolved link stands with the human's Allow. `waiting` is a call still waiting;
- * `expired` is one whose wait ended with none. The `reference-` states come only from
- * get_flcm_reference's status lookup, which never waits. Approved has no sentence, so it is not a
- * state.
- */
-export type ApprovalGuidanceState =
-  | { kind: "reference-pending" }
-  | { kind: "waiting" }
-  | { kind: "expired"; waitMs: number }
-  | { kind: "rejected" }
-  | { kind: "unresponsive" }
-  | { kind: "reference-status-unknown" };
+/** A call on a linked plugin, waiting for the human to allow this project in Figma. */
+export const GRANT_WAITING_TEXT =
+  "Waiting for the user to allow this project in the Framelink plugin in Figma. Code has not been submitted.";
 
-/** The sentence for `state` on `surface`. */
-export function approvalGuidance(state: ApprovalGuidanceState, surface: GuidanceSurface): string {
-  switch (state.kind) {
-    case "waiting":
-      return "Waiting for approval in Figma. Code has not been submitted.";
-    case "reference-pending":
-      return "Approval is required before executing code. Ask the user to click Allow for this session in the Framelink plugin. This reference request does not wait for approval or submit code.";
-    // On the reference, a rejected request reads like an open one: an Allow on that row still works.
-    case "rejected":
-      return surface === "reference"
-        ? approvalGuidance({ kind: "reference-pending" }, surface)
-        : "Approval rejected; no code was submitted.";
-    case "expired":
-      return surface === "cli"
-        ? `The script did not run. ${approvalPendingRerunAction(state.waitMs)}`
-        : `This call did not run. ${approvalPendingAction(state.waitMs)}`;
-    case "unresponsive":
+/** Why a call got no document to run against, on `surface`. Nothing was submitted. */
+export function callTargetGuidance(
+  block: CallTargetBlock,
+  surface: "mcp" | "cli",
+  waitMs: number,
+): string {
+  const retry = surface === "mcp" ? "retrying" : "re-running";
+  switch (block.kind) {
+    case "document-not-open":
       return (
-        `Blocked: the Framelink plugin is connected but did not answer the approval check before the wait ` +
-        `expired, so no code was submitted. Required before retrying: someone closes and reopens the ` +
-        `Framelink plugin in Figma. ${REPORT_TO_PERSON} it is reopened.`
+        `Blocked: the Framelink plugin isn't open in the Figma file ${block.fileKey}, so nothing was ` +
+        `submitted and no plugin panel was asked. Required before ${retry}: someone opens the ` +
+        `Framelink plugin in that file. ${REPORT_TO_PERSON} it is open. To work in a file that is ` +
+        `already open, call again without a file key and the user picks it in Figma.`
       );
-    case "reference-status-unknown":
-      return "The plugin's approval status could not be checked. Check the Framelink plugin connection before executing code. The reference is available below; no code was submitted.";
+    case "document-unprovable":
+      return (
+        `Blocked: this server couldn't confirm which Figma file the Framelink plugin is in ` +
+        `(${block.problem}), so nothing was submitted. It confirms that by reading the file with ` +
+        `the Figma token, so the token must be able to open the file. ${REPORT_TO_PERSON} that is fixed.`
+      );
+    case "grant-denied":
+      return (
+        `Blocked: the user denied this project access to "${block.fileName}" in the Framelink ` +
+        `plugin, so nothing was submitted. Don't retry unless the user asks to; they can click ` +
+        `Allow on this project's row in the plugin.`
+      );
+    case "grant-unavailable":
+      return (
+        `Blocked: the Framelink plugin in "${block.fileName}" has no signed-in Figma user, so it ` +
+        `can't let this project edit the file, and nothing was submitted. ${REPORT_TO_PERSON} ` +
+        `someone signs in to Figma and reopens the plugin.`
+      );
+    case "grant-expired": {
+      const file = block.fileName === null ? "a Figma file" : `"${block.fileName}"`;
+      const action =
+        block.fileName === null
+          ? `someone picks the file to edit in the Framelink plugin in Figma (Allow, or Use this file), ` +
+            `or pastes the file's link into the plugin if it asks for one`
+          : `someone clicks Allow for this project in the Framelink plugin in ${file}`;
+      return surface === "mcp"
+        ? `Blocked: this project isn't allowed to edit ${file} yet, so this call did not run. ` +
+            `Required before retrying: ${action}. ${REPORT_TO_PERSON} they confirm — each attempt ` +
+            `waits up to ${Math.round(waitMs / 1000)}s and cannot succeed without them. Allowing ` +
+            `later does not run this call; submit it again.`
+        : `Blocked: this project isn't allowed to edit ${file} yet, so the script did not run. ` +
+            `Required before re-running: ${action}. A grant is remembered for this project, so it is ` +
+            `needed once. This run waited ${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`;
+    }
   }
+}
+
+/**
+ * The plugin refused a run after this server bound it: the grant was revoked, or the plugin isn't in
+ * that file any more. The plugin refused it before it ran.
+ */
+export function notGrantedText(reason: "no-grant" | "other-document", fileName: string): string {
+  return reason === "no-grant"
+    ? `Blocked: the Framelink plugin refused the run because this project is no longer allowed to ` +
+        `edit "${fileName}" (the user revoked it), so nothing ran. Don't retry unless the user asks to.`
+    : `Blocked: the Framelink plugin refused the run because it is no longer in "${fileName}", so ` +
+        `nothing ran. Retry once the plugin is open in that file again.`;
+}
+
+/**
+ * get_flcm_reference's note on where this project stands with the open files. It never prompts:
+ * it reads grants, and says what an execute call will ask.
+ */
+export function referenceGrantGuidance(grantedFiles: readonly string[] | null): string | undefined {
+  if (grantedFiles === null)
+    return "The plugin's grants could not be checked. Check the Framelink plugin connection before executing code. The reference is available below; no code was submitted.";
+  if (grantedFiles.length === 1) return undefined;
+  if (grantedFiles.length > 1)
+    return `This project may edit ${grantedFiles.length} open Figma files (${grantedFiles.map((name) => `"${name}"`).join(", ")}). Pass fileKey when executing code to name one; without it the user is asked to pick.`;
+  return "This project isn't allowed to edit any open Figma file yet. Executing code asks the user to allow it in the Framelink plugin; pass fileKey to name the file. This reference request does not ask or submit code.";
 }
 
 function unpairedGuidance(surface: GuidanceSurface): string {
@@ -184,36 +219,5 @@ export function pluginDisconnectedAction(): string {
   return (
     `Required before retrying: someone opens the Framelink plugin in the intended Figma file, with ` +
     `this server running. ${REPORT_TO_PERSON} the plugin is open — retrying sooner fails the same way.`
-  );
-}
-
-/**
- * Approval is still pending after the wait expired, on a server that outlives the call (MCP). A later
- * Allow approves the session, never the finished call: nothing is queued to replay, so the caller
- * must submit again.
- */
-function approvalPendingAction(waitMs: number): string {
-  return (
-    `Blocked: session approval is pending. Required before retrying: someone clicks Allow for this ` +
-    `session in the Framelink plugin in Figma, where the request now shows as expired. ` +
-    `${REPORT_TO_PERSON} they confirm the approval — each attempt waits up to ` +
-    `${Math.round(waitMs / 1000)}s and cannot succeed without them. Approving later does not run ` +
-    `this call; submit it again.`
-  );
-}
-
-/**
- * The `execute` CLI's form: its relay ends with the run, but the plugin keeps the expired request, and
- * an Allow there carries to the next run from this directory. Nothing replays — the person's Allow
- * approves the session, and only re-running sends the script.
- */
-function approvalPendingRerunAction(waitMs: number): string {
-  return (
-    `Blocked: session approval is pending, and this run has ended without sending the script. ` +
-    `Required before re-running: someone clicks Allow on this run's request in the Framelink plugin ` +
-    `in Figma, where it now shows as expired. That approves the next run from this directory while ` +
-    `the plugin stays open, provided it reconnects on the same port; it does not run this one. ` +
-    `${REPORT_TO_PERSON} they confirm the approval — this run waited ` +
-    `${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`
   );
 }

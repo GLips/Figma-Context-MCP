@@ -20,25 +20,34 @@ import type { PluginFrame, WriteAccessNotice } from "./protocol.js";
  */
 export type ConnKey = number;
 
-/** One row of the session list. Never the session token: a localhost bearer value, not for display. */
+/**
+ * One row of the session list: a connected server, or a project granted this file whose server isn't
+ * connected (`key` null). Revoking a row's grant affects every agent of that project.
+ */
 export interface PanelSession {
-  key: ConnKey;
-  identity: string | null;
+  key: ConnKey | null;
+  project: string;
   label: string;
-  approved: boolean;
+  // The grant this row stands for, once the file is proven: what Revoke names.
+  grant: { credentialId: string; project: string } | null;
+  granted: boolean;
   active: boolean;
   writeAccess: WriteAccessNotice | null;
-  // Whether the session's socket is open. A closed one is an away request: it asked, its call gave
-  // up, and its socket went before anyone clicked Allow.
   connected: boolean;
-  // The session's latest approval request: still waiting on a call, or expired with nothing waiting
-  // to run. Null for an approved session or one that has never asked.
-  request: "waiting" | "expired" | null;
-  // The human rejected this connected session; its calls are refused until an Allow.
-  rejected: boolean;
-  // An away request the human already allowed; it applies when that session next connects.
-  allowedWhileAway: boolean;
+  // What a call of this server is asking right now: to be granted this file, or for the human to
+  // pick a file. Null once answered, or when its polls stopped.
+  prompt: "grant" | "select" | null;
+  // The human said no to this server; its calls are refused until an Allow.
+  denied: boolean;
+  // An Allow is being saved.
+  allowing: boolean;
 }
+
+/** What the panel knows about the file this plugin is in. */
+export type PanelDocument =
+  | { kind: "proven"; fileName: string }
+  // `asking`: a server wants a file picked and this one can't be until it is identified.
+  | { kind: "unproven"; asking: boolean; pasted: { fileKey: string; refuted: boolean } | null };
 
 /**
  * A socket from a server this installation isn't paired with. `code` is the pairing attempt it is
@@ -52,27 +61,29 @@ export interface PanelPairing {
 /** Everything the panel paints, pushed whole on every change. */
 export interface PanelRender {
   pairings: PanelPairing[];
+  // Null while no server has authenticated: nothing has asked about this file yet.
+  document: PanelDocument | null;
   sessions: PanelSession[];
   expanded: boolean;
   showOrientation: boolean;
-  // Any remembered approval at all, connected or not: gates "Revoke all approvals".
-  hasApprovals: boolean;
-  approvalStorageError: string | null;
+  grantStorageError: string | null;
 }
 
 /** The panel's input to the host: the human's clicks, the iframe's measurements, the relay's signals. */
 export type PanelControl =
   | { type: "UI_READY" }
   | { type: "UI_TOGGLE" }
-  | { type: "UI_REVOKE_ALL" }
   | { type: "UI_HEIGHT"; height: number }
   // Only for a socket that actually opened, never for the empty block ports the relay also dials.
   | { type: "WS_CONNECTED"; connKey: ConnKey }
   | { type: "WS_CLOSED"; connKey: ConnKey }
+  // Allow grants the row's project this file (and, when it asked for a pick, picks it); Deny refuses.
   | { type: "UI_DECISION"; connKey: ConnKey; approve: boolean }
   | { type: "UI_SIGN_IN"; connKey: ConnKey }
   | { type: "UI_OPEN_SIGN_IN"; connKey: ConnKey }
-  | { type: "UI_REVOKE"; connKey: ConnKey };
+  | { type: "UI_REVOKE"; credentialId: string; project: string }
+  // What the human pasted as this file's link. Text, unparsed: the host reads it.
+  | { type: "UI_PASTE_LINK"; text: string };
 
 /** Relay → host. The frame is untrusted JSON until the host admits it (protocol.ts parseServerFrame). */
 export type HostInbound =

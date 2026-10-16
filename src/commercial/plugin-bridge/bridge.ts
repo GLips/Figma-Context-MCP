@@ -3,10 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import type { WebSocket } from "ws";
+import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
 import { Logger } from "~/utils/logger.js";
-import { ApprovalStore } from "./approval-store.js";
-import { ApprovalSession, type ApprovedSession } from "./approval-session.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
+import { targetPluginCall, type CallTarget, type CallTargetOptions } from "./call-target.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
 import { LinkCredentialStore } from "./link-credential.js";
 import {
@@ -16,8 +16,15 @@ import {
   type PairingConfirmation,
   type PairingOffer,
 } from "./link-setup.js";
+import {
+  DEFAULT_PROOF_TIMING,
+  LinkDocuments,
+  type DocumentReader,
+  type ProofTiming,
+} from "./link-documents.js";
+import { canonicalProjectPath } from "./project.js";
 import { RelayConnection, isSettlingLinkStage } from "./relay-connection.js";
-import { MAX_CHANNEL_BYTES, RECLAIM_WINDOW_MS, RelayListener } from "./relay-listener.js";
+import { MAX_CHANNEL_BYTES, RelayListener } from "./relay-listener.js";
 import { RequestTrace } from "./request-trace.js";
 import {
   BridgeRequestError,
@@ -31,8 +38,9 @@ import type { RunEvent } from "../entitlement/write-meter.js";
 import {
   parseExecuteCodeResult,
   parsePluginEvent,
+  type GrantPrompt,
+  type GrantState,
   type LINK_SETUP_REQUEST_TYPES,
-  type PendingApprovalReply,
   type PluginEvent,
   type PluginEventType,
   type ReplyFor,
@@ -41,7 +49,9 @@ import {
 
 export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
 export type { CapabilityHandler } from "./channel-server.js";
-export type { LinkStage } from "./relay-connection.js";
+export type { LinkDocument, LinkStage } from "./relay-connection.js";
+export type { CallDocument, CallTarget, CallTargetBlock } from "./call-target.js";
+export type { DocumentReader } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
 
 /** One plugin link: a socket from one plugin incarnation, in whatever stage of setup it reached. */
@@ -57,8 +67,8 @@ export type LinkRequest = Exclude<
 export interface PluginBridgeEvents {
   /** A link proved it holds the installation credential: introduce this server to it. */
   onLinkAuthenticated?: (link: PluginLink) => void;
-  /** The human clicked Allow for this server in this link's plugin. */
-  onSessionApproved?: (link: PluginLink) => void;
+  /** The human granted or revoked this project a document in this link's plugin. */
+  onGrantChanged?: (link: PluginLink, granted: boolean) => void;
   /** The human clicked the panel's sign-in button in this link's plugin. */
   onWriteAccessSignIn?: (link: PluginLink) => void;
   /**
@@ -69,20 +79,13 @@ export interface PluginBridgeEvents {
   onRunEvent?: (event: RunEvent) => void;
 }
 
-/** The plugin's answer to an approval poll, with the session a GRANTED admits read at that instant. */
-export type ApprovalStatus =
-  | { type: "APPROVAL_GRANTED"; session: ApprovedSession | null }
-  | PendingApprovalReply
-  | { type: "APPROVAL_REJECTED" };
-
 /**
- * Which link a call that needs the plugin runs on. Until calls can name their document, exactly one
- * authenticated link resolves, and several refuse rather than pick: picking is the wrong-file hazard.
+ * Whether a call that needs the plugin has links to run on: every authenticated one. Which of them
+ * it runs on is the document's question (targetCall), never the link's.
  */
 export type LinkResolution =
-  | { kind: "linked"; link: PluginLink }
+  | { kind: "linked"; links: PluginLink[] }
   | { kind: "unpaired" }
-  | { kind: "several"; count: number }
   | { kind: "credential-unusable"; problem: string }
   | { kind: "incompatible"; refusal: string }
   | { kind: "disconnected"; elapsedMs: number | null };
@@ -97,8 +100,8 @@ type EventRoutes = {
 /**
  * The relay to the Figma plugin: every plugin link, and the composition of its parts — the listener
  * (network edge), the run ledger (requests and their clocks), the channel server (the reverse
- * direction), the approval session (what this server presents and persists), and link setup (HELLO,
- * AUTHENTICATE and pairing).
+ * direction), link setup (HELLO, AUTHENTICATE and pairing), and link documents (which file each link
+ * is in). It keeps no grant state: the plugin alone stores grants, and is asked on every call.
  *
  * Until a link authenticates it is sent only the setup envelope, and nothing it sends but replies
  * to that is heard.
@@ -111,19 +114,26 @@ export class PluginBridge {
   private readonly listener: RelayListener;
   private readonly ledger: RunLedger;
   private readonly channel: ChannelServer;
-  private readonly approval: ApprovalSession;
   private readonly setup: LinkSetup;
+  private readonly documents: LinkDocuments;
+  private readonly documentReader: DocumentReader | null;
   private readonly events: PluginBridgeEvents;
 
   private readonly routes: EventRoutes = {
     RUN_TRACE: (link, event) => this.ledger.trace.recordHost(event.runId, link, event),
-    SESSION_TOKEN: (link, event) => {
-      this.approval.apply({ type: "handedOver", session: { token: event.sessionToken } });
-      this.events.onSessionApproved?.(link);
+    // Every other plugin instance of the same owner re-reads its storage: one file open in two
+    // instances must honor a grant or revoke made in either.
+    GRANT_CHANGED: (link, event) => {
+      for (const other of this.authenticatedLinks())
+        if (other !== link && other.owner?.figmaUserId === link.owner?.figmaUserId)
+          this.request(other, {
+            type: "GRANT_CHANGED_ELSEWHERE",
+            project: event.project,
+            fileKey: event.fileKey,
+          }).catch(() => {});
+      this.events.onGrantChanged?.(link, event.granted);
     },
-    SESSION_CLAIM: (_, event) =>
-      this.approval.apply({ type: "claimed", claim: event.sessionClaim }),
-    REVOKE_SESSION: () => this.approval.apply({ type: "revoked" }),
+    DOCUMENT_CLAIMED: (link, event) => this.documents.claimed(link, event.fileKey),
     WRITE_ACCESS_SIGN_IN: (link) => this.events.onWriteAccessSignIn?.(link),
     CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
     RUN_STATE: (link, event) => this.ledger.runState(link, event),
@@ -135,34 +145,39 @@ export class PluginBridge {
     RUN_SETTLED: (_, event) => this.events.onRunEvent?.({ type: "settled", runId: event.runId }),
   };
 
-  // Everything injectable for the tests and the contract harness: `store` and `linkCredentials`
-  // isolate persistence to a temp dir; the clocks let them pin timeout behaviour without waiting out
-  // the real deadlines; `trace` lets a test read what the trace kept. Production takes the defaults,
-  // and index.ts registers the production capability allowlist.
-  constructor(
-    store: ApprovalStore = new ApprovalStore(),
-    {
-      linkCredentials = new LinkCredentialStore(),
-      requestTimeoutMs = DEFAULT_TIMEOUT_MS,
-      runCeilingMs = DEFAULT_RUN_CEILING_MS,
-      reclaimWindowMs = RECLAIM_WINDOW_MS,
-      unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
-      capabilities = new Map(),
-      events = {},
-      trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
-    }: {
-      linkCredentials?: LinkCredentialStore;
-      requestTimeoutMs?: number;
-      runCeilingMs?: number;
-      reclaimWindowMs?: number;
-      unauthenticatedLinkMs?: number;
-      capabilities?: ReadonlyMap<string, CapabilityHandler>;
-      events?: PluginBridgeEvents;
-      trace?: RequestTrace;
-    } = {},
-  ) {
+  // Everything injectable for the tests and the contract harness: `linkCredentials` isolates
+  // persistence to a temp dir; `project` stands in for the cwd; `documentReader` for Figma's REST
+  // API; the clocks let them pin timeout behaviour without waiting out the real deadlines; `trace`
+  // lets a test read what the trace kept. Production takes the defaults, and index.ts registers the
+  // production capability allowlist and the reader.
+  constructor({
+    linkCredentials = new LinkCredentialStore(),
+    project = canonicalProjectPath(),
+    framelinkOrigin = new URL(DEFAULT_FRAMELINK_API_URL).origin,
+    documentReader = null,
+    proofTiming = DEFAULT_PROOF_TIMING,
+    requestTimeoutMs = DEFAULT_TIMEOUT_MS,
+    runCeilingMs = DEFAULT_RUN_CEILING_MS,
+    unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
+    capabilities = new Map(),
+    events = {},
+    trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
+  }: {
+    linkCredentials?: LinkCredentialStore;
+    project?: string;
+    framelinkOrigin?: string;
+    /** Reads files to prove links no call asked about yet. Null: only a call's reader proves. */
+    documentReader?: DocumentReader | null;
+    proofTiming?: ProofTiming;
+    requestTimeoutMs?: number;
+    runCeilingMs?: number;
+    unauthenticatedLinkMs?: number;
+    capabilities?: ReadonlyMap<string, CapabilityHandler>;
+    events?: PluginBridgeEvents;
+    trace?: RequestTrace;
+  } = {}) {
     this.events = events;
-    this.approval = new ApprovalSession(store);
+    this.documentReader = documentReader;
     this.ledger = new RunLedger({
       requestTimeoutMs,
       runCeilingMs,
@@ -178,19 +193,24 @@ export class PluginBridge {
         this.ledger.submit(link, payload, undefined, undefined, NO_RUN_CONTEXT) as Promise<
           ReplyFor<T["type"]>
         >,
-      onAuthenticated: (link) => this.events.onLinkAuthenticated?.(link),
+      onAuthenticated: (link) => {
+        this.documents.introduce(link);
+        this.events.onLinkAuthenticated?.(link);
+      },
+    });
+    this.documents = new LinkDocuments({
+      send: (link, payload) => this.request(link, payload),
+      reader: documentReader,
+      timing: proofTiming,
+      project,
+      framelinkOrigin,
     });
     this.channel = new ChannelServer(capabilities, this.ledger, (link) => this.isLive(link));
-    this.listener = new RelayListener(
-      {
-        admitsNewcomer: () => this.setup.makeRoomForNewcomer(),
-        holdsApprovalFor: (port) => this.approval.holdsApprovalFor(port),
-        bound: (port) => this.approval.bind(port),
-        accept: (socket) => this.accept(socket),
-        heartbeat: () => this.heartbeatTick(),
-      },
-      reclaimWindowMs,
-    );
+    this.listener = new RelayListener({
+      admitsNewcomer: () => this.setup.makeRoomForNewcomer(),
+      accept: (socket) => this.accept(socket),
+      heartbeat: () => this.heartbeatTick(),
+    });
   }
 
   /** Bind the first free port in the block; `onConnect` runs as each socket is accepted. */
@@ -282,8 +302,8 @@ export class PluginBridge {
   }
 
   /**
-   * Which link a call runs on. Links a credential failed are challenged again first, and links still
-   * setting up are waited out rather than guessed about.
+   * Whether a call has links to run on. Links a credential failed are challenged again first, and
+   * links still setting up are waited out rather than guessed about.
    */
   async resolveLink(signal?: AbortSignal): Promise<LinkResolution> {
     this.setup.rechallenge();
@@ -296,8 +316,7 @@ export class PluginBridge {
     }
     const open = [...this.links].filter((link) => link.isOpen);
     const authenticated = open.filter((link) => link.isAuthenticated);
-    if (authenticated.length === 1) return { kind: "linked", link: authenticated[0] };
-    if (authenticated.length > 1) return { kind: "several", count: authenticated.length };
+    if (authenticated.length) return { kind: "linked", links: authenticated };
     // Ahead of unpaired: with no usable credential, no link could pass, and pairing can't help.
     for (const link of open)
       if (link.stage.kind === "credential-unusable")
@@ -329,39 +348,37 @@ export class PluginBridge {
     return this.setup.pairingCodeExpiresAt(typedCode);
   }
 
-  /** The session this server holds a token for — what it presents as a prior Allow — or null. */
-  approvedSession(): ApprovedSession | null {
-    return this.approval.session;
-  }
-
-  /** What this server says about itself to an authenticated link: who it is, and its prior approval. */
-  sessionInfo(framelinkOrigin: string): Extract<ServerRequest, { type: "SESSION_INFO" }> {
-    return this.approval.sessionInfo(framelinkOrigin);
-  }
-
-  /** Whether the approval found at bind was used recently — see ApprovalSession.hasRecentApproval. */
-  hasRecentApproval(): boolean {
-    return this.approval.hasRecentApproval();
-  }
-
   /**
-   * Slide the persisted approval's TTL forward after a successful write by `session`, so an
-   * actively-used session is never pruned mid-work. Called on the success path, not from `request()`
-   * — only a real write counts as use.
+   * The one document a call runs against, and the link to run it on — see call-target.ts. `fileKey`
+   * null lets the human pick. Prompts in the plugin; submits nothing.
    */
-  touchApproval(session: ApprovedSession): void {
-    this.approval.touch(session);
+  targetCall(
+    fileKey: string | null,
+    options: Omit<CallTargetOptions, "reader"> & { reader?: DocumentReader | null },
+  ): Promise<CallTarget> {
+    return targetPluginCall(
+      {
+        links: () => this.authenticatedLinks(),
+        documents: this.documents,
+        askGrant: (link, key, prompt, signal) => this.grantStatus(link, key, prompt, signal),
+        closePrompt: (link) => {
+          this.request(link, { type: "GRANT_PROMPT_CLOSED" }).catch(() => {});
+        },
+      },
+      fileKey,
+      { ...options, reader: options.reader ?? this.documentReader },
+    );
   }
 
-  /**
-   * Poll a link's approval decision. A GRANTED carries the session this server held at that same
-   * instant, so whatever it admits is attributed to the Allow that admitted it, with no second read.
-   */
-  async approvalStatus(link: PluginLink, signal?: AbortSignal): Promise<ApprovalStatus> {
-    const reply = await this.request(link, { type: "APPROVAL_STATUS" }, { signal });
-    return reply.type === "APPROVAL_GRANTED"
-      ? { type: "APPROVAL_GRANTED", session: this.approvedSession() }
-      : reply;
+  /** Ask a link's plugin whether this project holds a grant on `fileKey`, prompting as `prompt` says. */
+  async grantStatus(
+    link: PluginLink,
+    fileKey: string | null,
+    prompt: GrantPrompt,
+    signal?: AbortSignal,
+  ): Promise<GrantState> {
+    const reply = await this.request(link, { type: "GRANT_STATUS", fileKey, prompt }, { signal });
+    return reply.state;
   }
 
   /**

@@ -2,11 +2,22 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The one compare-and-confirm driver: how a call that needs the plugin gets its link, pairing it
-// first when it isn't paired yet. The MCP tools, the `pair` command and the live probes all go
-// through here, each with its own way of asking the person whether the panel shows a code.
-import type { LinkResolution, PluginBridge, PluginLink, UnlinkedResolution } from "./bridge.js";
+// The one driver for how a call that needs the plugin gets where it runs: its links, pairing first
+// when the plugin isn't paired yet, then its one document and a grant on it. The MCP tools, the CLI
+// commands and the live probes all go through here, each with its own way of asking the person
+// whether the panel shows a code.
+import type {
+  CallTargetBlock,
+  DocumentReader,
+  LinkResolution,
+  PluginBridge,
+  PluginLink,
+  UnlinkedResolution,
+} from "./bridge.js";
+import type { CallTargetOptions } from "./call-target.js";
+import type { PluginCallTarget } from "./execution.js";
 import {
+  callTargetGuidance,
   linkGuidance,
   pairingCodeExpiredText,
   pairingConfirmationGuidance,
@@ -33,9 +44,13 @@ export const PAIRING_GUIDANCE_MIN_LIFE_MS = 60_000;
 /** Who reads the blocked text: an MCP tool result, or a terminal. */
 export type PairingSurface = "mcp" | "cli";
 
-/** Why a call got no link, as a telemetry code. */
+/** Why a call got nowhere to run, as a telemetry code. */
 export type PluginCallBlock =
-  | "several_files"
+  | "document_not_open"
+  | "document_unprovable"
+  | "grant_denied"
+  | "grant_unavailable"
+  | "grant_pending"
   | "incompatible"
   | "disconnected"
   | "credential_unusable"
@@ -52,34 +67,68 @@ type PluginCallBlocked = {
   isError: boolean;
 };
 
-export type PluginCallLink = { kind: "linked"; link: PluginLink } | PluginCallBlocked;
+export type PluginCallTargeting = ({ kind: "targeted" } & PluginCallTarget) | PluginCallBlocked;
 
-/**
- * Where pairing left this server. An `already-paired` link is null when several files hold
- * authenticated links: pairing is done, even though a call couldn't pick one.
- */
+/** Where pairing left this server. */
 export type PluginPairing =
   | { kind: "paired"; link: PluginLink }
-  | { kind: "already-paired"; link: PluginLink | null }
+  | { kind: "already-paired" }
   | PluginCallBlocked;
 
-/** The link a call runs on, pairing first if the plugin isn't paired yet. Nothing is submitted here. */
-export async function linkForPluginCall(
-  bridge: PluginBridge,
-  askPairingCode: PairingCodeAsker | null,
-  signal: AbortSignal,
-  surface: PairingSurface = "mcp",
-): Promise<PluginCallLink> {
-  const resolution = await bridge.resolveLink(signal);
-  if (resolution.kind === "linked") return resolution;
-  if (resolution.kind !== "unpaired") return unlinked(resolution, surface);
-  const paired = await confirmShownCode(bridge, askPairingCode, signal, surface);
-  if (paired.kind === "blocked") return paired;
-  // Resolved again, never taken from the pairing: another file may have authenticated alongside,
-  // and a call doesn't pick between files.
-  const settled = await bridge.resolveLink(signal);
-  return settled.kind === "linked" ? settled : unlinked(settled, surface);
+export interface PluginCallTargetOptions {
+  /** The file the call names, or null to run in the one granted file or let the human pick. */
+  fileKey: string | null;
+  askPairingCode: PairingCodeAsker | null;
+  signal: AbortSignal;
+  surface: PairingSurface;
+  /** The call's own file reader, for proofs; the bridge's process-wide one when absent. */
+  reader?: DocumentReader | null;
+  waitMs: number;
+  pollMs?: number;
+  onWaiting?: CallTargetOptions["onWaiting"];
 }
+
+/**
+ * Where a call runs: pair first if the plugin isn't paired yet, then bind the call to one document
+ * under a grant (call-target.ts). Prompts the human; submits nothing.
+ */
+export async function targetForPluginCall(
+  bridge: PluginBridge,
+  {
+    fileKey,
+    askPairingCode,
+    signal,
+    surface,
+    reader,
+    waitMs,
+    pollMs,
+    onWaiting,
+  }: PluginCallTargetOptions,
+): Promise<PluginCallTargeting> {
+  let resolution = await bridge.resolveLink(signal);
+  if (resolution.kind === "unpaired") {
+    const paired = await confirmShownCode(bridge, askPairingCode, signal, surface);
+    if (paired.kind === "blocked") return paired;
+    resolution = await bridge.resolveLink(signal);
+  }
+  if (resolution.kind !== "linked") return unlinked(resolution, surface);
+  const target = await bridge.targetCall(fileKey, { reader, signal, waitMs, pollMs, onWaiting });
+  if (target.kind === "targeted") return target;
+  return blocked(
+    BLOCK_FOR_TARGET[target.block.kind],
+    callTargetGuidance(target.block, surface, waitMs),
+    // Waiting on a person is not a failure; everything else is.
+    target.block.kind !== "grant-expired",
+  );
+}
+
+const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
+  "document-not-open": "document_not_open",
+  "document-unprovable": "document_unprovable",
+  "grant-denied": "grant_denied",
+  "grant-unavailable": "grant_unavailable",
+  "grant-expired": "grant_pending",
+};
 
 /** Pair this server with the plugin unless it already is. Nothing is submitted here. */
 export async function pairPluginLink(
@@ -151,13 +200,11 @@ async function confirmShownCode(
 }
 
 function alreadyPaired(resolution: LinkResolution, surface: PairingSurface): PluginPairing {
-  if (resolution.kind === "linked") return { kind: "already-paired", link: resolution.link };
-  if (resolution.kind === "several") return { kind: "already-paired", link: null };
+  if (resolution.kind === "linked") return { kind: "already-paired" };
   return unlinked(resolution, surface);
 }
 
 const BLOCK_FOR_RESOLUTION: Record<UnlinkedResolution["kind"], PluginCallBlock> = {
-  several: "several_files",
   incompatible: "incompatible",
   disconnected: "disconnected",
   "credential-unusable": "credential_unusable",

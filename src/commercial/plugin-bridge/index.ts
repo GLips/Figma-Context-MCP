@@ -2,8 +2,11 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { FigmaService, staticCredentialSource, type FigmaCredential } from "~/services/figma.js";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge, type PluginLink } from "./bridge.js";
+import { documentReaderFor } from "./link-documents.js";
+import { pluginSeenRecently, recordPluginSighting } from "./plugin-sighting.js";
 import { createLocalImageReader, type LocalImageReader } from "./images.js";
 import { ImageUploadStore } from "./image-intake.js";
 import { startUploadEndpoint, type UploadEndpoint } from "./upload-endpoint.js";
@@ -29,8 +32,8 @@ const WRITE_ACCESS_SYNC_TICK_MS = 10 * 60 * 1000;
 
 /**
  * Where a plugin stands for this process. `connected` is on the wire now; `expected` has connected
- * in this process or recently used an approval on this (cwd, port) — so the write path exists even
- * while it redials; `absent` has shown no sign of one.
+ * in this process, or authenticated with a server on this state dir recently — so the write path
+ * exists even while it redials; `absent` has shown no sign of one.
  */
 export type PluginPresence = "connected" | "expected" | "absent";
 
@@ -87,10 +90,16 @@ export function bindPluginAdvertisement(
 export function startPluginBridge({
   assetRoot,
   framelinkApiUrl,
+  figmaCredential,
   acceptUploads = false,
 }: {
   assetRoot: string;
   framelinkApiUrl: string;
+  /**
+   * The operator's Figma credential, read when a plugin link must be proven to be in a file before
+   * any call asks. Absent (an HTTP server with no global token): each call's own token proves.
+   */
+  figmaCredential: FigmaCredential | undefined;
   /**
    * Open the image upload endpoint. Only a long-lived server wants it: an upload outlives the command
    * that made it, so a CLI run's own short-lived runtime has nothing to hold handles for.
@@ -132,15 +141,20 @@ export function startPluginBridge({
   const syncOwnerWriteAccess = (link: PluginLink, options?: { force: boolean }) => {
     if (link.owner) inBackground(writeAccess.syncWriteAccess(link.owner, options));
   };
-  const bridge: PluginBridge = new PluginBridge(undefined, {
+  const bridge: PluginBridge = new PluginBridge({
+    framelinkOrigin,
+    documentReader: figmaCredential
+      ? documentReaderFor(new FigmaService(staticCredentialSource(figmaCredential)))
+      : null,
     events: {
       onLinkAuthenticated: (link) => {
-        // Fire-and-forget: the plugin acks at once and records what to display and the token proving
-        // a prior Allow. It must NOT block on the human — approval arrives later, via the panel.
-        bridge.request(link, bridge.sessionInfo(framelinkOrigin)).catch(() => {});
+        recordPluginSighting();
         syncOwnerWriteAccess(link);
       },
-      onSessionApproved: (link) => syncOwnerWriteAccess(link, { force: true }),
+      // A grant is the moment the human starts a run of writes: bring the owner's seat up to date.
+      onGrantChanged: (link, granted) => {
+        if (granted) syncOwnerWriteAccess(link, { force: true });
+      },
       onWriteAccessSignIn: (link) => inBackground(signIn.start(link.owner)),
       onRunEvent: (event) => writeMeter.runEvent(event),
     },
@@ -159,9 +173,10 @@ export function startPluginBridge({
       ["comments.pins", createCommentPinsCapability()],
     ]),
   });
-  // Surface where the plugin link credential and approvals live — both are 0600 secrets, so an
-  // operator should be able to locate and inspect them at startup. Override via FRAMELINK_STATE_DIR.
-  Logger.log(`Plugin pairing and session approvals persisted under ${resolveStateDir()}`);
+  // Surface where the plugin link credential lives — a 0600 secret, so an operator should be able to
+  // locate and inspect it at startup. Override via FRAMELINK_STATE_DIR. Grants live in the plugin.
+  Logger.log(`Plugin pairing persisted under ${resolveStateDir()}`);
+  const seenAtStart = pluginSeenRecently();
   // Callbacks awaiting the first plugin connection; null once it has happened (the latch fired).
   // One variable, not a boolean + array pair, so "latched but callbacks still queued" can't exist.
   let pendingFirstConnect: (() => void)[] | null = [];
@@ -193,7 +208,7 @@ export function startPluginBridge({
     },
     pluginPresence: () => {
       if (bridge.isPluginConnected()) return "connected";
-      return pendingFirstConnect === null || bridge.hasRecentApproval() ? "expected" : "absent";
+      return pendingFirstConnect === null || seenAtStart ? "expected" : "absent";
     },
     onFirstConnect: (cb) => {
       if (pendingFirstConnect) pendingFirstConnect.push(cb);

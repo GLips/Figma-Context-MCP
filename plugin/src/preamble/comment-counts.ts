@@ -50,10 +50,7 @@ const livePinGeometry: CommentPinGeometry<BaseNode> = {
 };
 
 async function loadCommentPins(): Promise<readonly HostCommentPin[]> {
-  // Only private org plugins get the file key (manifest `enablePrivatePluginApi`); without it, no counts.
-  const fileKey = figma.fileKey;
-  if (!fileKey) return [];
-  return (await requestHostCommentPins(fileKey)) ?? [];
+  return (await requestHostCommentPins()) ?? [];
 }
 
 // The id the thread counts against, or null for a page pin or a deleted anchor. Throws when Figma

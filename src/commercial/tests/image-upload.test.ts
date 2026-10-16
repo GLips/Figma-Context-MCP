@@ -31,7 +31,8 @@ import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
 import { createImageSourceFetcher } from "~/commercial/plugin-bridge/image-requests.js";
 import {
   createTestWriteAccess,
-  grantedTestApproval,
+  targetedTestCall,
+  TEST_DOCUMENT,
   TEST_PLUGIN_LINK,
 } from "./fixtures/write-access.js";
 
@@ -115,8 +116,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
         documentChanged: false,
       };
     },
-    touchApproval: () => {},
-    approvalStatus: grantedTestApproval,
+    targetCall: targetedTestCall,
   } as unknown as PluginBridge;
   await executePluginCode(
     {
@@ -124,7 +124,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       writeMeter: createTestWriteAccess().writeMeter,
       readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
     },
-    TEST_PLUGIN_LINK,
+    { link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT },
     code,
   );
   return fetched!;

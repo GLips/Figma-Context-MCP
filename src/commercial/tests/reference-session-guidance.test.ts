@@ -9,35 +9,40 @@ import {
   type ReferenceLinkLookup,
 } from "~/commercial/plugin-bridge/session-guidance.js";
 
-const link = {} as PluginLink;
+const provenIn = (fileKey: string, fileName: string) =>
+  ({ document: { kind: "proven", fileKey, fileName } }) as PluginLink;
+const unproven = { document: { kind: "unclaimed" } } as PluginLink;
 
 function lookupOf(
   resolution: LinkResolution,
-  approvalStatus: ReferenceLinkLookup["approvalStatus"] = vi.fn(),
+  grantStatus: ReferenceLinkLookup["grantStatus"] = vi.fn(),
 ): ReferenceLinkLookup {
-  return { resolveLink: async () => resolution, approvalStatus };
+  return { resolveLink: async () => resolution, grantStatus };
 }
 
 describe("link-aware reference guidance", () => {
-  it("approved sessions receive no preamble and perform one status query", async () => {
-    const status = vi.fn(async () => ({ type: "APPROVAL_GRANTED", session: null }) as const);
+  it("one granted file needs no note; several name the files; none says executing will ask", async () => {
+    const granted = vi.fn(async () => "granted" as const);
+    const one = provenIn("A", "Alpha");
     expect(
-      await referenceSessionGuidance(lookupOf({ kind: "linked", link }, status)),
+      await referenceSessionGuidance(lookupOf({ kind: "linked", links: [one, unproven] }, granted)),
     ).toBeUndefined();
-    expect(status).toHaveBeenCalledTimes(1);
+    expect(granted).toHaveBeenCalledTimes(1);
+    expect(granted).toHaveBeenCalledWith(one, "A", "none", expect.any(AbortSignal));
+
+    const several = await referenceSessionGuidance(
+      lookupOf({ kind: "linked", links: [one, provenIn("B", "Beta")] }, granted),
+    );
+    expect(several).toContain('"Alpha", "Beta"');
+    expect(several).toContain("fileKey");
+
+    const none = await referenceSessionGuidance(
+      lookupOf({ kind: "linked", links: [one] }, async () => "absent" as const),
+    );
+    expect(none).toContain("isn't allowed to edit any open Figma file");
   });
 
-  it("pending and rejected approvals ask for an Allow without waiting", async () => {
-    for (const type of ["PENDING_APPROVAL", "APPROVAL_REJECTED"] as const) {
-      const status = vi.fn(async () => ({ type }));
-      expect(await referenceSessionGuidance(lookupOf({ kind: "linked", link }, status))).toContain(
-        "click Allow",
-      );
-      expect(status).toHaveBeenCalledTimes(1);
-    }
-  });
-
-  it("an unlinked plugin keeps docs available without status traffic or starting pairing", async () => {
+  it("an unlinked plugin keeps docs available without grant traffic or starting pairing", async () => {
     const status = vi.fn();
     expect(
       await referenceSessionGuidance(lookupOf({ kind: "disconnected", elapsedMs: null }, status)),
@@ -56,7 +61,7 @@ describe("link-aware reference guidance", () => {
   it("failed or unresponsive lookups return guidance within the bound", async () => {
     expect(
       await referenceSessionGuidance(
-        lookupOf({ kind: "linked", link }, async () => {
+        lookupOf({ kind: "linked", links: [provenIn("A", "Alpha")] }, async () => {
           throw Error("gone");
         }),
       ),
@@ -69,7 +74,7 @@ describe("link-aware reference guidance", () => {
             signal = s;
             return new Promise(() => {});
           },
-          approvalStatus: vi.fn(),
+          grantStatus: vi.fn(),
         },
         5,
       ),

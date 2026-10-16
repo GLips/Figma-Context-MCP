@@ -16,23 +16,34 @@ import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
+import {
+  connectFakePlugin,
+  fakeFigmaFile,
+  serveFakeFigmaFiles,
+  type FakePluginSocket,
+} from "./fixtures/fake-plugin-socket.js";
 import { createTestWriteAccess } from "./fixtures/write-access.js";
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-/** An unpaired plugin that, once paired, grants approval and runs whatever it is sent. */
+// Every call names this file, so the plugin is proven in it on the call rather than asked to pick.
+const file = fakeFigmaFile();
+const execute = { code: "return 1", fileKey: file.fileKey };
+
+/** An unpaired plugin open in `file` that, once paired, holds a grant there and runs whatever it is sent. */
 async function setup(answerPrompt?: (message: string) => ElicitResult | Promise<ElicitResult>) {
+  serveFakeFigmaFiles(file);
   const bridge = new PluginBridge();
   cleanups.push(() => bridge.stop());
-  const socket = await connectFakePlugin(bridge, { paired: false });
+  const socket = await connectFakePlugin(bridge, { paired: false, file });
   socket.onFrame = (frame) => {
-    if (frame.type === "APPROVAL_STATUS")
-      socket.receive({ type: "APPROVAL_GRANTED", id: frame.id });
+    if (frame.type === "GRANT_STATUS")
+      socket.receive({ type: "GRANT", id: frame.id, state: "granted" });
     if (frame.type === "EXECUTE_CODE")
       socket.receive({
         type: "EXECUTE_CODE_RESULT",
@@ -89,7 +100,7 @@ const executions = (socket: FakePluginSocket) =>
 it("without a client prompt, the agent is told to confirm the code, and pair_figma_plugin pairs it", async () => {
   const { socket, call } = await setup();
 
-  const blocked = await call("figma_execute_code", { code: "return 1" });
+  const blocked = await call("figma_execute_code", execute);
   const code = shownCode(socket);
   expect(blocked.isError).toBeFalsy();
   expect(blocked.text).toContain(`shows the pairing code ${code}`);
@@ -97,7 +108,7 @@ it("without a client prompt, the agent is told to confirm the code, and pair_fig
   expect(executions(socket)).toBe(0);
 
   expect((await call("pair_figma_plugin", { code })).text).toContain("Paired");
-  expect((await call("figma_execute_code", { code: "return 1" })).text).toContain("ran");
+  expect((await call("figma_execute_code", execute)).text).toContain("ran");
   expect(executions(socket)).toBe(1);
 });
 
@@ -107,7 +118,7 @@ it("a Yes in the client's prompt pairs and runs the call that asked", async () =
     content: { shown: true },
   }));
 
-  expect((await call("figma_execute_code", { code: "return 1" })).text).toContain("ran");
+  expect((await call("figma_execute_code", execute)).text).toContain("ran");
   expect(prompts).toHaveLength(1);
   expect(prompts[0]).toContain(shownCode(socket));
   expect(executions(socket)).toBe(1);
@@ -124,7 +135,7 @@ it.each([
 ])("a %s prompt falls back to agent guidance, which still pairs", async (_, answer) => {
   const { socket, call } = await setup(answer);
 
-  const blocked = await call("figma_execute_code", { code: "return 1" });
+  const blocked = await call("figma_execute_code", execute);
   const code = shownCode(socket);
   expect(blocked.text).toContain(`pair_figma_plugin with { "code": "${code}" }`);
   expect(executions(socket)).toBe(0);
@@ -134,7 +145,7 @@ it.each([
 it("a No in the client's prompt pairs nothing and takes the code off the panel", async () => {
   const { socket, call } = await setup(() => ({ action: "accept", content: { shown: false } }));
 
-  const refused = await call("figma_execute_code", { code: "return 1" });
+  const refused = await call("figma_execute_code", execute);
   const code = shownCode(socket);
   expect(refused.isError).toBe(true);
   expect(refused.text).toContain("doesn't show the pairing code");
@@ -149,7 +160,7 @@ it("a client that advertises prompts but never answers gets guidance for a code 
   const { socket, call } = await setup(() => new Promise<ElicitResult>(() => {}));
   vi.useFakeTimers();
 
-  const pending = call("figma_execute_code", { code: "return 1" });
+  const pending = call("figma_execute_code", execute);
   await vi.advanceTimersByTimeAsync(90_000);
   const blocked = await pending;
   const code = shownCode(socket);
@@ -161,7 +172,7 @@ it("with several codes showing, the agent has the user read the code out, and is
   const { bridge, socket, call } = await setup();
   const other = await connectFakePlugin(bridge, { paired: false });
 
-  const blocked = await call("figma_execute_code", { code: "return 1" });
+  const blocked = await call("figma_execute_code", execute);
   expect(blocked.text).toContain("read out the exact pairing code");
   for (const shown of [socket, other]) expect(blocked.text).not.toContain(shownCode(shown));
   expect(executions(socket)).toBe(0);

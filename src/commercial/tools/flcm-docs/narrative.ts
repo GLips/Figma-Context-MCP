@@ -35,7 +35,7 @@ A read is a spec with ids, so \`const { node } = await flcm.get(target); await f
 
 ### Session across calls
 
-Each call has a fresh scope: top-level declarations and that call's \`flcm\` are gone when it returns. \`session\` is the one object that persists — the same object for the whole plugin run, shared by approved callers, kept across WebSocket reconnects and page switches, cleared when the plugin closes or the file switches, and never saved anywhere. Save specs, constants, SVG markup and looked-up ids in session. Ids keep pointing at live nodes; everything else is a snapshot, so re-read with \`flcm.get\` when the canvas may have changed.
+Each call has a fresh scope: top-level declarations and that call's \`flcm\` are gone when it returns. \`session\` is the one object that persists — the same object for the whole plugin run, shared by every caller granted on that file, kept across WebSocket reconnects and page switches, cleared when the plugin closes or the file switches, and never saved anywhere. Save specs, constants, SVG markup and looked-up ids in session. Ids keep pointing at live nodes; everything else is a snapshot, so re-read with \`flcm.get\` when the canvas may have changed.
 
 ${sample("sessionCall1")}
 

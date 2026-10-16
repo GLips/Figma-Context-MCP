@@ -3,9 +3,17 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { EventEmitter } from "node:events";
+import { vi } from "vitest";
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION, type PluginOwner } from "@framelink/plugin/protocol";
-import type { PluginBridge, PluginLink } from "~/commercial/plugin-bridge/bridge.js";
+import {
+  DOCUMENT_DATA_NAMESPACE,
+  DOCUMENT_PROOF_KEY_PREFIX,
+  PROTOCOL_VERSION,
+  type PluginOwner,
+} from "@framelink/plugin/protocol";
+import type { CallDocument, PluginBridge, PluginLink } from "~/commercial/plugin-bridge/bridge.js";
+import type { DocumentReader } from "~/commercial/plugin-bridge/link-documents.js";
+import { FigmaService } from "~/services/figma.js";
 import {
   LinkCredentialStore,
   linkProof,
@@ -17,7 +25,8 @@ import { TEST_PLUGIN_OWNER } from "./write-access.js";
  * An in-memory plugin socket, handed to `PluginBridge.accept` the way the listener hands it a real
  * one. `frames` records what the bridge sent; `receive` delivers a frame as the plugin would. It
  * answers the link-setup envelope itself: HELLO when `answersHello`, and AUTHENTICATE with a proof
- * when it holds `credential`, LINK_UNPAIRED otherwise.
+ * when it holds `credential`, LINK_UNPAIRED otherwise. INTRODUCE is answered with no document claim,
+ * so a link stays unproven until a call proves it: PROVE_DOCUMENT marks its `file`, if it has one.
  */
 export class FakePluginSocket extends EventEmitter {
   readyState: number = WebSocket.OPEN;
@@ -31,6 +40,7 @@ export class FakePluginSocket extends EventEmitter {
     private readonly answersHello: boolean,
     public credential: LinkCredential | null,
     private readonly owner: PluginOwner | null = TEST_PLUGIN_OWNER,
+    private readonly file: FakeFigmaFile | null = null,
   ) {
     super();
   }
@@ -61,6 +71,14 @@ export class FakePluginSocket extends EventEmitter {
     }
     if (frame.type === "PAIRING_OFFER" || frame.type === "PAIRING_CLOSED")
       this.receive({ type: `${frame.type}_ACK`, id: frame.id });
+    if (frame.type === "INTRODUCE") this.receive({ type: "INTRODUCED", id: frame.id, claim: null });
+    if (frame.type === "PROVE_DOCUMENT") {
+      this.file?.proofs.add(String(frame.nonce));
+      this.receive({ type: "PROOF_WRITTEN", id: frame.id });
+    }
+    if (frame.type === "PROOF_SETTLED") this.receive({ type: "PROOF_SETTLED_ACK", id: frame.id });
+    if (frame.type === "GRANT_PROMPT_CLOSED")
+      this.receive({ type: "GRANT_PROMPT_CLOSED_ACK", id: frame.id });
     if (frame.type === "PAIR_CONFIRMED") {
       this.credential = { id: String(frame.credentialId), secret: String(frame.secret) };
       this.receive({ type: "CREDENTIAL_STORED", id: frame.id });
@@ -97,17 +115,21 @@ export async function connectFakePlugin(
     paired = true,
     owner = TEST_PLUGIN_OWNER,
     credentials = new LinkCredentialStore(),
+    file = null,
   }: {
     answersHello?: boolean;
     paired?: boolean;
     owner?: PluginOwner | null;
     credentials?: LinkCredentialStore;
+    /** The Figma file this plugin is open in, which its proofs are written to. */
+    file?: FakeFigmaFile | null;
   } = {},
 ): Promise<FakePluginSocket> {
   const socket = new FakePluginSocket(
     answersHello,
     paired ? credentials.readOrCreate() : null,
     owner,
+    file,
   );
   bridge.accept(socket as unknown as WebSocket);
   // Settled when it authenticated, or (unpaired) once its AUTHENTICATE was answered and handled.
@@ -125,4 +147,39 @@ export async function connectFakePlugin(
   for (let i = 0; i < 20; i++) await Promise.resolve();
   socket.frames.length = 0;
   return socket;
+}
+
+/** A Figma file as REST reports it: its name, and the proof nonces plugins wrote to its root. */
+export interface FakeFigmaFile extends CallDocument {
+  proofs: Set<string>;
+}
+
+export function fakeFigmaFile(fileKey = "FAKEfile1", fileName = "Fake file"): FakeFigmaFile {
+  return { fileKey, fileName, proofs: new Set() };
+}
+
+/** A proof reader over `files`; a file not among them can't be read, as with a wrong key. */
+export function fakeDocumentReader(...files: FakeFigmaFile[]): DocumentReader {
+  return async (fileKey) => {
+    const file = files.find((candidate) => candidate.fileKey === fileKey);
+    if (!file) throw new Error(`Figma API returned 404 for ${fileKey}`);
+    return { name: file.fileName, proofs: [...file.proofs] };
+  };
+}
+
+/**
+ * Serve `files` from every FigmaService's shared-plugin-data read, for tests that build the reader
+ * from a server's own Figma token. Restored by `vi.restoreAllMocks`.
+ */
+export function serveFakeFigmaFiles(...files: FakeFigmaFile[]): void {
+  vi.spyOn(FigmaService.prototype, "getFileRootSharedPluginData").mockImplementation(
+    async (fileKey) => {
+      const file = files.find((candidate) => candidate.fileKey === fileKey);
+      if (!file) throw new Error(`Figma API returned 404 for ${fileKey}`);
+      const proofs = Object.fromEntries(
+        [...file.proofs].map((nonce) => [DOCUMENT_PROOF_KEY_PREFIX + nonce, "1"]),
+      );
+      return { name: file.fileName, sharedPluginData: { [DOCUMENT_DATA_NAMESPACE]: proofs } };
+    },
+  );
 }

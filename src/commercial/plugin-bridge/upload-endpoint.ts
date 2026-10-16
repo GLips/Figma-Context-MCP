@@ -25,7 +25,7 @@ import {
   type LocalListenerPolicy,
 } from "~/utils/local-listener.js";
 import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
-import { SESSION_IDENTITY } from "./approval.js";
+import { canonicalProjectPath } from "./project.js";
 import { ImageIntakeError, tooLarge, type ImageUploadStore } from "./image-intake.js";
 import { MAX_IMAGE_BYTES } from "./images.js";
 
@@ -95,7 +95,7 @@ export async function startUploadEndpoint({
       port,
       capability,
       expiresAt,
-      identity: SESSION_IDENTITY,
+      identity: canonicalProjectPath(),
       pid: process.pid,
     };
     writePrivateFileAtomic(recordFile, JSON.stringify(record, null, 2));

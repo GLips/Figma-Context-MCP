@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
-import { ApprovalStore } from "../../plugin-bridge/approval-store.js";
 import { answerLinkSetup } from "./plugin-link-peer.js";
 
 const mode = process.argv[2];
@@ -28,7 +27,7 @@ let aborted!: () => void;
 const serviceAborted = new Promise<void>((resolve) => {
   aborted = resolve;
 });
-const bridge = new PluginBridge(new ApprovalStore(directory, directory), {
+const bridge = new PluginBridge({
   requestTimeoutMs: 30_000,
   capabilities: new Map([
     [
@@ -63,8 +62,8 @@ async function peer() {
   ws.on("message", (raw) => {
     const message = JSON.parse(raw.toString());
     answerLinkSetup((frame) => ws.send(JSON.stringify(frame)), message);
-    if (message.type === "SESSION_INFO")
-      ws.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: message.id }));
+    if (message.type === "GRANT_STATUS")
+      ws.send(JSON.stringify({ type: "GRANT", id: message.id, state: "absent" }));
     if (message.type === "EXECUTE_CODE")
       ws.send(
         JSON.stringify({
@@ -79,7 +78,7 @@ async function peer() {
   await once(ws, "open");
   const resolution = await bridge.resolveLink();
   assert.equal(resolution.kind, "linked");
-  return { ws, link: (resolution as Extract<typeof resolution, { kind: "linked" }>).link };
+  return { ws, link: (resolution as Extract<typeof resolution, { kind: "linked" }>).links[0] };
 }
 function oversizedHeader() {
   const header = Buffer.alloc(14);
@@ -112,6 +111,7 @@ try {
     const result = bridge
       .request(link, {
         type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
         code: "unused",
         preamble: "unused",
         lateChangeWindowMs: 60_000,
@@ -133,8 +133,12 @@ try {
   }
   // Prove the same server process remains usable and accepts a replacement connection.
   const { ws: replacement, link } = await peer();
-  const ack = await bridge.request(link, bridge.sessionInfo("https://framelink.test"));
-  assert.equal(ack.type, "SESSION_INFO_ACK");
+  const status = await bridge.request(link, {
+    type: "GRANT_STATUS",
+    fileKey: null,
+    prompt: "none",
+  });
+  assert.equal(status.type, "GRANT");
   replacement.close();
   await once(replacement, "close");
   process.stdout.write(`PASS ${mode}\n`);

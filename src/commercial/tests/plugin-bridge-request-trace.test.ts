@@ -14,7 +14,7 @@ afterEach(() => {
 });
 async function connectedBridge(timeout = 100, ceiling = 1000) {
   const trace = new RequestTrace(() => {});
-  const bridge = new PluginBridge(undefined, {
+  const bridge = new PluginBridge({
     requestTimeoutMs: timeout,
     runCeilingMs: ceiling,
     trace,
@@ -34,6 +34,7 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
   const result = bridge
     .request(link, {
       type: "EXECUTE_CODE",
+      fileKey: "FAKEfile1",
       code: "private code",
       preamble: "private preamble",
       lateChangeWindowMs: 60_000,
@@ -70,7 +71,13 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, link, trace, sent, stranger, receive } = await connectedBridge(100, 150);
   const result = bridge
-    .request(link, { type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 })
+    .request(link, {
+      type: "EXECUTE_CODE",
+      fileKey: "FAKEfile1",
+      code: "",
+      preamble: "",
+      lateChangeWindowMs: 60_000,
+    })
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
@@ -120,7 +127,13 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
     const result = bridge
       .request(
         link,
-        { type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 },
+        {
+          type: "EXECUTE_CODE",
+          fileKey: "FAKEfile1",
+          code: "",
+          preamble: "",
+          lateChangeWindowMs: 60_000,
+        },
         { signal: controller.signal },
       )
       .catch((error) => error);
@@ -165,6 +178,7 @@ test("execution error result is traced as error without changing successful enve
   const { bridge, link, trace, sent, receive } = await connectedBridge();
   const result = bridge.request(link, {
     type: "EXECUTE_CODE",
+    fileKey: "FAKEfile1",
     code: "",
     preamble: "",
     lateChangeWindowMs: 60_000,

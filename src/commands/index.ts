@@ -60,12 +60,13 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
   // Inline code has no shell form worth having: a shell writes the file and passes it.
   figma_execute_code: {
     command: "execute",
-    inputs: { code: "<script>", scriptPath: "<script>" },
+    inputs: { code: "<script>", scriptPath: "<script>", fileKey: "--file-key" },
     figmaRest: true,
   },
   get_screenshot: {
     command: "execute",
     inputs: {
+      fileKey: "--file-key",
       nodeId: "--node-id",
       key: "--key",
       context: "--context",

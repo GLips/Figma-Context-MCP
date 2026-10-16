@@ -2,11 +2,10 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Runs what an approved session submits — agent code and screenshots — one at a time, against the
+// Runs what a granted server submits — agent code and screenshots — one at a time, against the
 // live document, and owns everything a run carries: its phase and cancellation, its mid-run server
 // calls, the late-change watch, and the agent's session store.
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
-import type { ApprovalAnswer, SettledApproval } from "./approval-lifecycle.js";
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
@@ -14,7 +13,7 @@ import { observeDocumentChanges, type DocumentChangeObserver } from "./document-
 import { createServerCallTable } from "./server-calls.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import type { HostTraceStage, NativeOperation, RunPhase, ServerFrame } from "./protocol.js";
+import type { HostTraceStage, NativeOperation, NotGrantedReason, RunPhase, ServerFrame } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
@@ -26,25 +25,23 @@ import type * as SandboxRuntime from "./preamble/sandbox.js";
 const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
   server: "this run was cancelled by the server while it was still queued",
   disconnected: "this run's server disconnected while the run was still queued",
-  revoked: "the human revoked this session's approval while the run was still queued",
+  revoked: "the human revoked this project's grant on the file while the run was still queued",
 };
 
 // Why a connection's suspended server calls were abandoned, by cause.
 const CALLS_ABANDONED: Record<Exclude<RunCancelCause, "server">, string> = {
   disconnected: "flcm: the server disconnected mid-run — the server call was abandoned and the script stops here.",
   revoked:
-    "flcm: the human revoked this session's approval in Figma — the server call was abandoned and the script stops here.",
+    "flcm: the human revoked this project's grant in Figma — the server call was abandoned and the script stops here.",
 };
 
 export function createRunExecutor({
   isConnected,
-  settledApprovalOf,
-  gateWrite,
+  refusalAtDequeue,
 }: {
   isConnected: (key: ConnKey) => boolean;
-  settledApprovalOf: (key: ConnKey) => Promise<SettledApproval>;
-  /** The consent gate, asked again at dequeue: false means it already replied. */
-  gateWrite: (to: ReplyTo, approval: ApprovalAnswer) => boolean;
+  /** The grant gate, asked again at dequeue: null admits. */
+  refusalAtDequeue: (key: ConnKey, fileKey: string) => Promise<NotGrantedReason | null>;
 }) {
   const serverCalls = createServerCallTable(isConnected);
   // The policy, the run phase it reads, and the key semantics live on run-cancellation.ts.
@@ -53,12 +50,12 @@ export function createRunExecutor({
   // (document-changes.ts watchLate). Bounded by the next run's start and by the window its
   // EXECUTE_CODE carried — the server's number, since the server is what holds the run open for it.
   let lateChangeWatch: DocumentChangeObserver | null = null;
-  // One store per plugin run, shared by approved callers across socket generations and pages.
+  // One store per plugin run, shared by granted callers across socket generations and pages.
   let agentSession: Record<string, unknown> | undefined;
 
   /**
    * One writer at a time (Invariant) — enforced by SERIALIZING writes rather than refusing the
-   * non-driving session. Without this chain two approved agents' executions would interleave at every
+   * non-driving server. Without this chain two granted agents' executions would interleave at every
    * `await` inside the document (loadFontAsync, exportAsync).
    *
    * The `catch` is not defensive noise: one rejection anywhere in the chain would poison it and
@@ -102,22 +99,27 @@ export function createRunExecutor({
   }
 
   /**
-   * The dequeue refusals, in order: approval first, so a CANCEL landing while the store settles is
+   * The dequeue refusals, in order: the grant first, so a CANCEL landing while storage settles is
    * still honoured; then the queued-zombie case (run-cancellation.ts) — a run cancelled while it sat
    * queued must not execute now, mutating a canvas the agent was told is unchanged. Nothing waits on
    * that reply (the CANCEL was answered when it landed), but the frozen envelope promises one per
    * request, and the server files it as a late reply. True when the run may start.
    */
-  async function admitAtDequeue(to: ReplyTo, refuseQueued: (reason: string) => void): Promise<boolean> {
-    const approval = await settledApprovalOf(to.connKey);
+  async function admitAtDequeue(
+    to: ReplyTo,
+    fileKey: string,
+    refuseQueued: (reason: string) => void,
+  ): Promise<boolean> {
+    const refusal = await refusalAtDequeue(to.connKey, fileKey);
     const cancelled = cancelledRuns.cancellation(to);
     if (cancelled) {
       cancelledRuns.settle(to);
       refuseQueued(CANCELLED_WHILE_QUEUED[cancelled]);
       return false;
     }
-    if (!gateWrite(to, approval)) {
+    if (refusal) {
       cancelledRuns.settle(to);
+      reply(to, { type: "NOT_GRANTED", reason: refusal });
       return false;
     }
     return true;
@@ -131,8 +133,14 @@ export function createRunExecutor({
    * The async IIFE wrapper is mandatory: Figma's QuickJS sandbox blocks the AsyncFunction constructor
    * but permits `eval` + `await` inside an IIFE, so this is what buys the agent `await`.
    */
-  async function executeCode(to: ReplyTo, code: string, preamble: string, lateChangeWindowMs: number): Promise<void> {
-    const admitted = await admitAtDequeue(to, (reason) =>
+  async function executeCode(
+    to: ReplyTo,
+    fileKey: string,
+    code: string,
+    preamble: string,
+    lateChangeWindowMs: number,
+  ): Promise<void> {
+    const admitted = await admitAtDequeue(to, fileKey, (reason) =>
       reply(to, {
         type: "EXECUTE_CODE_RESULT",
         result: null,
@@ -282,8 +290,13 @@ export function createRunExecutor({
    * outbound frame, which turns a raw Uint8Array into a useless `{"0":..}` blob. QuickJS has no
    * Buffer, so the sandbox's own `figma.base64Encode` gets a clean string across the wire.
    */
-  async function screenshot(to: ReplyTo, target: ScreenshotTarget, options: CaptureOptions): Promise<void> {
-    const admitted = await admitAtDequeue(to, (reason) =>
+  async function screenshot(
+    to: ReplyTo,
+    fileKey: string,
+    target: ScreenshotTarget,
+    options: CaptureOptions,
+  ): Promise<void> {
+    const admitted = await admitAtDequeue(to, fileKey, (reason) =>
       reply(to, { type: "SCREENSHOT_RESULT", errors: `flcm: ${reason} — no screenshot was taken.` }),
     );
     if (!admitted) return;
@@ -300,15 +313,18 @@ export function createRunExecutor({
   }
 
   return {
-    /** Queue an admitted EXECUTE_CODE. Queued, not awaited, so another session's write can't interleave. */
-    runCode(to: ReplyTo, code: string, preamble: string, lateChangeWindowMs: number): void {
+    /**
+     * Queue an admitted EXECUTE_CODE for `fileKey`, the document it was admitted for. Queued, not
+     * awaited, so another server's write can't interleave.
+     */
+    runCode(to: ReplyTo, fileKey: string, code: string, preamble: string, lateChangeWindowMs: number): void {
       acceptRun(to);
-      enqueueWrite(() => executeCode(to, code, preamble, lateChangeWindowMs));
+      enqueueWrite(() => executeCode(to, fileKey, code, preamble, lateChangeWindowMs));
     },
 
-    runScreenshot(to: ReplyTo, target: ScreenshotTarget, options: CaptureOptions): void {
+    runScreenshot(to: ReplyTo, fileKey: string, target: ScreenshotTarget, options: CaptureOptions): void {
       acceptRun(to);
-      enqueueWrite(() => screenshot(to, target, options));
+      enqueueWrite(() => screenshot(to, fileKey, target, options));
     },
 
     /**

@@ -7,16 +7,12 @@ import { buildSync } from "esbuild";
 import { createWarningRegistry } from "../../../plugin/src/preamble/warnings.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
-import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
 import type { FigmaService } from "~/services/figma.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 
 const bridges: PluginBridge[] = [];
-function create(options: ConstructorParameters<typeof PluginBridge>[1] = {}) {
-  const bridge = new PluginBridge(
-    new ApprovalStore("/test", "/tmp/execution-test-unused"),
-    options,
-  );
+function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
+  const bridge = new PluginBridge(options);
   bridges.push(bridge);
   return bridge;
 }
@@ -41,7 +37,13 @@ async function running(
   const result = bridge
     .request(
       socket.link,
-      { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
+      {
+        type: "EXECUTE_CODE",
+        fileKey: "FAKEfile1",
+        code: "x",
+        preamble: "x",
+        lateChangeWindowMs: 60_000,
+      },
       { signal },
     )
     .catch((e) => e);
@@ -259,25 +261,56 @@ it.each([false, true])(
     const socket = await connectFakePlugin(bridge);
     // The page and change-event registration the host meters every run by (document-changes.ts).
     const page = { id: "0:1", name: "test", on() {}, off() {} };
-    // Settles on the Allow handover itself — the approval is stored asynchronously, so waiting a
-    // fixed number of event-loop turns for it would race.
-    let handedOver!: () => void;
-    const allowed = new Promise<void>((resolve) => (handedOver = resolve));
+    // The plugin is driven through pairing, proof and Allow directly: its replies settle these
+    // waiters, never a count of event-loop turns, since the host stores and replies asynchronously.
+    const credential = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
+    const storage = new Map<string, unknown>([
+      ["code-mode:link-credential:" + credential.id, credential.secret],
+    ]);
+    const shared = new Map<string, string>();
+    const waiters: Array<(frame: Record<string, unknown>) => boolean> = [];
+    const awaitFrame = (match: (frame: Record<string, unknown>) => boolean) =>
+      new Promise<void>((resolve) =>
+        waiters.push((frame) => (match(frame) ? (resolve(), true) : false)),
+      );
     const figma = {
       showUI() {},
       notify() {},
+      // Grants belong to a signed-in Figma user.
+      currentUser: { id: "figma-user-1", name: "Test" },
       currentPage: page,
-      root: { children: [page] },
+      root: {
+        children: [page],
+        getSharedPluginData: (ns: string, key: string) => shared.get(`${ns}/${key}`) ?? "",
+        setSharedPluginData: (ns: string, key: string, value: string) =>
+          void shared.set(`${ns}/${key}`, value),
+      },
       on() {},
       off() {},
-      clientStorage: { getAsync: async () => [], setAsync: async () => {} },
+      clientStorage: {
+        getAsync: async (key: string) => storage.get(key),
+        setAsync: async (key: string, value: unknown) => void storage.set(key, value),
+        deleteAsync: async (key: string) => void storage.delete(key),
+        keysAsync: async () => [...storage.keys()],
+      },
       ui: {
         resize() {},
         onmessage: (_msg: Record<string, unknown>) => {},
         postMessage: (msg: { to: string; frame?: Record<string, unknown> }) => {
           if (msg.to !== "server" || !msg.frame) return;
-          socket.receive(msg.frame);
-          if (msg.frame.type === "SESSION_TOKEN") handedOver();
+          const frame = msg.frame;
+          for (const waiter of [...waiters])
+            if (waiter(frame)) waiters.splice(waiters.indexOf(waiter), 1);
+          // Only run traffic reaches the bridge: the bridge already authenticated this fake socket.
+          const setup = [
+            "LINK_PROOF",
+            "INTRODUCED",
+            "PROOF_WRITTEN",
+            "PROOF_SETTLED_ACK",
+            "DOCUMENT_CLAIMED",
+            "GRANT_CHANGED",
+          ];
+          if (!setup.includes(String(frame.type))) socket.receive(frame);
         },
       },
     };
@@ -303,17 +336,37 @@ it.each([false, true])(
     socket.onFrame = (frame) => figma.ui.onmessage({ from: "server", connKey: 1, frame });
     const panel = (control: Record<string, unknown>) =>
       figma.ui.onmessage({ from: "panel", control: { ...control, connKey: 1 } });
+    const ask = async (request: Record<string, unknown>) => {
+      const replied = awaitFrame((frame) => frame.id === request.id);
+      figma.ui.onmessage({ from: "server", connKey: 1, frame: request });
+      await replied;
+    };
     panel({ type: "WS_CONNECTED" });
-    socket.onFrame({
-      type: "SESSION_INFO",
-      id: "session",
-      identity: "test",
+    await ask({
+      type: "AUTHENTICATE",
+      id: "auth",
+      credentialId: credential.id,
+      nonce: "nonce-1-0000",
+    });
+    await ask({
+      type: "INTRODUCE",
+      id: "intro",
+      project: "/proj",
       framelinkOrigin: "https://app.framelink.ai",
     });
+    await ask({ type: "PROVE_DOCUMENT", id: "prove", nonce: "proof-1-0000" });
+    await ask({
+      type: "PROOF_SETTLED",
+      id: "settle",
+      nonce: "proof-1-0000",
+      outcome: { kind: "proven", fileKey: "FAKEfile1", fileName: "Fake file" },
+    });
+    const granted = awaitFrame((frame) => frame.type === "GRANT_CHANGED");
     panel({ type: "UI_DECISION", approve: true });
-    await allowed;
+    await granted;
     const result = (await bridge.request(socket.link, {
       type: "EXECUTE_CODE",
+      fileKey: "FAKEfile1",
       lateChangeWindowMs: 60_000,
       // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
       preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })`,
@@ -470,8 +523,21 @@ it("hands each channel request the credentials of the request that started its r
     bridge
       .request(
         socket.link,
-        { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
-        { runContext: { figma, uploadHandles: new Set(), readLocalImage: null } },
+        {
+          type: "EXECUTE_CODE",
+          fileKey: "FAKEfile1",
+          code: "x",
+          preamble: "x",
+          lateChangeWindowMs: 60_000,
+        },
+        {
+          runContext: {
+            figma,
+            fileKey: "FAKEfile1",
+            uploadHandles: new Set(),
+            readLocalImage: null,
+          },
+        },
       )
       .catch((e) => e),
   );

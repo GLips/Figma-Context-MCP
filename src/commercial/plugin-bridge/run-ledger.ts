@@ -29,6 +29,8 @@ import type { LocalImageReader } from "./images.js";
  */
 export interface ChannelRunContext {
   figma: FigmaService | null;
+  /** The document the run was admitted for. Null for a request that is no run. */
+  fileKey: string | null;
   /** Upload handles the submitted code names literally — the only ones this run may redeem. */
   uploadHandles: ReadonlySet<string>;
   /** flcm.image's read of the operator's asset root. Null: this run may read no local file. */
@@ -37,6 +39,7 @@ export interface ChannelRunContext {
 
 export const NO_RUN_CONTEXT: ChannelRunContext = {
   figma: null,
+  fileKey: null,
   uploadHandles: new Set(),
   readLocalImage: null,
 };
@@ -67,7 +70,7 @@ export const DEFAULT_TIMEOUT_MS = RUN_INACTIVITY_DEADLINE_MS;
 // inactivity deadline deliberately isn't. Without it, a cold-cache many-image render could
 // legitimately re-arm the inactivity deadline for minutes while the MCP client abandoned the call at
 // its own ~60s default — the agent told "failed" about a canvas still being written. Sized to fit the
-// client's 60s budget in the common (already-approved) case.
+// client's 60s budget in the common (already-granted) case.
 export const DEFAULT_RUN_CEILING_MS = 45_000;
 
 // How long the caller's rejection waits for the plugin's CANCEL_RESULT before falling back to the
@@ -76,7 +79,7 @@ export const DEFAULT_RUN_CEILING_MS = 45_000;
 // CAN'T answer (socket dying, main thread wedged), which is precisely when the hedge is true.
 const CANCEL_ANSWER_MS = 1_000;
 
-// Only runs can have their cancellation answered. Everything else (handshake, approval polling)
+// Only runs can have their cancellation answered. Everything else (handshake, grant polling, proofs)
 // never reaches the document, so its cancellation rejects on the spot.
 const RUN_REQUESTS = new Set<ServerRequestType>(RUN_REQUEST_TYPES);
 
@@ -116,7 +119,7 @@ export interface RunLedgerOptions {
   requestTimeoutMs: number;
   runCeilingMs: number;
   trace: RequestTrace;
-  /** How long the plugin has been gone, for the wording of an approval poll its drop cut short. */
+  /** How long the plugin has been gone, for the wording of a non-run request its drop cut short. */
   disconnectedDurationMs(): number | null;
 }
 
@@ -279,13 +282,13 @@ export class RunLedger {
 
   /**
    * Reject everything sent on `connection` (or everything, with none) — it can never be answered.
-   * An approval poll is worded as the outage it is: nothing was submitted.
+   * A request that isn't a run is worded as the outage it is: nothing was submitted.
    */
   fail(reason: string, connection?: RelayConnection): void {
     for (const [id, entry] of this.entries) {
       if (connection && entry.connection !== connection) continue;
       this.trace.record(id, entry.connection, "disconnected");
-      const waiting = entry.payloadType === "APPROVAL_STATUS";
+      const waiting = !RUN_REQUESTS.has(entry.payloadType);
       this.take(id)?.reject(
         new BridgeRequestError(
           waiting
@@ -397,9 +400,9 @@ function cancelRejection(
   disposition: CancelDisposition,
 ): BridgeRequestError {
   const head = `Bridge request ${entry.id} (${entry.payloadType}, last phase ${entry.phase}, ${Date.now() - entry.startedAt}ms) ${why}. `;
-  if (entry.payloadType === "APPROVAL_STATUS")
+  if (!RUN_REQUESTS.has(entry.payloadType))
     return new BridgeRequestError(
-      head + "Approval status was not received; no code was submitted.",
+      head + "No answer was received; no code was submitted.",
       "not-submitted",
       entry.phase,
     );

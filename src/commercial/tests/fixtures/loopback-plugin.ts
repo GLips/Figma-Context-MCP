@@ -4,7 +4,9 @@
  */
 // The real plugin, both halves, against a real server socket: the relay iframe (ui.ts) and the host
 // (code.ts) are bundled from source and run in their own vm contexts, joined the way Figma joins them
-// (an async postMessage each way). Only Figma itself is a stand-in: one page, a user, and storage.
+// (an async postMessage each way). Only Figma itself is a stand-in: one page, a user, storage, and
+// the file the plugin is open in — whose shared plugin data `LoopbackFigma` serves back the way
+// Figma's REST API does, so a server proves which file a plugin is in exactly as it does live.
 // Shared by the loopback test and scripts/bridge-contract.mjs.
 //
 // The relay dials the production port block in order; the first ports it dials are routed to
@@ -13,7 +15,56 @@
 import vm from "node:vm";
 import { buildSync } from "esbuild";
 import { WebSocket } from "ws";
-import type { HostInbound, HostOutbound, PanelControl, PanelRender } from "@framelink/plugin/panel";
+import type {
+  HostInbound,
+  HostOutbound,
+  PanelControl,
+  PanelRender,
+  PanelSession,
+} from "@framelink/plugin/panel";
+import { documentProofNonces } from "@framelink/plugin/protocol";
+import type { DocumentReader } from "~/commercial/plugin-bridge/link-documents.js";
+
+/** One Figma file: its key, its name, and its root's shared plugin data. */
+export interface LoopbackFile {
+  key: string;
+  name: string;
+  /** Keyed `${namespace}/${key}`. */
+  shared: Map<string, string>;
+}
+
+/** The Figma files plugins can be open in, and the REST read a server proves them with. */
+export class LoopbackFigma {
+  readonly files = new Map<string, LoopbackFile>();
+  /** REST reads served, per file key. */
+  readonly reads = new Map<string, number>();
+
+  file(key: string, name = `File ${key}`): LoopbackFile {
+    const file = { key, name, shared: new Map<string, string>() };
+    this.files.set(key, file);
+    return file;
+  }
+
+  /** Figma's Duplicate: a new key, and a copy of everything in the root. */
+  duplicate(original: LoopbackFile, key: string): LoopbackFile {
+    const copy = this.file(key, `${original.name} (Copy)`);
+    for (const [entry, value] of original.shared) copy.shared.set(entry, value);
+    return copy;
+  }
+
+  /** `GET /v1/files/:key?plugin_data=shared&depth=1`, as the proof reads it. */
+  readonly reader: DocumentReader = async (fileKey) => {
+    this.reads.set(fileKey, (this.reads.get(fileKey) ?? 0) + 1);
+    const file = this.files.get(fileKey);
+    if (!file) throw new Error(`Figma API 404: no file ${fileKey}`);
+    const sharedPluginData: Record<string, Record<string, string>> = {};
+    for (const [entry, value] of file.shared) {
+      const [namespace, key] = entry.split("/", 2) as [string, string];
+      (sharedPluginData[namespace] ??= {})[key] = value;
+    }
+    return { name: file.name, proofs: documentProofNonces(sharedPluginData) };
+  };
+}
 
 const bundle = (entry: string) =>
   buildSync({
@@ -35,6 +86,10 @@ export interface LoopbackPluginOptions {
   storage?: Map<string, unknown>;
   /** Hold each HELLO this long before the host sees it: link setup still in flight. */
   holdHelloMs?: number;
+  /** The file this plugin is open in. Two plugins given one file are two instances in it. */
+  file?: LoopbackFile;
+  /** The Figma user signed in; null for none. */
+  user?: { id: string; name: string } | null;
 }
 
 export interface LoopbackPlugin {
@@ -44,12 +99,25 @@ export interface LoopbackPlugin {
   pairingCode(): Promise<string>;
   /** Whether the panel shows any pairing code right now. */
   showsPairingCode(): boolean;
-  /** Click Allow on the connected, unapproved session; resolves once the token is handed over. */
+  /** The file this plugin is open in. */
+  file: LoopbackFile;
+  /** The panel's rows now. */
+  sessions(): PanelSession[];
+  /** Whether a row is asking the human for a decision now. */
+  isPrompting(): boolean;
+  /**
+   * Click Allow (or Use this file) on the first row asking for one, waiting for a row to ask;
+   * resolves once the grant is saved and announced.
+   */
   allow(): Promise<void>;
-  /** Click the panel's sign-in button on the approved session. */
+  /** Click Deny on the first row asking. */
+  deny(): Promise<void>;
+  /** Paste a link into the panel, as the human does when a server asks for this file's link. */
+  pasteLink(text: string): void;
+  /** Click the panel's sign-in button on the granted session. */
   signIn(): void;
-  /** Click Revoke access on the approved session. */
-  revoke(): void;
+  /** Click Revoke on the grant of `project` (the first granted row by default). */
+  revoke(project?: string): void;
   /** Figma's toasts, in order. */
   toasts: string[];
   /** Deliver the node changes Figma has noticed since the last call. */
@@ -62,12 +130,17 @@ export interface LoopbackPlugin {
 
 export function startLoopbackPlugin(
   serverPorts: number | readonly number[],
-  { storage = new Map(), holdHelloMs = 0 }: LoopbackPluginOptions = {},
+  {
+    storage = new Map(),
+    holdHelloMs = 0,
+    file = new LoopbackFigma().file("LOOPBACKfile", "Loopback file"),
+    user = { id: "loopback-user", name: "Loopback Human" },
+  }: LoopbackPluginOptions = {},
 ): LoopbackPlugin {
   const sockets = new Set<WebSocket>();
   const toasts: string[] = [];
   let lastRender: PanelRender | null = null;
-  let handedOver = 0;
+  let grantsAnnounced = 0;
   let closed = false;
 
   // ---- The relay iframe ----
@@ -144,9 +217,17 @@ export function startLoopbackPlugin(
   const figma = {
     showUI() {},
     notify: (message: string) => toasts.push(message),
-    currentUser: { id: "loopback-user", name: "Loopback Human" },
+    currentUser: user,
     currentPage: page,
-    root: { children: [page] },
+    root: {
+      children: [page],
+      getSharedPluginData: (namespace: string, key: string) =>
+        file.shared.get(`${namespace}/${key}`) ?? "",
+      setSharedPluginData: (namespace: string, key: string, value: string) => {
+        if (value) file.shared.set(`${namespace}/${key}`, value);
+        else file.shared.delete(`${namespace}/${key}`);
+      },
+    },
     on() {},
     off() {},
     openExternal() {},
@@ -157,13 +238,16 @@ export function startLoopbackPlugin(
     clientStorage: {
       getAsync: async (key: string) => storage.get(key),
       setAsync: async (key: string, value: unknown) => void storage.set(key, value),
+      deleteAsync: async (key: string) => void storage.delete(key),
+      keysAsync: async () => [...storage.keys()],
     },
     ui: {
       resize() {},
       onmessage: (_inbound: HostInbound) => {},
       postMessage: (outbound: HostOutbound) => {
         if (outbound.to === "panel") lastRender = outbound.render;
-        else if (outbound.frame.type === "SESSION_TOKEN") handedOver++;
+        else if (outbound.frame.type === "GRANT_CHANGED" && outbound.frame.granted)
+          grantsAnnounced++;
         deferred(() => relayWindow.onmessage?.({ data: { pluginMessage: outbound } }));
       },
     },
@@ -182,8 +266,13 @@ export function startLoopbackPlugin(
 
   // What the panel's buttons post (ui.ts): a "panel" envelope, which only the relay itself builds.
   const click = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
-  const session = (approved: boolean) =>
-    lastRender?.sessions.filter((s) => s.connected && s.approved === approved).at(-1);
+  const sessions = () => lastRender?.sessions ?? [];
+  const asking = () =>
+    sessions().find(
+      (s) => s.key !== null && s.grant !== null && s.prompt !== null && !s.denied && !s.allowing,
+    );
+  const granted = (project?: string) =>
+    sessions().find((s) => s.granted && (project === undefined || s.project === project));
   const shownCode = () => lastRender?.pairings.find((pairing) => pairing.code)?.code ?? null;
   return {
     async opened() {
@@ -194,17 +283,28 @@ export function startLoopbackPlugin(
       return shownCode()!;
     },
     showsPairingCode: () => shownCode() !== null,
+    file,
+    sessions,
+    isPrompting: () => asking() !== undefined,
     async allow() {
-      while (!session(false)) await tick();
-      const before = handedOver;
-      click({ type: "UI_DECISION", approve: true, connKey: session(false)!.key });
-      while (handedOver === before) await tick();
+      while (!asking()) await tick();
+      const before = grantsAnnounced;
+      click({ type: "UI_DECISION", approve: true, connKey: asking()!.key! });
+      while (grantsAnnounced === before) await tick();
+    },
+    async deny() {
+      while (!asking()) await tick();
+      click({ type: "UI_DECISION", approve: false, connKey: asking()!.key! });
+    },
+    pasteLink(text) {
+      click({ type: "UI_PASTE_LINK", text });
     },
     signIn() {
-      click({ type: "UI_SIGN_IN", connKey: session(true)!.key });
+      click({ type: "UI_SIGN_IN", connKey: granted()!.key! });
     },
-    revoke() {
-      click({ type: "UI_REVOKE", connKey: session(true)!.key });
+    revoke(project) {
+      const { grant } = granted(project)!;
+      click({ type: "UI_REVOKE", ...grant! });
     },
     toasts,
     deliverChanges() {

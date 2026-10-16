@@ -11,8 +11,7 @@ import { resolveTarget } from "./target.js";
 
 // Its own file on purpose: counts are memoized per preamble evaluation, i.e. per module instance.
 test("reads carry counts on the node under each pin, fetched once per run and reassigned after edits", async () => {
-  const figma = createFigmaMock() as { fileKey?: string };
-  figma.fileKey = "abc";
+  createFigmaMock();
   await render({
     type: "FRAME",
     key: "screen",
@@ -53,7 +52,7 @@ test("reads carry counts on the node under each pin, fetched once per run and re
     const moved = await get("screen");
     assert.equal(moved.node.comments, 2);
     assert.equal(moved.node.children?.find((child) => child.id === card.id)?.comments, undefined);
-    assert.deepEqual(calls, [["comments.pins", { fileKey: "abc" }]]);
+    assert.deepEqual(calls, [["comments.pins", {}]]);
   } finally {
     delete g.__flcmHost;
   }

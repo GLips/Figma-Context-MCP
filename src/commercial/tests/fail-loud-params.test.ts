@@ -12,7 +12,7 @@ import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
   createTestWriteAccess,
-  grantedTestApproval,
+  targetedTestCall,
   linkedTestResolution,
   TEST_PLUGIN_LINK,
 } from "./fixtures/write-access.js";
@@ -29,9 +29,8 @@ function connectedServer(
 ) {
   const bridge = {
     request,
-    touchApproval: () => {},
     // A plugin is on the wire in these tests, so the disconnect reply never fires.
-    approvalStatus: grantedTestApproval,
+    targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
@@ -81,10 +80,10 @@ describe("unknown MCP tool params fail loud", () => {
 
     expect(request).toHaveBeenCalledWith(
       TEST_PLUGIN_LINK,
-      { type: "SCREENSHOT", nodeId: "1:2", scale: 2 },
+      { type: "SCREENSHOT", fileKey: "TESTfile1", nodeId: "1:2", scale: 2 },
       { signal: expect.any(AbortSignal) },
     );
-    expect(result.content[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+    expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
     await close();
   });
 

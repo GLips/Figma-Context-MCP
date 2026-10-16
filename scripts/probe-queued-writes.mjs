@@ -22,14 +22,13 @@
 //          the probe needs the build you just made, not whatever Figma has cached)
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:queued-writes              (this script)
-//   5. When the plugin strip shows this session, click Allow.
+//   5. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
 // The probe creates one small frame, reads it back, and deletes it again. Safe to re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { linkForProbe } from "./probe-link.mjs";
-import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The plugin holds no runtime of its own (ADR-0010), so the probe ships the real std-lib — the same
@@ -42,13 +41,12 @@ const STALE_MARK = "flcm-probe-stale-write";
 const t0 = Date.now();
 const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 
-const bridge = new PluginBridge(undefined, {
+const bridge = new PluginBridge({
   capabilities: new Map([["images.fetch", async () => ({})]]),
 });
 
 const run = (code) =>
-  bridge.request(link, {
-    type: "EXECUTE_CODE",
+  executeOnProbeTarget(bridge, target, {
     code,
     preamble: PREAMBLE,
     lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
@@ -79,30 +77,18 @@ try {
 } catch (e) { return { refusal: String(e.message || e) }; }
 `;
 
-let link = null;
+let target = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   let survivorId = null;
   try {
-    link = await linkForProbe(bridge, log);
-    log(`sending the queued-write batch — if the strip asks, click Allow`);
+    target = await targetForProbe(bridge, log);
+    log(`sending the queued-write batch`);
 
     // ---- 1. The reply must not outrun the queued render. ----
-    // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
-    // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, and the
-    // granted run's own reply then reads as an unexpected approval status.
-    const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(link, signal),
-      () => run(QUEUED_WRITE),
-    );
-    if (waited.type === "PENDING_APPROVAL") {
-      fail(
-        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
-      );
-    }
-    const first = waited.result;
+    const first = await run(QUEUED_WRITE);
     if (first?.errors) fail(`the probe script errored in the sandbox:\n${first.errors}`);
     if (!first?.result?.caught) {
       fail(
@@ -193,6 +179,6 @@ function fail(reason) {
 console.log(
   "Framelink probe: a reply outrunning its own writes, and a runtime kept past its reply.\n" +
     "Waiting for the Figma plugin to connect… (import it from THIS worktree's plugin/manifest.json,\n" +
-    "open it in a scratch file, and approve this session when asked; Ctrl-C to abort)\n",
+    "open it in a scratch file, and allow this project when the plugin asks; Ctrl-C to abort)\n",
 );
 bridge.start(WS_PORT_BLOCK, () => void runProbe());

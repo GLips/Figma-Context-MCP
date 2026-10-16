@@ -28,7 +28,7 @@ type NativeTraceStage = Extract<HostTraceStage, `native-${string}`>;
 
 /**
  * Why a run was cancelled, which the refusal words for the agent: the server gave up on it (its
- * deadline passed), its server disconnected, or the human revoked the session's approval.
+ * deadline passed), its server disconnected, or the human revoked its project's grant on the file.
  */
 export type RunCancelCause = "server" | "disconnected" | "revoked";
 
@@ -107,11 +107,12 @@ export interface HostCommentPin {
  * Absence is QUIET, unlike images: counts decorate reads nobody asked to be about comments, so no host,
  * a token without the comments scope, or a failed fetch all just mean no counts.
  */
-export async function requestHostCommentPins(fileKey: string): Promise<HostCommentPin[] | null> {
+export async function requestHostCommentPins(): Promise<HostCommentPin[] | null> {
   const host = currentHost();
   if (!host) return null;
   try {
-    const reply = await serverCall(host, "flcm.read", "comments.pins", { fileKey });
+    // No file key: the server reads the pins of the document this run was admitted for.
+    const reply = await serverCall(host, "flcm.read", "comments.pins", {});
     const pins = (reply as { pins?: unknown } | null)?.pins;
     if (!Array.isArray(pins)) return null;
     return pins.filter(

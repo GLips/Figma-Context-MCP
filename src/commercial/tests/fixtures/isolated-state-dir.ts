@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // A vitest setup file: every test file gets its own Framelink state root, so nothing a test does by
-// default — minting the plugin link credential, persisting an approval — reaches the developer's
+// default — minting the plugin link credential, recording a plugin sighting — reaches the developer's
 // real one. A test that wants its own dir still stubs FRAMELINK_STATE_DIR itself.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -15,8 +15,8 @@ import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 
 const bridges: PluginBridge[] = [];
-function create(options: ConstructorParameters<typeof PluginBridge>[1] = {}) {
-  const bridge = new PluginBridge(undefined, options);
+function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
+  const bridge = new PluginBridge(options);
   bridges.push(bridge);
   return bridge;
 }
@@ -27,14 +27,16 @@ afterEach(() => {
 
 it("an unpaired link is sent only the setup envelope, and nothing it sends is heard", async () => {
   const onRunEvent = vi.fn();
+  const onGrantChanged = vi.fn();
   const capability = vi.fn();
   const bridge = create({
-    events: { onRunEvent },
+    events: { onRunEvent, onGrantChanged },
     capabilities: new Map([["images.fetch", capability]]),
   });
   const socket = await connectFakePlugin(bridge, { paired: false });
 
-  socket.receive({ type: "SESSION_TOKEN", sessionToken: "squattersessiontoken000" });
+  socket.receive({ type: "DOCUMENT_CLAIMED", fileKey: "SQUATfile1" });
+  socket.receive({ type: "GRANT_CHANGED", project: "/p", fileKey: "SQUATfile1", granted: true });
   socket.receive({ type: "RUN_CHANGED", runId: "r" });
   socket.receive({
     type: "CHANNEL_REQUEST",
@@ -47,8 +49,8 @@ it("an unpaired link is sent only the setup envelope, and nothing it sends is he
 
   expect(await bridge.resolveLink()).toEqual({ kind: "unpaired" });
   expect(bridge.authenticatedLinks()).toEqual([]);
-  expect(bridge.approvedSession()).toBeNull();
   expect(onRunEvent).not.toHaveBeenCalled();
+  expect(onGrantChanged).not.toHaveBeenCalled();
   expect(capability).not.toHaveBeenCalled();
   // resolveLink challenged it again; nothing else was sent, not even a channel refusal.
   expect(new Set(socket.frames.map((frame) => frame.type))).toEqual(new Set(["AUTHENTICATE"]));
@@ -118,6 +120,6 @@ it("a confirmation pairs only the link showing its code, once", async () => {
   const confirmed = await bridge.confirmPairing(codeOf(shown).toLowerCase().replace("-", " "));
   expect(confirmed).toMatchObject({ kind: "paired", link: { socket: shown } });
   expect(other.frames.some((frame) => frame.type === "PAIR_CONFIRMED")).toBe(false);
-  expect(await bridge.resolveLink()).toMatchObject({ kind: "linked", link: { socket: shown } });
+  expect(await bridge.resolveLink()).toMatchObject({ kind: "linked", links: [{ socket: shown }] });
   expect(await bridge.confirmPairing(codeOf(shown))).toEqual({ kind: "unknown-code" });
 });

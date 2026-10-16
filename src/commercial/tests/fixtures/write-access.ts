@@ -10,9 +10,9 @@ import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
-import type { ApprovedSession } from "~/commercial/plugin-bridge/approval-session.js";
 import type {
-  ApprovalStatus,
+  CallDocument,
+  CallTarget,
   LinkResolution,
   PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
@@ -23,21 +23,20 @@ export const TEST_PLUGIN_OWNER: PluginOwner = {
   name: "Test Plugin Owner",
 };
 
-export const TEST_APPROVED_SESSION: ApprovedSession = {
-  token: "test-session-token",
-};
+/** The document fake bridges bind every call to. */
+export const TEST_DOCUMENT: CallDocument = { fileKey: "TESTfile1", fileName: "Test file" };
 
 /** A stand-in authenticated link, for fake bridges that never touch a socket. */
 export const TEST_PLUGIN_LINK = { owner: TEST_PLUGIN_OWNER } as unknown as PluginLink;
 
 /** A fake bridge's `resolveLink`: always the one authenticated TEST_PLUGIN_LINK. */
 export async function linkedTestResolution(): Promise<LinkResolution> {
-  return { kind: "linked", link: TEST_PLUGIN_LINK };
+  return { kind: "linked", links: [TEST_PLUGIN_LINK] };
 }
 
-/** A fake bridge's `approvalStatus` that always grants, under TEST_APPROVED_SESSION. */
-export async function grantedTestApproval(): Promise<ApprovalStatus> {
-  return { type: "APPROVAL_GRANTED", session: TEST_APPROVED_SESSION };
+/** A fake bridge's `targetCall`: every call bound to TEST_DOCUMENT on TEST_PLUGIN_LINK, granted. */
+export async function targetedTestCall(): Promise<CallTarget> {
+  return { kind: "targeted", link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT };
 }
 
 /**

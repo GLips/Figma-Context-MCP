@@ -45,8 +45,8 @@ function listToolsWith(presence: PluginPresence) {
 }
 
 describe("code-mode write tools are advertised whenever a plugin is expected", () => {
-  it("advertises across a server restart, when only the recent approval remembers the plugin", async () => {
-    // A dev-watch restart: fresh process (latch off), relay rebound onto an approval used minutes ago,
+  it("advertises across a server restart, when only a recent sighting remembers the plugin", async () => {
+    // A dev-watch restart: fresh process (latch off), relay rebound after a plugin seen minutes ago,
     // and the plugin a second or two from redialing. Hiding the tools here answered a call that was
     // merely early with "Tool figma_execute_code disabled" — a hard error an agent can't retry past.
     const { names, close } = listToolsWith("expected");

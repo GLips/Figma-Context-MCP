@@ -23,15 +23,14 @@
 //      needs no re-import at all.
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:constraints-stretch        (this script)
-//   5. When the plugin strip shows this session, click Allow.
+//   5. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
 // The probe renders four small frames, measures, deletes them again, and prints PASS/FAIL per case.
 // Safe to re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { linkForProbe } from "./probe-link.mjs";
-import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The real plugin holds no runtime of its own (ADR-0010), so the probe ships the actual std-lib
@@ -92,34 +91,20 @@ for (const id of roots) { const n = await figma.getNodeByIdAsync(id); if (n) n.r
 return out;
 `;
 
-let link = null;
+let target = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   try {
-    link = await linkForProbe(bridge, log);
-    log(`sending the probe render — if the strip asks, click Allow`);
+    target = await targetForProbe(bridge, log);
+    log(`sending the probe render`);
 
-    // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
-    // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, and the
-    // granted run's own reply then reads as an unexpected approval status.
-    const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(link, signal),
-      () =>
-        bridge.request(link, {
-          type: "EXECUTE_CODE",
-          code: PROBE_CODE,
-          preamble: PREAMBLE,
-          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
-        }),
-    );
-    if (waited.type === "PENDING_APPROVAL") {
-      fail(
-        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
-      );
-    }
-    const reply = waited.result;
+    const reply = await executeOnProbeTarget(bridge, target, {
+      code: PROBE_CODE,
+      preamble: PREAMBLE,
+      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+    });
     if (reply?.errors) fail(`the probe script errored in the sandbox:\n${reply.errors}`);
 
     const results = reply?.result;
@@ -157,7 +142,7 @@ const bridge = new PluginBridge();
 
 console.log(
   'Framelink probe: does `constraints: "stretch"` resize an authored absolute child?\n' +
-    "Waiting for the Figma plugin to connect… (open it in a scratch file and approve this session\n" +
-    "when asked; Ctrl-C to abort)\n",
+    "Waiting for the Figma plugin to connect… (open it in a scratch file and allow this project\n" +
+    "when the plugin asks; Ctrl-C to abort)\n",
 );
 bridge.start(WS_PORT_BLOCK, () => void runProbe());

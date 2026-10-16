@@ -97,7 +97,7 @@ function refuseIfDevMode(verb: string): void {
 const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
   server: "this run was cancelled by the server (its deadline passed)",
   disconnected: "this run's server disconnected, so the run was cancelled",
-  revoked: "the human revoked this session's approval in Figma, so the run was cancelled",
+  revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
 };
 
 function refuseIfCancelled(verb: string): void {

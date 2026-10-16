@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Write-access state on disk: this install's id, each signed-in Plugin Owner's seat and bearer
-// token, and the free-allowance ledger. One 0600 file in the same state dir as session approvals.
+// token, and the free-allowance ledger. One 0600 file in the same state dir as the link credentials.
 //
 // The FILE is shared state, not any one process's: several servers (one per agent) share it, so every
 // change is read → transform → atomic write with no await in between. That shrinks the lost-update

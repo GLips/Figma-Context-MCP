@@ -13,7 +13,7 @@ import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
   createTestWriteAccess,
-  grantedTestApproval,
+  targetedTestCall,
   linkedTestResolution,
 } from "./fixtures/write-access.js";
 
@@ -24,8 +24,7 @@ function connectedServer() {
   }));
   const bridge = {
     request,
-    touchApproval: () => {},
-    approvalStatus: grantedTestApproval,
+    targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
@@ -62,7 +61,7 @@ describe("contextual screenshot boundary", () => {
         context: true,
         margin: 0,
       });
-      expect(result.content[0].type).toBe("image");
+      expect(result.content.map((part) => part.type)).toEqual(["text", "image"]);
     } finally {
       await close();
     }

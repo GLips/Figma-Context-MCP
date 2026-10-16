@@ -3,9 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Live GRID authoring probe. Run `pnpm probe:grid`, open Framelink in a scratch Figma file,
-// then approve the pairing code. Import plugin/manifest.json after `pnpm build:plugin` if needed.
+// then confirm the pairing code and Allow; FIGMA_API_KEY must be set, to prove the file. Import
+// plugin/manifest.json after `pnpm build:plugin` if needed.
 // The preamble is built from this checkout, so preamble changes need no plugin re-import.
-// Set FRAMELINK_STATE_DIR to a writable, isolated directory to keep approval/session state
+// Set FRAMELINK_STATE_DIR to a writable, isolated directory to keep pairing state
 // separate from your normal server. This script creates probe frames and removes them in finally.
 // It verifies native track setters, placement/spans, cell sizing, read words, edits, and stacking.
 // Live Figma uses pre-removal insertion indices: insertChild(2, A) on [A,B,C] gives [B,A,C].
@@ -17,8 +18,7 @@
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { linkForProbe } from "./probe-link.mjs";
-import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The real plugin holds no runtime of its own (ADR-0010), so the probe ships the actual std-lib
@@ -114,32 +114,20 @@ try {
 }
 `;
 
-let link = null;
+let target = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   try {
-    link = await linkForProbe(bridge, log);
-    log(`sending the probe render — if the strip asks, click Allow`);
+    target = await targetForProbe(bridge, log);
+    log(`sending the probe render`);
 
-    // Poll status separately so approval retries cannot execute the probe more than once.
-    const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(link, signal),
-      () =>
-        bridge.request(link, {
-          type: "EXECUTE_CODE",
-          code: PROBE_CODE,
-          preamble: PREAMBLE,
-          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
-        }),
-    );
-    if (waited.type === "PENDING_APPROVAL") {
-      fail(
-        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
-      );
-    }
-    const reply = waited.result;
+    const reply = await executeOnProbeTarget(bridge, target, {
+      code: PROBE_CODE,
+      preamble: PREAMBLE,
+      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+    });
     if (reply?.errors) fail(`the probe script errored in the sandbox:\n${reply.errors}`);
 
     const results = reply?.result?.checks;
@@ -166,6 +154,6 @@ function fail(reason) {
 const bridge = new PluginBridge();
 
 console.log(
-  "Framelink GRID probe: waiting for the plugin in a scratch file. Approve this session when asked; Ctrl-C to abort.",
+  "Framelink GRID probe: waiting for the plugin in a scratch file. Allow this project when the plugin asks; Ctrl-C to abort.",
 );
 bridge.start(WS_PORT_BLOCK, () => void runProbe());

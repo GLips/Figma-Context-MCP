@@ -17,7 +17,7 @@ import { linkProofMessage, type PluginOwner } from "./protocol.js";
 const LINK_CREDENTIAL_STORAGE_PREFIX = "code-mode:link-credential:";
 
 /** The Figma user signed in to this plugin: the owner every write through its links is charged to. */
-function currentPluginOwner(): PluginOwner | null {
+export function currentPluginOwner(): PluginOwner | null {
   const user = figma.currentUser;
   return user?.id ? { figmaUserId: user.id, name: user.name } : null;
 }
@@ -30,6 +30,8 @@ interface PairingOffer {
 export function createLinkAuth({ show }: { show: (expandTo?: boolean) => void }) {
   // Sockets this plugin told it holds no credential for. A socket that proved itself leaves the set.
   const unpaired = new Set<ConnKey>();
+  // The credential each socket last proved: grants are scoped to it, so each state dir has its own.
+  const proved = new Map<ConnKey, string>();
   const offers = new Map<ConnKey, PairingOffer>();
 
   function dropOffer(key: ConnKey): void {
@@ -48,9 +50,11 @@ export function createLinkAuth({ show }: { show: (expandTo?: boolean) => void })
       const secret: unknown = await figma.clientStorage.getAsync(LINK_CREDENTIAL_STORAGE_PREFIX + credentialId);
       if (typeof secret !== "string") {
         unpaired.add(to.connKey);
+        proved.delete(to.connKey);
         reply(to, { type: "LINK_UNPAIRED" });
       } else {
         unpaired.delete(to.connKey);
+        proved.set(to.connKey, credentialId);
         dropOffer(to.connKey);
         reply(to, {
           type: "LINK_PROOF",
@@ -103,7 +107,18 @@ export function createLinkAuth({ show }: { show: (expandTo?: boolean) => void })
 
     closed(key: ConnKey): void {
       unpaired.delete(key);
+      proved.delete(key);
       dropOffer(key);
+    },
+
+    /** The credential this socket proved, or null while it hasn't. */
+    credentialOf(key: ConnKey): string | null {
+      return proved.get(key) ?? null;
+    },
+
+    /** Every socket that proved a credential. */
+    authenticatedConnections(): ConnKey[] {
+      return [...proved.keys()];
     },
 
     /** One row per unpaired socket, with the code it is showing, if any. */

@@ -27,11 +27,24 @@ export function isSettlingLinkStage(stage: LinkStage): boolean {
 }
 
 /**
+ * Which file an authenticated link is in, as far as this server knows. `claimed` is the plugin's
+ * word, from an earlier proof or a pasted link (with why it couldn't be proven, if it couldn't);
+ * only `proven` is this server's own finding, read back from the file over REST.
+ */
+export type LinkDocument =
+  | { kind: "unknown" }
+  | { kind: "unclaimed" }
+  | { kind: "claimed"; fileKey: string; problem: string | null }
+  | { kind: "proven"; fileKey: string; fileName: string };
+
+/**
  * Everything the relay knows about ONE accepted socket — one plugin link — created on accept and
  * dropped as a unit, so a reconnecting plugin never inherits a predecessor's stage or owner.
  */
 export class RelayConnection {
   private current: LinkStage = { kind: "hello" };
+  /** Which file this link is in. A proof holds for the plugin incarnation, which is this socket. */
+  document: LinkDocument = { kind: "unknown" };
   private abandoned = false;
   private notifyStageChanged!: () => void;
   // Resolves on this link's next stage change, or when it is abandoned. A call waiting for the link
