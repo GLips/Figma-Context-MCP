@@ -21,6 +21,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { RequestTrace } from "../src/commercial/plugin-bridge/request-trace.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
 import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
@@ -108,7 +109,8 @@ if (!toggle || !heavy) {
 }
 `;
 
-const FIXTURE_FILL = (target) => benchCode(`
+const FIXTURE_FILL = (target) =>
+  benchCode(`
 ${FIXTURE_DEFINITIONS}
 const have = section.children.filter((n) => n.type === "INSTANCE").length;
 const add = Math.min(${INSTANCES_PER_CALL}, ${target} - have);
@@ -166,6 +168,28 @@ for (let i = 0; i < 5; i++) await step("measure(missing key)", () => flcm.measur
 
   build: buildScenario,
 
+  // One component per variation, adding one ingredient at a time, to find what a component costs.
+  "component-parts": (fx) => `
+const made = [];
+const variations = {
+  "frame + text": [{ type: "TEXT", text: "Label" }],
+  "+ small instance": [{ type: "TEXT", text: "Label" }, { type: "INSTANCE", componentId: ${JSON.stringify(fx.toggleId)} }],
+  "+ heavy instance": [{ type: "TEXT", text: "Label" }, { type: "INSTANCE", componentId: ${JSON.stringify(fx.heavyId)} }],
+  "+ heavy rotated": [{ type: "TEXT", text: "Label" }, { type: "INSTANCE", componentId: ${JSON.stringify(fx.heavyId)}, rotation: 45 }],
+};
+try {
+  let n = 0;
+  for (const [label, children] of Object.entries(variations)) {
+    for (let i = 0; i < 3; i++) {
+      const spec = { type: "FRAME", left: 70000 + n++ * 400, top: 0, layout: { mode: "row", gap: 8 }, children };
+      made.push((await step("render " + label, () => flcm.render(spec))).id);
+      made.push((await step("component " + label, () => flcm.component({ ...spec, left: 70000 + n++ * 400 }))).id);
+    }
+  }
+} finally {
+  for (const id of made.reverse()) (await figma.getNodeByIdAsync(id))?.remove();
+}`,
+
   // Edits deep inside the fixture section: the post-write layout checks climb to the section.
   "edit-deep": (fx) => `
 const id = ${JSON.stringify(fx.deepRowId)};
@@ -185,7 +209,13 @@ return { removed: !!section };`);
 
 function printSteps(name, wallMs, result) {
   console.log(`\n── ${name}: ${wallMs}ms wall`);
-  for (const [label, ms] of result?.steps ?? []) console.log(`   ${String(ms).padStart(7)}ms  ${label}`);
+  for (const [label, ms] of result?.steps ?? [])
+    console.log(`   ${String(ms).padStart(7)}ms  ${label}`);
+  // The plugin's live step reports, so a run that hangs still shows the step it stopped at.
+  for (const e of result?.trace ?? [])
+    console.log(
+      `   ${String(e.hostElapsedMs).padStart(7)}ms  · ${e.hostStage}${e.operation ? " " + e.operation : ""}`,
+    );
   if (result?.error) console.log(`   ERROR: ${result.error}`);
 }
 
@@ -197,17 +227,38 @@ async function run(target, code) {
   const started = Date.now();
   try {
     const session = { handle: SESSION_HANDLE, create: !sessionCreated };
-    const reply = await executeOnProbeTarget(bridge, target, { code, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS, session });
+    traced.length = 0;
+    const reply = await executeOnProbeTarget(bridge, target, {
+      code,
+      preamble: PREAMBLE,
+      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+      session,
+    });
     sessionCreated = true;
     const wallMs = Date.now() - started;
-    if (reply.errors) return { wallMs, result: { steps: [], error: reply.errors } };
-    return { wallMs, result: reply.result };
+    const trace = [...traced];
+    if (reply.errors) return { wallMs, result: { steps: [], error: reply.errors, trace } };
+    return { wallMs, result: { ...reply.result, trace } };
   } catch (error) {
-    return { wallMs: Date.now() - started, result: { steps: [], error: error instanceof Error ? error.message : String(error) } };
+    return {
+      wallMs: Date.now() - started,
+      result: {
+        steps: [],
+        error: error instanceof Error ? error.message : String(error),
+        trace: [...traced],
+      },
+    };
   }
 }
 
-const bridge = new PluginBridge({ capabilities: new Map() });
+// Runs are sequential, so every host step reported since a run was submitted is that run's.
+const traced = [];
+const bridge = new PluginBridge({
+  capabilities: new Map(),
+  trace: new RequestTrace((event) => {
+    if (event.stage === "host") traced.push(event);
+  }),
+});
 let started = false;
 async function main() {
   if (started) return; // a reconnect must not start a second bench
@@ -218,7 +269,11 @@ async function main() {
 
   if (requested.includes("fixture-reset")) {
     const { result } = await run(target, FIXTURE_RESET);
-    log(result?.error ? `reset failed: ${result.error}` : `fixture removed: ${result?.value?.removed}`);
+    log(
+      result?.error
+        ? `reset failed: ${result.error}`
+        : `fixture removed: ${result?.value?.removed}`,
+    );
     process.exit(0);
   }
 
@@ -235,7 +290,8 @@ async function main() {
   const report = { at: new Date().toISOString(), page: PAGE, instances: INSTANCES, scenarios: {} };
   for (const name of names) {
     const scenario = SCENARIOS[name];
-    if (!scenario) throw new Error(`no scenario "${name}" — choose from ${Object.keys(SCENARIOS).join(", ")}`);
+    if (!scenario)
+      throw new Error(`no scenario "${name}" — choose from ${Object.keys(SCENARIOS).join(", ")}`);
     const { wallMs, result } = await run(target, benchCode(scenario(fixture)));
     printSteps(name, wallMs, result);
     report.scenarios[name] = { wallMs, ...result };
@@ -248,9 +304,11 @@ async function main() {
 }
 
 console.log("Framelink live bench. Waiting for the Figma plugin to connect…");
-bridge.start(WS_PORT_BLOCK, () =>
-  void main().catch((error) => {
-    console.error(`\n❌ ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }),
+bridge.start(
+  WS_PORT_BLOCK,
+  () =>
+    void main().catch((error) => {
+      console.error(`\n❌ ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }),
 );

@@ -135,12 +135,27 @@ export const HOST_TRACE_STAGES = [
   "native-start",
   "native-end",
   "native-error",
+  // One flcm verb's course (preamble mutation-lock.ts): its turn began, its resources were loaded,
+  // its writes were applied, and it committed or failed.
+  "verb-start",
+  "verb-prepared",
+  "verb-applied",
+  "verb-end",
+  "verb-error",
 ] as const;
 export type HostTraceStage = (typeof HOST_TRACE_STAGES)[number];
 
 /** The native Figma operations whose waits the preamble traces. */
 export const NATIVE_OPERATIONS = ["page-create", "page-switch", "font-load", "font-list"] as const;
 export type NativeOperation = (typeof NATIVE_OPERATIONS)[number];
+
+/** What a traced stage concerns: a native Figma wait, or an flcm verb by its `flcm.` name. */
+export type TraceOperation = NativeOperation | `flcm.${string}`;
+const TRACED_VERB = /^flcm\.[A-Za-z]{1,32}$/;
+
+function isTraceOperation(value: unknown): value is TraceOperation {
+  return isOneOf(NATIVE_OPERATIONS, value) || (typeof value === "string" && TRACED_VERB.test(value));
+}
 
 /**
  * The owner of a plugin link: the Figma user signed in to the plugin (`figma.currentUser`), reported
@@ -702,7 +717,7 @@ export type PluginEvent =
   // A run entered a phase; `at` is the plugin's stamp for when (the frame leaves only once the
   // plugin thread goes idle, so arrival can be seconds late).
   | { type: "RUN_STATE"; executionId: string; phase: RunPhase; at: number }
-  | { type: "RUN_TRACE"; executionId: string; stage: HostTraceStage; operation?: NativeOperation; elapsedMs: number }
+  | { type: "RUN_TRACE"; executionId: string; stage: HostTraceStage; operation?: TraceOperation; elapsedMs: number }
   // The answer to a CANCEL.
   | { type: "CANCEL_RESULT"; executionId: string; disposition: CancelDisposition }
   // The document changed after the run's reply said it hadn't. At most one per run.
@@ -740,7 +755,7 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
       if (typeof f.executionId !== "string" || !isOneOf(HOST_TRACE_STAGES, f.stage)) return null;
       if (typeof f.elapsedMs !== "number" || !(f.elapsedMs >= 0 && f.elapsedMs <= 3_600_000)) return null;
       const event: PluginEvent = { type: "RUN_TRACE", executionId: f.executionId, stage: f.stage, elapsedMs: f.elapsedMs };
-      if (isOneOf(NATIVE_OPERATIONS, f.operation)) event.operation = f.operation;
+      if (isTraceOperation(f.operation)) event.operation = f.operation;
       return event;
     }
     case "CANCEL_RESULT":

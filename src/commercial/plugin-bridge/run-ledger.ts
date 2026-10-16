@@ -348,10 +348,12 @@ export class RunLedger {
   }
 
   private timeout(id: string, cause: "inactivity" | "ceiling"): void {
+    const lastStep = this.trace.lastHostStep(id);
     const why =
-      cause === "inactivity"
+      (cause === "inactivity"
         ? `saw no traffic for ${this.options.requestTimeoutMs}ms`
-        : `exceeded the absolute ${this.options.runCeilingMs}ms run ceiling`;
+        : `exceeded the absolute ${this.options.runCeilingMs}ms run ceiling`) +
+      (lastStep ? ` (the plugin's last reported step: ${lastStep})` : "");
     const entry = this.entries.get(id);
     if (entry)
       this.trace.record(

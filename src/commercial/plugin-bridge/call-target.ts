@@ -372,9 +372,18 @@ async function targetNamed(
       (request.fileKey === null || file.fileKey === request.fileKey)
     );
   };
-  const candidates = deps.links().filter(matches);
-  if (!candidates.length) return documentNotOpen(deps, request, options, request.document);
-  return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
+  // A plugin in the named file may still be on its redial backoff (a hidden Figma window's timers
+  // run late), so "not open" is only said once every plugin still open has had time to dial back.
+  const { signal, pollMs = GRANT_POLL_MS } = options;
+  for (;;) {
+    await abortable(deps.documentsSettled(deps.links()), signal);
+    const candidates = deps.links().filter(matches);
+    if (candidates.length)
+      return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
+    const settleAt = deps.linksSettleAt();
+    if (Date.now() >= settleAt) return documentNotOpen(deps, request, options, request.document);
+    await pause(Math.min(pollMs, settleAt - Date.now()), signal);
+  }
 }
 
 /** No open plugin is in the document the call named (or was bound to before its links closed). */

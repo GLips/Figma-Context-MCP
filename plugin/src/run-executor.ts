@@ -18,10 +18,10 @@ import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
 import type {
   HostTraceStage,
-  NativeOperation,
   NotGrantedReason,
   RunPhase,
   ServerFrame,
+  TraceOperation,
 } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
@@ -172,7 +172,7 @@ export function createRunExecutor({
     }
     const runStartedAt = beginRun(to);
     const traceStarted = Date.now();
-    const trace = (stage: HostTraceStage, operation?: NativeOperation) => {
+    const trace = (stage: HostTraceStage, operation?: TraceOperation) => {
       try {
         toServer(to.connKey, { type: "RUN_TRACE", executionId: to.id, stage, operation, elapsedMs: Date.now() - traceStarted });
       } catch { /* A diagnostic must never change execution or cleanup. */ }

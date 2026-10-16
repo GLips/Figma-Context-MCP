@@ -51,3 +51,58 @@ it("a call granted in a panel whose file is re-stamped mid-round stays bound to 
 
   expect(target).toMatchObject({ kind: "targeted", link: fast, document: { documentId: named } });
 });
+
+it("a call naming a file whose plugin is still redialing waits for it instead of refusing", async () => {
+  const named = parseDocumentId("n4medd0c00000001")!;
+  const other = parseDocumentId("0therd0c00000002")!;
+  const early = { isOpen: true } as RelayConnection;
+  const late = { isOpen: true } as RelayConnection;
+  const links = [early];
+  const documents = new Map<RelayConnection, LinkDocument>([
+    [
+      early,
+      {
+        kind: "identified",
+        documentId: other,
+        fileName: "Other",
+        pageNames: ["Home"],
+        fileKey: null,
+      },
+    ],
+    [
+      late,
+      {
+        kind: "identified",
+        documentId: named,
+        fileName: "Pricing",
+        pageNames: ["Home"],
+        fileKey: null,
+      },
+    ],
+  ]);
+  // The named file's plugin dials back a moment after the call arrives, inside the settle window.
+  setTimeout(() => links.push(late), 30);
+  const deps: CallTargetDeps = {
+    links: () => [...links],
+    linksSettleAt: () => Date.now() + 1_000,
+    documentsSettled: async () => {},
+    documentOf: (link) => documents.get(link)!,
+    closePrompt: () => {},
+    lookupSession: async () => false,
+    grantStatus: async () => "granted",
+  };
+
+  const target = await targetPluginCall(
+    deps,
+    {
+      executionId: mintExecutionId(),
+      intent: "Test call" as CallIntent,
+      session: null,
+      document: named,
+      fileKey: null,
+    },
+    { signal: new AbortController().signal, waitMs: 1_000, pollMs: 10 },
+  );
+
+  expect(target).toMatchObject({ kind: "targeted", link: late, document: { documentId: named } });
+});

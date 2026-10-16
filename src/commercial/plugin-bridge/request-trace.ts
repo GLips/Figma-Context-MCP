@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { HostTraceStage, NativeOperation, PluginEvent } from "@framelink/plugin/protocol";
+import type { HostTraceStage, PluginEvent, TraceOperation } from "@framelink/plugin/protocol";
 
 /** Bounded diagnostic metadata, deliberately independent of request promises, clocks and sockets. */
 type Stage =
@@ -24,7 +24,7 @@ export interface TraceEvent {
   hostStage?: HostTraceStage;
   lastHostStage?: HostTraceStage;
   hostElapsedMs?: number;
-  operation?: NativeOperation;
+  operation?: TraceOperation;
 }
 /** A RUN_TRACE as the protocol admitted it — only a known stage and a bounded elapsed time. */
 export type HostTrace = Omit<Extract<PluginEvent, { type: "RUN_TRACE" }>, "type" | "executionId">;
@@ -35,7 +35,7 @@ interface RecordEntry {
   events: TraceEvent[];
   emitted: number;
   lastHostStage?: HostTraceStage;
-  lastOperation?: NativeOperation;
+  lastOperation?: TraceOperation;
   late: boolean;
 }
 const REQUEST_LIMIT = 128;
@@ -94,6 +94,16 @@ export class RequestTrace {
       entry.emitted++;
       this.emit(event);
     }
+  }
+  /** The run's last step the plugin reported, worded for an error; null when it reported none. */
+  lastHostStep(id: string): string | null {
+    const last = this.entries
+      .get(id)
+      ?.events.filter((event) => event.stage === "host")
+      .at(-1);
+    if (!last) return null;
+    const what = last.operation ? `${last.hostStage} of ${last.operation}` : last.hostStage;
+    return `${what}, ${last.hostElapsedMs}ms into the run`;
   }
   snapshot(id: string): readonly TraceEvent[] {
     this.prune();

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { HostTraceStage, NativeOperation } from "../protocol.js";
+import type { HostTraceStage, NativeOperation, TraceOperation } from "../protocol.js";
 import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
@@ -25,6 +25,7 @@ import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // Execution services are required. Diagnostic reporting is optional; diagnostics never affect
 // execution or deadlines.
 type NativeTraceStage = Extract<HostTraceStage, `native-${string}`>;
+type VerbTraceStage = Extract<HostTraceStage, `verb-${string}`>;
 
 /**
  * Why a run was cancelled, which the refusal words for the agent: the server gave up on it (its
@@ -38,7 +39,9 @@ export interface FlcmHost {
    * plugin run; never retain the initializer.
    */
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
-  traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
+  /** Reports a step of the run to the server as it happens, so a run that never replies still says
+   * where it stopped. Named for its first use; verbs report through it too. */
+  traceNative?(stage: NativeTraceStage | VerbTraceStage, operation: TraceOperation): void;
   /**
    * Private transport for server-shipped verbs. Never expose this on flcm or session. Every call
    * goes through serverCall below: withServerCall (server-deadline.ts) keeps the run's clock from
@@ -169,6 +172,10 @@ function serverCall(host: FlcmHost, action: string, capability: string, payload:
 /** Diagnostics must not change the result or rejection of a native operation. */
 export function traceNative(stage: NativeTraceStage, operation: NativeOperation): void {
   try { currentHost()?.traceNative?.(stage, operation); } catch { /* Reporting is best effort. */ }
+}
+
+export function traceVerb(stage: VerbTraceStage, verb: string): void {
+  try { currentHost()?.traceNative?.(stage, `flcm.${verb}`); } catch { /* Reporting is best effort. */ }
 }
 
 export async function awaitNative<T>(operation: NativeOperation, run: () => Promise<T>): Promise<T> {

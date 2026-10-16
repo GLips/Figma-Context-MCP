@@ -36,7 +36,7 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, type RunCancelCause } from "./host.js";
+import { hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, traceVerb, type RunCancelCause } from "./host.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
 import { settleApplySpan } from "./bridge.js";
@@ -230,12 +230,14 @@ export function enterMutatingVerb<P, G, T>(
   const turn = verbChain.then(async () => {
     refuseIfRunFinished("flcm." + verb);
     refuseIfCancelled(verb);
+    traceVerb("verb-start", verb);
     // The verb's annotation-category slate, opened here rather than by prepare because its other
     // half is the failure path below: what a prepare created must be removable from a catch that
     // never sees the prepared value (annotation-categories.ts).
     beginAnnotationMutation();
     try {
       const prepared = await prepare();
+      traceVerb("verb-prepared", verb);
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
       // during them is the same kind of fact, read at the same place.
@@ -259,12 +261,14 @@ export function enterMutatingVerb<P, G, T>(
         const result = apply(gated, span);
         // The backstop: whatever geometry the verb didn't settle itself, before any style links.
         settleApplySpan(span);
+        traceVerb("verb-applied", verb);
         await flushStyleLinks(span);
         figma.commitUndo();
         recordCommittedVerb();
         finishSizingDiagnostics(verb);
         finishMovedOutDiagnostics(verb);
         registerResult(result);
+        traceVerb("verb-end", verb);
         return result;
       } catch (err) {
         warnings.discardFrom(warningCheckpoint);
@@ -276,6 +280,7 @@ export function enterMutatingVerb<P, G, T>(
     } catch (err) {
       // Wraps every phase: a category is created during the resource loads, so a gate that refuses
       // after them (or a write that fails inside the seal) both leave one to remove.
+      traceVerb("verb-error", verb);
       throw removeFailedAnnotationCategories(err);
     }
   });
