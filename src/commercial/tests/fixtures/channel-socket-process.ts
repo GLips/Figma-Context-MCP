@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
-import { mintExecutionId } from "../../plugin-bridge/execution-id.js";
+import { mintExecutionId } from "../../execution-id.js";
 import { answerLinkSetup } from "./plugin-link-peer.js";
 import { TEST_SESSION_REQUEST } from "./write-access.js";
 

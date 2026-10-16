@@ -35,7 +35,7 @@ The root package is the shipped product. The arrows only point one way — `plug
 
 The relay starts with the server in both transports, but the code-mode tools are **dynamically advertised**: hidden from `tools/list` until a plugin connects, then latched on for the process lifetime. `--code-mode` forces them always-on.
 
-Beside the relay, `plugin-bridge/upload-endpoint.ts` runs a second loopback listener (`POST /uploads`) that takes image bytes for the `upload` command, with its own browser-refusal and authorization gates. Every write passes the gate in `src/commercial/entitlement/`: a free monthly allowance on a local ledger, then a seat check against the Framelink app. One execution id (`plugin-bridge/execution-id.ts`), minted once per call, is the run's wire id and the key it is cancelled, served and metered by; the meter settles it once, and only from the link it went out on.
+Beside the relay, `plugin-bridge/upload-endpoint.ts` runs a second loopback listener (`POST /uploads`) that takes image bytes for the `upload` command, with its own browser-refusal and authorization gates. Every write passes the gate in `src/commercial/entitlement/`: a free monthly allowance on a local ledger, then a seat check against the Framelink app. One execution id (`src/commercial/execution-id.ts`, shared by the bridge and the meter), minted once per call, is the run's wire id and the key it is cancelled, served and metered by; the meter settles it once, and only from the link it went out on.
 
 ### CLI and telemetry
 

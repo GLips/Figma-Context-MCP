@@ -26,7 +26,7 @@ import {
 } from "@framelink/plugin/protocol";
 import { answerLinkSetup } from "./fixtures/plugin-link-peer.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
-import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 
 // Exercise production startup/handshake/images/execution on an ephemeral test port.
 // Figma only scans its fixed production block, so these tests cannot drive a live document.

@@ -7,7 +7,7 @@ import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import { writesUsedThisMonth } from "~/commercial/entitlement/write-ledger.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
-import { mintExecutionId, type ExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
+import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import {
@@ -87,7 +87,7 @@ it("runtime shutdown interrupts device polling without another authentication re
     notified = resolve;
   });
   const { signIn } = createTestWriteAccess({
-    notifyPanel: (_figmaUserId, notice) => {
+    notifyOwnerPanels: (_figmaUserId, notice) => {
       if (notice.kind === "sign-in-pending") notified();
     },
   });

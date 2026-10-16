@@ -23,7 +23,7 @@ import {
   type PluginLink,
   type RunRequest,
 } from "~/commercial/plugin-bridge/bridge.js";
-import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
@@ -122,7 +122,7 @@ async function setup() {
   // The panel is the other reader of every refusal; capture what its owner would be shown.
   const access = createTestWriteAccess({
     apiUrl: fake.baseUrl,
-    notifyPanel: (figmaUserId, notice) => {
+    notifyOwnerPanels: (figmaUserId, notice) => {
       expect(figmaUserId).toBe(TEST_PLUGIN_OWNER.figmaUserId);
       notices.push(notice);
     },

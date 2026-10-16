@@ -59,10 +59,10 @@ export const TEST_SESSION_REQUEST: SessionRequest = {
  */
 export function createTestWriteAccess({
   apiUrl = "http://127.0.0.1:9",
-  notifyPanel = () => {},
+  notifyOwnerPanels = () => {},
 }: {
   apiUrl?: string;
-  notifyPanel?: (figmaUserId: string, notice: WriteAccessNotice) => void;
+  notifyOwnerPanels?: (figmaUserId: string, notice: WriteAccessNotice) => void;
 } = {}): {
   writeAccess: WriteAccess;
   writeMeter: WriteMeter;
@@ -74,8 +74,8 @@ export function createTestWriteAccess({
   const writeAccess = new WriteAccess(api, store);
   return {
     writeAccess,
-    writeMeter: new WriteMeter(writeAccess, { notifyPanel }),
-    signIn: new DeviceSignIn(api, writeAccess, notifyPanel),
+    writeMeter: new WriteMeter(writeAccess, { notifyOwnerPanels }),
+    signIn: new DeviceSignIn(api, writeAccess, notifyOwnerPanels),
     store,
   };
 }

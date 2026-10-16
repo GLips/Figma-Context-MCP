@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { randomUUID } from "node:crypto";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import type { RelayConnection } from "./relay-connection.js";
@@ -43,6 +44,13 @@ export const NO_RUN_CONTEXT: ChannelRunContext = {
   uploadHandles: new Set(),
   readLocalImage: null,
 };
+
+export interface LedgerSubmitOptions {
+  /** The run's execution id. Omitted for a request that is no run. */
+  id?: string;
+  signal?: AbortSignal;
+  runContext?: ChannelRunContext;
+}
 
 export type RequestPhase = "submitted" | RunPhase;
 
@@ -156,13 +164,14 @@ export class RunLedger {
     return this.entries.get(entry.id) === entry;
   }
 
-  /** Send the payload under `id`, and resolve when the reply carrying that id lands. */
+  /**
+   * Send the payload under `id`, and resolve when the reply carrying that id lands. A request that is
+   * no run omits `id` and gets a fresh correlation id.
+   */
   submit(
     connection: RelayConnection,
     payload: ServerRequest,
-    id: string,
-    signal: AbortSignal | undefined,
-    runContext: ChannelRunContext,
+    { id = randomUUID(), signal, runContext = NO_RUN_CONTEXT }: LedgerSubmitOptions = {},
   ): Promise<PluginReply> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     return new Promise((resolve, reject) => {

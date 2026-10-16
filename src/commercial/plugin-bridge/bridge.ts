@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
@@ -38,12 +37,12 @@ import {
   BridgeRequestError,
   DEFAULT_RUN_CEILING_MS,
   DEFAULT_TIMEOUT_MS,
-  NO_RUN_CONTEXT,
+  type LedgerSubmitOptions,
   RunLedger,
   type ChannelRunContext,
 } from "./run-ledger.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
-import type { ExecutionId } from "./execution-id.js";
+import type { ExecutionId } from "~/commercial/execution-id.js";
 import {
   PLUGIN_REDIAL_MAX_MS,
   parseExecuteCodeResult,
@@ -223,9 +222,7 @@ export class PluginBridge {
       links: () => this.links,
       // Sound because the ledger resolves only what parseReply admitted for this payload's type.
       send: <T extends LinkSetupRequest>(link: PluginLink, payload: T) =>
-        this.ledger.submit(link, payload, randomUUID(), undefined, NO_RUN_CONTEXT) as Promise<
-          ReplyFor<T["type"]>
-        >,
+        this.ledger.submit(link, payload) as Promise<ReplyFor<T["type"]>>,
       onAuthenticated: (link) => {
         this.documents.introduce(link);
         this.events.onLinkAuthenticated?.(link);
@@ -434,7 +431,7 @@ export class PluginBridge {
     payload: T,
     { signal }: { signal?: AbortSignal } = {},
   ): Promise<ReplyFor<T["type"]>> {
-    return this.submit(link, payload, randomUUID(), signal, NO_RUN_CONTEXT);
+    return this.submit(link, payload, { signal });
   }
 
   /**
@@ -446,22 +443,17 @@ export class PluginBridge {
     link: PluginLink,
     payload: T,
     executionId: ExecutionId,
-    {
-      signal,
-      runContext = NO_RUN_CONTEXT,
-    }: { signal?: AbortSignal; runContext?: ChannelRunContext } = {},
+    { signal, runContext }: { signal?: AbortSignal; runContext?: ChannelRunContext } = {},
   ): Promise<ReplyFor<T["type"]>> {
-    return this.submit(link, payload, executionId, signal, runContext);
+    return this.submit(link, payload, { id: executionId, signal, runContext });
   }
 
   private submit<T extends LinkRequest>(
     link: PluginLink,
     payload: T,
-    id: string,
-    signal: AbortSignal | undefined,
-    runContext: ChannelRunContext,
+    options: LedgerSubmitOptions,
   ): Promise<ReplyFor<T["type"]>> {
-    if (signal?.aborted) return Promise.reject(signal.reason);
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason);
     if (!this.isLive(link))
       return Promise.reject(
         new BridgeRequestError(
@@ -470,9 +462,7 @@ export class PluginBridge {
         ),
       );
     // Sound because the ledger resolves only what parseReply admitted for this payload's type.
-    return this.ledger.submit(link, payload, id, signal, runContext) as Promise<
-      ReplyFor<T["type"]>
-    >;
+    return this.ledger.submit(link, payload, options) as Promise<ReplyFor<T["type"]>>;
   }
 
   private isLive(link: PluginLink): boolean {

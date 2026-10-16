@@ -33,7 +33,7 @@ import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { LinkCredentialStore, linkProof } from "../src/commercial/plugin-bridge/link-credential.ts";
 import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handle.ts";
-import { mintExecutionId } from "../src/commercial/plugin-bridge/execution-id.ts";
+import { mintExecutionId } from "../src/commercial/execution-id.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import {

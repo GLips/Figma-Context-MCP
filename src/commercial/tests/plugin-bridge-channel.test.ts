@@ -11,7 +11,7 @@ import type { FigmaService } from "~/services/figma.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
-import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 
 const bridges: PluginBridge[] = [];
 function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {

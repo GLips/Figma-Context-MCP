@@ -7,7 +7,7 @@ import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bri
 import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
-import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 
 const bridges: PluginBridge[] = [];
 // A request with a trivial reply, for tests about the ledger rather than the payload.

@@ -14,7 +14,7 @@ import {
   type ChannelRunContext,
   type PluginLink,
 } from "./bridge.js";
-import { mintExecutionId } from "./execution-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { mintSessionHandle, type SessionHandle } from "./session-handle.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
@@ -83,8 +83,9 @@ export async function executePluginCode(
       message: writeRefusalText(admission.refusal, writeMeter.framelinkApiUrl),
     };
   const { charge } = admission;
-  // Every refusal below lands before the plugin admits the run, so resubmitting the same execution
-  // id with a freshly minted handle never runs the code twice.
+  // A taken handle is refused before the plugin admits the run, so resubmitting this execution id
+  // with a fresh handle never runs the code twice. Every other refusal is final: NOT_GRANTED can
+  // arrive after the plugin queued the run.
   for (let attempt = 1; ; attempt++) {
     const session = namedSession
       ? { handle: namedSession, create: false }

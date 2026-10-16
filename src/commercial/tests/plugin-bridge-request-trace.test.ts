@@ -8,7 +8,7 @@ import { RequestTrace, type TraceEvent } from "~/commercial/plugin-bridge/reques
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
-import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 
 afterEach(() => {
   vi.useRealTimers();

@@ -141,7 +141,7 @@ export function startPluginBridge({
     for (const link of bridge.authenticatedLinks())
       if (link.owner?.figmaUserId === figmaUserId) notifyLinkPanel(link, notice);
   };
-  const writeMeter = new WriteMeter(writeAccess, { notifyPanel: notifyOwnerPanels });
+  const writeMeter = new WriteMeter(writeAccess, { notifyOwnerPanels });
   const signIn = new DeviceSignIn(api, writeAccess, notifyOwnerPanels);
   const framelinkOrigin = new URL(framelinkApiUrl).origin;
   const syncOwnerWriteAccess = (link: PluginLink, options?: { force: boolean }) => {

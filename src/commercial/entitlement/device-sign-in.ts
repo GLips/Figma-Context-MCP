@@ -33,7 +33,7 @@ export class DeviceSignIn {
     private readonly api: FramelinkApiClient,
     private readonly access: WriteAccess,
     /** Show a notice in the panels of the plugin owner signing in, and no one else's. */
-    private readonly notifyPanel: (figmaUserId: string, notice: WriteAccessNotice) => void,
+    private readonly notifyOwnerPanels: (figmaUserId: string, notice: WriteAccessNotice) => void,
     { now = () => new Date() }: { now?: () => Date } = {},
   ) {
     this.now = now;
@@ -52,13 +52,13 @@ export class DeviceSignIn {
     const { figmaUserId } = owner;
     const live = this.flows.get(figmaUserId);
     if (live) {
-      if (live.notice) this.notifyPanel(figmaUserId, live.notice);
+      if (live.notice) this.notifyOwnerPanels(figmaUserId, live.notice);
       return live.done;
     }
     const flow: SignInFlow = { notice: null, done: Promise.resolve() };
     flow.done = this.run(figmaUserId, (notice) => {
       flow.notice = notice;
-      this.notifyPanel(figmaUserId, notice);
+      this.notifyOwnerPanels(figmaUserId, notice);
     }).finally(() => this.flows.delete(figmaUserId));
     this.flows.set(figmaUserId, flow);
     return flow.done;

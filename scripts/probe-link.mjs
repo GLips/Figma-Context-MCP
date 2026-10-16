@@ -13,7 +13,7 @@ import { terminalPairingCodeAsker } from "../src/commercial/commands/terminal-pa
 import { FigmaService, staticCredentialSource } from "../src/services/figma.ts";
 import { figmaFileKey } from "../src/utils/figma-url.ts";
 import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handle.ts";
-import { mintExecutionId } from "../src/commercial/plugin-bridge/execution-id.ts";
+import { mintExecutionId } from "../src/commercial/execution-id.ts";
 
 // A person may be finding the plugin window: long enough not to rush them.
 const PROBE_GRANT_WAIT_MS = 10 * 60_000;

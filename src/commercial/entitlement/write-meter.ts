@@ -10,7 +10,7 @@
 // and pinned to the plugin link the run went out on. Callers see only an ExecutionCharge; the plugin's
 // run events arrive through runEvent. Seats get a charge that does nothing — they carry no counters.
 import type { PluginOwner, ExecuteCodeResult, WriteAccessNotice } from "@framelink/plugin/protocol";
-import type { ExecutionId } from "../plugin-bridge/execution-id.js";
+import type { ExecutionId } from "~/commercial/execution-id.js";
 import type { WriteAccess } from "./write-access.js";
 import {
   allowanceExhaustedNotice,
@@ -81,21 +81,21 @@ interface UnsettledExecution {
 export class WriteMeter {
   private readonly unsettled = new Map<string, UnsettledExecution>();
   private readonly settleWaiters = new Set<() => void>();
-  private readonly notifyPanel: (figmaUserId: string, notice: WriteAccessNotice) => void;
+  private readonly notifyOwnerPanels: (figmaUserId: string, notice: WriteAccessNotice) => void;
   private readonly now: () => Date;
 
   constructor(
     private readonly access: WriteAccess,
     {
-      notifyPanel = () => {},
+      notifyOwnerPanels = () => {},
       now = () => new Date(),
     }: {
       /** Show a notice in the panels of the plugin owner it concerns, and no one else's. */
-      notifyPanel?: (figmaUserId: string, notice: WriteAccessNotice) => void;
+      notifyOwnerPanels?: (figmaUserId: string, notice: WriteAccessNotice) => void;
       now?: () => Date;
     } = {},
   ) {
-    this.notifyPanel = notifyPanel;
+    this.notifyOwnerPanels = notifyOwnerPanels;
     this.now = now;
   }
 
@@ -121,7 +121,7 @@ export class WriteMeter {
     // Synchronous with the decision above, so no other call can decide in between.
     if (decision.kind === "refused") {
       if (decision.reason === "allowance-exhausted")
-        this.notifyPanel(decision.figmaUserId, allowanceExhaustedNotice(decision));
+        this.notifyOwnerPanels(decision.figmaUserId, allowanceExhaustedNotice(decision));
       return { kind: "refused", refusal: decision };
     }
     if (decision.via === "seat")
