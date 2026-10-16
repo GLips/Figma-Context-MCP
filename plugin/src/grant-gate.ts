@@ -124,16 +124,8 @@ export function createGrantGate({
     show(true);
   }
 
-  function dropPrompt(id: string, prompt: CallPrompt): void {
-    prompts.delete(id);
-    activity.promptEnded(prompt.executionId);
-  }
-
   function closePromptOf(key: ConnKey, executionId: string): void {
-    const id = promptKey(key, executionId);
-    const prompt = prompts.get(id);
-    if (!prompt) return;
-    dropPrompt(id, prompt);
+    if (!prompts.delete(promptKey(key, executionId))) return;
     show();
   }
 
@@ -212,7 +204,7 @@ export function createGrantGate({
 
     closed(key: ConnKey): void {
       connections.delete(key);
-      for (const [id, prompt] of prompts) if (prompt.key === key) dropPrompt(id, prompt);
+      for (const [id, prompt] of prompts) if (prompt.key === key) prompts.delete(id);
       show();
     },
 
@@ -231,7 +223,7 @@ export function createGrantGate({
 
     /** The file's stamp is new: grants and prompts on the old one no longer apply here. */
     documentChanged(): void {
-      for (const [id, prompt] of prompts) if (prompt.documentId !== identity.documentId) dropPrompt(id, prompt);
+      for (const [id, prompt] of prompts) if (prompt.documentId !== identity.documentId) prompts.delete(id);
       refreshConnectionGrants(connections.keys());
       void refreshDocumentGrants();
     },
@@ -253,13 +245,13 @@ export function createGrantGate({
       const held = prompts.get(promptKey(to.connKey, executionId));
       const decided = held?.kind === prompt && held.documentId === documentId ? held.state : "open";
       if (decided === "picked" || decided === "denied") {
-        activity.update(executionId, decided);
+        activity.advance(executionId, decided);
         closePromptOf(to.connKey, executionId);
         return answer(decided);
       }
       if (prompt === "allow" && (await store.settledAnswer(scope)) === "granted") {
         // Only a call that was asked here has a feed entry to move on; one already granted has none yet.
-        if (held) activity.update(executionId, "allowed");
+        if (held) activity.advance(executionId, "allowed");
         closePromptOf(to.connKey, executionId);
         return answer("granted");
       }
@@ -354,7 +346,7 @@ export function createGrantGate({
     admit(to: ReplyTo, documentId: string): GrantScope | null {
       const answer = admission(to.connKey, documentId);
       if (answer !== "granted" && answer !== "unknown") {
-        activity.update(to.id, "refused");
+        activity.advance(to.id, "refused");
         reply(to, { type: "NOT_GRANTED", reason: answer });
         return null;
       }

@@ -13,9 +13,16 @@ export type ActivityEntry = Omit<PanelActivity, "label"> & { project: string | n
 /** Enough to see what every agent did lately without pushing the grant rows off the panel. */
 export const ACTIVITY_FEED_LIMIT = 10;
 
-// A run's outcome moves forward only: a late "not-run" from a prompt closing must not overwrite a
-// run already under way, and a resubmitted id (a refused session handle) may start over.
+// A run's outcome moves forward only: a resubmitted id (a refused session handle) may start over,
+// but nothing moves a settled run.
 const SETTLED: ReadonlySet<ActivityOutcome> = new Set(["done", "failed", "cancelled"]);
+
+// What the cap may drop: a call with nothing left to report. Anything still in flight stays, even
+// past the cap, so a long run's final outcome isn't lost behind a burst of refused calls.
+const FINISHED: ReadonlySet<ActivityOutcome> = new Set([...SETTLED, "refused", "denied", "not-run"]);
+
+/** Where the plugin moves a call; waiting and not-run come from its prompt being live or not. */
+export type ActivityAdvance = Exclude<ActivityOutcome, "waiting" | "not-run">;
 
 export function createActivityFeed(show: () => void) {
   // Insertion order is age: a Map keeps it, and a new call is appended, so newest is last.
@@ -26,25 +33,16 @@ export function createActivityFeed(show: () => void) {
     if (!entry) {
       entry = { executionId, intent, project, session: null, outcome: "waiting" };
       entries.set(executionId, entry);
-      if (entries.size > ACTIVITY_FEED_LIMIT) entries.delete(entries.keys().next().value!);
     }
     return entry;
   }
 
-  function set(executionId: string, outcome: ActivityOutcome, session?: string): void {
-    const entry = entries.get(executionId);
-    if (!entry || SETTLED.has(entry.outcome)) return;
-    entry.outcome = outcome;
-    if (session !== undefined) entry.session = session;
-    show();
-  }
-
   return {
-    /** A call's prompt opened here. */
+    /** A call's prompt opened here; a call refused before may be asked again. */
     waiting(executionId: string, intent: string, project: string): void {
       const entry = entryFor(executionId, intent, project);
-      if (entry.outcome !== "waiting") set(executionId, "waiting");
-      else show();
+      if (!SETTLED.has(entry.outcome)) entry.outcome = "waiting";
+      show();
     },
 
     /** A run arrived for a call: it joins the feed if its prompt never showed here. */
@@ -52,29 +50,31 @@ export function createActivityFeed(show: () => void) {
       entryFor(executionId, intent, project);
     },
 
-    /** The human answered, or the plugin decided, a call's next step. */
-    update(executionId: string, outcome: Exclude<ActivityOutcome, "waiting" | "queued">): void {
-      set(executionId, outcome);
-    },
-
-    /** The call's prompt ended without an answer here. */
-    promptEnded(executionId: string): void {
-      if (entries.get(executionId)?.outcome === "waiting") set(executionId, "not-run");
-    },
-
-    /** A run was admitted under `session` (null for a screenshot) and waits its turn. */
-    queued(executionId: string, session: string | null): void {
-      set(executionId, "queued", session ?? undefined);
+    /** Move a call on. `session` is set when it is admitted to run (null for a screenshot). */
+    advance(executionId: string, outcome: ActivityAdvance, session?: string | null): void {
+      const entry = entries.get(executionId);
+      if (!entry || SETTLED.has(entry.outcome)) return;
+      entry.outcome = outcome;
+      if (session !== undefined) entry.session = session;
+      show();
     },
 
     /**
-     * Newest first. `promptLive` says whether a waiting call's prompt still shows: one that lapsed
-     * because its server stopped asking reads as not run.
+     * Newest first. `promptLive` says whether a waiting call's prompt still shows: one that lapsed,
+     * closed or was dropped reads as not run. Past the cap, the oldest finished calls are dropped.
      */
     entries(promptLive: (executionId: string) => boolean): ActivityEntry[] {
-      return [...entries.values()].reverse().map((entry) =>
-        entry.outcome === "waiting" && !promptLive(entry.executionId) ? { ...entry, outcome: "not-run" } : { ...entry },
+      const shown = [...entries.values()].map((entry) =>
+        entry.outcome === "waiting" && !promptLive(entry.executionId) ? { ...entry, outcome: "not-run" as const } : { ...entry },
       );
+      let excess = shown.length - ACTIVITY_FEED_LIMIT;
+      const kept = shown.filter((entry) => {
+        if (excess <= 0 || !FINISHED.has(entry.outcome)) return true;
+        excess--;
+        entries.delete(entry.executionId);
+        return false;
+      });
+      return kept.reverse();
     },
   };
 }

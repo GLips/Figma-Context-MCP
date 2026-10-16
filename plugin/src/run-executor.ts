@@ -97,7 +97,7 @@ export function createRunExecutor({
   function acceptRun(to: ReplyTo, session: string | null): void {
     cancelledRuns.enqueue(to);
     runState(to, "queued");
-    activity.queued(to.id, session);
+    activity.advance(to.id, "queued", session);
   }
 
   /**
@@ -108,7 +108,7 @@ export function createRunExecutor({
     lateChangeWatch?.stop();
     lateChangeWatch = null;
     cancelledRuns.markRunning(to);
-    activity.update(to.id, "running");
+    activity.advance(to.id, "running");
     return runState(to, "running");
   }
 
@@ -128,13 +128,13 @@ export function createRunExecutor({
     const cancelled = cancelledRuns.cancellation(to);
     if (cancelled) {
       cancelledRuns.settle(to);
-      activity.update(to.id, "cancelled");
+      activity.advance(to.id, "cancelled");
       refuseQueued(CANCELLED_WHILE_QUEUED[cancelled]);
       return false;
     }
     if (refusal) {
       cancelledRuns.settle(to);
-      activity.update(to.id, "refused");
+      activity.advance(to.id, "refused");
       reply(to, { type: "NOT_GRANTED", reason: refusal });
       return false;
     }
@@ -308,7 +308,7 @@ export function createRunExecutor({
     const sessionNotice = sessions.release(agentSession);
     if (sessionNotice) consoleLog.push(`[warn] ${sessionNotice}`);
 
-    activity.update(to.id, cancelledMidRun ? "cancelled" : errorMessage === null ? "done" : "failed");
+    activity.advance(to.id, cancelledMidRun ? "cancelled" : errorMessage === null ? "done" : "failed");
     reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
   }
 
@@ -334,10 +334,10 @@ export function createRunExecutor({
     try {
       const node = await resolveScreenshotTarget(target);
       const bytes = await captureScreenshot(node, options, () => cancelledRuns.cancellation(to) !== null);
-      activity.update(to.id, "done");
+      activity.advance(to.id, "done");
       reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
     } catch (err) {
-      activity.update(to.id, cancelledRuns.cancellation(to) !== null ? "cancelled" : "failed");
+      activity.advance(to.id, cancelledRuns.cancellation(to) !== null ? "cancelled" : "failed");
       reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
     } finally {
       cancelledRuns.settle(to);

@@ -309,11 +309,12 @@ function wireIntent(raw: unknown): string | null {
 /**
  * One GRANT_STATUS question. A prompting one carries the intent of the call it asks for, which the
  * prompt shows; a prompt-free one (a status read for the open-document list) belongs to no call.
+ * The server narrows the id, document and intent to its branded types.
  */
-export type GrantStatusAsk = { executionId: string; documentId: string } & (
-  | { prompt: "none" }
-  | { prompt: Exclude<GrantPrompt, "none">; intent: string }
-);
+export type GrantStatusAsk<Id = string, Document = string, Intent = string> = {
+  executionId: Id;
+  documentId: Document;
+} & ({ prompt: "none" } | { prompt: Exclude<GrantPrompt, "none">; intent: Intent });
 
 /** Why a run was refused before anything executed: no grant, or not the document it names. */
 export const NOT_GRANTED_REASONS = ["no-grant", "other-document"] as const;

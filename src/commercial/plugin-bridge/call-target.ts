@@ -17,7 +17,12 @@
 //
 // A document is its stamp. One stamp on two links is either one file open twice (both reported the
 // same file key) or a copy; when nothing tells them apart, the human picks in those panels.
-import { GRANT_POLL_MS, type GrantPrompt, type GrantState } from "@framelink/plugin/protocol";
+import {
+  GRANT_POLL_MS,
+  type GrantPrompt,
+  type GrantState,
+  type GrantStatusAsk,
+} from "@framelink/plugin/protocol";
 import type { ExecutionId } from "~/commercial/execution-id.js";
 import type { CallIntent } from "./call-intent.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
@@ -112,10 +117,7 @@ export interface CallTargetOptions {
 }
 
 /** One GRANT_STATUS question: a prompting one shows the intent of the call it asks for. */
-export type GrantStatusRequest = { executionId: ExecutionId; documentId: DocumentId } & (
-  | { prompt: "none" }
-  | { prompt: Exclude<GrantPrompt, "none">; intent: CallIntent }
-);
+export type GrantStatusRequest = GrantStatusAsk<ExecutionId, DocumentId, CallIntent>;
 
 /** What a snapshot reads: each link's document, and its plugin's grant on it. */
 export interface OpenDocumentLookup {

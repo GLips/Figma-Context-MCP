@@ -253,7 +253,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       if (!scope) return;
       const admission = sessions.admit(scope, msg.session);
       if (admission.kind !== "admitted") {
-        activity.update(msg.id, "refused");
+        activity.advance(msg.id, "refused");
         reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
         return;
       }
