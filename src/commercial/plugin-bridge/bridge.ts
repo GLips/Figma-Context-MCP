@@ -12,6 +12,7 @@ import {
   type CallTarget,
   type CallTargetOptions,
   type CallTargetRequest,
+  type OpenDocumentLookup,
   type OpenDocumentSnapshot,
 } from "./call-target.js";
 import type { DocumentId } from "./document-id.js";
@@ -38,7 +39,7 @@ import {
   type ChannelRunContext,
 } from "./run-ledger.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
-import type { ExecutionId } from "~/commercial/execution-id.js";
+import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import {
   PLUGIN_REDIAL_MAX_MS,
   parseExecuteCodeResult,
@@ -141,6 +142,10 @@ export class PluginBridge {
   private readonly setup: LinkSetup;
   private readonly documents: LinkDocuments;
   private readonly events: PluginBridgeEvents;
+  private readonly documentLookup: OpenDocumentLookup = {
+    documentOf: (link) => this.documentOf(link),
+    grantStatus: (link, ask, signal) => this.grantStatus(link, ask, signal),
+  };
 
   private readonly routes: EventRoutes = {
     RUN_TRACE: (link, event) => this.ledger.trace.recordHost(event.executionId, link, event),
@@ -374,11 +379,10 @@ export class PluginBridge {
   targetCall(request: CallTargetRequest, options: CallTargetOptions): Promise<CallTarget> {
     return targetPluginCall(
       {
+        ...this.documentLookup,
         links: () => this.authenticatedLinks(),
         linksSettleAt: () => this.linksUnsettledSince + this.linkSettleMs,
-        documents: this.documents,
-        documentOf: (link) => this.documentOf(link),
-        grantStatus: (link, ask, signal) => this.grantStatus(link, ask, signal),
+        documentsSettled: (links) => this.documents.settled(links),
         closePrompt: (link, executionId) => {
           this.request(link, { type: "GRANT_PROMPT_CLOSED", executionId }).catch(() => {});
         },
@@ -394,21 +398,11 @@ export class PluginBridge {
    * Every open plugin's document and this project's grant on it, asked without prompting, once each
    * link's introduction has answered. What a refusal and the reference show an agent to choose from.
    */
-  async openDocuments(
-    executionId: ExecutionId,
-    signal: AbortSignal,
-  ): Promise<OpenDocumentSnapshot> {
+  async openDocuments(signal: AbortSignal): Promise<OpenDocumentSnapshot> {
     const links = this.authenticatedLinks();
     await this.documents.settled(links);
-    return openDocumentSnapshot(
-      links,
-      {
-        documentOf: (link) => this.documentOf(link),
-        grantStatus: (link, ask, askSignal) => this.grantStatus(link, ask, askSignal),
-      },
-      executionId,
-      signal,
-    );
+    // Only a key for the plugin's prompt-free answer: nothing runs under this id.
+    return openDocumentSnapshot(links, this.documentLookup, mintExecutionId(), signal);
   }
 
   /** Which file `link` is in, as far as this server knows. */

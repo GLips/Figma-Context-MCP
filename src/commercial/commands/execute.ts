@@ -26,6 +26,7 @@ import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-opti
 import {
   GRANT_WAITING_TEXT,
   notGrantedText,
+  quoteFigmaName,
   sessionNotFoundText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { parseSessionHandle } from "~/commercial/plugin-bridge/session-handle.js";
@@ -274,7 +275,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     });
     if (bound.kind === "blocked") throw new Error(bound.text);
     const { document: ran } = bound;
-    console.error(`Running in "${ran.fileName}" (document ${ran.documentId}).`);
+    console.error(`Running in ${quoteFigmaName(ran.fileName)} (document ${ran.documentId}).`);
     const outcome = await executePluginCode(runtime, bound, code, {
       figma,
       signal: controller.signal,

@@ -9,25 +9,11 @@
 //
 // The stamp is written only when absent, and re-read before every admission and dequeue: two first
 // opens can race, and a copy given its own identity in another instance changes it under this one.
-import type { DocumentReport } from "./protocol.js";
+import { DOCUMENT_ID_KEY, mintDocumentId, type DocumentReport } from "./protocol.js";
 
-/** Where the stamp lives: the root's private plugin data, readable only by this plugin. */
-const DOCUMENT_ID_KEY = "framelink-document-id";
-// Lowercase Crockford base32, matching protocol.ts DOCUMENT_ID_PATTERN.
-const DOCUMENT_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
-const DOCUMENT_ID_LENGTH = 16;
 // How often names and the stamp are re-read for reporting. Figma has no event for a rename without
 // loading every page, and a read of the root's names is cheap.
 const DOCUMENT_REPORT_POLL_MS = 2_000;
-
-// Math.random, because QuickJS has no crypto. The id only tells open files apart, so it needs to be
-// unlikely to collide, not unguessable.
-function mintDocumentId(): string {
-  let id = "";
-  for (let i = 0; i < DOCUMENT_ID_LENGTH; i++)
-    id += DOCUMENT_ID_ALPHABET[Math.floor(Math.random() * DOCUMENT_ID_ALPHABET.length)];
-  return id;
-}
 
 function readStamp(): string {
   return figma.root.getPluginData(DOCUMENT_ID_KEY);
@@ -97,6 +83,17 @@ export function createDocumentIdentity({
     onReport(now);
   }
 
+  /**
+   * The file's stamp now, re-read; null while unidentified or being given a new identity. A stamp
+   * that changed fires onChanged and onReport before this returns.
+   */
+  function rereadDocumentId(): string | null {
+    if (restamping) return null;
+    settleStamp();
+    reportIfChanged();
+    return documentId;
+  }
+
   function poll(): void {
     if (!restamping) settleStamp();
     reportIfChanged();
@@ -111,20 +108,21 @@ export function createDocumentIdentity({
       setTimeout(poll, DOCUMENT_REPORT_POLL_MS);
     },
 
-    /** The file's stamp now, re-read; null while unidentified or being given a new identity. */
-    current(): string | null {
-      if (restamping) return null;
-      settleStamp();
-      reportIfChanged();
-      return documentId;
-    },
+    rereadDocumentId,
 
     /** The stamp as last read, for display and grant rows: never re-reads. */
     get documentId(): string | null {
       return restamping ? null : documentId;
     },
 
+    /** The report as last read, for display: never re-reads. */
     report,
+
+    /** The report after re-reading the stamp, for a server that asks which file this is. */
+    rereadReport(): DocumentReport {
+      rereadDocumentId();
+      return report();
+    },
 
     /**
      * Give this file its own identity: a fresh stamp, once `idle` says nothing admitted under the old

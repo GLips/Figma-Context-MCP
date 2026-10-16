@@ -15,7 +15,7 @@ import type { DocumentIdentity } from "./document-identity.js";
 import type { DocumentGrant, GrantScope, GrantStore } from "./grant-store.js";
 import { currentPluginOwner } from "./link-auth.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
-import type { ConnKey } from "./panel.js";
+import type { ConnKey, PanelPrompt } from "./panel.js";
 import {
   GRANT_PROMPT_GRACE_MS,
   type GrantPrompt,
@@ -51,16 +51,6 @@ export interface GrantRow {
   grant: DocumentGrant | null;
   granted: boolean;
   connected: boolean;
-}
-
-/** A call's live prompt, as the panel draws it. */
-export interface GrantPromptRow {
-  key: ConnKey;
-  executionId: string;
-  kind: Exclude<GrantPrompt, "none">;
-  project: string;
-  documentId: string;
-  allowing: boolean;
 }
 
 function promptKey(key: ConnKey, executionId: string): string {
@@ -165,7 +155,7 @@ export function createGrantGate({
   }
 
   function admission(key: ConnKey, documentId: string): "granted" | "unknown" | NotGrantedReason {
-    if (identity.current() !== documentId) return "other-document";
+    if (identity.rereadDocumentId() !== documentId) return "other-document";
     const scope = scopeOf(key, documentId);
     if (!scope) return "no-grant";
     const answer = store.answer(scope);
@@ -215,8 +205,7 @@ export function createGrantGate({
       }
       // Before the reply: the server's first question must find the fresh read already in flight.
       refreshConnectionGrants([to.connKey]);
-      identity.current();
-      reply(to, { type: "INTRODUCED", document: identity.report() });
+      reply(to, { type: "INTRODUCED", document: identity.rereadReport() });
       show();
     },
 
@@ -235,7 +224,7 @@ export function createGrantGate({
       const answer = (state: GrantState) => reply(to, { type: "GRANT", state });
       const conn = connections.get(to.connKey);
       if (!conn || conn.project === null) return answer("absent");
-      if (identity.current() !== documentId) {
+      if (identity.rereadDocumentId() !== documentId) {
         closePromptOf(to.connKey, executionId);
         return answer("other-document");
       }
@@ -281,7 +270,7 @@ export function createGrantGate({
     allow(key: ConnKey, executionId: string, documentId: string): void {
       const prompt = prompts.get(promptKey(key, executionId));
       if (!prompt || prompt.kind !== "allow" || prompt.documentId !== documentId || prompt.state !== "open") return;
-      if (identity.current() !== documentId) return;
+      if (identity.rereadDocumentId() !== documentId) return;
       const scope = scopeOf(key, documentId);
       if (!scope) {
         if (currentPluginOwner() === null)
@@ -350,11 +339,15 @@ export function createGrantGate({
       return scopeOf(to.connKey, documentId)!;
     },
 
-    currentScopeOf,
+    /** The grant scope a run on this connection would run under, after re-reading the stamp. */
+    rereadScopeOf(key: ConnKey): GrantScope | null {
+      const documentId = identity.rereadDocumentId();
+      return documentId ? scopeOf(key, documentId) : null;
+    },
 
     /** The check again at dequeue, once storage has a definite answer: null admits. */
     async refusalAtDequeue(key: ConnKey, documentId: string): Promise<NotGrantedReason | null> {
-      if (identity.current() !== documentId) return "other-document";
+      if (identity.rereadDocumentId() !== documentId) return "other-document";
       const scope = scopeOf(key, documentId);
       if (!scope || (await store.settledAnswer(scope)) !== "granted") return "no-grant";
       takeBaton(key);
@@ -364,8 +357,8 @@ export function createGrantGate({
     rows,
 
     /** Every call's prompt still waiting on the human, oldest first. */
-    prompts(now: number): GrantPromptRow[] {
-      const result: GrantPromptRow[] = [];
+    prompts(now: number): PanelPrompt[] {
+      const result: PanelPrompt[] = [];
       for (const prompt of prompts.values()) {
         const project = connections.get(prompt.key)?.project ?? null;
         if (project === null || !isLive(prompt, now) || (prompt.state !== "open" && prompt.state !== "allowing"))

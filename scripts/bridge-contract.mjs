@@ -37,7 +37,7 @@ import { mintExecutionId } from "../src/commercial/execution-id.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import {
-  LoopbackFigma,
+  loopbackFile,
   startLoopbackPlugin,
 } from "../src/commercial/tests/fixtures/loopback-plugin.ts";
 
@@ -53,8 +53,7 @@ const until = async (condition, what, ms = 5_000) => {
 };
 
 // The Figma files the real plugins are open in. Each plugin stamps its file's root on start.
-const figmaFiles = new LoopbackFigma();
-const contractFile = figmaFiles.file("Contract file");
+const contractFile = loopbackFile("Contract file");
 // A well-formed document id no open file carries.
 const ABSENT_DOCUMENT = "zzzzzzzzzzzzzzzz";
 let contractDocument = null;
@@ -414,7 +413,7 @@ await wait(150);
 // Nothing about grants is on the server's disk, so any server of this installation and project —
 // restarted, or a sibling on another port — is granted by the one Allow the plugin stored.
 const sharedDir = freshStateDir();
-const restartFile = figmaFiles.file("Restart file");
+const restartFile = loopbackFile("Restart file");
 const restartStorage = new Map();
 const bridgeR1 = bridgeOn(19879, { stateDir: sharedDir });
 await wait(150);

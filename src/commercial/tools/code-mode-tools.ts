@@ -23,6 +23,7 @@ import {
   GRANT_WAITING_TEXT,
   notGrantedText,
   pairingCodeUnknownText,
+  quoteFigmaName,
   sessionNotFoundText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
@@ -734,7 +735,7 @@ function usedSession(session: SessionHandle): string {
 
 /** Every reply names the document it ran against, so a wrong file is noticed on the first call. */
 function ranIn({ fileName, documentId, fileKey }: CallDocument): string {
-  return `Figma file: "${fileName}" (document ${documentId}${fileKey ? `, fileKey ${fileKey}` : ""})`;
+  return `Figma file: ${quoteFigmaName(fileName)} (document ${documentId}${fileKey ? `, fileKey ${fileKey}` : ""})`;
 }
 
 // How long a client's pairing prompt may stay open before the call falls back to agent guidance.

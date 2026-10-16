@@ -7,9 +7,9 @@
 // this file, and what the grant gate says about each server and each waiting call, plus what is the
 // panel's own to know:
 // whether it is expanded, who holds the driving baton, and each row's write-access card.
-import type { GrantPromptRow, GrantRow } from "./grant-gate.js";
+import type { GrantRow } from "./grant-gate.js";
 import { toServer } from "./outbound.js";
-import type { ConnKey, PanelDocument, PanelPairing, PanelRender, PanelGrantRow } from "./panel.js";
+import type { ConnKey, PanelDocument, PanelPairing, PanelPrompt, PanelRender, PanelGrantRow } from "./panel.js";
 import type { WriteAccessNotice } from "./protocol.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
@@ -27,7 +27,7 @@ const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 /** What the panel reads from the grant gate, link authentication and document identity. */
 export interface GrantPanelSource {
   rows(): GrantRow[];
-  prompts(now: number): GrantPromptRow[];
+  prompts(now: number): PanelPrompt[];
   nextPromptLapse(now: number): number | null;
   document(): PanelDocument | null;
   pairings(): PanelPairing[];
@@ -109,7 +109,7 @@ export function createGrantPanel(source: GrantPanelSource) {
     const update: PanelRender = {
       pairings: source.pairings(),
       document: source.document(),
-      prompts: source.prompts(now).map((prompt) => ({ ...prompt, label: projectLabel(prompt.project) })),
+      prompts: source.prompts(now),
       grantRows: grantRows(),
       expanded,
       showOrientation,

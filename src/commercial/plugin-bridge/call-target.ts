@@ -11,7 +11,8 @@
 // - A call naming a document (or a file key, which matches only links that reported it) runs only
 //   there, and only that document's panels are asked to Allow.
 // - A call naming neither runs in the one open document already granted to this project, once every
-//   open plugin's file and grant is known. Otherwise it is refused with the open documents, for the
+//   open plugin's file and grant is known and every plugin still open has had time to redial.
+//   Otherwise it is refused with the open documents, for the
 //   agent to choose from by name. No panel is asked.
 //
 // A document is its stamp. One stamp on two links is either one file open twice (both reported the
@@ -20,7 +21,7 @@ import { GRANT_POLL_MS, type GrantPrompt, type GrantState } from "@framelink/plu
 import type { ExecutionId } from "~/commercial/execution-id.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentId } from "./document-id.js";
-import type { LinkDocument, LinkDocuments, OpenFile } from "./link-documents.js";
+import type { LinkDocument, OpenFile } from "./link-documents.js";
 import type { RelayConnection } from "./relay-connection.js";
 import type { SessionHandle } from "./session-handle.js";
 
@@ -68,7 +69,7 @@ export type CallTargetBlock =
       open: OpenDocumentSnapshot;
     }
   // Named nothing, and not exactly one open document is known to be granted: the agent chooses.
-  | { kind: "document-unchosen"; open: OpenDocumentSnapshot }
+  | { kind: "document-unchosen"; reason: NoUnnamedCallDefault; open: OpenDocumentSnapshot }
   // The file the call was waiting on was given a new stamp: the agent chooses again.
   | { kind: "document-changed"; fileName: string; open: OpenDocumentSnapshot }
   | { kind: "grant-denied"; fileName: string }
@@ -88,9 +89,9 @@ export type CallTargetBlock =
       fileKey: FigmaFileKey | null;
     };
 
-export type CallTarget =
-  | { kind: "targeted"; link: RelayConnection; document: CallDocument }
-  | BlockedCallTarget;
+type Targeted = { kind: "targeted"; link: RelayConnection; document: CallDocument };
+
+export type CallTarget = Targeted | BlockedCallTarget;
 
 type BlockedCallTarget = { kind: "blocked"; block: CallTargetBlock };
 
@@ -126,7 +127,8 @@ export interface CallTargetDeps extends OpenDocumentLookup {
    * dropped. Until then a plugin missing from links() may only be on its redial backoff.
    */
   linksSettleAt(): number;
-  documents: LinkDocuments;
+  /** Resolves once each of `links` has said which file it is in, or couldn't. */
+  documentsSettled(links: readonly RelayConnection[]): Promise<void>;
   closePrompt(link: RelayConnection, executionId: ExecutionId): void;
   /** Whether a link's plugin holds `session` for this project. Rejects when it couldn't be asked. */
   lookupSession(
@@ -217,6 +219,29 @@ export async function openDocumentSnapshot(
   };
 }
 
+/**
+ * Where a call naming nothing runs, by `open` alone: the one open document granted to this project,
+ * or why there is none. The one rule the binder, its refusal and the reference all read.
+ */
+export type UnnamedCallDefault =
+  | { kind: "default"; document: OpenDocument }
+  | { kind: "no-files" }
+  // More granted documents can only appear as links arrive, so this never resolves to a default.
+  | { kind: "several-granted"; count: number }
+  | { kind: "incomplete" }
+  | { kind: "none-granted" };
+
+export type NoUnnamedCallDefault = Exclude<UnnamedCallDefault, { kind: "default" }>;
+
+export function unnamedCallDefault(open: OpenDocumentSnapshot): UnnamedCallDefault {
+  const granted = open.documents.filter((document) => document.grant === "granted");
+  if (!open.documents.length) return { kind: "no-files" };
+  if (granted.length > 1) return { kind: "several-granted", count: granted.length };
+  // With a plugin whose file or grant is unknown, the one granted document may not be the only one.
+  if (!open.complete) return { kind: "incomplete" };
+  return granted.length ? { kind: "default", document: granted[0] } : { kind: "none-granted" };
+}
+
 export async function targetPluginCall(
   deps: CallTargetDeps,
   request: CallTargetRequest,
@@ -230,7 +255,7 @@ export async function targetPluginCall(
     },
   };
   try {
-    await abortable(deps.documents.settled(deps.links()), options.signal);
+    await abortable(deps.documentsSettled(deps.links()), options.signal);
     if (request.session !== null)
       return await targetSession(deps, request, request.session, waiting);
     if (request.document !== null || request.fileKey !== null)
@@ -262,7 +287,7 @@ async function targetSession(
   const found = await findSessionHolder(deps, session, options);
   if (found.kind === "blocked") return found;
   const { holder } = found;
-  await abortable(deps.documents.settled([holder]), options.signal);
+  await abortable(deps.documentsSettled([holder]), options.signal);
   const file = identifiedFile(deps.documentOf(holder));
   if (!file) return blocked({ kind: "session-lookup-failed", session });
   if (
@@ -276,7 +301,7 @@ async function targetSession(
       document: request.document,
       fileKey: request.fileKey,
     });
-  return waitForGrant(deps, request, [holder], file, options, () =>
+  return waitForGrant(deps, request, [holder], file, options, async () =>
     blocked({ kind: "session-not-found", session }),
   );
 }
@@ -337,17 +362,30 @@ async function targetNamed(
     );
   };
   const candidates = deps.links().filter(matches);
-  if (!candidates.length)
-    return blocked({
-      kind: "document-not-open",
-      document: request.document,
-      fileKey: request.fileKey,
-      open: await snapshotNow(deps, request, options),
-    });
+  if (!candidates.length) return documentNotOpen(deps, request, options, request.document);
   return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
 }
 
-/** A call naming nothing: the one open document granted to this project, or a refusal to choose. */
+/** No open plugin is in the document the call named (or was bound to before its links closed). */
+async function documentNotOpen(
+  deps: CallTargetDeps,
+  request: CallTargetRequest,
+  options: WaitingOptions,
+  document: DocumentId | null,
+): Promise<BlockedCallTarget> {
+  return blocked({
+    kind: "document-not-open",
+    document,
+    fileKey: request.fileKey,
+    open: await snapshotNow(deps, request, options),
+  });
+}
+
+/**
+ * A call naming nothing: the one open document granted to this project, or a refusal to choose.
+ * Decided only once every plugin still open has had time to redial: one on its backoff may hold
+ * the grant (none seen yet) or a second one (one seen).
+ */
 async function targetUnnamed(
   deps: CallTargetDeps,
   request: CallTargetRequest,
@@ -357,15 +395,15 @@ async function targetUnnamed(
   let documentId: DocumentId;
   for (;;) {
     const open = await snapshotNow(deps, request, options);
-    const granted = open.documents.filter((document) => document.grant === "granted");
-    // With a plugin whose file or grant is unknown, the one granted document may not be the only one.
-    if (!open.complete || granted.length !== 1) return blocked({ kind: "document-unchosen", open });
-    // Nor while a plugin still open may be on its redial backoff: it may hold a second grant.
+    const unnamed = unnamedCallDefault(open);
     const settleAt = deps.linksSettleAt();
-    if (Date.now() >= settleAt) {
-      documentId = granted[0].documentId;
+    const settled = Date.now() >= settleAt;
+    if (unnamed.kind === "default" && settled) {
+      documentId = unnamed.document.documentId;
       break;
     }
+    if (unnamed.kind !== "default" && (settled || unnamed.kind === "several-granted"))
+      return blocked({ kind: "document-unchosen", reason: unnamed, open });
     await pause(Math.min(pollMs, settleAt - Date.now()), signal);
   }
   const candidates = deps
@@ -388,13 +426,8 @@ async function bindFiles(
     if (picked.kind === "blocked") return picked;
     links = [picked.link];
   }
-  return waitForGrant(deps, request, links, file, options, async () =>
-    blocked({
-      kind: "document-not-open",
-      document: file.documentId,
-      fileKey: request.fileKey,
-      open: await snapshotNow(deps, request, options),
-    }),
+  return waitForGrant(deps, request, links, file, options, () =>
+    documentNotOpen(deps, request, options, file.documentId),
   );
 }
 
@@ -409,7 +442,7 @@ interface Answer {
  * new stamp ends the wait: the agent chooses again from the refreshed documents. Every prompt this
  * round opened is closed on the way out, but the decided link's.
  */
-async function pollPanels(
+async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: RelayConnection }>(
   deps: CallTargetDeps,
   request: CallTargetRequest,
   file: OpenFile,
@@ -417,11 +450,11 @@ async function pollPanels(
   round: {
     prompt: Exclude<GrantPrompt, "none">;
     links: () => RelayConnection[];
-    decide: (answers: Answer[]) => CallTarget | { kind: "picked"; link: RelayConnection } | null;
-    gone: () => CallTarget | Promise<CallTarget>;
-    expired: () => CallTarget;
+    decide: (answers: Answer[]) => Decided | BlockedCallTarget | null;
+    gone: () => Promise<BlockedCallTarget>;
+    expired: () => BlockedCallTarget;
   },
-): Promise<CallTarget | { kind: "picked"; link: RelayConnection }> {
+): Promise<Decided | BlockedCallTarget> {
   const { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS } = options;
   const deadline = Date.now() + waitMs;
   const asked = new Set<RelayConnection>();
@@ -483,24 +516,16 @@ async function waitForPick(
   file: OpenFile,
   options: WaitingOptions,
 ): Promise<{ kind: "picked"; link: RelayConnection } | BlockedCallTarget> {
-  const outcome = await pollPanels(deps, request, file, options, {
+  return pollPanels(deps, request, file, options, {
     prompt: "pick",
     links: () => files.flat(),
     decide: (answers) => {
       const picked = answers.find((answer) => answer.state === "picked");
-      return picked ? { kind: "picked", link: picked.link } : null;
+      return picked ? { kind: "picked" as const, link: picked.link } : null;
     },
-    gone: async () =>
-      blocked({
-        kind: "document-not-open",
-        document: file.documentId,
-        fileKey: request.fileKey,
-        open: await snapshotNow(deps, request, options),
-      }),
+    gone: () => documentNotOpen(deps, request, options, file.documentId),
     expired: () => blocked({ kind: "pick-pending", fileName: file.fileName }),
   });
-  if (outcome.kind === "targeted") throw new Error("A pick never targets a call by itself");
-  return outcome;
 }
 
 /** Ask `links` (one file) to Allow this call's project, unless it already holds a grant. */
@@ -510,9 +535,9 @@ async function waitForGrant(
   links: RelayConnection[],
   file: OpenFile,
   options: WaitingOptions,
-  gone: () => CallTarget | Promise<CallTarget>,
+  gone: () => Promise<BlockedCallTarget>,
 ): Promise<CallTarget> {
-  const outcome = await pollPanels(deps, request, file, options, {
+  return pollPanels(deps, request, file, options, {
     prompt: "allow",
     links: () => links,
     decide: (answers) => {
@@ -527,11 +552,9 @@ async function waitForGrant(
     gone,
     expired: () => blocked({ kind: "grant-pending", fileName: file.fileName }),
   });
-  if (outcome.kind === "picked") throw new Error("An Allow prompt never answers with a pick");
-  return outcome;
 }
 
-function targeted(deps: CallTargetDeps, link: RelayConnection): CallTarget {
+function targeted(deps: CallTargetDeps, link: RelayConnection): Targeted {
   const file = identifiedFile(deps.documentOf(link))!;
   return {
     kind: "targeted",

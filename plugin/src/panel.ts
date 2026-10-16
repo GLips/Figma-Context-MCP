@@ -46,7 +46,6 @@ export interface PanelPrompt {
   executionId: string;
   kind: "allow" | "pick";
   project: string;
-  label: string;
   documentId: string;
   // An Allow is being saved.
   allowing: boolean;

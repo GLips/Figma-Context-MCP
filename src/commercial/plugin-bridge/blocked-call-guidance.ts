@@ -9,7 +9,13 @@
 // is true; nothing outside this module words them.
 import { CLI_NAME } from "~/utils/cli-help.js";
 import type { UnlinkedResolution } from "./bridge.js";
-import type { CallTargetBlock, OpenDocument, OpenDocumentSnapshot } from "./call-target.js";
+import {
+  unnamedCallDefault,
+  type CallTargetBlock,
+  type NoUnnamedCallDefault,
+  type OpenDocument,
+  type OpenDocumentSnapshot,
+} from "./call-target.js";
 
 /** How long a disconnection counts as a redial blip before the reply escalates to a person. */
 export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
@@ -49,13 +55,21 @@ export const GRANT_WAITING_TEXT =
 // A file's pages are there to tell files apart, not to list a document: a few is enough.
 const LISTED_PAGES = 5;
 
+/**
+ * A file or page name as agent-facing text. Anyone who can edit an open file sets these, so they are
+ * escaped: a quote or newline in one can't forge another line of the open-document list.
+ */
+export function quoteFigmaName(name: string): string {
+  return JSON.stringify(name);
+}
+
 function documentFlag(surface: GuidanceSurface): string {
   return surface === "cli" ? "--document" : "document";
 }
 
 /** One open document, as a line an agent chooses from. */
 function openDocumentLine(document: OpenDocument): string {
-  const pages = document.pageNames.slice(0, LISTED_PAGES).map((name) => `"${name}"`);
+  const pages = document.pageNames.slice(0, LISTED_PAGES).map(quoteFigmaName);
   const more = document.pageNames.length - pages.length;
   const parts = [
     `document ${document.documentId}`,
@@ -70,7 +84,7 @@ function openDocumentLine(document: OpenDocument): string {
       ? [`open as ${document.copies} files that share this id (the user picks one in Figma)`]
       : []),
   ];
-  return `- "${document.fileName}": ${parts.join("; ")}`;
+  return `- ${quoteFigmaName(document.fileName)}: ${parts.join("; ")}`;
 }
 
 /**
@@ -114,34 +128,34 @@ export function callTargetGuidance(
         openDocumentsText(block.open, surface)
       );
     case "document-unchosen":
-      return `${unchosenLead(block.open)}\n\n${openDocumentsText(block.open, surface)}`;
+      return `${unchosenLead(block.reason)}\n\n${openDocumentsText(block.open, surface)}`;
     case "document-changed":
       return (
-        `Blocked: "${block.fileName}" was given a new identity in the Framelink plugin while this ` +
+        `Blocked: ${quoteFigmaName(block.fileName)} was given a new identity in the Framelink plugin while this ` +
         `call waited (a copy of a file now has its own), so nothing was submitted. Choose the file ` +
         `again from the list below.\n\n${openDocumentsText(block.open, surface)}`
       );
     case "grant-denied":
       return (
-        `Blocked: the user denied this call access to "${block.fileName}" in the Framelink ` +
+        `Blocked: the user denied this call access to ${quoteFigmaName(block.fileName)} in the Framelink ` +
         `plugin, so nothing was submitted. Don't retry unless the user asks to.`
       );
     case "grant-unavailable":
       return (
-        `Blocked: the Framelink plugin in "${block.fileName}" has no signed-in Figma user, so it ` +
+        `Blocked: the Framelink plugin in ${quoteFigmaName(block.fileName)} has no signed-in Figma user, so it ` +
         `can't let this project edit the file, and nothing was submitted. ${REPORT_TO_PERSON} ` +
         `someone signs in to Figma and reopens the plugin.`
       );
     case "grant-pending":
       return waitingText(
-        `this project isn't allowed to edit "${block.fileName}" yet`,
-        `someone clicks Allow for this call in the Framelink plugin in "${block.fileName}"`,
+        `this project isn't allowed to edit ${quoteFigmaName(block.fileName)} yet`,
+        `someone clicks Allow for this call in the Framelink plugin in ${quoteFigmaName(block.fileName)}`,
         surface,
         waitMs,
       );
     case "pick-pending":
       return waitingText(
-        `"${block.fileName}" is open as more than one file that share one identity (one is a ` +
+        `${quoteFigmaName(block.fileName)} is open as more than one file that share one identity (one is a ` +
           `copy), and nothing tells this server which one this call means`,
         `someone clicks "Use this one" in the Framelink plugin of the file to edit, or "Give this ` +
           `copy its own identity" in the copy`,
@@ -168,10 +182,10 @@ export function callTargetGuidance(
           ? ["document and fileKey", "session"]
           : ["--document and --file-key", "--session"];
       return (
-        `Blocked: the session ${block.session} is in "${block.sessionFileName}", but this call ` +
+        `Blocked: the session ${block.session} is in ${quoteFigmaName(block.sessionFileName)}, but this call ` +
         `named ${namedDocument(block.document, block.fileKey)}, so nothing was submitted. ` +
         `A session stays in the file it started in: drop ${documentArgs} to keep ` +
-        `working in "${block.sessionFileName}", or drop ${sessionFlag} to start a fresh session.`
+        `working in ${quoteFigmaName(block.sessionFileName)}, or drop ${sessionFlag} to start a fresh session.`
       );
     }
   }
@@ -185,15 +199,16 @@ function namedDocument(document: string | null, fileKey: string | null): string 
   return `the Figma file named by ${names.join(" and ")}`;
 }
 
-function unchosenLead(open: OpenDocumentSnapshot): string {
-  const granted = open.documents.filter((document) => document.grant === "granted").length;
-  const why = !open.documents.length
-    ? "there is no open Figma file to run in"
-    : !open.complete
-      ? "not every open file is known yet, so this server won't choose one for you"
-      : granted > 1
-        ? `this project may edit ${granted} open files, and this call named none`
-        : "this project isn't allowed to edit any open file yet, and this call named none";
+function unchosenLead(reason: NoUnnamedCallDefault): string {
+  const why =
+    reason.kind === "several-granted"
+      ? `this project may edit ${reason.count} open files, and this call named none`
+      : {
+          "no-files": "there is no open Figma file to run in",
+          incomplete: "not every open file is known yet, so this server won't choose one for you",
+          "none-granted":
+            "this project isn't allowed to edit any open file yet, and this call named none",
+        }[reason.kind];
   return (
     `Blocked: ${why}, so nothing was submitted and no plugin panel was asked. Name the file to ` +
     `edit; if this project isn't allowed there yet, the user is asked to Allow it in that file only.`
@@ -242,8 +257,8 @@ function freshSession(surface: "mcp" | "cli"): string {
 export function notGrantedText(reason: "no-grant" | "other-document", fileName: string): string {
   return reason === "no-grant"
     ? `Blocked: the Framelink plugin refused the run because this project is no longer allowed to ` +
-        `edit "${fileName}" (the user revoked it), so nothing ran. Don't retry unless the user asks to.`
-    : `Blocked: the Framelink plugin refused the run because "${fileName}" no longer carries the ` +
+        `edit ${quoteFigmaName(fileName)} (the user revoked it), so nothing ran. Don't retry unless the user asks to.`
+    : `Blocked: the Framelink plugin refused the run because ${quoteFigmaName(fileName)} no longer carries the ` +
         `document id this call named (the file was given its own identity, or the plugin closed), ` +
         `so nothing ran. Call again without a document to see the open files, and choose again.`;
 }
@@ -258,10 +273,10 @@ export function referenceDocumentsGuidance(
 ): string {
   if (open === null)
     return "The open Figma files could not be listed. Check the Framelink plugin connection before executing code. No code was submitted.";
-  const granted = open.documents.filter((document) => document.grant === "granted");
+  const unnamed = unnamedCallDefault(open);
   const binding =
-    open.complete && granted.length === 1
-      ? `Executing code without ${documentFlag(surface)} runs in "${granted[0].fileName}".`
+    unnamed.kind === "default"
+      ? `Executing code without ${documentFlag(surface)} runs in ${quoteFigmaName(unnamed.document.fileName)}.`
       : `Executing code without ${documentFlag(surface)} is refused until exactly one open file is allowed; name the file to edit.`;
   return `${binding}\n${openDocumentsText(open, surface)}`;
 }

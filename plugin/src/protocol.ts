@@ -196,7 +196,24 @@ export function isWireFileKey(value: unknown): value is string {
  * lowercase Crockford base32 characters. It tells open files apart and keys grants; it proves nothing,
  * and a duplicated file carries its original's.
  */
-export const DOCUMENT_ID_PATTERN = /^[0-9a-hjkmnp-tv-z]{16}$/;
+const DOCUMENT_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+const DOCUMENT_ID_LENGTH = 16;
+const DOCUMENT_ID_PATTERN = new RegExp(`^[${DOCUMENT_ID_ALPHABET}]{${DOCUMENT_ID_LENGTH}}$`);
+
+/**
+ * Where the plugin keeps the stamp: the root's private plugin data, readable only by this plugin.
+ * Never on the wire; here so the whole definition of a document id is in one figma-free place.
+ */
+export const DOCUMENT_ID_KEY = "framelink-document-id";
+
+// Math.random, because QuickJS has no crypto. The id only tells open files apart, so it needs to be
+// unlikely to collide, not unguessable.
+export function mintDocumentId(): string {
+  let id = "";
+  for (let i = 0; i < DOCUMENT_ID_LENGTH; i++)
+    id += DOCUMENT_ID_ALPHABET[Math.floor(Math.random() * DOCUMENT_ID_ALPHABET.length)];
+  return id;
+}
 
 export function isDocumentId(value: unknown): value is string {
   return typeof value === "string" && DOCUMENT_ID_PATTERN.test(value);

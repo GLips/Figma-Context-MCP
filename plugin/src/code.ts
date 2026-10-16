@@ -235,8 +235,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       void gate.changedElsewhere(to, msg.project, msg.documentId);
       return;
     case "SESSION_LOOKUP": {
-      identity.current();
-      const scope = gate.currentScopeOf(key);
+      const scope = gate.rereadScopeOf(key);
       reply(to, { type: "SESSION_LOOKUP_RESULT", held: scope !== null && sessions.holds(scope, msg.handle) });
       return;
     }

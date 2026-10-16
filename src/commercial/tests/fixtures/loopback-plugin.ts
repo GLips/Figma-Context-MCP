@@ -23,6 +23,7 @@ import type {
   PanelRender,
   PanelGrantRow,
 } from "@framelink/plugin/panel";
+import { DOCUMENT_ID_KEY } from "@framelink/plugin/protocol";
 
 /** One Figma file: its name, its root's private plugin data, and its key where the build exposes one. */
 export interface LoopbackFile {
@@ -34,25 +35,23 @@ export interface LoopbackFile {
   readOnly: boolean;
 }
 
-/** The Figma files plugins can be open in. */
-export class LoopbackFigma {
-  file(
-    name: string,
-    { key = null, readOnly = false }: { key?: string | null; readOnly?: boolean } = {},
-  ): LoopbackFile {
-    return { name, key, pluginData: new Map(), readOnly };
-  }
-
-  /** Figma's Duplicate: a new file (and key), carrying everything in the root — the stamp too. */
-  duplicate(original: LoopbackFile, key: string | null = null): LoopbackFile {
-    const copy = this.file(`${original.name} (Copy)`, { key });
-    for (const [entry, value] of original.pluginData) copy.pluginData.set(entry, value);
-    return copy;
-  }
+/** A Figma file a plugin can be open in. */
+export function loopbackFile(
+  name: string,
+  { key = null, readOnly = false }: { key?: string | null; readOnly?: boolean } = {},
+): LoopbackFile {
+  return { name, key, pluginData: new Map(), readOnly };
 }
 
-// The plugin's stamp key (document-identity.ts). Read here only to tell a test which id it got.
-const DOCUMENT_ID_KEY = "framelink-document-id";
+/** Figma's Duplicate: a new file (and key), carrying everything in the root — the stamp too. */
+export function duplicateLoopbackFile(
+  original: LoopbackFile,
+  key: string | null = null,
+): LoopbackFile {
+  const copy = loopbackFile(`${original.name} (Copy)`, { key });
+  for (const [entry, value] of original.pluginData) copy.pluginData.set(entry, value);
+  return copy;
+}
 
 const bundle = (entry: string) =>
   buildSync({
@@ -127,7 +126,7 @@ export function startLoopbackPlugin(
   {
     storage = new Map(),
     holdHelloMs = 0,
-    file = new LoopbackFigma().file("Loopback file"),
+    file = loopbackFile("Loopback file"),
     user = { id: "loopback-user", name: "Loopback Human" },
   }: LoopbackPluginOptions = {},
 ): LoopbackPlugin {

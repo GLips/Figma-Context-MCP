@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 import vm from "node:vm";
 import { createHmac } from "node:crypto";
-import { linkProofMessage } from "./protocol.js";
+import { DOCUMENT_ID_KEY, linkProofMessage } from "./protocol.js";
 import type { ConnKey, HostInbound, HostOutbound, PanelControl, PanelRender } from "./panel.js";
 
 const bundle = (entry: string) =>
@@ -27,8 +27,7 @@ const FRAME_DEADLINE_MS = 5_000;
 const CREDENTIAL = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
 const DOCUMENT_ID = "0123456789abcdef";
 const OTHER_DOCUMENT_ID = "fedcba9876543210";
-const STAMP_KEY = "framelink-document-id";
-const stampedFile = (): Map<string, string> => new Map([[STAMP_KEY, DOCUMENT_ID]]);
+const stampedFile = (): Map<string, string> => new Map([[DOCUMENT_ID_KEY, DOCUMENT_ID]]);
 type Storage = Map<string, unknown>;
 const pairedStorage = (): Storage => new Map([["code-mode:link-credential:" + CREDENTIAL.id, CREDENTIAL.secret]]);
 const clientStorageOver = (storage: Storage) => ({
@@ -128,10 +127,10 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   root.getPluginData ??= (key: string) => pluginData.get(key) ?? "";
   root.setPluginData ??= (key: string, value: string) => void pluginData.set(key, value);
   // A root of its own (the figma mock's) is stamped with this file's id too, so runs find it.
-  const stamp = pluginData.get(STAMP_KEY);
-  if (stamp && root.getPluginData !== undefined && !(root.getPluginData as (key: string) => string)(STAMP_KEY))
+  const stamp = pluginData.get(DOCUMENT_ID_KEY);
+  if (stamp && root.getPluginData !== undefined && !(root.getPluginData as (key: string) => string)(DOCUMENT_ID_KEY))
     try {
-      (root.setPluginData as (key: string, value: string) => void)(STAMP_KEY, stamp);
+      (root.setPluginData as (key: string, value: string) => void)(DOCUMENT_ID_KEY, stamp);
     } catch {
       // A view-only root refuses; the test is about exactly that.
     }
@@ -403,7 +402,7 @@ test("a file is stamped once and keeps its stamp and grant across plugin runs; a
   duplicate.sendFrame(1, { type: "EXECUTE_CODE", id: "old-id", documentId, preamble: echoPreamble, code: "return 'ran';" });
   assert.equal((await duplicate.frame((f) => f.id === "old-id", "the refusal")).reason, "other-document");
   // The original keeps its own.
-  assert.equal(pluginData.get(STAMP_KEY), documentId);
+  assert.equal(pluginData.get(DOCUMENT_ID_KEY), documentId);
 });
 
 test("a file the plugin can't stamp is reported unidentified and runs nothing", async () => {
@@ -583,7 +582,7 @@ test("a server frame can never act as the human's panel input", async () => {
   fromServer({ type: "GRANT_STATUS", id: "status", executionId: "rogue-call", documentId: DOCUMENT_ID, prompt: "none" });
   assert.equal((await h.frame((f) => f.id === "status", "the status")).state, "absent");
   assert(!h.sent.some(({ frame: f }) => f.type === "WRITE_ACCESS_SIGN_IN" || f.type === "DOCUMENT_REPORTED"));
-  assert.equal(h.pluginData.get(STAMP_KEY), DOCUMENT_ID);
+  assert.equal(h.pluginData.get(DOCUMENT_ID_KEY), DOCUMENT_ID);
 });
 
 test("the browser opens a sign-in page only on the Framelink origin the server announced", async () => {

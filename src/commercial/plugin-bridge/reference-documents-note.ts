@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import type { LinkResolution } from "./bridge.js";
 import { linkGuidance, referenceDocumentsGuidance } from "./blocked-call-guidance.js";
 import type { OpenDocumentSnapshot } from "./call-target.js";
@@ -10,7 +9,7 @@ import type { OpenDocumentSnapshot } from "./call-target.js";
 /** The lookups the reference note makes: which links, then the open documents on them. */
 export interface ReferenceDocumentsLookup {
   resolveLink(signal: AbortSignal): Promise<LinkResolution>;
-  openDocuments(executionId: ExecutionId, signal: AbortSignal): Promise<OpenDocumentSnapshot>;
+  openDocuments(signal: AbortSignal): Promise<OpenDocumentSnapshot>;
 }
 
 /**
@@ -34,11 +33,7 @@ export async function referenceDocumentsNote(
   try {
     const resolution = await Promise.race([lookup.resolveLink(controller.signal), timedOut]);
     if (resolution.kind !== "linked") return linkGuidance(resolution, "reference");
-    // Only a key for the plugin's prompt-free answer: nothing runs under this id.
-    const open = await Promise.race([
-      lookup.openDocuments(mintExecutionId(), controller.signal),
-      timedOut,
-    ]);
+    const open = await Promise.race([lookup.openDocuments(controller.signal), timedOut]);
     return referenceDocumentsGuidance(open, surface);
   } catch {
     return referenceDocumentsGuidance(null, surface);

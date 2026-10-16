@@ -33,7 +33,8 @@ import { runPair } from "~/commercial/commands/pair.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import { writesUsedThisMonth } from "~/commercial/entitlement/write-ledger.js";
 import {
-  LoopbackFigma,
+  duplicateLoopbackFile,
+  loopbackFile,
   startLoopbackPlugin,
   type LoopbackPlugin,
 } from "./fixtures/loopback-plugin.js";
@@ -47,7 +48,6 @@ vi.mock("@framelink/plugin/protocol", async (actual) => ({
 }));
 
 let dir: string;
-let figma: LoopbackFigma;
 const cleanups: (() => void)[] = [];
 
 async function reservePort(): Promise<number> {
@@ -62,7 +62,6 @@ async function reservePort(): Promise<number> {
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "flcm-loopback-"));
   vi.stubEnv("FRAMELINK_STATE_DIR", dir);
-  figma = new LoopbackFigma();
   ports.splice(0, ports.length, await reservePort());
 });
 
@@ -201,7 +200,7 @@ async function pairByPanel(bridge: PluginBridge, plugin: LoopbackPlugin): Promis
 
 it("without a token: pairs, refuses an unnamed call with the open file, asks Allow there on retry, then writes with no clicks", async () => {
   const runtime = startRuntime();
-  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
+  const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   const link = await pairByPanel(runtime.bridge, plugin);
   expect(link.owner).toEqual({ figmaUserId: "loopback-user", name: "Loopback Human" });
   await linksReported(runtime.bridge, 1);
@@ -324,7 +323,7 @@ it("servers in one project share one grant from one click; a server in another p
   const first = startBridge(dir, ports[0], "/work/app");
   const sibling = startBridge(dir, ports[1], "/work/app");
   const elsewhere = startBridge(dir, ports[2], "/work/other");
-  const plugin = startPlugin(ports, { file: figma.file("Checkout") });
+  const plugin = startPlugin(ports, { file: loopbackFile("Checkout") });
   await pairByPanel(first, plugin);
   for (const bridge of [sibling, elsewhere]) {
     await settlesTo(bridge, "linked");
@@ -355,9 +354,9 @@ it("servers in one project share one grant from one click; a server in another p
 it("several open files: an unnamed call runs in the one granted file; with two granted it is refused with both, and naming one needs no prompt", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: loopbackFile("Checkout") });
   await pairByPanel(bridge, checkout);
-  const settings = startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  const settings = startPlugin(ports[0], { storage, file: loopbackFile("Settings") });
   await linksReported(bridge, 2);
 
   // Named: only that file's panel is asked.
@@ -403,9 +402,9 @@ it("several open files: an unnamed call runs in the one granted file; with two g
 it("two agents write to two files in parallel", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: loopbackFile("Checkout") });
   await pairByPanel(bridge, checkout);
-  const settings = startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  const settings = startPlugin(ports[0], { storage, file: loopbackFile("Settings") });
   await linksReported(bridge, 2);
   await target(bridge, documentOf(checkout), () => checkout.allow());
   await target(bridge, documentOf(settings), () => settings.allow());
@@ -423,7 +422,7 @@ it("two agents write to two files in parallel", async () => {
 
 it("two calls prompting in one panel each keep their own outcome", async () => {
   const bridge = startBridge(dir, ports[0]);
-  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
+  const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   await pairByPanel(bridge, plugin);
   await linksReported(bridge, 1);
   const checkout = documentOf(plugin);
@@ -446,20 +445,20 @@ it("two calls prompting in one panel each keep their own outcome", async () => {
 it("a viewer's plugin that can't stamp its file is listed as unusable, and the granted file still defaults", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: loopbackFile("Checkout") });
   await pairByPanel(bridge, checkout);
   await linksReported(bridge, 1);
   await target(bridge, documentOf(checkout), () => checkout.allow());
   const viewer = startPlugin(ports[0], {
     storage,
-    file: figma.file("Read only", { readOnly: true }),
+    file: loopbackFile("Read only", { readOnly: true }),
   });
   await linksReported(bridge, 2);
   expect(viewer.documentId()).toBeNull();
 
   const unnamed = await target(bridge, null);
   expect(unnamed.target).toMatchObject({ kind: "targeted", document: { fileName: "Checkout" } });
-  const snapshot = await bridge.openDocuments(mintExecutionId(), new AbortController().signal);
+  const snapshot = await bridge.openDocuments(new AbortController().signal);
   expect(snapshot.unidentified).toEqual([expect.stringContaining("refused to mark this file")]);
   expect(snapshot.documents.map((document) => document.fileName)).toEqual(["Checkout"]);
 });
@@ -469,10 +468,10 @@ it("a call naming a document no plugin is in is refused with the open files, wit
   const storage = new Map<string, unknown>();
   const keyed = startPlugin(ports[0], {
     storage,
-    file: figma.file("Checkout", { key: "FILEkeyA" }),
+    file: loopbackFile("Checkout", { key: "FILEkeyA" }),
   });
   await pairByPanel(bridge, keyed);
-  startPlugin(ports[0], { storage, file: figma.file("Settings", { key: null }) });
+  startPlugin(ports[0], { storage, file: loopbackFile("Settings", { key: null }) });
   await linksReported(bridge, 2);
 
   const closed = await target(bridge, "zzzzzzzzzzzzzzzz");
@@ -500,7 +499,7 @@ it("one file in two plugin instances is one document, and a revoke in either sto
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
   // Both report the same file key, so they are one file open twice, not a copy.
-  const file = figma.file("Checkout", { key: "FILEkeyA" });
+  const file = loopbackFile("Checkout", { key: "FILEkeyA" });
   const one = startPlugin(ports[0], { storage, file });
   await pairByPanel(bridge, one);
   const two = startPlugin(ports[0], { storage, file });
@@ -539,7 +538,7 @@ it("one file in two plugin instances is one document, and a revoke in either sto
 it("a plugin restart keeps the stamp and the grant; a duplicate asks for a pick in both panels, and once given its own identity needs its own grant", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const file = figma.file("Checkout");
+  const file = loopbackFile("Checkout");
   const first = startPlugin(ports[0], { storage, file });
   await pairByPanel(bridge, first);
   await linksReported(bridge, 1);
@@ -556,7 +555,7 @@ it("a plugin restart keeps the stamp and the grant; a duplicate asks for a pick 
   expect(recognized.target).toMatchObject({ kind: "targeted", document: { documentId: checkout } });
 
   // Figma's Duplicate copies the root, stamp and all: nothing tells the two files apart.
-  const copy = startPlugin(ports[0], { storage, file: figma.duplicate(file) });
+  const copy = startPlugin(ports[0], { storage, file: duplicateLoopbackFile(file) });
   await linksReported(bridge, 2);
   expect(documentOf(copy)).toBe(checkout);
   const picked = await target(bridge, checkout, async () => {
@@ -580,7 +579,7 @@ it("a plugin restart keeps the stamp and the grant; a duplicate asks for a pick 
   expect(ownId).not.toBe(checkout);
   await expect
     .poll(async () =>
-      (await bridge.openDocuments(mintExecutionId(), new AbortController().signal)).documents
+      (await bridge.openDocuments(new AbortController().signal)).documents
         .map((document) => [document.documentId, document.grant])
         .sort(),
     )
@@ -613,7 +612,7 @@ async function runIn(
 
 it("two agents on one file each see only their own session.last, through the handle each reply names", async () => {
   const bridge = startBridge(dir, ports[0]);
-  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
+  const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   await pairByPanel(bridge, plugin);
   await linksReported(bridge, 1);
   await target(bridge, documentOf(plugin), () => plugin.allow());
@@ -637,7 +636,7 @@ it("two agents on one file each see only their own session.last, through the han
 it("a handle from before the plugin restarted is refused without running, though the granted file is open", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const file = figma.file("Checkout");
+  const file = loopbackFile("Checkout");
   const first = startPlugin(ports[0], { storage, file });
   await pairByPanel(bridge, first);
   await linksReported(bridge, 1);
@@ -665,11 +664,11 @@ it("after a server restart, a session's plugin that redials later than another p
   // Its handshake lags, so the restarted server hears from the other plugin first.
   const checkout = startPlugin(ports[0], {
     storage,
-    file: figma.file("Checkout"),
+    file: loopbackFile("Checkout"),
     holdHelloMs: 700,
   });
   await pairByPanel(before, checkout);
-  startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  startPlugin(ports[0], { storage, file: loopbackFile("Settings") });
   await linksReported(before, 2);
   await target(before, documentOf(checkout), () => checkout.allow());
   const { session } = await runIn(before, documentOf(checkout), "session.kept = true;");
@@ -680,9 +679,32 @@ it("after a server restart, a session's plugin that redials later than another p
   expect((await runIn(after, { session }, "return session.kept;")).reply.result).toBe(true);
 });
 
+it("after a server restart, an unnamed call waits for the granted file's plugin that redials after an ungranted one", async () => {
+  const storage = new Map<string, unknown>();
+  const before = startBridge(dir, ports[0]);
+  const checkout = startPlugin(ports[0], {
+    storage,
+    file: loopbackFile("Checkout"),
+    holdHelloMs: 700,
+  });
+  await pairByPanel(before, checkout);
+  startPlugin(ports[0], { storage, file: loopbackFile("Settings") });
+  await linksReported(before, 2);
+  await target(before, documentOf(checkout), () => checkout.allow());
+  before.stop();
+
+  const after = startBridge(dir, ports[0]);
+  await linksReported(after, 1);
+  const unnamed = await target(after, null);
+  expect(unnamed.target).toMatchObject({
+    kind: "targeted",
+    document: { documentId: documentOf(checkout), fileName: "Checkout" },
+  });
+});
+
 it("a reconnect during a run leaves its outcome unknown, names its session, and never runs it a second time", async () => {
   const bridge = startBridge(dir, ports[0]);
-  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
+  const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   await pairByPanel(bridge, plugin);
   await linksReported(bridge, 1);
   await target(bridge, documentOf(plugin), () => plugin.allow());
@@ -714,9 +736,9 @@ it("a reconnect during a run leaves its outcome unknown, names its session, and 
 it("a handle passed with another document refuses without running, and without asking either panel", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: loopbackFile("Checkout") });
   await pairByPanel(bridge, checkout);
-  const settings = startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  const settings = startPlugin(ports[0], { storage, file: loopbackFile("Settings") });
   await linksReported(bridge, 2);
   await target(bridge, documentOf(checkout), () => checkout.allow());
   await target(bridge, documentOf(settings), () => settings.allow());
