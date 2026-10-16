@@ -20,7 +20,7 @@ type Frame = Record<string, unknown>;
 /** A frame the host addressed to a server, with the socket generation it named beside it (panel.ts). */
 type Sent = { connKey: ConnKey; frame: Frame };
 // Tests wait on what the plugin SAYS, never on elapsed time or a count of event-loop turns: the host's
-// reply path crosses real timers (document-changes.ts settles one task), so "N turns later" is a race.
+// reply path crosses awaits whose turn count is the host's business, so "N turns later" is a race.
 // The deadline only turns a missing frame into a readable failure instead of a hung run.
 const FRAME_DEADLINE_MS = 5_000;
 // The installation every test plugin is paired with, and the stamp of the file every test plugin is in.
@@ -135,22 +135,23 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       // A view-only root refuses; the test is about exactly that.
     }
   // Unref'd so a run's minute-long late-change watch can't hold the test process open after it ends.
-  const hostSetTimeout = (callback: () => void, ms?: number) => setTimeout(callback, ms).unref();
   // Figma pausing the plugin (figma-pause.ts): its timers stop firing while its clock runs on.
   let figmaPaused = false;
   let clockOffsetMs = 0;
-  const hostSetInterval = (callback: () => void, ms?: number) =>
-    setInterval(() => figmaPaused || callback(), ms).unref();
+  const hostSetTimeout = (callback: () => void, ms?: number) =>
+    setTimeout(() => figmaPaused || callback(), ms).unref();
   const HostDate = class extends Date {
     static override now() {
       return Date.now() + clockOffsetMs;
     }
   };
-  const pauseFigma = (forMs: number) => {
+  const pauseFigma = () => {
     figmaPaused = true;
-    clockOffsetMs += forMs;
   };
-  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout, setInterval: hostSetInterval, Date: HostDate });
+  const advanceClock = (ms: number) => {
+    clockOffsetMs += ms;
+  };
+  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout, Date: HostDate });
   vm.runInContext(code, context);
   // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
   // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window,
@@ -246,7 +247,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     ) as Promise<any>;
   const running = (id: string, key: ConnKey) =>
     frame((f, connKey) => f.type === "RUN_STATE" && f.executionId === id && connKey === key && f.phase === "running", `${id} running`);
-  return { sent, renders, context, storage, pluginData, pauseFigma, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
+  return { sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
 }
 
 test("while Figma has paused the plugin, a new run is refused at once and a stuck run's cancel says why", async () => {
@@ -259,7 +260,10 @@ test("while Figma has paused the plugin, a new run is refused at once and a stuc
   const preamble = "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "stuck", preamble, code: "await hold;" });
   await h.running("stuck", 1);
-  h.pauseFigma(30_000);
+  h.pauseFigma();
+  // A message arriving arms the plugin's probe timer, which a paused Figma never fires.
+  await h.ask(1, { type: "HELLO", serverProtocol: 0 });
+  h.advanceClock(30_000);
 
   const refused = await h.ask(1, { type: "EXECUTE_CODE", preamble, code: "return 1;" });
   assert.equal(refused.type, "FIGMA_PAUSED");

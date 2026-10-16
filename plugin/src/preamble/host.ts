@@ -51,6 +51,9 @@ export interface FlcmHost {
   /** Why this run was cancelled, or null while it wasn't. Only the host sees a CANCEL, a disconnect
    * or a revoke arrive. */
   runCancellation(): RunCancelCause | null;
+  /** Settles when this run is cancelled. A Figma call can stall with the plugin's timers stalled too,
+   * so this — driven by the CANCEL message — is the only thing that can end the wait (awaitNative). */
+  whenCancelled(): Promise<RunCancelCause>;
   /**
    * Has the run this runtime was built FOR already replied? A runtime is per request, but agent code
    * can outlive it — stash `flcm` on globalThis in one call and it is still callable in the next,
@@ -71,7 +74,8 @@ declare const __flcmHost: FlcmHost | undefined;
 // Absent wherever no host is installed — every preamble unit test and the dogfood harness. Those
 // paths must stay alive, so this answers "is there one" rather than asserting there is; each caller
 // below decides whether absence is fatal for what IT is doing.
-function currentHost(): FlcmHost | undefined {
+/** The host of the run this preamble serves; one object per run. */
+export function currentHost(): FlcmHost | undefined {
   return typeof __flcmHost === "object" && __flcmHost !== null ? __flcmHost : undefined;
 }
 
@@ -178,10 +182,43 @@ export function traceVerb(stage: VerbTraceStage, verb: string): void {
   try { currentHost()?.trace?.(stage, `flcm.${verb}`); } catch { /* Reporting is best effort. */ }
 }
 
+/** What each traced operation is, in the agent's words. */
+const NATIVE_CALLS: Record<NativeOperation, string> = {
+  "page-create": "figma.createPage",
+  "page-switch": "figma.setCurrentPageAsync",
+  "font-load": "figma.loadFontAsync",
+  "font-list": "figma.listAvailableFontsAsync",
+};
+
+export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
+  server: "this run was cancelled by the server (its deadline passed)",
+  disconnected: "this run's server disconnected, so the run was cancelled",
+  revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
+};
+
+/**
+ * Await a Figma call, traced, and abandoned if the run is cancelled first. Figma can leave a call
+ * pending forever — loadFontAsync in a file whose window is in the background, seen live — with the
+ * plugin's timers stalled too, so no timeout could end it; without this the run never replies and
+ * every run behind it waits.
+ */
 export async function awaitNative<T>(operation: NativeOperation, run: () => Promise<T>): Promise<T> {
   traceNative("native-start", operation);
+  const started = Date.now();
+  const host = currentHost();
+  const abandoned = host
+    ? host.whenCancelled().then((cause): never => {
+        throw new Error(
+          "flcm: " + NATIVE_CALLS[operation] + " still hadn't returned after " + Math.round((Date.now() - started) / 1000) +
+            "s when " + CANCELLED_BECAUSE[cause] + ", so the run stops here. Figma stalls its calls like this in a file " +
+            "whose window or tab is in the background: bring the file to the front in Figma before retrying.",
+        );
+      })
+    : new Promise<never>(() => {});
+  // The race handles it when it settles first; this keeps a later cancellation from going unhandled.
+  abandoned.catch(() => {});
   try {
-    const value = await run();
+    const value = await Promise.race([run(), abandoned]);
     traceNative("native-end", operation);
     return value;
   } catch (error) {

@@ -232,6 +232,7 @@ export function createRunExecutor({
         // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
         callServer: (capability: string, payload: unknown) => serverCalls.call(to, capability, payload),
         runCancellation: () => cancelledRuns.cancellation(to),
+        whenCancelled: () => cancelledRuns.whenCancelled(to),
         isRunFinished: () => settled,
         runStartedAt,
       };
@@ -277,7 +278,7 @@ export function createRunExecutor({
       // while change events arrive in asynchronous batches (document-changes.ts). A "no" is only
       // provisional: the observer keeps watching past the reply and reports a late change on its own.
       documentChanged =
-        ((await documentChanges?.changedSoFar()) ?? false) || (runtime?.committedVerbCount() ?? 0) > 0;
+        (documentChanges?.changedSoFar() ?? false) || (runtime?.committedVerbCount() ?? 0) > 0;
       if (documentChanged) documentChanges?.stop();
       else if (documentChanges) {
         // Run-scoped and id-less, like CANCEL_RESULT; at most one RUN_CHANGED per run, and the server

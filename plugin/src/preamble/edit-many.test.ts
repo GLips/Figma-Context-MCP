@@ -332,7 +332,7 @@ test("a node deleted during the resource round trip refuses the whole batch — 
       a.remove();
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    runCancellation: () => null, isRunFinished: () => false,
+    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
   };
   try {
     await assert.rejects(

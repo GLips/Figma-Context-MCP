@@ -36,7 +36,7 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, traceVerb, type RunCancelCause } from "./host.js";
+import { CANCELLED_BECAUSE, hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, traceVerb } from "./host.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
 import { settleApplySpan } from "./bridge.js";
@@ -94,11 +94,6 @@ function refuseIfDevMode(verb: string): void {
   }
 }
 
-const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
-  server: "this run was cancelled by the server (its deadline passed)",
-  disconnected: "this run's server disconnected, so the run was cancelled",
-  revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
-};
 
 function refuseIfCancelled(verb: string): void {
   const cause = hostRunCancellation();

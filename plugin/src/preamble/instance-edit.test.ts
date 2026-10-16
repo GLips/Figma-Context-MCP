@@ -15,6 +15,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
+import { inNextRun } from "../../harness/next-run.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
@@ -201,7 +202,7 @@ test("the main component is proven at the seal: a swap during the font load refu
   };
   try {
     await assert.rejects(
-      edit(inst.id, { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } }),
+      inNextRun(() => edit(inst.id, { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } })),
       /the main component of INSTANCE .* changed while this call was resolving targets and loading resources \(it was COMPONENT "Chip"/,
     );
   } finally {

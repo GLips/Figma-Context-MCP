@@ -226,7 +226,7 @@ test("shipped factory supports RegExp input across separate evaluations", async 
   const preamble = await buildSandboxPreamble();
   const context = createContext({ figma, console });
   const install = () =>
-    runInContext("var flcm = (" + preamble + "\n)({runCancellation: () => null, isRunFinished: () => false, getSession: init => init()}).flcm;", context);
+    runInContext("var flcm = (" + preamble + "\n)({runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false, getSession: init => init()}).flcm;", context);
   install();
   await runInContext(
     '(async () => { var built = await flcm.render({type:"FRAME", name:"Copy"}); globalThis.oldId = built.id; globalThis.newId = (await flcm.component(oldId)).id; })()',

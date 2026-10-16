@@ -195,6 +195,26 @@ try {
 const id = ${JSON.stringify(fx.deepRowId)};
 for (let i = 0; i < 3; i++) await step("edit deep row", () => flcm.edit(id, { opacity: i % 2 ? 1 : 0.99 }));`,
 
+  // One text render after another: each loads its font, so this counts how many loads succeed.
+  "font-loads": () => `
+const made = [];
+try {
+  for (let i = 0; i < 20; i++)
+    made.push((await step("render text " + i, () => flcm.render({ type: "TEXT", text: "t" + i, left: 80000 + i * 100, top: 0 }))).id);
+} finally {
+  for (const id of made.reverse()) (await figma.getNodeByIdAsync(id))?.remove();
+}`,
+
+  // Text edits load the node's font without listing the available fonts: tells a load apart from a list.
+  "font-edits": () => `
+const text = figma.createText();
+text.x = 80000; text.y = 400;
+try {
+  for (let i = 0; i < 20; i++) await step("edit text " + i, () => flcm.edit(text.id, { text: "e" + i }));
+} finally {
+  text.remove();
+}`,
+
   find: () => `
 await step("find name=bench-row", () => flcm.find({ name: "bench-row" }));
 await step("findOne key", () => flcm.find({ key: "no-such-key" }));`,
@@ -236,7 +256,7 @@ async function run(target, code) {
     });
     sessionCreated = true;
     const wallMs = Date.now() - started;
-    const trace = [...traced];
+    const trace = runTrace();
     if (reply.errors) return { wallMs, result: { steps: [], error: reply.errors, trace } };
     return { wallMs, result: { ...reply.result, trace } };
   } catch (error) {
@@ -245,20 +265,29 @@ async function run(target, code) {
       result: {
         steps: [],
         error: error instanceof Error ? error.message : String(error),
-        trace: [...traced],
+        trace: runTrace(),
       },
     };
   }
 }
 
-// Runs are sequential, so every host step reported since a run was submitted is that run's.
+// Runs are sequential, so every host step reported since a run was submitted is that run's. The
+// trace logs only a run's first events, so the steps it kept last — where a stuck run stopped —
+// are appended from its snapshot.
 const traced = [];
-const bridge = new PluginBridge({
-  capabilities: new Map(),
-  trace: new RequestTrace((event) => {
-    if (event.stage === "host") traced.push(event);
-  }),
+const requestTrace = new RequestTrace((event) => {
+  if (event.stage === "host") traced.push(event);
 });
+const bridge = new PluginBridge({ capabilities: new Map(), trace: requestTrace });
+function runTrace() {
+  const head = [...traced];
+  const last = head.at(-1);
+  if (!last) return head;
+  const tail = requestTrace
+    .snapshot(last.requestId)
+    .filter((event) => event.stage === "host" && event.hostElapsedMs > last.hostElapsedMs);
+  return [...head, ...tail];
+}
 let started = false;
 async function main() {
   if (started) return; // a reconnect must not start a second bench

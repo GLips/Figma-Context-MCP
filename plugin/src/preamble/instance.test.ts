@@ -11,6 +11,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
+import { inNextRun } from "../../harness/next-run.js";
 import { get } from "./read.js";
 import { render, append } from "./structure.js";
 
@@ -111,7 +112,7 @@ test("an override is planned at the seal: a definition retyped during the font l
   };
   try {
     await assert.rejects(
-      render({ type: "INSTANCE", componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } }),
+      inNextRun(() => render({ type: "INSTANCE", componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } })),
       /changed to Roboto Regular while this call was loading fonts and images/,
     );
   } finally {

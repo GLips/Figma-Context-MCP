@@ -180,6 +180,7 @@ function isLinkSetupRequest(type: ServerRequestType): boolean {
  * answered ERROR. CANCEL and CHANNEL_RESPONSE are one-way.
  */
 function handleServerFrame(raw: unknown, key: ConnKey): void {
+  figmaPause.arm();
   const msg = parseServerFrame(raw);
   if (!msg) {
     // Frozen-envelope contract: every id-carrying inbound gets a reply, so a newer server against

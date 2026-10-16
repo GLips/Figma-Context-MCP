@@ -17,24 +17,21 @@
 // Figma delivers these events "periodically", with no deadline, and agent code can leave raw async
 // writes running past its return. So the answer at reply time is provisional: the observer stays
 // attached after the reply (watchLate) and reports either the first change it sees then, or that the
-// watch closed without one.
+// watch closed without one. The reply never waits a turn for pending events: Figma can stall the
+// plugin's timers, and a timer on the reply path would then hold the run — and every run behind it.
 //
 // Only LOCAL-origin changes count: REMOTE ones are other people in the file. Negative space, named:
 // variables and document-root properties have no change event and are not observed, and a human's
 // own LOCAL edit that lands inside a run's window (late window included) is indistinguishable from
 // the run's.
 
-// One macrotask turn before the reply reads the answer: most of the run's own events are flushed to
-// their listeners by then, which keeps the late path the exception rather than the rule.
-const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
 function pageListSignature(): string {
   return JSON.stringify(figma.root.children.map((page) => [page.id, page.name]));
 }
 
 export interface DocumentChangeObserver {
-  /** Whether a change has been seen so far, after one turn for pending events to arrive. */
-  changedSoFar(): Promise<boolean>;
+  /** Whether a change has been seen so far. */
+  changedSoFar(): boolean;
   /**
    * Keep listening past the reply. Exactly one of the two is called, once: `onChange` at the first
    * change, or `onSettled` when the watch closes without one — after `windowMs`, or at stop().
@@ -99,8 +96,7 @@ export function observeDocumentChanges(): DocumentChangeObserver {
   }
 
   return {
-    async changedSoFar() {
-      await settle();
+    changedSoFar() {
       if (!changed && pageListSignature() !== before) changed = true;
       return changed;
     },

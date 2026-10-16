@@ -27,10 +27,16 @@ function runKey(connKey: number, executionId: string): string {
 export function createRunCancellationRegistry() {
   // One row per outstanding run, from acceptance to settlement — exactly the window in which a
   // cancel answer can be anything but `unknown`. The first cause sticks: it is what happened first.
-  const runs = new Map<string, { phase: RunPhase; cancelled: RunCancelCause | null }>();
+  type Run = { phase: RunPhase; cancelled: RunCancelCause | null; onCancel: ((cause: RunCancelCause) => void)[] };
+  const runs = new Map<string, Run>();
+  const cancel = (run: Run, cause: RunCancelCause): void => {
+    if (run.cancelled) return;
+    run.cancelled = cause;
+    for (const listener of run.onCancel.splice(0)) listener(cause);
+  };
   return {
     enqueue(ref: RunRef): void {
-      runs.set(runKey(ref.connKey, ref.id), { phase: "queued", cancelled: null });
+      runs.set(runKey(ref.connKey, ref.id), { phase: "queued", cancelled: null, onCancel: [] });
     },
     /** The run reached the front of the queue. Recorded BEFORE its first verb, so a CANCEL racing
      * the start is answered "was running" — the safe side of that race. */
@@ -52,17 +58,27 @@ export function createRunCancellationRegistry() {
     recordCancellation(connKey: number, executionId: string): CancelDisposition {
       const run = runs.get(runKey(connKey, executionId));
       if (!run) return "unknown";
-      run.cancelled ??= "server";
+      cancel(run, "server");
       return run.phase === "queued" ? "never-executed" : "was-running";
     },
     /** Why the run was cancelled, or null while it wasn't. */
     cancellation(ref: RunRef): RunCancelCause | null {
       return runs.get(runKey(ref.connKey, ref.id))?.cancelled ?? null;
     },
+    /**
+     * Settles when the run is cancelled, as the CANCEL message is handled — the one thing that still
+     * happens when Figma stalls a call the run awaits. Never settles for a run that isn't.
+     */
+    whenCancelled(ref: RunRef): Promise<RunCancelCause> {
+      const run = runs.get(runKey(ref.connKey, ref.id));
+      if (!run) return new Promise(() => {});
+      if (run.cancelled) return Promise.resolve(run.cancelled);
+      return new Promise((resolve) => run.onCancel.push(resolve));
+    },
     /** Cancel every outstanding run of one connection: its socket closed, or the human revoked it. */
     cancelConnection(connKey: number, cause: Exclude<RunCancelCause, "server">): void {
       const prefix = String(connKey) + ":";
-      for (const [key, run] of runs) if (key.startsWith(prefix)) run.cancelled ??= cause;
+      for (const [key, run] of runs) if (key.startsWith(prefix)) cancel(run, cause);
     },
   };
 }

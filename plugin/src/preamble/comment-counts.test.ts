@@ -27,7 +27,7 @@ test("reads carry counts on the node under each pin, fetched once per run and re
   const calls: unknown[] = [];
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = {
-        runCancellation: () => null,
+        runCancellation: () => null, whenCancelled: () => new Promise(() => {}),
     isRunFinished: () => false,
     callServer: async (capability: string, payload: unknown) => {
       calls.push([capability, payload]);

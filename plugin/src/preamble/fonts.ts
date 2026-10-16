@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { awaitNative } from "./host.js";
+import { awaitNative, currentHost } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // fonts — resolve every text node's (family, weight) to a real, loaded Figma font style, and preload
 // them before render() builds any text.
@@ -16,8 +16,10 @@ import { sceneFigma as figma } from "./scene-access.js";
 // The snap is a real listAvailableFontsAsync nearest-style match (replacing the old fixed 4-Inter-weight
 // bucket): a numeric/named weight resolves to the nearest AVAILABLE style of the requested family across
 // the full weight ladder, and an unknown family falls back to Inter. We load exactly the styles this
-// render needs, every render — font state is session-global, so a "looks loaded, skip" optimization
-// only throws on a cold session; an idempotent reload is the price of that heisenbug never happening.
+// render needs, once per RUN — never trusting a load an earlier run made, so a cold session can't
+// throw. Not once per verb: in a background window Figma answers only a handful of loadFontAsync
+// calls per run and leaves the next pending forever (seen live: the 7th, every run), so each
+// redundant call is a chance to stall the run.
 //
 // The load pass returns a FontMap that render() threads on the RenderCtx through the build walk — load
 // and resolve agree on the `key()` of each (family, weight) by construction, with no module-level state.
@@ -38,9 +40,51 @@ function fontLabel(font: { family: string; style: string }): string {
   return font.family + "\u0000" + font.style;
 }
 
-async function loadFont(font: { family: string; style: string }): Promise<void> {
-  await awaitNative("font-load", () => figma.loadFontAsync(font));
-  loadedFonts.add(fontLabel(font));
+// Each style's load this run, settled or in flight, so concurrent verbs share one call. A failed
+// load is forgotten, so a later verb may try it again.
+const fontLoads = new Map<string, Promise<void>>();
+
+// A run's caches belong to its run: its host and its document. Each run evals a fresh preamble, so
+// in the plugin this never resets mid-run; in-process tests reuse one module across runs and mock
+// documents, and must not share.
+let cachesFor: { host: unknown; figma: unknown } = { host: null, figma: null };
+function useRunCaches(): void {
+  const host = currentHost();
+  const current = (globalThis as { figma?: unknown }).figma;
+  if (host === cachesFor.host && current === cachesFor.figma) return;
+  cachesFor = { host, figma: current };
+  loadedFonts.clear();
+  fontLoads.clear();
+  availableFonts = null;
+}
+
+function loadFont(font: { family: string; style: string }): Promise<void> {
+  useRunCaches();
+  const label = fontLabel(font);
+  let load = fontLoads.get(label);
+  if (!load) {
+    load = awaitNative("font-load", () => figma.loadFontAsync(font)).then(() => {
+      loadedFonts.add(label);
+    });
+    fontLoads.set(label, load);
+    load.catch(() => fontLoads.delete(label));
+  }
+  return load;
+}
+
+// The available fonts, listed once per run for the same reason: a list is one more call to stall on.
+let availableFonts: Promise<Font[]> | null = null;
+
+function listAvailableFonts(): Promise<Font[]> {
+  useRunCaches();
+  if (!availableFonts) {
+    const listing = awaitNative("font-list", () => figma.listAvailableFontsAsync());
+    availableFonts = listing;
+    listing.catch(() => {
+      if (availableFonts === listing) availableFonts = null;
+    });
+  }
+  return availableFonts;
 }
 
 // A resolved-and-loaded style per (family, weight) key — the output of the load pass, consumed by the
@@ -234,7 +278,7 @@ export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fo
 }
 
 export async function loadFontsForTree(tree: WriteNode, tokens?: ResolvedTokens): Promise<FontMap> {
-  const avail = await awaitNative("font-list", () => figma.listAvailableFontsAsync());
+  const avail = await listAvailableFonts();
   const byFamily: Record<string, string[]> = {};
   for (const { fontName } of avail) {
     (byFamily[fontName.family] || (byFamily[fontName.family] = [])).push(fontName.style);

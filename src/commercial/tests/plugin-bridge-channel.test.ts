@@ -327,9 +327,9 @@ it.each([false, true])(
         createWarningRegistry,
         __html__: "",
         console: { ...console },
-        setTimeout,
+        // Unref'd: the host's heartbeat (figma-pause.ts) re-arms forever.
+        setTimeout: (callback: () => void, ms?: number) => setTimeout(callback, ms).unref(),
         clearTimeout,
-        setInterval: (callback: () => void, ms: number) => setInterval(callback, ms).unref(),
       }),
     );
     // The relay's two envelopes: server frames (after a JSON round trip in the fake socket) and panel input.

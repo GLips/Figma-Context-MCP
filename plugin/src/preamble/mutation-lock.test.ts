@@ -34,7 +34,7 @@ beforeEach(() => {
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
   if (!g.__flcmHost) {
-    g.__flcmHost = { callServer: async () => ({}), runCancellation: () => null, isRunFinished: () => false, runStartedAt: Date.now() };
+    g.__flcmHost = { callServer: async () => ({}), runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false, runStartedAt: Date.now() };
   }
   return g.__flcmHost as Record<string, unknown>;
 };

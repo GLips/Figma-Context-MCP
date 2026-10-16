@@ -31,7 +31,7 @@ async function renderWithImages(
       batches.push(urls);
       return respond(urls);
     },
-    runCancellation: () => null, isRunFinished: () => false,
+    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
   };
   try {
     return { out: await render(tree), batches };

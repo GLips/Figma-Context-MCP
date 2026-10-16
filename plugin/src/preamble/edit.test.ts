@@ -12,6 +12,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
+import { inNextRun } from "../../harness/next-run.js";
 import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
@@ -109,7 +110,7 @@ test("an image fill in a delta fetches bytes through the host channel and stamps
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
-    runCancellation: () => null, isRunFinished: () => false,
+    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
   };
   try {
     await edit("card", { fill: image(url) });
@@ -155,7 +156,7 @@ test('clearing an image fill with "none" wipes the flcm/image provenance too', a
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
-    runCancellation: () => null, isRunFinished: () => false,
+    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
   };
   try {
     await edit("card", { fill: image("https://cdn.example.com/b.jpg") });
@@ -391,13 +392,13 @@ test("a TEXT size delta preloads the node's font before the mutating span", asyn
   });
   const label = await figma.getNodeByIdAsync(specNode(out, "label").id);
   figma.fontLoads.length = 0;
-  await edit("label", { width: 120 });
+  await inNextRun(() => edit("label", { width: 120 }));
   assert.deepEqual(figma.fontLoads, [{ family: "Inter", style: "Regular" }]);
   assert.equal(label.textAutoResize, "HEIGHT");
   assert.equal(label.width, 120);
   // A non-size delta on the same node loads nothing — the preload is for the resize handshake only.
   figma.fontLoads.length = 0;
-  await edit("label", { opacity: 0.5 });
+  await inNextRun(() => edit("label", { opacity: 0.5 }));
   assert.deepEqual(figma.fontLoads, []);
 });
 
@@ -710,7 +711,7 @@ async function renderKeyedText(
 test("`content` with a plain string replaces the whole text, preloading the live font first", async () => {
   const node = await renderKeyedText("hello");
   figma.fontLoads.length = 0;
-  await edit("label", { text: "goodbye" });
+  await inNextRun(() => edit("label", { text: "goodbye" }));
   assert.equal(node.characters, "goodbye");
   // The reflow re-lays the existing font — loaded before the mutating span, like create's preload.
   assert.deepEqual(figma.fontLoads[0], { family: "Inter", style: "Regular" });
@@ -776,7 +777,7 @@ test("`content` markdown compiles runs over the live base family, per-range font
 test("a plain-string `content` on a MIXED text succeeds, preloading EVERY range font for the reflow", async () => {
   const node = await renderKeyedText("plain **bold**");
   figma.fontLoads.length = 0;
-  await edit("label", { text: "flat" });
+  await inNextRun(() => edit("label", { text: "flat" }));
   assert.equal(node.characters, "flat");
   // Verified live 2026-08-08: a whole-content replacement collapses the text to its LEADING
   // run's style (no positional carry-over of old range styling). Char 0 is unstyled here, so
@@ -940,7 +941,7 @@ function imageChannelThatRetypes(
       node.fontName = fontName;
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    runCancellation: () => null, isRunFinished: () => false,
+    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
   };
   return () => {
     delete g.__flcmHost;
@@ -949,10 +950,12 @@ function imageChannelThatRetypes(
 
 test("a live fact that changed during the round trip: the delta lands on the FRESH state, or refuses with zero writes", async () => {
   const node = await renderKeyedText("hello", { textStyle: { fontWeight: "bold" } });
-  // Bold → Regular while the bytes are in flight. The delta names no font identity, so the gate's
-  // compile against the retyped node is just as valid: it lands, on the node as the user left it.
+  // Bold → Regular while the bytes are in flight, Regular being a font this run already loaded. The
+  // delta names no font identity, so the gate's compile against the retyped node is just as valid:
+  // it lands, on the node as the user left it.
   let restore = imageChannelThatRetypes(node, { family: "Inter", style: "Regular" });
   try {
+    await render({ type: "TEXT", text: "regular", left: 400 });
     await edit("label", {
       fill: image("https://cdn.example.com/a.jpg"),
       textStyle: { fontSize: 20 },
