@@ -103,11 +103,13 @@ npx figma-developer-mcp execute workflow.js --output artifacts/result.json
 npx figma-developer-mcp execute workflow.js --screenshot artifacts/page.png --scale 2
 ```
 
-Open Framelink in the intended Figma file and click Allow when the panel asks. The plugin must already be paired with this machine: run `npx figma-developer-mcp pair` once, and answer `y` if the code it prints is the code the plugin panel shows. Pairing is remembered for every server and `execute` run sharing this machine's Framelink state directory (`FRAMELINK_STATE_DIR`). The command uses the same approval, plugin owner, seat/free-allowance checks, and runtime as MCP execution. A Figma REST token is optional (`--figma-api-key`, `--figma-oauth-token`, or the server's env vars); with one, a script can read the file's comment pins, as it can through the MCP server.
+Open Framelink in the intended Figma file. The plugin must already be paired with this machine: run `npx figma-developer-mcp pair` once, and answer `y` if the code it prints is the code the plugin panel shows. Pairing is remembered for every server and `execute` run sharing this machine's Framelink state directory (`FRAMELINK_STATE_DIR`).
+
+Each run executes in exactly one Figma file. `--file-key <key>` (from the file's URL) names it; without it, the run uses the one open file this project is already allowed to edit, or the plugin asks you to pick one. The first run from a project in a file waits for you to click Allow in the plugin. The plugin remembers that grant for this project and file, for every server and `execute` run in the project, until you revoke it in the panel. The server proves which file the plugin is in by reading the file over the Figma REST API, so give it a token that can open the file: `--figma-api-key`, `--figma-oauth-token`, or the server's env vars. The same token lets a script read the file's comment pins. The command uses the same grant, plugin owner, seat/free-allowance checks, and runtime as MCP execution, and its JSON names the file it ran in.
 
 The execution reply is JSON on stdout; progress and errors go to stderr. `--output` also saves that JSON. `--screenshot` saves a PNG after a completed execution, including a script error; select a target with `--node-id` or `--key`, or omit both for the current page. `--context` also captures the canvas around a target, with `--margin` pixels on each side. Script and transport failures return a nonzero exit status. An interrupted or disconnected execution is never automatically resubmitted.
 
-`--wait` sets the connection wait and each approval wait separately (600 seconds by default); it does not extend execution deadlines. `--asset-root` confines local image reads, defaulting to the working directory. `--env` selects an environment file; `FRAMELINK_ASSET_ROOT` and `FRAMELINK_API_URL` retain their server meanings.
+`--wait` sets the connection wait and the wait for Allow separately (600 seconds by default); it does not extend execution deadlines. `--asset-root` confines local image reads, defaulting to the working directory. `--env` selects an environment file; `FRAMELINK_ASSET_ROOT` and `FRAMELINK_API_URL` retain their server meanings.
 
 Results are delivered promptly. When a free-allowance execution reports no document change yet, the command retains its relay for the existing late-change accounting window (up to 90 seconds), exiting sooner if a late change is reported. Seat-covered executions and already-counted writes do not need that wait. Ctrl-C exits with status 130 and warns if it interrupts this observation; the emitted result remains available, but late-write accounting could not be fully observed.
 
@@ -117,7 +119,7 @@ The server sends usage telemetry to PostHog: one event per tool call, with its d
 
 - **Reads are anonymous.** Read events carry a per-process random ID, never your identity, file keys, node IDs, or design content.
 - **Writes name the Figma user.** Events from write-path tools (`figma_execute_code`, `get_screenshot`) carry the Figma user ID of the plugin owner, the Figma user signed in to the plugin that ran the code. Writes are metered per user, so we need it to tell usage apart. Neither authored code nor returned content is ever sent.
-- **Failures are sent as codes.** Expected failures, such as a 403, a rate limit, a rejected argument, or a declined approval, go out as a category, status and field name, never as the error text.
+- **Failures are sent as codes.** Expected failures, such as a 403, a rate limit, a rejected argument, or a denied grant, go out as a category, status and field name, never as the error text.
 - **Unexpected errors go to error tracking.** The error message and stack frames are scrubbed of credentials, your home directory, and Figma file and node IDs. Response bodies are replaced with a fingerprint of who answered.
 
 ## Licensing proposal
