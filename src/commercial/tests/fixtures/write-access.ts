@@ -43,7 +43,7 @@ export async function linkedTestResolution(): Promise<LinkResolution> {
  * fresh session.
  */
 export async function targetedTestCall(): Promise<CallTarget> {
-  return { kind: "targeted", link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT, session: null };
+  return { kind: "targeted", link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT };
 }
 
 /** The session a test submits a run in directly, past the execution layer that mints one. */

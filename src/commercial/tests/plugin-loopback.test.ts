@@ -19,7 +19,10 @@ import {
   type DocumentReader,
   type PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
-import { parseSessionHandle } from "~/commercial/plugin-bridge/session-handle.js";
+import {
+  parseSessionHandle,
+  type SessionHandle,
+} from "~/commercial/plugin-bridge/session-handle.js";
 import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
 import { executePluginCode, type ExecutionOutcome } from "~/commercial/plugin-bridge/execution.js";
 import { runPair } from "~/commercial/commands/pair.js";
@@ -84,7 +87,8 @@ function startPlugin(...args: Parameters<typeof startLoopbackPlugin>): LoopbackP
 
 /**
  * A bare relay for a project, reading the loopback files to prove links, with proofs quick enough
- * that a refuted one doesn't hold a test for the production deadline.
+ * that a refuted one doesn't hold a test for the production deadline. Its links settle sooner too:
+ * the loopback plugin redials a server it just lost within a second.
  */
 function startBridge(
   stateDir: string,
@@ -97,6 +101,7 @@ function startBridge(
     project,
     documentReader,
     proofTiming: { pollMs: 20, deadlineMs: 400 },
+    linkSettleMs: 3_000,
   });
   bridge.start([port]);
   cleanups.push(() => bridge.stop());
@@ -137,13 +142,18 @@ async function target(
 
 const NO_TARGET: CallTargetRequest = { fileKey: null, session: null };
 
-/** Run code on a bound call, metered offline. */
-function run(bridge: PluginBridge, bound: CallTarget, code: string): Promise<ExecutionOutcome> {
+/** Run code on a bound call, in the session it named (null: a fresh one), metered offline. */
+function run(
+  bridge: PluginBridge,
+  bound: CallTarget,
+  code: string,
+  session: SessionHandle | null = null,
+): Promise<ExecutionOutcome> {
   if (bound.kind !== "targeted") throw new Error(`not targeted: ${JSON.stringify(bound)}`);
   const { writeMeter } = createTestWriteAccess();
   return executePluginCode(
     { bridge, writeMeter, readLocalImage: () => Promise.reject(new Error("no images")) },
-    bound,
+    { ...bound, session },
     code,
   );
 }
@@ -185,7 +195,7 @@ it("pairs by the code the panel shows, proves the file, waits for Allow, then se
     });
     if (bound.kind !== "targeted") throw new Error(JSON.stringify(bound));
     expect(bound.document).toEqual({ fileKey: "FILEkeyA", fileName: "Checkout" });
-    return executePluginCode(runtime, bound, code);
+    return executePluginCode(runtime, { ...bound, session: null }, code);
   };
 
   const read = await execute("return 1 + 1;");
@@ -338,7 +348,7 @@ it("one file in two plugin instances is one document, and a revoke in either sto
   const document = { fileKey: figmaFileKey("FILEkeyA"), fileName: "Checkout" };
   for (const link of bridge.authenticatedLinks())
     await expect
-      .poll(() => run(bridge, { kind: "targeted", link, document, session: null }, "return 1;"), {
+      .poll(() => run(bridge, { kind: "targeted", link, document }, "return 1;"), {
         timeout: 5_000,
       })
       .toEqual({ kind: "not-granted", reason: "no-grant" });
@@ -410,7 +420,9 @@ async function runIn(
   named: Parameters<typeof target>[1],
   code: string,
 ): Promise<Extract<ExecutionOutcome, { kind: "executed" }>> {
-  const outcome = await run(bridge, (await target(bridge, named)).target, code);
+  const session =
+    typeof named === "object" && named !== null ? parseSessionHandle(named.session) : null;
+  const outcome = await run(bridge, (await target(bridge, named)).target, code, session);
   if (outcome.kind !== "executed") throw new Error(`not executed: ${JSON.stringify(outcome)}`);
   return outcome;
 }
@@ -458,6 +470,27 @@ it("a handle from before the plugin restarted is refused without running, though
   expect(await target(bridge, { session, fileKey: "FILEkeyA" })).toMatchObject({
     target: { kind: "blocked", block: { kind: "session-not-found" } },
   });
+});
+
+it("after a server restart, a session's plugin that redials later than another plugin is still found", async () => {
+  const storage = new Map<string, unknown>();
+  const before = startBridge(dir, ports[0]);
+  // Its handshake lags, so the restarted server hears from the other plugin first.
+  const checkout = startPlugin(ports[0], {
+    storage,
+    file: figma.file("FILEkeyA", "Checkout"),
+    holdHelloMs: 700,
+  });
+  await pairByPanel(before, checkout);
+  startPlugin(ports[0], { storage, file: figma.file("FILEkeyB", "Settings") });
+  await expect.poll(() => before.authenticatedLinks().length, { timeout: 5_000 }).toBe(2);
+  await target(before, "FILEkeyA", () => checkout.allow());
+  const { session } = await runIn(before, "FILEkeyA", "session.kept = true;");
+  before.stop();
+
+  const after = startBridge(dir, ports[0]);
+  await expect.poll(() => after.authenticatedLinks().length, { timeout: 5_000 }).toBe(1);
+  expect((await runIn(after, { session }, "return session.kept;")).reply.result).toBe(true);
 });
 
 it("a handle passed with another file's key refuses without running, and without asking either panel", async () => {

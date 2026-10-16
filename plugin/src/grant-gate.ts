@@ -64,7 +64,7 @@ export function createGrantGate({
   show: (expandTo?: boolean) => void;
   /** End a connection's runs: the human revoked its project's grant. */
   cancelRuns: (key: ConnKey) => void;
-  /** A granted server's run was admitted: it drives now. */
+  /** A granted server's run passed the dequeue check and is about to touch the document: it drives now. */
   takeBaton: (key: ConnKey) => void;
 }) {
   const connections = new Map<ConnKey, GrantConnection>();
@@ -311,20 +311,17 @@ export function createGrantGate({
     },
 
     /**
-     * The check when a run arrives. Past the grant, `alsoAdmit` makes the run's own arrival checks
-     * under the scope it runs in, answering for itself when it refuses. False means the run was
-     * already answered.
+     * The check when a run arrives: the grant scope it runs under, or null once it has been answered
+     * NOT_GRANTED. A grant still settling in storage admits here and is decided at dequeue.
      */
-    admit(to: ReplyTo, fileKey: string, alsoAdmit: (scope: GrantScope) => boolean = () => true): boolean {
+    admit(to: ReplyTo, fileKey: string): GrantScope | null {
       const answer = admission(to.connKey, fileKey);
       if (answer !== "granted" && answer !== "unknown") {
         reply(to, { type: "NOT_GRANTED", reason: answer });
-        return false;
+        return null;
       }
       // Non-null: either answer came from the store, which needs the scope to give one.
-      if (!alsoAdmit(scopeOf(to.connKey, fileKey)!)) return false;
-      if (answer === "granted") takeBaton(to.connKey);
-      return true;
+      return scopeOf(to.connKey, fileKey)!;
     },
 
     /** The grant scope a run on this connection would run under, once its document is proven. */

@@ -81,6 +81,12 @@ export const WS_PORT_BLOCK: readonly number[] = Array.from(
  * (preamble/server-deadline.ts) to refuse verbs while a CANCEL is still queued behind the thread. */
 export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
 
+/**
+ * The longest the plugin waits between dials to a port that keeps refusing. A server that just
+ * started, or just lost a link, hears from every open plugin within it.
+ */
+export const PLUGIN_REDIAL_MAX_MS = 15_000;
+
 /** How often a call waiting on the human polls GRANT_STATUS. */
 export const GRANT_POLL_MS = 750;
 /** How long after its last poll a grant prompt still reads as waiting in the panel: four missed polls. */

@@ -5,7 +5,7 @@
 // Runs what a granted server submits — agent code and screenshots — one at a time, against the
 // live document, and owns everything a run carries: its phase and cancellation, its mid-run server
 // calls, the late-change watch, and the agents' session stores.
-import { createAgentSessions, type AgentSession } from "./agent-sessions.js";
+import type { AgentSession, AgentSessions } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
@@ -20,7 +20,6 @@ import type {
   NotGrantedReason,
   RunPhase,
   ServerFrame,
-  SessionRequest,
 } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
@@ -46,10 +45,13 @@ const CALLS_ABANDONED: Record<Exclude<RunCancelCause, "server">, string> = {
 export function createRunExecutor({
   isConnected,
   refusalAtDequeue,
+  sessions,
 }: {
   isConnected: (key: ConnKey) => boolean;
   /** The grant gate, asked again at dequeue: null admits. */
   refusalAtDequeue: (key: ConnKey, fileKey: string) => Promise<NotGrantedReason | null>;
+  /** Where each run's pinned session is released when it settles, ran or not. */
+  sessions: AgentSessions;
 }) {
   const serverCalls = createServerCallTable(isConnected);
   // The policy, the run phase it reads, and the key semantics live on run-cancellation.ts.
@@ -58,8 +60,6 @@ export function createRunExecutor({
   // (document-changes.ts watchLate). Bounded by the next run's start and by the window its
   // EXECUTE_CODE carried — the server's number, since the server is what holds the run open for it.
   let lateChangeWatch: DocumentChangeObserver | null = null;
-  // One store per session handle, kept across socket generations and pages for this plugin run.
-  const sessions = createAgentSessions();
 
   /**
    * One writer at a time (Invariant) — enforced by SERIALIZING writes rather than refusing the
@@ -331,18 +331,6 @@ export function createRunExecutor({
   }
 
   return {
-    /**
-     * Pin the session a run arriving under grant scope `scope` names. Checked on arrival only: the
-     * pin keeps the session until the run settles.
-     */
-    admitSession(scope: string, request: SessionRequest) {
-      return sessions.admit(scope, request);
-    },
-
-    holdsSession(scope: string, handle: string): boolean {
-      return sessions.holds(scope, handle);
-    },
-
     /**
      * Queue an admitted EXECUTE_CODE for `fileKey`, the document it was admitted for, in its pinned
      * session. Queued, not awaited, so another server's write can't interleave.

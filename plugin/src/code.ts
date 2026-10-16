@@ -8,8 +8,8 @@
 // runner (run-executor.ts) and the panel (grant-panel.ts) do the work.
 import { createDocumentIdentity } from "./document-identity.js";
 import { createGrantGate } from "./grant-gate.js";
-import { createGrantStore, grantKey } from "./grant-store.js";
-import type { AgentSession } from "./agent-sessions.js";
+import { createGrantStore } from "./grant-store.js";
+import { createAgentSessions } from "./agent-sessions.js";
 import { createLinkAuth } from "./link-auth.js";
 import { createRunExecutor } from "./run-executor.js";
 import { createGrantPanel } from "./grant-panel.js";
@@ -95,9 +95,12 @@ const panel = createGrantPanel({
   projectOf: gate.projectOf,
   framelinkOriginOf: gate.framelinkOriginOf,
 });
+// One store per session handle, kept across socket generations and pages for this plugin run.
+const sessions = createAgentSessions();
 const executor = createRunExecutor({
   isConnected: gate.isConnected,
   refusalAtDequeue: gate.refusalAtDequeue,
+  sessions,
 });
 panel.render();
 
@@ -240,23 +243,21 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       return;
     case "SESSION_LOOKUP": {
       const scope = gate.provenScopeOf(key);
-      const held = scope !== null && executor.holdsSession(grantKey(scope), msg.handle);
-      reply(to, { type: "SESSION_LOOKUP_RESULT", held });
+      reply(to, { type: "SESSION_LOOKUP_RESULT", held: scope !== null && sessions.holds(scope, msg.handle) });
       return;
     }
     case "EXECUTE_CODE": {
       // The grant gate refuses here and again at dequeue; the session is checked here only, and
       // pinned until the run settles. A request missing its std-lib, document or session never got
       // this far: the parser refused it.
-      let session: AgentSession | undefined;
-      const admitted = gate.admit(to, msg.fileKey, (scope) => {
-        const admission = executor.admitSession(grantKey(scope), msg.session);
-        if (admission.kind === "admitted") session = admission.session;
-        else reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
-        return admission.kind === "admitted";
-      });
-      if (admitted && session)
-        executor.runCode(to, msg.fileKey, session, msg.code, msg.preamble, msg.lateChangeWindowMs);
+      const scope = gate.admit(to, msg.fileKey);
+      if (!scope) return;
+      const admission = sessions.admit(scope, msg.session);
+      if (admission.kind !== "admitted") {
+        reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
+        return;
+      }
+      executor.runCode(to, msg.fileKey, admission.session, msg.code, msg.preamble, msg.lateChangeWindowMs);
       return;
     }
     case "SCREENSHOT":

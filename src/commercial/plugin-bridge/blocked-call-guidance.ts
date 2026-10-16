@@ -97,6 +97,13 @@ export function callTargetGuidance(
     }
     case "session-not-found":
       return sessionNotFoundText(block.session, surface);
+    case "session-lookup-failed":
+      return (
+        `Blocked: the Framelink plugin didn't answer whether it holds the session ${block.session}, ` +
+        `so nothing was submitted. The session may still be open, so ` +
+        `${surface === "mcp" ? "call" : "run"} again with the same session. If it keeps failing, ` +
+        `report it to the user or coordinating agent.`
+      );
     case "session-ambiguous":
       return (
         `Blocked: two open Framelink plugins both hold the session ${block.session}, so this call ` +

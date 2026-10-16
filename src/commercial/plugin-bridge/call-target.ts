@@ -6,8 +6,8 @@
 // proven document, under a grant the plugin holds for this project:
 //
 // - A call naming a session runs only in the plugin run holding it, in the document the session is
-//   bound to. If no open plugin holds it, or the call names another file, it is refused and never
-//   falls through to the rules below.
+//   bound to. If no plugin holds it once every open one has had time to dial in, or the call names
+//   another file, it is refused and never falls through to the rules below.
 // - A call naming a file runs only there. Its panels prompt for a grant; no other panel is asked,
 //   and if no link can be proven to be in that file, the call is refused.
 // - A call naming none runs in the one open document already granted to this project. Otherwise
@@ -41,6 +41,8 @@ export type CallTargetBlock =
   | { kind: "grant-unavailable"; fileName: string }
   | { kind: "grant-pending"; fileName: string | null }
   | { kind: "session-not-found"; session: SessionHandle }
+  // An open plugin couldn't be asked whether it holds the session, and none that answered does.
+  | { kind: "session-lookup-failed"; session: SessionHandle }
   // Two open plugin runs answered for one handle: a minting collision across plugins. Never guessed.
   | { kind: "session-ambiguous"; session: SessionHandle }
   | {
@@ -51,14 +53,10 @@ export type CallTargetBlock =
     };
 
 export type CallTarget =
-  | {
-      kind: "targeted";
-      link: RelayConnection;
-      document: CallDocument;
-      /** The session the call named, which the run resumes; null runs in a fresh one. */
-      session: SessionHandle | null;
-    }
-  | { kind: "blocked"; block: CallTargetBlock };
+  | { kind: "targeted"; link: RelayConnection; document: CallDocument }
+  | BlockedCallTarget;
+
+type BlockedCallTarget = { kind: "blocked"; block: CallTargetBlock };
 
 // Human-scale wait. SDK 1.29 only resets idle timeouts if the CLIENT opts into
 // resetTimeoutOnProgress. Caller abort wins. A private client deadline that sends
@@ -78,6 +76,11 @@ export interface CallTargetOptions {
 export interface CallTargetDeps {
   /** The authenticated links now: read afresh each round, so a panel that joins mid-wait is asked. */
   links(): RelayConnection[];
+  /**
+   * When every plugin still open should have dialed this server again, after it started or a link
+   * dropped. Until then a plugin missing from links() may only be on its redial backoff.
+   */
+  linksSettleAt(): number;
   documents: LinkDocuments;
   askGrant(
     link: RelayConnection,
@@ -86,7 +89,10 @@ export interface CallTargetDeps {
     signal: AbortSignal,
   ): Promise<GrantState>;
   closePrompt(link: RelayConnection): void;
-  /** Whether a link's plugin holds `session` for this project, in its proven document. */
+  /**
+   * Whether a link's plugin holds `session` for this project, in its proven document. Rejects when
+   * the plugin couldn't be asked.
+   */
   lookupSession(
     link: RelayConnection,
     session: SessionHandle,
@@ -160,15 +166,10 @@ async function targetSession(
   options: CallTargetOptions,
 ): Promise<CallTarget> {
   const { documents } = deps;
-  const links = deps.links();
-  const held = await Promise.all(
-    links.map((link) => deps.lookupSession(link, session, options.signal).catch(() => false)),
-  );
-  options.signal.throwIfAborted();
-  const holders = links.filter((_, index) => held[index]);
-  if (holders.length > 1) return blocked({ kind: "session-ambiguous", session });
-  const [holder] = holders;
-  if (!holder) return blocked({ kind: "session-not-found", session });
+  const found = await findSessionHolder(deps, session, options);
+  if (found.kind === "blocked") return found;
+  const { holder } = found;
+  await abortable(documents.settled([holder]), options.signal);
   // The plugin answers only for its proven document, but another server may be the one that proved
   // it: this server proves the plugin's claim itself before running there.
   if (documents.documentOf(holder).kind !== "proven" && options.reader)
@@ -195,10 +196,51 @@ async function targetSession(
   return waitForGrant(deps, options, {
     ask: () => (open() ? [{ link: holder, fileKey: document.fileKey, prompt: "grant" }] : []),
     onRound: (answers) =>
-      grantDecision(documents, answers, session) ??
+      grantDecision(documents, answers) ??
       (open() ? null : blocked({ kind: "session-not-found", session })),
     expired: () => blocked({ kind: "grant-pending", fileName: document.fileName }),
   });
+}
+
+/**
+ * The one open plugin run holding `session`. A miss is final only once every plugin still open has
+ * had time to dial in, so a holder on its redial backoff after a server (re)start isn't reported
+ * gone. Links are asked until they answer; one that never could makes the miss a failed lookup.
+ */
+async function findSessionHolder(
+  deps: CallTargetDeps,
+  session: SessionHandle,
+  { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS }: CallTargetOptions,
+): Promise<{ kind: "found"; holder: RelayConnection } | BlockedCallTarget> {
+  const settleAt = Math.min(deps.linksSettleAt(), Date.now() + waitMs);
+  const answered = new Map<RelayConnection, boolean>();
+  const failed = new Set<RelayConnection>();
+  for (;;) {
+    const unasked = deps.links().filter((link) => !answered.has(link));
+    const held = await Promise.all(
+      unasked.map((link) => deps.lookupSession(link, session, signal).catch(() => null)),
+    );
+    signal.throwIfAborted();
+    unasked.forEach((link, index) => {
+      const answer = held[index];
+      if (answer === null) failed.add(link);
+      else {
+        failed.delete(link);
+        answered.set(link, answer);
+      }
+    });
+    const holders = deps.links().filter((link) => answered.get(link) === true);
+    if (holders.length > 1) return blocked({ kind: "session-ambiguous", session });
+    if (holders.length === 1) return { kind: "found", holder: holders[0] };
+    if (Date.now() >= settleAt) {
+      const unreachable = deps.links().some((link) => failed.has(link));
+      return blocked({
+        kind: unreachable ? "session-lookup-failed" : "session-not-found",
+        session,
+      });
+    }
+    await pause(Math.min(pollMs, Math.max(settleAt - Date.now(), 0)), signal);
+  }
 }
 
 /** A call that named its file: prove a link is in it if none is yet, then ask only there. */
@@ -241,7 +283,7 @@ async function targetNamed(
   return waitForGrant(deps, options, {
     ask: () => holders().map((link) => ({ link, fileKey, prompt: "grant" })),
     onRound: (answers) =>
-      grantDecision(documents, answers, null) ??
+      grantDecision(documents, answers) ??
       (!answers.length && !holders().length
         ? blocked({ kind: "document-not-open", fileKey })
         : null),
@@ -274,7 +316,7 @@ async function targetUnnamed(
     },
     options.signal,
   );
-  if (granted.size === 1) return targeted(documents, [...granted.values()][0].link, null);
+  if (granted.size === 1) return targeted(documents, [...granted.values()][0].link);
 
   const anyProven = deps.links().some((link) => documents.documentOf(link).kind === "proven");
   if (!anyProven && !options.reader)
@@ -301,7 +343,7 @@ async function targetUnnamed(
         (answer) =>
           answer.state === "granted" && documents.documentOf(answer.link).kind === "proven",
       );
-      return picked ? targeted(documents, picked.link, null) : null;
+      return picked ? targeted(documents, picked.link) : null;
     },
     expired: () => blocked({ kind: "grant-pending", fileName: null }),
   });
@@ -371,13 +413,9 @@ async function waitForGrant(
  * One round of asking the panels of a document the call named for a grant: decided, or null to ask
  * again.
  */
-function grantDecision(
-  documents: LinkDocuments,
-  answers: readonly Answer[],
-  session: SessionHandle | null,
-): CallTarget | null {
+function grantDecision(documents: LinkDocuments, answers: readonly Answer[]): CallTarget | null {
   const granted = answers.find((answer) => answer.state === "granted");
-  if (granted) return targeted(documents, granted.link, session);
+  if (granted) return targeted(documents, granted.link);
   const denied = answers.find((answer) => answer.state === "denied");
   if (denied)
     return blocked({ kind: "grant-denied", fileName: documentOf(documents, denied.link).fileName });
@@ -389,15 +427,11 @@ function grantDecision(
   return null;
 }
 
-function targeted(
-  documents: LinkDocuments,
-  link: RelayConnection,
-  session: SessionHandle | null,
-): CallTarget {
-  return { kind: "targeted", link, document: documentOf(documents, link), session };
+function targeted(documents: LinkDocuments, link: RelayConnection): CallTarget {
+  return { kind: "targeted", link, document: documentOf(documents, link) };
 }
 
-function blocked(block: CallTargetBlock): CallTarget {
+function blocked(block: CallTargetBlock): BlockedCallTarget {
   return { kind: "blocked", block };
 }
 

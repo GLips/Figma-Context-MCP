@@ -7,7 +7,7 @@
 // visible status strip that expands into the grant list. The host drives it with one render
 // envelope and owns every decision; this file only reports clicks and its own measured height.
 // Messages both ways are typed in panel.ts. build.mjs inlines the bundle into dist/ui.html.
-import { WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
+import { PLUGIN_REDIAL_MAX_MS, WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
 import type {
   ConnKey,
   HostInbound,
@@ -27,7 +27,6 @@ let nextConnectionKey = 0;
 // back off 1s → 15s. This is purely to tame console noise: every doomed connect emits a browser-level
 // "WebSocket connection to … failed" line that JS cannot catch or mute. A port that has opened (a// real server) stays on the fast cadence so a dropped/restarted server reappears promptly.
 const BASE_RECONNECT_MS = 1000;
-const MAX_RECONNECT_MS = 15000;
 const reconnectDelays = new Map<number, number>();
 // When each port last had a socket open, and how long after that it keeps the fast cadence through
 // failed retries. A server restart's first retry lands in the rebuild gap and never opens; without
@@ -83,7 +82,7 @@ function connect(port: number): void {
     if (opened) toSandbox({ type: "WS_CLOSED", connKey });
     else if (Date.now() - (lastOpenAt.get(port) ?? 0) > FAST_RECONNECT_GRACE_MS) {
       const previous = reconnectDelays.get(port) ?? BASE_RECONNECT_MS;
-      reconnectDelays.set(port, Math.min(previous * 2, MAX_RECONNECT_MS));
+      reconnectDelays.set(port, Math.min(previous * 2, PLUGIN_REDIAL_MAX_MS));
     }
     // Auto-reconnect either way: the plugin outlives any single server run, and an empty port keeps
     // its slot warm for a server that may yet bind it.

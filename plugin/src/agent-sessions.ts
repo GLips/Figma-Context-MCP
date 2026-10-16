@@ -10,6 +10,7 @@
 // entry overhead) against a per-session budget, and their sum against a total, evicting the least
 // recently used. A session with a queued or running execution is pinned and never evicted.
 import type { SessionRequest } from "./protocol.js";
+import { grantKey, type GrantScope } from "./grant-store.js";
 
 export interface AgentSession {
   readonly handle: string;
@@ -51,12 +52,13 @@ export function createAgentSessions({
 
   return {
     /** Whether `handle` names a session under `scope`. A session under another scope is not held. */
-    holds(scope: string, handle: string): boolean {
-      return sessions.get(handle)?.scope === scope;
+    holds(scope: GrantScope, handle: string): boolean {
+      return sessions.get(handle)?.scope === grantKey(scope);
     },
 
-    /** Pin the session a run arriving under `scope` names, creating it if the server minted it. */
-    admit(scope: string, { handle, create }: SessionRequest): SessionAdmission {
+    /** Pin the session a run arriving under `grantScope` names, creating it if the server minted it. */
+    admit(grantScope: GrantScope, { handle, create }: SessionRequest): SessionAdmission {
+      const scope = grantKey(grantScope);
       const held = sessions.get(handle);
       if (create) {
         // Checked against every scope: one handle names one session in this plugin run.

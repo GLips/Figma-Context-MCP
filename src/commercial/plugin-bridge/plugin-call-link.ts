@@ -54,6 +54,7 @@ export type PluginCallBlock =
   | "grant_unavailable"
   | "grant_pending"
   | "session_not_found"
+  | "session_lookup_failed"
   | "session_ambiguous"
   | "session_document_mismatch"
   | "incompatible"
@@ -132,7 +133,7 @@ export async function targetForPluginCall(
     { fileKey, session },
     { reader, signal, waitMs, pollMs, onWaiting },
   );
-  if (target.kind === "targeted") return target;
+  if (target.kind === "targeted") return { ...target, session };
   return blocked(
     BLOCK_FOR_TARGET[target.block.kind],
     callTargetGuidance(target.block, surface, waitMs),
@@ -148,6 +149,7 @@ const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
   "grant-unavailable": "grant_unavailable",
   "grant-pending": "grant_pending",
   "session-not-found": "session_not_found",
+  "session-lookup-failed": "session_lookup_failed",
   "session-ambiguous": "session_ambiguous",
   "session-document-mismatch": "session_document_mismatch",
 };

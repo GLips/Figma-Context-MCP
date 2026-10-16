@@ -43,6 +43,7 @@ import {
 } from "./run-ledger.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
 import {
+  PLUGIN_REDIAL_MAX_MS,
   parseExecuteCodeResult,
   parsePluginEvent,
   type GrantPrompt,
@@ -65,6 +66,10 @@ export type {
 } from "./call-target.js";
 export type { DocumentReader, LinkDocument } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
+
+// How long after this server starts, or loses a link, a plugin that is still open may take to be back
+// on an authenticated link: its longest redial wait, then a handshake.
+export const PLUGIN_LINK_SETTLE_MS = PLUGIN_REDIAL_MAX_MS + 2_000;
 
 /** One plugin link: a socket from one plugin incarnation, in whatever stage of setup it reached. */
 export type PluginLink = RelayConnection;
@@ -121,6 +126,9 @@ type EventRoutes = {
 export class PluginBridge {
   private readonly links = new Set<RelayConnection>();
   private disconnectedAt: number | null = null;
+  // The last time a plugin that is still open may have been off this server: its start, or a drop.
+  private linksUnsettledSince = Date.now();
+  private readonly linkSettleMs: number;
   private onConnect: (() => void) | undefined;
   private readonly connectionWaiters = new Set<() => void>();
   private readonly listener: RelayListener;
@@ -172,6 +180,7 @@ export class PluginBridge {
     requestTimeoutMs = DEFAULT_TIMEOUT_MS,
     runCeilingMs = DEFAULT_RUN_CEILING_MS,
     unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
+    linkSettleMs = PLUGIN_LINK_SETTLE_MS,
     capabilities = new Map(),
     events = {},
     trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
@@ -185,12 +194,14 @@ export class PluginBridge {
     requestTimeoutMs?: number;
     runCeilingMs?: number;
     unauthenticatedLinkMs?: number;
+    linkSettleMs?: number;
     capabilities?: ReadonlyMap<string, CapabilityHandler>;
     events?: PluginBridgeEvents;
     trace?: RequestTrace;
   } = {}) {
     this.events = events;
     this.documentReader = documentReader;
+    this.linkSettleMs = linkSettleMs;
     this.ledger = new RunLedger({
       requestTimeoutMs,
       runCeilingMs,
@@ -229,6 +240,7 @@ export class PluginBridge {
   /** Bind the first free port in the block; `onConnect` runs as each socket is accepted. */
   start(ports: readonly number[], onConnect?: () => void): void {
     this.onConnect = onConnect;
+    this.linksUnsettledSince = Date.now();
     this.listener.start(ports);
   }
 
@@ -372,6 +384,7 @@ export class PluginBridge {
     return targetPluginCall(
       {
         links: () => this.authenticatedLinks(),
+        linksSettleAt: () => this.linksUnsettledSince + this.linkSettleMs,
         documents: this.documents,
         askGrant: (link, key, prompt, signal) => this.grantStatus(link, key, prompt, signal),
         closePrompt: (link) => {
@@ -442,6 +455,7 @@ export class PluginBridge {
 
   private drop(link: PluginLink): void {
     if (!this.links.delete(link)) return;
+    if (link.isAuthenticated) this.linksUnsettledSince = Date.now();
     this.setup.forget(link);
     link.abandon();
     if (!this.isPluginConnected()) this.disconnectedAt = Date.now();

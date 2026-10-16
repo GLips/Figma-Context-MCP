@@ -26,7 +26,6 @@ const FRAME_DEADLINE_MS = 5_000;
 // The installation every test plugin is paired with, and the file every test plugin is proven in.
 const CREDENTIAL = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
 const FILE_KEY = "FILEkey123";
-const SHARED_SESSION = "test-shared-session-handle";
 type Storage = Map<string, unknown>;
 const pairedStorage = (): Storage => new Map([["code-mode:link-credential:" + CREDENTIAL.id, CREDENTIAL.secret]]);
 const clientStorageOver = (storage: Storage) => ({
@@ -128,14 +127,19 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
   // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window,
   // and every run names this file unless the test says otherwise. Unless a test names a session,
-  // every run of a project is in one shared session, created by the first run the plugin admits —
-  // as an agent passing its handle back would.
+  // every run resumes its project's one shared session, which connect() opens — as an agent passing
+  // its handle back would.
   const projectOf = new Map<ConnKey, string>();
-  const sessionOpened = new Set<string>();
-  const sendFrame = (connKey: ConnKey, frame: Frame) => {
-    const project = projectOf.get(connKey) ?? "/proj";
-    const sharedSession = frame.type === "EXECUTE_CODE" && frame.session === undefined;
-    const before = sent.length;
+  const sharedSessions = new Map<string, string>();
+  const sharedSessionOf = (project: string) => {
+    let handle = sharedSessions.get(project);
+    if (!handle) {
+      handle = `shared-session-project-${["one", "two", "three", "four"][sharedSessions.size]}`;
+      sharedSessions.set(project, handle);
+    }
+    return handle;
+  };
+  const sendFrame = (connKey: ConnKey, frame: Frame) =>
     figma.ui.onmessage({
       from: "server",
       connKey,
@@ -144,17 +148,13 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
           ? {
               lateChangeWindowMs: 60_000,
               fileKey: FILE_KEY,
-              session: { handle: SHARED_SESSION, create: !sessionOpened.has(project) },
+              session: { handle: sharedSessionOf(projectOf.get(connKey) ?? "/proj"), create: false },
               ...frame,
             }
           : frame.type === "SCREENSHOT"
             ? { fileKey: FILE_KEY, ...frame }
             : frame,
     });
-    // Admission is synchronous, and announces the queued run before onmessage returns.
-    if (sharedSession && sent.slice(before).some((s) => s.frame.type === "RUN_STATE" && s.frame.runId === frame.id))
-      sessionOpened.add(project);
-  };
   const sendControl = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   /** A server request, answered: resolves with the reply frame. */
   let nextId = 0;
@@ -186,10 +186,28 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       `the grant for ${key}`,
     );
   };
+  /**
+   * A granted, proven server, with its project's shared session open. The opening run's preamble
+   * never builds the session's store, so the first run that does gets the store its own preamble
+   * makes.
+   */
+  const openedProjects = new Set<string>();
   const connect = async (key: ConnKey, project = "/proj") => {
     await introduce(key, project);
     await prove(key);
     await allow(key);
+    if (openedProjects.has(project)) return;
+    openedProjects.add(project);
+    const id = `open-session-${++nextId}`;
+    sendFrame(key, {
+      type: "EXECUTE_CODE",
+      id,
+      preamble:
+        "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })",
+      code: "",
+      session: { handle: sharedSessionOf(project), create: true },
+    });
+    assert.equal((await frame((f) => f.id === id, "the shared session opening")).type, "EXECUTE_CODE_RESULT");
   };
   const result = (id: string, key?: ConnKey) =>
     frame(
@@ -272,7 +290,9 @@ test("a run is refused before it executes without a grant, or for a document thi
   await h.introduce(1);
   await h.prove(1);
   h.context.writes = [];
-  h.sendFrame(1, { type: "EXECUTE_CODE", id: "ungranted", preamble: echoPreamble, code: "writes.push('bad');" });
+  // A fresh session, so the refusal is the grant's: no shared session was opened without one.
+  const session = { handle: "fresh-store-never-granted", create: true };
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "ungranted", preamble: echoPreamble, code: "writes.push('bad');", session });
   assert.equal((await h.frame((f) => f.id === "ungranted", "the refusal")).reason, "no-grant");
   // Denied, its grant prompt answers "denied" from then on, without asking again.
   h.sendControl({ type: "UI_DECISION", approve: false, connKey: 1 });
