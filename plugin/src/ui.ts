@@ -8,7 +8,15 @@
 // envelope and owns every decision; this file only reports clicks and its own measured height.
 // Messages both ways are typed in panel.ts. build.mjs inlines the bundle into dist/ui.html.
 import { WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
-import type { ConnKey, HostInbound, HostOutbound, PanelControl, PanelRender, PanelSession } from "./panel.js";
+import type {
+  ConnKey,
+  HostInbound,
+  HostOutbound,
+  PanelControl,
+  PanelPairing,
+  PanelRender,
+  PanelSession,
+} from "./panel.js";
 
 // Discovery is keyed by port; host traffic by socket generation, which never reuses a port's number.
 const sockets = new Map<number, WebSocket>();
@@ -108,22 +116,24 @@ byId("strip").onclick = () => toSandbox({ type: "UI_TOGGLE" });
 // The whole surface from one render: the always-on strip, plus — when expanded — the session list.
 // Built with textContent, never innerHTML, so a project path can't inject markup.
 function render(state: PanelRender): void {
-  renderStrip(state.sessions, state.expanded);
+  renderStrip(state.pairings, state.sessions, state.expanded);
   const detail = byId("detail");
   detail.textContent = "";
   detail.style.display = state.expanded ? "flex" : "none";
   if (state.expanded) {
     if (state.showOrientation) detail.appendChild(orientationBanner());
     if (state.approvalStorageError) detail.appendChild(el("div", "orientation", state.approvalStorageError));
-    if (!state.sessions.length) detail.appendChild(emptyState());
+    if (!state.sessions.length && !state.pairings.length) detail.appendChild(emptyState());
+    for (const pairing of state.pairings) detail.appendChild(pairingCard(pairing));
     for (const session of state.sessions) detail.appendChild(sessionCard(session));
     if (state.hasApprovals) detail.appendChild(revokeAllFooter());
   }
   reportHeight();
 }
 
-// One glanceable line, in priority order: a decision you owe > who is driving > who is ready.
-function renderStrip(sessions: PanelSession[], expanded: boolean): void {
+// One glanceable line, in priority order: a code to confirm > a decision you owe > who is driving >
+// who is ready.
+function renderStrip(pairings: PanelPairing[], sessions: PanelSession[], expanded: boolean): void {
   let wants = 0;
   let expired = 0;
   let approved = 0;
@@ -140,9 +150,13 @@ function renderStrip(sessions: PanelSession[], expanded: boolean): void {
     if (s.writeAccess?.kind === "allowance-exhausted") writesSpent = true;
   }
 
+  const offered = pairings.filter((p) => p.code !== null);
   let text: string;
   let tone: string;
-  if (wants) {
+  if (offered.length) {
+    text = offered.length === 1 ? "Pairing code " + offered[0].code : offered.length + " pairing codes to check";
+    tone = "wants";
+  } else if (wants) {
     text = wants === 1 ? "A session wants to connect" : wants + " sessions want to connect";
     tone = "wants";
   } else if (writesSpent) {
@@ -204,12 +218,34 @@ function emptyState(): HTMLElement {
   return wrap;
 }
 
+// A server this installation isn't paired with. Confirmation happens with the agent, never here: a
+// button would let anything that can open a socket ask the human to click it.
+function pairingCard(p: PanelPairing): HTMLElement {
+  const card = el("div", p.code ? "session waiting" : "session");
+  const lines = el("div", "session-lines");
+  if (p.code) {
+    lines.appendChild(el("div", "session-id", "Pairing code"));
+    lines.appendChild(el("div", "pairing-code", p.code));
+    lines.appendChild(
+      el(
+        "div",
+        "status-line",
+        "Your agent will ask whether this code is shown here. Say yes only if it matches exactly.",
+      ),
+    );
+  } else {
+    lines.appendChild(el("div", "session-id", "A Framelink server isn't paired with this plugin yet"));
+    lines.appendChild(el("div", "status-line", "It will show a pairing code here when your agent first needs Figma."));
+  }
+  card.appendChild(lines);
+  return card;
+}
+
 // A row per live session, and per disconnected one whose request still awaits an answer.
 function sessionCard(s: PanelSession): HTMLElement {
   const card = el("div", s.request ? "session " + s.request : "session");
   const lines = el("div", "session-lines");
   lines.appendChild(el("div", "session-id", s.identity || "(unknown project)"));
-  lines.appendChild(el("div", "session-code", "Pairing code " + (s.pairingCode || "—")));
   card.appendChild(lines);
 
   const actions = el("div", "actions");

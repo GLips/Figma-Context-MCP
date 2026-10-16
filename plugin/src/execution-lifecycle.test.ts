@@ -7,6 +7,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 import vm from "node:vm";
+import { createHmac } from "node:crypto";
+import { linkProofMessage } from "./protocol.js";
 import type { ConnKey, HostInbound, HostOutbound, PanelControl, PanelRender, PanelSession } from "./panel.js";
 
 const bundle = (entry: string) =>
@@ -217,7 +219,7 @@ test("an Allow given while a session is away reaches only the connection present
     return h.sent.find(({ frame: f }) => f.id === id)?.frame.type;
   };
   h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
-  h.sessionInfo(1, "session-1", { identity: "/proj", pairingCode: "1111" });
+  h.sessionInfo(1, "session-1", { identity: "/proj" });
   assert.equal(statusFor(1, "ask"), "PENDING_APPROVAL");
   const claim = (await h.frame((f, connKey) => f.type === "SESSION_CLAIM" && connKey === 1, "a session claim")).sessionClaim;
   // The waiting call gives up and its session disconnects; the human allows the request afterwards.
@@ -295,17 +297,48 @@ test("SESSION_INFO keeps what the connection already holds: its claim and an All
   await h.approved(1);
 });
 
-test("a peer that has not been approved learns nothing from PING and can't author a toast", async () => {
+test("HELLO tells any peer the plugin's versions and nothing else, and a peer can't author the skew toast", async () => {
   const toasts: string[] = [];
   const h = host({ notify: (message: string) => toasts.push(message) });
   h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
-  h.sendFrame(1, { type: "PING", id: "ping", payload: "x" });
-  h.sendFrame(1, { type: "NOTIFY", id: "notify", serverProtocol: 99, message: "Your file is corrupt — visit evil.example" });
-  const pong = h.sent.find(({ frame: f }) => f.id === "ping")!;
-  assert.equal(pong.connKey, 1);
-  assert.deepEqual({ ...pong.frame }, { type: "PONG", echo: "x", id: "ping" });
+  h.sendFrame(1, { type: "HELLO", id: "hello", serverProtocol: 99, message: "Your file is corrupt — visit evil.example" });
+  const hello = await h.frame((f) => f.id === "hello", "the HELLO reply");
+  assert.deepEqual(Object.keys(hello).sort(), ["id", "pluginVersion", "protocolVersion", "type"]);
   assert.equal(toasts.length, 1);
   assert(!toasts[0].includes("evil.example"));
+});
+
+test("a confirmed pairing is stored only by the socket showing its code, and its proof names the plugin owner", async () => {
+  const storage = new Map<string, unknown>();
+  const h = host({
+    currentUser: { id: "figma-user-7", name: "Ada" },
+    clientStorage: {
+      getAsync: async (key: string) => storage.get(key),
+      setAsync: async (key: string, value: unknown) => void storage.set(key, value),
+    },
+  });
+  const pairing = { code: "7QKM-X2D9", credentialId: "credential-id-1", secret: "secret-0123456789abcdef" };
+  h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
+  h.sendControl({ type: "WS_CONNECTED", connKey: 2 });
+  h.sendFrame(1, { type: "PAIRING_OFFER", id: "offer", code: pairing.code, expiresInMs: 60_000 });
+  await h.frame((f) => f.id === "offer" && f.type === "PAIRING_OFFER_ACK", "the offer's ack");
+
+  h.sendFrame(2, { type: "PAIR_CONFIRMED", id: "elsewhere", ...pairing });
+  assert.equal((await h.frame((f) => f.id === "elsewhere", "the refusal")).type, "ERROR");
+  const storesSecret = () => [...storage.values()].includes(pairing.secret);
+  assert.equal(storesSecret(), false);
+  h.sendFrame(1, { type: "PAIR_CONFIRMED", id: "stored", ...pairing });
+  assert.equal((await h.frame((f) => f.id === "stored", "the store's ack")).type, "CREDENTIAL_STORED");
+  assert.equal(storesSecret(), true);
+
+  // Another socket of the same installation now proves it too: storage is read on every challenge.
+  const nonce = "nonce-0123456789abcdef";
+  h.sendFrame(2, { type: "AUTHENTICATE", id: "auth", credentialId: pairing.credentialId, nonce });
+  const proof = await h.frame((f) => f.id === "auth", "the link proof");
+  assert.equal(proof.type, "LINK_PROOF");
+  const expected = createHmac("sha256", pairing.secret).update(linkProofMessage(pairing.credentialId, nonce)).digest("hex");
+  assert.equal(proof.proof, expected);
+  assert.deepEqual({ ...(proof.owner as object) }, { figmaUserId: "figma-user-7", name: "Ada" });
 });
 
 test("the panel tells a waiting request from an expired one, connected or away", async () => {
@@ -314,7 +347,7 @@ test("the panel tells a waiting request from an expired one, connected or away",
   const row = (match: (r: PanelSession) => boolean, what: string) =>
     h.render((render) => render.sessions.some((r) => r.key === 1 && match(r)), what);
   h.sendControl({ type: "WS_CONNECTED", connKey: 1 });
-  h.sessionInfo(1, "session-1", { identity: "/proj", pairingCode: "1111" });
+  h.sessionInfo(1, "session-1", { identity: "/proj" });
   h.sendFrame(1, { type: "APPROVAL_STATUS", id: "ask" });
   await row((r) => r.request === "waiting", "a waiting row");
   // The polls stop: the request expires on its own, with nothing waiting to run.
@@ -573,11 +606,9 @@ test("two calls reorder and re-append a stored tree while preserving live ids", 
   assert.equal(read.result, promoted.result);
 });
 
-test("a raw figma write counts even when its change event lands after the reply, and Allow names the Authorizing User", async () => {
-  const h = host({ currentUser: { id: "figma-user-7", name: "Ada" } });
+test("a raw figma write counts even when its change event lands after the reply", async () => {
+  const h = host();
   await h.connect(1);
-  const handover = h.sent.find(({ frame: f }) => f.type === "SESSION_TOKEN")?.frame as any;
-  assert.deepEqual(JSON.parse(JSON.stringify(handover.authorizingUser)), { figmaUserId: "figma-user-7", name: "Ada" });
   const changedLate = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_CHANGED" && f.runId === id);
   const read = await execute(h, `return 1;`) as any;
   assert.equal(read.documentChanged, false);

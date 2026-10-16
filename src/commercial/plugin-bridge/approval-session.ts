@@ -14,13 +14,11 @@
 import { Logger } from "~/utils/logger.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import type { ApprovalStore } from "./approval-store.js";
-import type { AuthorizingUser, ServerRequest } from "@framelink/plugin/protocol";
+import type { ServerRequest } from "@framelink/plugin/protocol";
 
-/** An Allow, as the plugin handed it over: the token approval keys on, and who clicked. */
+/** An Allow, as the plugin handed it over: the token approval keys on. */
 export interface ApprovedSession {
   readonly token: string;
-  /** Null when the plugin could not name a Figma user; the write gate refuses such a session. */
-  readonly authorizingUser: AuthorizingUser | null;
 }
 
 export interface ServerApprovalState {
@@ -38,8 +36,7 @@ export type ServerApprovalEffect =
   | { type: "persistSession"; session: ApprovedSession }
   | { type: "forgetSession" }
   | { type: "persistClaim"; claim: string }
-  | { type: "forgetClaim" }
-  | { type: "approved"; session: ApprovedSession };
+  | { type: "forgetClaim" };
 
 export const NO_SERVER_APPROVAL: ServerApprovalState = { session: null, claim: null };
 
@@ -56,11 +53,7 @@ export function serverApprovalTransition(
     case "handedOver":
       return {
         state: { session: event.session, claim: null },
-        effects: [
-          { type: "persistSession", session: event.session },
-          { type: "forgetClaim" },
-          { type: "approved", session: event.session },
-        ],
+        effects: [{ type: "persistSession", session: event.session }, { type: "forgetClaim" }],
       };
     case "claimed":
       return {
@@ -91,10 +84,7 @@ export class ApprovalSession {
   // code mode last used HERE, before this process existed" (see hasRecentApproval).
   private reloadedLastUsedAt: number | null = null;
 
-  constructor(
-    private readonly store: ApprovalStore,
-    private readonly onApproved: (session: ApprovedSession) => void,
-  ) {}
+  constructor(private readonly store: ApprovalStore) {}
 
   /** The session this server holds a token for, or null. */
   get session(): ApprovedSession | null {
@@ -113,7 +103,7 @@ export class ApprovalSession {
     this.reloadedLastUsedAt = record?.lastUsedAt ?? null;
     this.apply({
       type: "reloaded",
-      session: record ? { token: record.token, authorizingUser: record.authorizingUser } : null,
+      session: record ? { token: record.token } : null,
       claim: this.store.loadSessionClaim(port, now),
     });
     if (record)
@@ -137,15 +127,11 @@ export class ApprovalSession {
     for (const effect of effects) this.run(effect);
   }
 
-  /** What this server says about itself on every connection. */
-  sessionInfo(
-    pairingCode: string | null,
-    framelinkOrigin: string,
-  ): Extract<ServerRequest, { type: "SESSION_INFO" }> {
+  /** What this server says about itself to every authenticated link. */
+  sessionInfo(framelinkOrigin: string): Extract<ServerRequest, { type: "SESSION_INFO" }> {
     return {
       type: "SESSION_INFO",
       identity: SESSION_IDENTITY,
-      pairingCode,
       sessionToken: this.state.session?.token ?? null,
       sessionClaim: this.state.claim,
       framelinkOrigin,
@@ -179,13 +165,7 @@ export class ApprovalSession {
     switch (effect.type) {
       case "persistSession":
         if (port !== null)
-          this.store.save(
-            port,
-            effect.session.token,
-            SESSION_IDENTITY,
-            effect.session.authorizingUser,
-            Date.now(),
-          );
+          this.store.save(port, effect.session.token, SESSION_IDENTITY, Date.now());
         Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
         return;
       case "forgetSession":
@@ -197,9 +177,6 @@ export class ApprovalSession {
         return;
       case "forgetClaim":
         if (port !== null) this.store.clearSessionClaim(port);
-        return;
-      case "approved":
-        this.onApproved(effect.session);
         return;
     }
   }

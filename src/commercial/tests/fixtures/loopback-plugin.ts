@@ -7,8 +7,9 @@
 // (an async postMessage each way). Only Figma itself is a stand-in: one page, a user, and storage.
 // Shared by the loopback test and scripts/bridge-contract.mjs.
 //
-// The relay dials the production port block in order; the first port it dials is routed to
-// `serverPort`, and every other port is a socket that never opens — an empty block port, as most are.
+// The relay dials the production port block in order; the first ports it dials are routed to
+// `serverPorts`, one each, and every other port is a socket that never opens — an empty block port,
+// as most are.
 import vm from "node:vm";
 import { buildSync } from "esbuild";
 import { WebSocket } from "ws";
@@ -27,15 +28,22 @@ const deferred = (callback: () => void) => setImmediate(callback);
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 10).unref());
 
 export interface LoopbackPluginOptions {
-  /** Figma's clientStorage. Share one Map between instances to model the same plugin reopened. */
+  /**
+   * Figma's clientStorage. Share one Map between instances to model the same plugin reopened, or
+   * open in a second file: both see what the other stored, including its pairing.
+   */
   storage?: Map<string, unknown>;
-  /** Hold each GET_VERSION this long before the host sees it: a handshake still in flight. */
-  holdVersionMs?: number;
+  /** Hold each HELLO this long before the host sees it: link setup still in flight. */
+  holdHelloMs?: number;
 }
 
 export interface LoopbackPlugin {
   /** Resolves once the relay has a socket open to the server. */
   opened(): Promise<void>;
+  /** The pairing code the panel shows, once it shows one. */
+  pairingCode(): Promise<string>;
+  /** Whether the panel shows any pairing code right now. */
+  showsPairingCode(): boolean;
   /** Click Allow on the connected, unapproved session; resolves once the token is handed over. */
   allow(): Promise<void>;
   /** Click the panel's sign-in button on the approved session. */
@@ -53,8 +61,8 @@ export interface LoopbackPlugin {
 }
 
 export function startLoopbackPlugin(
-  serverPort: number,
-  { storage = new Map(), holdVersionMs = 0 }: LoopbackPluginOptions = {},
+  serverPorts: number | readonly number[],
+  { storage = new Map(), holdHelloMs = 0 }: LoopbackPluginOptions = {},
 ): LoopbackPlugin {
   const sockets = new Set<WebSocket>();
   const toasts: string[] = [];
@@ -63,7 +71,8 @@ export function startLoopbackPlugin(
   let closed = false;
 
   // ---- The relay iframe ----
-  let routedPort: number | undefined;
+  const unrouted = [serverPorts].flat();
+  const routes = new Map<number, number>();
   class RelaySocket {
     static OPEN = 1;
     readyState = 0;
@@ -73,8 +82,9 @@ export function startLoopbackPlugin(
     private readonly socket: WebSocket | null = null;
     constructor(url: string) {
       const port = Number(url.split(":").at(-1));
-      routedPort ??= port;
-      if (port !== routedPort || closed) return;
+      if (!routes.has(port) && unrouted.length) routes.set(port, unrouted.shift()!);
+      const serverPort = routes.get(port);
+      if (serverPort === undefined || closed) return;
       const socket = new WebSocket(`ws://127.0.0.1:${serverPort}`, { origin: "null" });
       this.socket = socket;
       sockets.add(socket);
@@ -85,8 +95,8 @@ export function startLoopbackPlugin(
       });
       socket.on("message", (data) => {
         const deliver = () => this.onmessage({ data: data.toString() });
-        if (holdVersionMs && JSON.parse(data.toString()).type === "GET_VERSION")
-          setTimeout(deliver, holdVersionMs).unref();
+        if (holdHelloMs && JSON.parse(data.toString()).type === "HELLO")
+          setTimeout(deliver, holdHelloMs).unref();
         else deliver();
       });
       socket.on("close", () => {
@@ -174,10 +184,16 @@ export function startLoopbackPlugin(
   const click = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   const session = (approved: boolean) =>
     lastRender?.sessions.filter((s) => s.connected && s.approved === approved).at(-1);
+  const shownCode = () => lastRender?.pairings.find((pairing) => pairing.code)?.code ?? null;
   return {
     async opened() {
       while (![...sockets].some((socket) => socket.readyState === WebSocket.OPEN)) await tick();
     },
+    async pairingCode() {
+      while (!shownCode()) await tick();
+      return shownCode()!;
+    },
+    showsPairingCode: () => shownCode() !== null,
     async allow() {
       while (!session(false)) await tick();
       const before = handedOver;

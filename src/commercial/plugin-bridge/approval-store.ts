@@ -18,7 +18,6 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { resolveStateDir, writePrivateFileAtomic } from "~/commercial/state-dir.js";
 import { Logger } from "~/utils/logger.js";
-import { parseAuthorizingUser, type AuthorizingUser } from "@framelink/plugin/protocol";
 
 // A working session lasts a day, refreshed on use (see `touch`). Long enough that an active human is
 // never re-prompted mid-session; short enough that a forgotten on-disk token can't silently re-approve
@@ -31,9 +30,6 @@ export interface ApprovalRecord {
   // when) — NOT read back or trusted at load time. The filename key already binds the file to a cwd;
   // these fields exist so a human can `cat` the file and understand it, not as a load-time check.
   identity: string;
-  // Who clicked Allow — writes are attributed to them, so it must survive a restart with the token.
-  // Null when the plugin could not name a Figma user; the write gate refuses such a session.
-  authorizingUser: AuthorizingUser | null;
   createdAt: number;
   lastUsedAt: number;
 }
@@ -119,14 +115,8 @@ export class ApprovalStore {
   }
 
   /** Persist a freshly handed-over token (0600), stamping created/used times. Fail-safe. */
-  save(
-    port: number,
-    token: string,
-    identity: string,
-    authorizingUser: AuthorizingUser | null,
-    now: number,
-  ): void {
-    this.write(port, { token, identity, authorizingUser, createdAt: now, lastUsedAt: now });
+  save(port: number, token: string, identity: string, now: number): void {
+    this.write(port, { token, identity, createdAt: now, lastUsedAt: now });
   }
 
   /**
@@ -246,20 +236,15 @@ export class ApprovalStore {
       if (prune) this.clear(port);
       return null;
     }
-    // `authorizingUser` must be PRESENT (null is a valid value): a record without the field predates write
-    // attribution, and reloading it would drive a session nobody can be billed or counted for. It
-    // reads as corrupt, so the plugin re-prompts and the fresh Allow names its Authorizing User.
     if (
       typeof record !== "object" ||
       record === null ||
       typeof (record as ApprovalRecord).token !== "string" ||
-      typeof (record as ApprovalRecord).lastUsedAt !== "number" ||
-      !("authorizingUser" in record)
+      typeof (record as ApprovalRecord).lastUsedAt !== "number"
     ) {
       if (prune) this.clear(port);
       return null;
     }
-    const approval = record as ApprovalRecord;
-    return { ...approval, authorizingUser: parseAuthorizingUser(approval.authorizingUser) };
+    return record as ApprovalRecord;
   }
 }

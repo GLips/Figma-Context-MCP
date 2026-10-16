@@ -15,7 +15,7 @@
 import { createApprovalLifecycle, type ApprovalAnswer, type SettledApproval } from "./approval-lifecycle.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import type { AuthorizingUser, ServerFrame } from "./protocol.js";
+import type { ServerFrame } from "./protocol.js";
 import {
   NO_PLUGIN_APPROVAL,
   approvalOf,
@@ -34,19 +34,12 @@ const APPROVED_TOKENS_STORAGE_KEY = "code-mode:approved-tokens";
 /**
  * Mint a session token on Allow, or a session claim.
  *
- * Why Math.random is fine (QuickJS has no crypto): the token is a localhost BEARER value. The server
- * re-discloses it in SESSION_INFO, so a local attacker connecting during a drop window can harvest
- * and replay it — closing that needs cryptographic server auth, out of scope; consent is the gate.
- * Claims reach unapproved servers, so a local process can sample the generator — no worse than that.
+ * Why Math.random is fine (QuickJS has no crypto): the token is a localhost BEARER value the server
+ * only ever discloses to an authenticated link, so guessing it is not the way in — the installation
+ * credential is. Claims reach any authenticated server, which may sample the generator; no worse.
  */
 function mintToken(): string {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-}
-
-/** The human who is clicking right now, as the Allow handover names them. */
-function currentAuthorizingUser(): AuthorizingUser | null {
-  const user = figma.currentUser;
-  return user?.id ? { figmaUserId: user.id, name: user.name } : null;
 }
 
 export function createApprovalGate({
@@ -190,16 +183,15 @@ export function createApprovalGate({
     connected: (key: ConnKey) => apply({ type: "connected", key }),
 
     /**
-     * The server introduces its session: the identity the human approves, the per-connection pairing
-     * code shown beside it, the Framelink origin its sign-in pages must be on, and — from an approved
-     * server — the token it was handed on a prior Allow. Approval arrives later via the panel.
+     * The server introduces its session over an authenticated link: the identity the human approves,
+     * the Framelink origin its sign-in pages must be on, and — from an approved server — the token it
+     * was handed on a prior Allow. Approval arrives later via the panel.
      */
     introduce(key: ConnKey, msg: Extract<ServerFrame, { type: "SESSION_INFO" }>): void {
       apply({
         type: "introduced",
         key,
         identity: msg.identity,
-        pairingCode: msg.pairingCode,
         sessionToken: msg.sessionToken,
         sessionClaim: msg.sessionClaim,
         framelinkOrigin: msg.framelinkOrigin,
@@ -212,7 +204,7 @@ export function createApprovalGate({
 
     /** The human's Allow / Deny on a row, connected or away. */
     decide(key: ConnKey, approve: boolean): void {
-      apply({ type: "decided", key, approve, user: currentAuthorizingUser(), freshToken: mintToken() });
+      apply({ type: "decided", key, approve, freshToken: mintToken() });
     },
 
     revoke: (key: ConnKey) => apply({ type: "revoked", key }),

@@ -16,13 +16,7 @@ import { createTestWriteAccess } from "./fixtures/write-access.js";
 // Every tool the server can advertise: the plugin bridge plus codeMode puts the write tools in
 // tools/list, and image downloads are on by default.
 async function listEveryTool(): Promise<Map<string, string[]>> {
-  const bridge = {
-    request: vi.fn(),
-    getPairingCode: () => null,
-    protocolRefusal: () => null,
-    touchApproval: () => {},
-    isPluginConnected: () => false,
-  } as unknown as PluginBridge;
+  const bridge = { request: vi.fn() } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeMeter: createTestWriteAccess().writeMeter,
@@ -60,7 +54,10 @@ it("gives every MCP tool input a CLI carrier, or the tool an explicit exemption"
       ...Object.keys(command!.flags ?? {}).map(kebab),
       ...(command!.parameters ?? []),
     ]);
-    expect(Object.keys(counterpart.inputs).sort(), tool).toEqual(tools.get(tool));
+    expect(
+      [...Object.keys(counterpart.inputs), ...Object.keys(counterpart.prompts ?? {})].sort(),
+      tool,
+    ).toEqual(tools.get(tool));
     for (const carrier of Object.values(counterpart.inputs))
       expect(carriers, tool).toContain(carrier);
     if (counterpart.figmaRest) {

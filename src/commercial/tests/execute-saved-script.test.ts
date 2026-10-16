@@ -18,7 +18,11 @@ import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createContainedFileReader } from "~/commercial/plugin-bridge/contained-file.js";
 import { createSavedScriptReader } from "~/commercial/plugin-bridge/saved-script.js";
-import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  grantedTestApproval,
+  linkedTestResolution,
+} from "./fixtures/write-access.js";
 
 let outer: string;
 let root: string;
@@ -34,7 +38,7 @@ afterEach(async () => {
 });
 
 function connectedServer() {
-  const request = vi.fn().mockImplementation(async (_payload: ServerRequest) => ({
+  const request = vi.fn().mockImplementation(async (_link: unknown, _payload: ServerRequest) => ({
     type: "EXECUTE_CODE_RESULT",
     result: "ran",
     console: [],
@@ -43,11 +47,9 @@ function connectedServer() {
   }));
   const bridge = {
     request,
-    getPairingCode: () => "1234",
-    protocolRefusal: () => null,
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
-    isPluginConnected: () => true,
+    resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
@@ -74,7 +76,7 @@ function connectedServer() {
   };
   const submitted = () =>
     request.mock.calls
-      .map(([payload]) => payload as ServerRequest)
+      .map(([, payload]) => payload as ServerRequest)
       .filter((payload) => payload.type === "EXECUTE_CODE");
   return { call, submitted, close: () => Promise.all([client.close(), server.close()]) };
 }

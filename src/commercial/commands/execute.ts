@@ -27,6 +27,7 @@ import {
   approvalGuidance,
   pluginDisconnectedAction,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
+import { unlinkedGuidanceState } from "~/commercial/plugin-bridge/session-guidance.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
 import { withoutTokenMarks } from "~/commercial/tools/token-tree.js";
 import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
@@ -43,9 +44,10 @@ export const executeCommand: Command = command(
       name: "execute",
       summary: "Run an flcm script in the Figma file the Framelink plugin has open",
       details: `The script is the body of an async function: use await and return directly, with no imports or
-exports. Open the Framelink plugin in the target file first; the first run waits for you to approve
-the pairing code printed to stderr. A Figma API token is optional: with one, the script can read
-the file's comment pins, as it can through the MCP server.
+exports. Open the Framelink plugin in the target file first. The plugin must be paired once (run
+\`pair\`), and the first run from a directory waits for you to click Allow in the plugin. A Figma
+API token is optional: with one, the script can read the file's comment pins, as it can through
+the MCP server.
 
 stdout gets the reply as JSON, { result, console, errors }; progress goes to stderr. Exits 0 when
 errors is null, 1 on a script, connection or approval failure, 130 on Ctrl-C. A run is never
@@ -190,9 +192,6 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     assetRoot: config.assetRoot.value,
     framelinkApiUrl: config.framelinkApiUrl.value,
   });
-  runtime.onFirstConnect(() =>
-    console.error(`Figma connected. Pairing code: ${runtime.bridge.getPairingCode()}.`),
-  );
   const controller = new AbortController();
   let awaitingSettlement = false;
   let signalExit: number | undefined;
@@ -211,29 +210,25 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   try {
     console.error(`Waiting up to ${waitMs / 1000}s for the Framelink plugin in Figma.`);
     await waitForPlugin(runtime, waitMs, controller.signal);
+    const resolution = await runtime.bridge.resolveLink(controller.signal);
+    // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
+    // may be a pipe or an agent's shell can't count on.
+    if (resolution.kind !== "linked")
+      throw new Error(approvalGuidance(unlinkedGuidanceState(resolution), "cli"));
+    const { link } = resolution;
+    console.error("Figma connected.");
     const options = {
       waitMs,
       signal: controller.signal,
       onWaiting: () => {
-        console.error(
-          approvalGuidance(
-            { kind: "waiting", pairingCode: runtime.bridge.getPairingCode() },
-            "cli",
-          ),
-        );
+        console.error(approvalGuidance({ kind: "waiting" }, "cli"));
         return async () => {};
       },
     };
-    const outcome = await executePluginCode(runtime, code, options, { figma });
+    const outcome = await executePluginCode(runtime, link, code, options, { figma });
     if (outcome.kind === "refused") throw new Error(outcome.message);
-    if (outcome.kind === "pending") {
-      throw new Error(
-        approvalGuidance(
-          { kind: "expired", pairingCode: runtime.bridge.getPairingCode(), waitMs },
-          "cli",
-        ),
-      );
-    }
+    if (outcome.kind === "pending")
+      throw new Error(approvalGuidance({ kind: "expired", waitMs }, "cli"));
     try {
       const reply = withoutTokenMarks(outcome.reply);
       const json = JSON.stringify(reply, null, 2) + "\n";
@@ -242,7 +237,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       if (reply.errors !== null) console.error(reply.errors);
 
       if (flags.screenshot) {
-        const captured = await capturePluginScreenshot(runtime.bridge, target, options);
+        const captured = await capturePluginScreenshot(runtime.bridge, link, target, options);
         if (captured.kind === "pending")
           throw new Error(
             "The script ran (its reply is above), but session approval was withdrawn before the " +

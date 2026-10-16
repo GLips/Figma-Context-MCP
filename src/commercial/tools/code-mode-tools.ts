@@ -21,14 +21,13 @@ import {
 import { APPROVAL_WAIT_MS, ApprovalWaitError } from "~/commercial/plugin-bridge/await-approval.js";
 import {
   approvalGuidance,
-  pluginDisconnectedNotSubmittedText,
+  pairingCodeUnknownText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
   executePluginCode,
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
-import { BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
-import type { ApprovedSession } from "~/commercial/plugin-bridge/approval-session.js";
+import { BridgeRequestError, type PluginLink } from "~/commercial/plugin-bridge/bridge.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
 import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
@@ -44,6 +43,7 @@ import {
 import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
 import { formatExecuteCodeReply } from "./token-tree.js";
+import { linkForPluginCall, type PairingCodeAsker } from "./plugin-call-link.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
 // the schema single-source + narrative — so the agent-facing contract can't drift from the code
@@ -95,19 +95,26 @@ export function codeModeExtension(
 
 /**
  * What a write-path call reports. Codes and flags only: never the script, its reply or a message.
- * `figma_user_id` is the Authorizing User of the Allow that admitted the run (README: Telemetry).
+ * `figma_user_id` is the Figma user the run's plugin link is signed in as (README: Telemetry).
  */
 type CodeModeFacts = ToolEventProperties & {
   figma_user_id?: string;
   /** How far the call got. */
-  outcome?: "executed" | "captured" | "pending_approval" | "refused" | "failed" | "not_run";
+  outcome?:
+    | "executed"
+    | "captured"
+    | "paired"
+    | "pending_approval"
+    | "refused"
+    | "failed"
+    | "not_run";
   /** A failure answered to the agent as a result — the plugin or the approval, never a bug. */
   failure?: string;
 };
 
-/** Who a run is attributed to: the Authorizing User of the Allow that admitted it. */
-function admittedBy(session: ApprovedSession | null): CodeModeFacts {
-  return session?.authorizingUser ? { figma_user_id: session.authorizingUser.figmaUserId } : {};
+/** Who a run is attributed to: the Figma user its plugin link is signed in as. */
+function ownedBy(link: PluginLink): CodeModeFacts {
+  return link.owner ? { figma_user_id: link.owner.figmaUserId } : {};
 }
 
 /**
@@ -151,7 +158,8 @@ type CodeModeToolsOptions = Pick<
 };
 
 /**
- * Register the code-mode (write-path) tools: figma_execute_code, get_flcm_reference, get_screenshot.
+ * Register the code-mode (write-path) tools: figma_execute_code, get_flcm_reference, get_screenshot,
+ * pair_figma_plugin.
  *
  * Dynamic exposure: the tools are registered but DISABLED until a plugin is connected or expected
  * (`bindPluginAdvertisement` over `pluginPresence()`), so the many read-only users of this server
@@ -168,21 +176,61 @@ function registerCodeModeTools(
 ): void {
   const runtime = caller.plugin;
 
-  /** A pre-submission outage uses bounded reconnect guidance; in-flight errors come from the bridge. */
-  function pluginUnavailableReply({ bridge }: PluginBridgeRuntime): CallToolResult | null {
-    if (bridge.isPluginConnected()) return null;
-    return retryableToolReply(pluginDisconnectedNotSubmittedText(bridge.disconnectedDurationMs()));
+  /**
+   * The client's own prompt for confirming a pairing code, when it advertises form elicitation.
+   * Stateless HTTP never does: it has no session to carry the client's capabilities.
+   */
+  function pairingCodeAsker(extra: ToolExtra): PairingCodeAsker | null {
+    if (!server.server.getClientCapabilities()?.elicitation?.form) return null;
+    return async (code, expiresInMs, signal) => {
+      try {
+        const answer = await server.server.elicitInput(
+          {
+            mode: "form",
+            message:
+              `Pair with the Framelink plugin? Check the Framelink plugin panel in Figma: it should ` +
+              `show the pairing code ${code}. Answer yes only if it shows exactly this code — ` +
+              `pairing lets this server edit your Figma files.`,
+            requestedSchema: {
+              type: "object",
+              properties: {
+                shown: { type: "boolean", title: `The panel shows ${code}`, default: false },
+              },
+              required: ["shown"],
+            },
+          },
+          { signal, timeout: expiresInMs, relatedRequestId: extra.requestId },
+        );
+        if (answer.action === "decline") return "not-shown";
+        if (answer.action === "accept")
+          return answer.content?.shown === true ? "shown" : "not-shown";
+        return "unanswered";
+      } catch (error) {
+        if (signal.aborted) throw error;
+        return "unanswered";
+      }
+    };
   }
 
-  function approvalOptions({ bridge }: PluginBridgeRuntime, extra: ToolExtra) {
+  /** The call's plugin link, or the reply that explains why there isn't one. Nothing is submitted. */
+  async function pluginCallLink(
+    { bridge }: PluginBridgeRuntime,
+    call: FramelinkToolCall<CodeModeFacts>,
+    facts: CodeModeFacts,
+    extra: ToolExtra,
+  ): Promise<{ link: PluginLink } | { reply: CallToolResult }> {
+    const linked = await linkForPluginCall(bridge, pairingCodeAsker(extra), extra.signal);
+    if (linked.kind === "linked") return { link: linked.link };
+    call.record({ ...facts, outcome: "not_run", failure: linked.block });
+    const content = [{ type: "text" as const, text: linked.text }];
+    return { reply: linked.isError ? { isError: true, content } : { content } };
+  }
+
+  function approvalOptions(extra: ToolExtra) {
     return {
       signal: extra.signal,
       onWaiting: () =>
-        startProgressHeartbeat(
-          extra,
-          () => approvalGuidance({ kind: "waiting", pairingCode: bridge.getPairingCode() }, "mcp"),
-          3000,
-        ),
+        startProgressHeartbeat(extra, () => approvalGuidance({ kind: "waiting" }, "mcp"), 3000),
     };
   }
 
@@ -194,17 +242,12 @@ function registerCodeModeTools(
   }
 
   /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
-  function pendingApprovalResult({ bridge }: PluginBridgeRuntime): {
-    content: { type: "text"; text: string }[];
-  } {
+  function pendingApprovalResult(): { content: { type: "text"; text: string }[] } {
     return {
       content: [
         {
           type: "text",
-          text: approvalGuidance(
-            { kind: "expired", pairingCode: bridge.getPairingCode(), waitMs: APPROVAL_WAIT_MS },
-            "mcp",
-          ),
+          text: approvalGuidance({ kind: "expired", waitMs: APPROVAL_WAIT_MS }, "mcp"),
         },
       ],
     };
@@ -263,8 +306,8 @@ function registerCodeModeTools(
                 cause instanceof OutsideAssetRootError
                   ? `send the script inline as code, or, with shell access, run ` +
                     `\`npx ${CLI_NAME} execute ${shellQuotedPath(resolvePath(cause.assetRoot, scriptPath))}\`, ` +
-                    `which reads the file on your side with your own permissions (the CLI pairs ` +
-                    `separately, so a human approves its pairing code in the Figma plugin)`
+                    `which reads the file on your side with your own permissions (a human approves ` +
+                    `its session in the Figma plugin)`
                   : "correct scriptPath, or send the script inline as code";
               call.record({ ...source, outcome: "not_run", failure: "script_unreadable" });
               return retryableToolReply(
@@ -272,26 +315,29 @@ function registerCodeModeTools(
               );
             }
           } else return scriptSourceReply("neither");
-          const unavailable = pluginUnavailableReply(runtime);
-          if (unavailable) return unavailable;
           return answeringExpectedFailures(call, extra, source, async () => {
-            const outcome = await executePluginCode(
-              runtime,
-              script,
-              approvalOptions(runtime, extra),
-              { figma: figmaService },
-            );
+            const linked = await pluginCallLink(runtime, call, source, extra);
+            if ("reply" in linked) return linked.reply;
+            const { link } = linked;
+            const outcome = await executePluginCode(runtime, link, script, approvalOptions(extra), {
+              figma: figmaService,
+            });
             if (outcome.kind === "refused") {
-              call.record({ ...source, outcome: "refused", failure: outcome.refusal.reason });
+              call.record({
+                ...source,
+                ...ownedBy(link),
+                outcome: "refused",
+                failure: outcome.refusal.reason,
+              });
               return { content: [{ type: "text", text: outcome.message }], isError: true };
             }
             if (outcome.kind === "pending") {
-              call.record({ ...source, outcome: "pending_approval" });
-              return pendingApprovalResult(runtime);
+              call.record({ ...source, ...ownedBy(link), outcome: "pending_approval" });
+              return pendingApprovalResult();
             }
             call.record({
               ...source,
-              ...admittedBy(outcome.session),
+              ...ownedBy(link),
               outcome: "executed",
               script_errored: outcome.reply.errors !== null,
             });
@@ -334,16 +380,10 @@ function registerCodeModeTools(
           call: FramelinkToolCall<CodeModeFacts>,
         ) => {
           call.record({ section_count: sections?.length ?? 0 });
-          // Docs still serve on a stale plugin — but lead with the refusal text so the agent learns
-          // the re-import fix here, before its first (refused) write. The session itself is the
-          // operator's: a caller without the plugin grant learns nothing of it.
-          const note =
-            runtime &&
-            (await referenceSessionGuidance({
-              pairingCode: runtime.bridge.getPairingCode(),
-              protocolRefusal: runtime.bridge.protocolRefusal(),
-              status: (signal) => runtime.bridge.approvalStatus(signal),
-            }));
+          // Docs still serve on a stale or unpaired plugin — but lead with what blocks a write, so the
+          // agent learns the fix here, before its first refused write. The link is the operator's: a
+          // caller without the plugin grant learns nothing of it.
+          const note = runtime && (await referenceSessionGuidance(runtime.bridge));
           return {
             content: [
               ...(note ? [{ type: "text" as const, text: note }] : []),
@@ -420,28 +460,87 @@ Returns a PNG image.`,
               `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
             );
           }
-          const unavailable = pluginUnavailableReply(runtime);
-          if (unavailable) return unavailable;
           return answeringExpectedFailures(call, extra, {}, async () => {
+            const linked = await pluginCallLink(runtime, call, {}, extra);
+            if ("reply" in linked) return linked.reply;
+            const { link } = linked;
             const outcome = await capturePluginScreenshot(
               runtime.bridge,
+              link,
               target,
-              approvalOptions(runtime, extra),
+              approvalOptions(extra),
             );
             if (outcome.kind === "pending") {
-              call.record({ outcome: "pending_approval" });
-              return pendingApprovalResult(runtime);
+              call.record({ ...ownedBy(link), outcome: "pending_approval" });
+              return pendingApprovalResult();
             }
             const reply = outcome.reply;
             const failed = "errors" in reply;
             call.record({
-              ...admittedBy(outcome.session),
+              ...ownedBy(link),
               outcome: "captured",
               failure: failed ? "screenshot_failed" : undefined,
             });
             if (failed) return { content: [{ type: "text", text: reply.errors }], isError: true };
             return { content: [{ type: "image", data: reply.image, mimeType: "image/png" }] };
           });
+        },
+      },
+      observe,
+    ),
+
+    registerFramelinkTool(
+      server,
+      {
+        name: "pair_figma_plugin",
+        unknownParams: "fail-loud",
+        description:
+          "Pair this server with the Framelink plugin in Figma, so figma_execute_code and " +
+          "get_screenshot can reach it. Pairing is remembered: it is needed once, when a tool says " +
+          "pairing is required. Call it without a code to show a pairing code in the plugin panel. " +
+          "Pass code only after the user confirms the plugin panel shows exactly that code.",
+        inputSchema: {
+          code: z
+            .string()
+            .optional()
+            .describe(
+              "The pairing code the user confirmed the Framelink plugin panel shows, e.g. 7QKM-X2D9. Never guess or copy it from anywhere but the user's confirmation.",
+            ),
+        },
+        handler: async (
+          { code }: { code?: string },
+          call: FramelinkToolCall<CodeModeFacts>,
+          extra: ToolExtra,
+        ) => {
+          if (!runtime) {
+            call.record({ outcome: "refused", failure: "remote_caller" });
+            return localWritesRefusal();
+          }
+          call.record({ outcome: "not_run" });
+          const { bridge } = runtime;
+          if (code === undefined) {
+            const linked = await pluginCallLink(runtime, call, {}, extra);
+            if ("reply" in linked) return linked.reply;
+            call.record({ ...ownedBy(linked.link), outcome: "paired" });
+            return retryableToolReply(PAIRED_TEXT);
+          }
+          const confirmed = await bridge.confirmPairing(code);
+          if (confirmed.kind === "failed") {
+            call.record({ outcome: "failed", failure: "pairing_failed" });
+            return { isError: true, content: [{ type: "text", text: confirmed.reason }] };
+          }
+          if (confirmed.kind === "paired") {
+            call.record({ ...ownedBy(confirmed.link), outcome: "paired" });
+            return retryableToolReply(PAIRED_TEXT);
+          }
+          // An agent retrying a confirmation that already went through is told so, not sent round.
+          const resolution = await bridge.resolveLink(extra.signal);
+          if (resolution.kind === "linked") {
+            call.record({ ...ownedBy(resolution.link), outcome: "paired" });
+            return retryableToolReply(PAIRED_TEXT);
+          }
+          call.record({ outcome: "not_run", failure: "pairing_code_unknown" });
+          return { isError: true, content: [{ type: "text", text: pairingCodeUnknownText(code) }] };
         },
       },
       observe,
@@ -465,6 +564,9 @@ Returns a PNG image.`,
     }
   });
 }
+
+const PAIRED_TEXT =
+  "Paired: this server and the Framelink plugin are linked, and stay linked across restarts. Retry the call that needed the plugin.";
 
 function localWritesRefusal(): CallToolResult {
   return { isError: true, content: [{ type: "text", text: LOCAL_WRITES_NEED_LOOPBACK }] };

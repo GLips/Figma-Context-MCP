@@ -26,9 +26,9 @@
 // The probe creates one small frame, reads it back, and deletes it again. Safe to re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
+import { linkForProbe } from "./probe-link.mjs";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -46,7 +46,13 @@ const bridge = new PluginBridge(undefined, {
   capabilities: new Map([["images.fetch", async () => ({})]]),
 });
 
-const run = (code) => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS });
+const run = (code) =>
+  bridge.request(link, {
+    type: "EXECUTE_CODE",
+    code,
+    preamble: PREAMBLE,
+    lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+  });
 
 // The agent's shape from the DX notes, verbatim in spirit: a batch that rejects fast while its
 // sibling's slot is already reserved. `0:0` is the document node, which no edit can touch.
@@ -73,45 +79,41 @@ try {
 } catch (e) { return { refusal: String(e.message || e) }; }
 `;
 
+let link = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   let survivorId = null;
   try {
-    log("plugin connected — introducing the session");
-    await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
-
-    const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
-    if (version.protocolVersion !== PROTOCOL_VERSION) {
-      fail(
-        `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
-          `${PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
-          `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
-      );
-    }
-    log(`plugin speaks protocol ${version.protocolVersion} (v${version.pluginVersion}) ✓`);
-    log(`sending the queued-write batch — if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
+    link = await linkForProbe(bridge, log);
+    log(`sending the queued-write batch — if the strip asks, click Allow`);
 
     // ---- 1. The reply must not outrun the queued render. ----
     // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
     // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, and the
     // granted run's own reply then reads as an unexpected approval status.
     const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(signal),
+      (signal) => bridge.approvalStatus(link, signal),
       () => run(QUEUED_WRITE),
     );
     if (waited.type === "PENDING_APPROVAL") {
-      fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
+      fail(
+        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
+      );
     }
     const first = waited.result;
     if (first?.errors) fail(`the probe script errored in the sandbox:\n${first.errors}`);
     if (!first?.result?.caught) {
-      fail("the batch did NOT reject — this probe needs the edit to fail; check that `0:0` is still unwritable.");
+      fail(
+        "the batch did NOT reject — this probe needs the edit to fail; check that `0:0` is still unwritable.",
+      );
     }
     log(`batch rejected as designed: ${first.result.caught}`);
 
-    const warning = (first.console ?? []).find((line) => line.includes("finished after your code returned"));
+    const warning = (first.console ?? []).find((line) =>
+      line.includes("finished after your code returned"),
+    );
     if (!warning) {
       fail(
         `the reply carried no settled-after-return warning, so the run replied without draining its ` +
@@ -127,7 +129,9 @@ async function runProbe() {
     if (found?.errors) fail(`the follow-up read errored in the sandbox:\n${found.errors}`);
     const ids = found?.result?.found ?? [];
     if (ids.length !== 1) {
-      fail(`expected exactly one ${SURVIVOR} on the canvas after the drain, saw ${JSON.stringify(ids)}.`);
+      fail(
+        `expected exactly one ${SURVIVOR} on the canvas after the drain, saw ${JSON.stringify(ids)}.`,
+      );
     }
     survivorId = typeof ids[0] === "string" ? ids[0] : ids[0]?.id;
     log(`the queued render is on the canvas and accounted for (${survivorId}) ✓`);
@@ -142,7 +146,9 @@ async function runProbe() {
       );
     }
     if (!/already finished and replied/.test(stale?.result?.refusal ?? "")) {
-      fail(`the stale runtime refused, but not as a finished run: ${JSON.stringify(stale?.result?.refusal)}`);
+      fail(
+        `the stale runtime refused, but not as a finished run: ${JSON.stringify(stale?.result?.refusal)}`,
+      );
     }
     log(`stale runtime refused: ${stale.result.refusal}`);
 

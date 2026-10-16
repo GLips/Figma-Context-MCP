@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { WebSocket } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
 import { ApprovalStore } from "../../plugin-bridge/approval-store.js";
-import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
+import { answerLinkSetup } from "./plugin-link-peer.js";
 
 const mode = process.argv[2];
 const directory = await mkdtemp(join(tmpdir(), "fig70-socket-"));
@@ -62,12 +62,9 @@ async function peer() {
   ws.on("error", () => {});
   ws.on("message", (raw) => {
     const message = JSON.parse(raw.toString());
-    if (message.type === "GET_VERSION")
-      ws.send(
-        JSON.stringify({ type: "VERSION", id: message.id, protocolVersion: PROTOCOL_VERSION }),
-      );
-    if (message.type === "PING")
-      ws.send(JSON.stringify({ type: "PONG", id: message.id, echo: message.payload }));
+    answerLinkSetup((frame) => ws.send(JSON.stringify(frame)), message);
+    if (message.type === "SESSION_INFO")
+      ws.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: message.id }));
     if (message.type === "EXECUTE_CODE")
       ws.send(
         JSON.stringify({
@@ -80,7 +77,9 @@ async function peer() {
       );
   });
   await once(ws, "open");
-  return ws;
+  const resolution = await bridge.resolveLink();
+  assert.equal(resolution.kind, "linked");
+  return { ws, link: (resolution as Extract<typeof resolution, { kind: "linked" }>).link };
 }
 function oversizedHeader() {
   const header = Buffer.alloc(14);
@@ -109,9 +108,9 @@ try {
     tcp.write(oversizedHeader());
     await closed;
   } else {
-    const ws = await peer();
+    const { ws, link } = await peer();
     const result = bridge
-      .request({
+      .request(link, {
         type: "EXECUTE_CODE",
         code: "unused",
         preamble: "unused",
@@ -133,9 +132,9 @@ try {
     await closed;
   }
   // Prove the same server process remains usable and accepts a replacement connection.
-  const replacement = await peer();
-  const pong = await bridge.request({ type: "PING", payload: "alive" });
-  assert.equal((pong as { type: string }).type, "PONG");
+  const { ws: replacement, link } = await peer();
+  const ack = await bridge.request(link, bridge.sessionInfo("https://framelink.test"));
+  assert.equal(ack.type, "SESSION_INFO_ACK");
   replacement.close();
   await once(replacement, "close");
   process.stdout.write(`PASS ${mode}\n`);

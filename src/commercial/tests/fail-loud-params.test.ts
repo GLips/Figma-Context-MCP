@@ -10,7 +10,12 @@ import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  grantedTestApproval,
+  linkedTestResolution,
+  TEST_PLUGIN_LINK,
+} from "./fixtures/write-access.js";
 
 /**
  * The point of these tests is the SDK parse seam, not our string formatting — so they drive a real
@@ -18,18 +23,16 @@ import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-acc
  * even if the SDK silently stripped the bad key on the way in, which is the exact bug this closes.
  */
 function connectedServer(
-  request = vi.fn().mockImplementation(async (_payload: { type: string }) => ({
+  request = vi.fn().mockImplementation(async (_link: unknown, _payload: { type: string }) => ({
     image: "iVBORw0KGgo=",
   })),
 ) {
   const bridge = {
     request,
-    getPairingCode: () => "1234",
-    protocolRefusal: () => null,
     touchApproval: () => {},
     // A plugin is on the wire in these tests, so the disconnect reply never fires.
     approvalStatus: grantedTestApproval,
-    isPluginConnected: () => true,
+    resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
@@ -77,8 +80,9 @@ describe("unknown MCP tool params fail loud", () => {
     const result = await call("get_screenshot", { nodeId: "1:2", scale: 2 });
 
     expect(request).toHaveBeenCalledWith(
+      TEST_PLUGIN_LINK,
       { type: "SCREENSHOT", nodeId: "1:2", scale: 2 },
-      expect.any(AbortSignal),
+      { signal: expect.any(AbortSignal) },
     );
     expect(result.content[0]).toMatchObject({ type: "image", mimeType: "image/png" });
     await close();

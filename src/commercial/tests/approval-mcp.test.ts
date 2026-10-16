@@ -8,16 +8,22 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
-import type {
-  ApprovalStatusReply,
-  PluginReply,
-  ReplyFor,
-  ServerRequest,
-} from "@framelink/plugin/protocol";
-import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { ApprovalStatusReply, PluginReply, ReplyFor } from "@framelink/plugin/protocol";
+import {
+  PluginBridge,
+  type LinkRequest,
+  type LinkResolution,
+  type PluginLink,
+} from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
-import { createTestWriteAccess, TEST_APPROVED_SESSION } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  TEST_APPROVED_SESSION,
+  TEST_PLUGIN_OWNER,
+} from "./fixtures/write-access.js";
+
+const LINK = { owner: TEST_PLUGIN_OWNER } as unknown as PluginLink;
 
 class Bridge extends PluginBridge {
   decision: ApprovalStatusReply["type"] = "PENDING_APPROVAL";
@@ -25,21 +31,18 @@ class Bridge extends PluginBridge {
   signal?: AbortSignal;
   connected = true;
   outage: number | null = null;
-  override isPluginConnected() {
-    return this.connected;
-  }
-  override disconnectedDurationMs() {
-    return this.outage;
+  override async resolveLink(): Promise<LinkResolution> {
+    return this.connected
+      ? { kind: "linked", link: LINK }
+      : { kind: "disconnected", elapsedMs: this.outage };
   }
   override approvedSession() {
     return TEST_APPROVED_SESSION;
   }
-  override getPairingCode() {
-    return "1234";
-  }
-  override async request<T extends ServerRequest>(
+  override async request<T extends LinkRequest>(
+    _link: PluginLink,
     payload: T,
-    signal?: AbortSignal,
+    { signal }: { signal?: AbortSignal } = {},
   ): Promise<ReplyFor<T["type"]>> {
     this.signal = signal;
     let reply: PluginReply;
@@ -184,7 +187,7 @@ it("the client's ordinary timeout cancels approval waiting before a late Allow",
   await h.close();
 });
 
-it("an expired approval wait names the blocker, the pairing code, and that a later Allow runs nothing", async () => {
+it("an expired approval wait names the blocker, the Allow it needs, and that a later Allow runs nothing", async () => {
   const h = await setup();
   vi.useFakeTimers();
   const call = h.client.request(
@@ -200,7 +203,7 @@ it("an expired approval wait names the blocker, the pairing code, and that a lat
   const text = JSON.stringify((await call).content);
   expect(text).toContain("did not run");
   expect(text).toContain("Blocked: session approval is pending");
-  expect(text).toContain("clicks Allow for pairing code 1234");
+  expect(text).toContain("clicks Allow for this session");
   expect(text).toContain("retry only after they confirm the approval");
   expect(text).toContain("Approving later does not run this call");
   h.bridge.decision = "APPROVAL_GRANTED";

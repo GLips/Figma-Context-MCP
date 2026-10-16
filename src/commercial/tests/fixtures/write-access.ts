@@ -11,18 +11,29 @@ import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import type { ApprovedSession } from "~/commercial/plugin-bridge/approval-session.js";
-import type { ApprovalStatus } from "~/commercial/plugin-bridge/bridge.js";
-import type { AuthorizingUser, WriteAccessNotice } from "@framelink/plugin/protocol";
+import type {
+  ApprovalStatus,
+  LinkResolution,
+  PluginLink,
+} from "~/commercial/plugin-bridge/bridge.js";
+import type { PluginOwner, WriteAccessNotice } from "@framelink/plugin/protocol";
 
-export const TEST_AUTHORIZING_USER: AuthorizingUser = {
+export const TEST_PLUGIN_OWNER: PluginOwner = {
   figmaUserId: "figma-user-1",
-  name: "Test Authorizing User",
+  name: "Test Plugin Owner",
 };
 
 export const TEST_APPROVED_SESSION: ApprovedSession = {
   token: "test-session-token",
-  authorizingUser: TEST_AUTHORIZING_USER,
 };
+
+/** A stand-in authenticated link, for fake bridges that never touch a socket. */
+export const TEST_PLUGIN_LINK = { owner: TEST_PLUGIN_OWNER } as unknown as PluginLink;
+
+/** A fake bridge's `resolveLink`: always the one authenticated TEST_PLUGIN_LINK. */
+export async function linkedTestResolution(): Promise<LinkResolution> {
+  return { kind: "linked", link: TEST_PLUGIN_LINK };
+}
 
 /** A fake bridge's `approvalStatus` that always grants, under TEST_APPROVED_SESSION. */
 export async function grantedTestApproval(): Promise<ApprovalStatus> {

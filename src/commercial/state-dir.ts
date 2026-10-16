@@ -2,12 +2,12 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The process-wide state root shared by every on-disk store (session approvals, image uploads, write
-// access). It reads FRAMELINK_STATE_DIR directly rather than through src/config.ts because the stores
-// are constructed deep in the write path, and tests and the contract harness isolate them per process
-// by setting the env var.
+// The process-wide state root shared by every on-disk store (the plugin link credential, session
+// approvals, image uploads, write access). It reads FRAMELINK_STATE_DIR directly rather than through
+// src/config.ts because the stores are constructed deep in the write path, and tests and the contract
+// harness isolate them per process by setting the env var.
 
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -37,5 +37,27 @@ export function writePrivateFileAtomic(file: string, contents: string): void {
   } catch (err) {
     rmSync(tmp, { force: true });
     throw err;
+  }
+}
+
+/**
+ * Create a 0600 state file only if none exists, atomically: the contents are complete in a temp
+ * file before `link` gives them the name, and `link` fails rather than replace. So processes racing
+ * to create the same file converge on whichever won, and no reader ever sees a torn one. Returns
+ * false when the file already existed.
+ */
+export function createPrivateFileExclusive(file: string, contents: string): boolean {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(tmp, contents, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    linkSync(tmp, file);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  } finally {
+    rmSync(tmp, { force: true });
   }
 }

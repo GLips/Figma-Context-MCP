@@ -95,10 +95,7 @@ export async function requestUntilApproved<R>(
       }
       local.signal.throwIfAborted();
       if (reply.type === "APPROVAL_REJECTED")
-        throw new ApprovalWaitError(
-          approvalGuidance({ kind: "rejected", pairingCode: null }, "mcp"),
-          "rejected",
-        );
+        throw new ApprovalWaitError(approvalGuidance({ kind: "rejected" }, "mcp"), "rejected");
       if (reply.type === "APPROVAL_GRANTED") {
         // Stop approval feedback before execution; never catch/retry a submitted run.
         clearTimeout(timeout);

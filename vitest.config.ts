@@ -36,5 +36,6 @@ export default defineConfig({
     // script. Without this bound, vitest globs them and fails with "No test
     // suite found".
     include: ["src/**/*.test.ts"],
+    setupFiles: ["src/commercial/tests/fixtures/isolated-state-dir.ts"],
   },
 });

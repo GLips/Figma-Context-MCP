@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExecuteCodeResult } from "@framelink/plugin/protocol";
 import type { PluginBridgeRuntime } from "./index.js";
-import { BridgeRequestError, type ChannelRunContext } from "./bridge.js";
+import { BridgeRequestError, type ChannelRunContext, type PluginLink } from "./bridge.js";
 import { requestUntilApproved, isPendingApproval } from "./await-approval.js";
 import type { ApprovedSession } from "./approval-session.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
@@ -22,7 +22,7 @@ export type ExecutionOutcome =
   | {
       kind: "executed";
       reply: Omit<ExecuteCodeResult, "type" | "documentChanged">;
-      /** The Allow that admitted the run — who it is attributed to. */
+      /** The Allow that admitted the run, whose approval it keeps fresh. */
       session: ApprovedSession | null;
     }
   | { kind: "pending" }
@@ -35,6 +35,7 @@ export async function executePluginCode(
     writeMeter,
     readLocalImage,
   }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
+  link: PluginLink,
   code: string,
   options?: ApprovalOptions,
   { figma }: Pick<ChannelRunContext, "figma"> = { figma: null },
@@ -47,29 +48,28 @@ export async function executePluginCode(
     readLocalImage,
   };
   const executionId = randomUUID();
-  // The charge decided under the admitting session, held in an object because TS can't see the
-  // closure assign it. The session itself comes back from the wait.
+  // The charge decided at submit, held in an object because TS can't see the closure assign it. The
+  // run is metered to the link's owner — the Figma user the authenticated plugin is signed in as.
   const gate: { charge: ExecutionCharge | null } = { charge: null };
-  async function submitUnderApproval(signal: AbortSignal, session: ApprovedSession | null) {
-    const admission = await writeMeter.authorize(session?.authorizingUser ?? null, executionId);
+  async function submitUnderApproval(signal: AbortSignal) {
+    const admission = await writeMeter.authorize(link.owner, executionId);
     if (admission.kind === "refused") return admission;
     const charge = (gate.charge = admission.charge);
     const reply = await bridge.request(
+      link,
       {
         type: "EXECUTE_CODE",
         code,
         preamble: flcmSandboxPreamble(),
         lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
       },
-      signal,
-      (runId) => charge.submitted(runId),
-      runContext,
+      { signal, onSubmitted: (runId) => charge.submitted(runId), runContext },
     );
     // The plugin gates consent again on the submit itself, so it too may answer PENDING_APPROVAL.
     return isPendingApproval(reply) ? reply : { kind: "replied" as const, reply };
   }
   const waited = await requestUntilApproved(
-    (signal) => bridge.approvalStatus(signal),
+    (signal) => bridge.approvalStatus(link, signal),
     submitUnderApproval,
     options,
   ).catch((error: unknown) => {
@@ -109,12 +109,13 @@ function mayHaveRun(error: unknown): boolean {
 
 export async function capturePluginScreenshot(
   bridge: PluginBridgeRuntime["bridge"],
+  link: PluginLink,
   target: { nodeId?: string; key?: string; scale?: number; context?: boolean; margin?: number },
   options?: ApprovalOptions,
 ) {
   const waited = await requestUntilApproved(
-    (signal) => bridge.approvalStatus(signal),
-    (signal) => bridge.request({ type: "SCREENSHOT", ...target }, signal),
+    (signal) => bridge.approvalStatus(link, signal),
+    (signal) => bridge.request(link, { type: "SCREENSHOT", ...target }, { signal }),
     options,
   );
   // As with code, the plugin gates the capture itself and may still answer PENDING_APPROVAL.

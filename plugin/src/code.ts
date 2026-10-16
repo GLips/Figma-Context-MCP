@@ -3,17 +3,19 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never touches the network —
-// it talks to the relay iframe (ui.ts) via postMessage — and it only routes: the consent gate
-// (approval-gate.ts), the runner (run-executor.ts) and the panel (session-panel.ts) do the work.
+// it talks to the relay iframe (ui.ts) via postMessage — and it only routes: link authentication
+// (link-auth.ts), the consent gate (approval-gate.ts), the runner (run-executor.ts) and the panel
+// (session-panel.ts) do the work.
 import { createApprovalGate } from "./approval-gate.js";
+import { createLinkAuth } from "./link-auth.js";
 import { createRunExecutor } from "./run-executor.js";
 import { createSessionPanel } from "./session-panel.js";
 import { reply, type ReplyTo } from "./outbound.js";
 import { PROTOCOL_VERSION, parseServerFrame } from "./protocol.js";
 import type { ConnKey, HostInbound, PanelControl } from "./panel.js";
 
-// The plugin release, answered beside PROTOCOL_VERSION to the server's GET_VERSION and shown to the
-// human in a skew refusal. Informational: the server gates on the protocol alone (protocol.ts).
+// The plugin release, answered beside PROTOCOL_VERSION to the server's HELLO and shown to the human
+// in a skew refusal. Informational: the server gates on the protocol alone (protocol.ts).
 const PLUGIN_VERSION = "0.1.0";
 
 /** The toast for a server on another protocol. Worded here, so a peer can't author it. */
@@ -33,7 +35,8 @@ const gate = createApprovalGate({
   cancelRuns: (key) => executor.cancelConnection(key, "revoked"),
   takeBaton: (key) => panel.takeBaton(key),
 });
-const panel = createSessionPanel(gate.panelSource);
+const linkAuth = createLinkAuth({ show: (expandTo) => panel.show(expandTo) });
+const panel = createSessionPanel(gate.panelSource, () => linkAuth.pairingRows());
 const executor = createRunExecutor({
   isConnected: gate.isConnected,
   settledApprovalOf: gate.settledApprovalOf,
@@ -70,6 +73,7 @@ function handlePanelControl(msg: PanelControl): void {
       // server already reported every in-flight caller failed. Then its row goes (or turns away).
       executor.cancelConnection(msg.connKey, "disconnected");
       panel.forget(msg.connKey);
+      linkAuth.closed(msg.connKey);
       gate.closed(msg.connKey);
       return;
     case "UI_DECISION":
@@ -124,10 +128,23 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
   }
   const to: ReplyTo = { id: msg.id, connKey: key };
   switch (msg.type) {
-    case "PING":
-      // Smoke test: echo back. Any local process can send it before consent, so it reads nothing
-      // from the document — not even the page name.
-      reply(to, { type: "PONG", echo: msg.payload });
+    case "HELLO":
+      // Human channel of a version mismatch: the plugin words the toast from the number, so a peer
+      // can never put its own text in front of the human.
+      if (msg.serverProtocol !== PROTOCOL_VERSION) figma.notify(skewNotice(msg.serverProtocol), { timeout: 15_000 });
+      reply(to, { type: "HELLO_RESULT", pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION });
+      return;
+    case "AUTHENTICATE":
+      void linkAuth.authenticate(to, msg.credentialId, msg.nonce);
+      return;
+    case "PAIRING_OFFER":
+      linkAuth.offer(to, msg.code, msg.expiresInMs);
+      return;
+    case "PAIRING_CLOSED":
+      linkAuth.closeOffer(to, msg.code);
+      return;
+    case "PAIR_CONFIRMED":
+      void linkAuth.storeCredential(to, msg.code, msg.credentialId, msg.secret);
       return;
     case "SESSION_INFO":
       // Acked at once: approval arrives later via the panel, never by blocking here.
@@ -153,16 +170,6 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     case "WRITE_ACCESS":
       panel.noteWriteAccess(key, msg.notice);
       reply(to, { type: "WRITE_ACCESS_ACK" });
-      return;
-    case "GET_VERSION":
-      reply(to, { type: "VERSION", pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION });
-      return;
-    case "NOTIFY":
-      // Human channel of the server's version-skew refusal. Any local process can send this frame
-      // before consent: it carries a number and the plugin words the toast, so a peer can't put its own
-      // text in front of the human.
-      figma.notify(skewNotice(msg.serverProtocol), { timeout: 15_000 });
-      reply(to, { type: "NOTIFY_RESULT" });
       return;
   }
 }

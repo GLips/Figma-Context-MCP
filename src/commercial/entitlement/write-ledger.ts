@@ -2,14 +2,14 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The free-allowance ledger: which Writes each Authorizing User has spent, per UTC calendar month. Pure —
+// The free-allowance ledger: which Writes each Plugin Owner has spent, per UTC calendar month. Pure —
 // every function returns a new ledger; write-access-store.ts persists it.
 //
 // The counting rules are licensing/LICENSE-Framelink-Commercial.md "Limit of the grant", fixed for
 // the release: one execution that changed the document is one Write; an executionId counts once however
 // often it is recorded or reported; months reset at 00:00 UTC on the 1st with no rollover.
 
-/** Writes per Authorizing User per UTC calendar month. Shipped with the release; no server response lowers or raises it. */
+/** Writes per Plugin Owner per UTC calendar month. Shipped with the release; no server response lowers or raises it. */
 export const FREE_WRITE_ALLOWANCE = 100;
 
 /** The report endpoint's batch ceiling. */
@@ -26,17 +26,17 @@ export interface LedgerExecution {
   reported: boolean;
 }
 
-export interface AuthorizingUserLedger {
+export interface PluginOwnerLedger {
   executions: LedgerExecution[];
   /**
-   * The server's last answer for this Authorizing User: its count covers every device and install,
+   * The server's last answer for this Plugin Owner: its count covers every device and install,
    * including this one's reported Writes but none of its unreported ones (writesUsedThisMonth).
    */
   serverReported: { month: UtcMonth; usedThisMonth: number; reportedAt: string } | null;
 }
 
 /** Keyed by figmaUserId. */
-export type WriteLedger = Record<string, AuthorizingUserLedger>;
+export type WriteLedger = Record<string, PluginOwnerLedger>;
 
 export function utcMonthOf(at: Date): UtcMonth {
   return at.toISOString().slice(0, 7);
@@ -47,7 +47,7 @@ export function allowanceResetsAt(at: Date): Date {
   return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1));
 }
 
-function ledgerFor(ledger: WriteLedger, figmaUserId: string): AuthorizingUserLedger {
+function ledgerFor(ledger: WriteLedger, figmaUserId: string): PluginOwnerLedger {
   return ledger[figmaUserId] ?? { executions: [], serverReported: null };
 }
 

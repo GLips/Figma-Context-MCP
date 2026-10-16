@@ -19,20 +19,20 @@ async function connectedBridge(timeout = 100, ceiling = 1000) {
     runCeilingMs: ceiling,
     trace,
   });
-  // Displaced before the holder connects: still wired to the bridge, but no longer the holder.
+  // Another authenticated link: wired to the bridge, but not the one the runs go out on.
   const stranger = await connectFakePlugin(bridge);
   const socket = await connectFakePlugin(bridge);
   const sent = socket.frames as { id?: string; type: string; runId?: string }[];
   const receive = (message: Record<string, unknown>, owner: FakePluginSocket = socket) =>
     owner.receive(message);
-  return { bridge, trace, sent, socket, stranger, receive };
+  return { bridge, trace, sent, socket, stranger, receive, link: socket.link };
 }
 test("host checkpoints do not reset inactivity or resubmit; late result remains diagnostic only", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, trace, sent, socket, receive } = await connectedBridge();
+  const { bridge, link, trace, sent, socket, receive } = await connectedBridge();
   const result = bridge
-    .request({
+    .request(link, {
       type: "EXECUTE_CODE",
       code: "private code",
       preamble: "private preamble",
@@ -68,9 +68,9 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
 test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply checkpoints", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, trace, sent, stranger, receive } = await connectedBridge(100, 150);
+  const { bridge, link, trace, sent, stranger, receive } = await connectedBridge(100, 150);
   const result = bridge
-    .request({ type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 })
+    .request(link, { type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 })
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
@@ -115,12 +115,13 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
   async (stage) => {
     vi.useFakeTimers();
     vi.spyOn(Logger, "log").mockImplementation(() => {});
-    const { bridge, trace, sent, socket, receive } = await connectedBridge();
+    const { bridge, link, trace, sent, socket, receive } = await connectedBridge();
     const controller = new AbortController();
     const result = bridge
       .request(
+        link,
         { type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 },
-        controller.signal,
+        { signal: controller.signal },
       )
       .catch((error) => error);
     const id = sent[0].id!;
@@ -161,8 +162,8 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
 test("execution error result is traced as error without changing successful envelope delivery", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, trace, sent, receive } = await connectedBridge();
-  const result = bridge.request({
+  const { bridge, link, trace, sent, receive } = await connectedBridge();
+  const result = bridge.request(link, {
     type: "EXECUTE_CODE",
     code: "",
     preamble: "",

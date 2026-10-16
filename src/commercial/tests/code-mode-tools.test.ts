@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -19,10 +19,6 @@ import { createTestWriteAccess } from "./fixtures/write-access.js";
  */
 function listToolsWith(presence: PluginPresence) {
   const bridge = {
-    request: vi.fn(),
-    getPairingCode: () => null,
-    protocolRefusal: () => null,
-    touchApproval: () => {},
     isPluginConnected: () => false,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {

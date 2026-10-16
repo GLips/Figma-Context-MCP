@@ -25,10 +25,6 @@ function connectWithPlugin({ connected }: { connected: boolean }) {
   const firstConnect: (() => void)[] = [];
   let everConnected = connected;
   const bridge = {
-    request: vi.fn(),
-    getPairingCode: () => null,
-    protocolRefusal: () => null,
-    touchApproval: () => {},
     isPluginConnected: () => everConnected,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {

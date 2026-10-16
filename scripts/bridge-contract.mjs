@@ -4,16 +4,18 @@
  */
 // Port-level contract check for the PluginBridge: the REAL bridge on real sockets, against the REAL
 // plugin (ui.ts + code.ts built from source, src/commercial/tests/fixtures/loopback-plugin.ts) wherever
-// a current plugin is the counterpart. The only hand-written peers are adversarial ones — a stale
-// plugin, a mute squatter, a holder that goes silent — plus raw sockets that drive the reverse
-// channel's timing directly. It pins what a refactor could silently undo:
+// a current plugin is the counterpart. The only hand-written peers are adversarial or timing ones — a
+// stale plugin, an unpaired stranger, a paired link that goes silent — driven as raw sockets. It pins
+// what a refactor could silently undo:
 //
-//   • Origin:null connects; web origins (figma.com included) are refused; an established plugin is
-//     never displaced, while a mute squatter's slot is reclaimable.
-//   • The version handshake gates every canvas request: a request racing it HOLDS, a stale or
-//     pre-handshake plugin never receives code, and a verdict never outlives its connection.
+//   • Origin:null connects; web origins (figma.com included) are refused; several links coexist,
+//     a flood of unauthenticated ones can't lock a plugin out, and an authenticated one is never
+//     displaced.
+//   • Link setup gates everything: HELLO refuses another protocol outright, AUTHENTICATE proves the
+//     installation credential, and an unpaired link is sent nothing but setup frames.
+//   • Pairing: the panel shows the code the server offered, and only that code pairs that link.
 //   • The consent gate: PENDING_APPROVAL before Allow, the minted token persisted and echoed so a
-//     reconnect or a same-port restart stays approved, and a token-less squatter re-prompted.
+//     reconnect or a same-port restart stays approved, and a token-less server re-prompted.
 //   • Port-block discovery: first free port, a restart reclaiming its own port, bounded and
 //     cancellable reclaim waits, and the manifest mirroring WS_PORT_BLOCK.
 //   • Deadlines cancel (never abandon) and are worded from the plugin's answer; the reverse channel
@@ -30,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { ApprovalStore } from "../src/commercial/plugin-bridge/approval-store.ts";
+import { LinkCredentialStore, linkProof } from "../src/commercial/plugin-bridge/link-credential.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import { startLoopbackPlugin } from "../src/commercial/tests/fixtures/loopback-plugin.ts";
@@ -39,7 +42,7 @@ const URL = `ws://127.0.0.1:${PORT}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (condition, what, ms = 5_000) => {
   const deadline = Date.now() + ms;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await wait(10);
   }
@@ -47,22 +50,32 @@ const until = async (condition, what, ms = 5_000) => {
 
 // The real plugin evals what it is sent, so it gets the real std-lib (ADR-0010).
 const PREAMBLE = await buildSandboxPreamble();
-const execute = (bridge, fields = {}) =>
-  bridge.request({
+const execute = (bridge, link, fields = {}) =>
+  bridge.request(link, {
     type: "EXECUTE_CODE",
     code: "return 'ok';",
     preamble: PREAMBLE,
     lateChangeWindowMs: 60_000,
     ...fields,
   });
-// What index.ts sends every connection: who this server is, and the token proving a prior Allow.
-const introduce = (bridge) => bridge.request(bridge.sessionInfo("https://app.framelink.ai"));
+// What index.ts sends every authenticated link: who this server is, and the token proving an Allow.
+const introduce = (bridge, link) =>
+  bridge.request(link, bridge.sessionInfo("https://app.framelink.ai"));
 const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
-// Every bridge gets its OWN empty persistence dir, so one bridge's persisted token can't be reloaded
-// by another in this one process. The restart tests below opt INTO a shared dir on purpose.
-const isolatedStore = () =>
-  new ApprovalStore(process.cwd(), mkdtempSync(join(tmpdir(), "flcm-approval-")));
+// Every bridge gets its OWN state dir — approvals and the link credential — so nothing one bridge
+// persists is reloaded by another in this one process, and nothing touches the operator's real state
+// root. The restart and shared-dir checks below opt INTO a shared dir on purpose.
+const freshStateDir = () => mkdtempSync(join(tmpdir(), "flcm-contract-"));
+function bridgeOn(ports, { stateDir = freshStateDir(), onConnect, ...options } = {}) {
+  const bridge = new PluginBridge(new ApprovalStore(process.cwd(), stateDir), {
+    linkCredentials: new LinkCredentialStore(stateDir),
+    ...options,
+  });
+  bridge.start([ports].flat(), onConnect);
+  bridge.stateDir = stateDir;
+  return bridge;
+}
 
 /** The real plugin, dialing `port`, with its socket open. */
 async function realPlugin(port, options) {
@@ -71,48 +84,72 @@ async function realPlugin(port, options) {
   return plugin;
 }
 
-// ---- Adversarial peers ----
-
-// A plugin on another protocol than this server: answers GET_VERSION with `version` after `delayMs`, or — with
-// `version: null` — predates the handshake and ERRORs every request. Never runs anything; `received`
-// lists every request it was sent, so a test can prove code never reached it.
-function stalePeer(url, version, delayMs = 0) {
-  const ws = new WebSocket(url, { origin: "null" });
-  ws.received = [];
-  ws.on("message", (raw) => {
-    const msg = JSON.parse(raw.toString());
-    if (typeof msg.id !== "string") return;
-    ws.received.push(msg.type);
-    const send = (body) => ws.send(JSON.stringify({ ...body, id: msg.id }));
-    if (version && msg.type === "GET_VERSION")
-      setTimeout(() => send({ type: "VERSION", ...version }), delayMs);
-    else send({ type: "ERROR", error: `Unsupported message type ${JSON.stringify(msg.type)}.` });
-  });
-  return ws;
+/** The one link `bridge` resolves, waiting out a plugin that is still dialing or setting up. */
+async function linkOf(bridge) {
+  let resolution;
+  await until(
+    async () => (resolution = await bridge.resolveLink()).kind === "linked",
+    "an authenticated link",
+  );
+  return resolution.link;
 }
 
-// A holder that passes the handshake as a current plugin, then goes silent on everything else:
-// crashed mid-run, asleep, or half-open (`autoPong: false`). `onFrame` sees every other frame.
-function silentHolder(url, { autoPong = true, onFrame = () => {} } = {}) {
+/** Pair the way a person does: offer, read the code off the real panel, confirm exactly that. */
+async function pairByPanel(bridge, plugin) {
+  await until(async () => (await bridge.resolveLink()).kind === "unpaired", "an unpaired link");
+  const offer = await bridge.offerPairing();
+  assert.equal(offer.kind, "offered", "an unpaired link is offered a pairing code");
+  const shown = await plugin.pairingCode();
+  const confirmed = await bridge.confirmPairing(shown);
+  assert.equal(confirmed.kind, "paired", "confirming the code the panel shows pairs it");
+  return confirmed.link;
+}
+
+// ---- Raw peers ----
+
+// A socket speaking the plugin's half of link setup by hand. `protocolVersion: null` predates HELLO
+// and ERRORs every request; `credentialDir` names the state dir whose credential it holds (none:
+// unpaired). `received` lists every request type it was sent; `onFrame` sees the rest.
+function rawPeer(
+  url,
+  {
+    protocolVersion = PROTOCOL_VERSION,
+    pluginVersion,
+    helloDelayMs = 0,
+    credentialDir,
+    autoPong = true,
+    onFrame = () => {},
+  } = {},
+) {
   const ws = new WebSocket(url, { origin: "null", autoPong });
+  ws.received = [];
+  const send = (body) => ws.send(JSON.stringify(body));
   ws.on("message", (raw) => {
     const msg = JSON.parse(raw.toString());
-    if (msg.type === "GET_VERSION")
-      ws.send(JSON.stringify({ type: "VERSION", id: msg.id, protocolVersion: PROTOCOL_VERSION }));
-    else onFrame(msg);
+    if (typeof msg.id === "string") ws.received.push(msg.type);
+    if (msg.type === "HELLO") {
+      if (protocolVersion === null)
+        send({ type: "ERROR", id: msg.id, error: 'Unsupported message type "HELLO".' });
+      else
+        setTimeout(
+          () => send({ type: "HELLO_RESULT", id: msg.id, protocolVersion, pluginVersion }),
+          helloDelayMs,
+        );
+      return;
+    }
+    if (msg.type === "AUTHENTICATE") {
+      const credential = credentialDir && new LinkCredentialStore(credentialDir).readOrCreate();
+      send(
+        credential
+          ? { type: "LINK_PROOF", id: msg.id, proof: linkProof(credential, msg.nonce), owner: null }
+          : { type: "LINK_UNPAIRED", id: msg.id },
+      );
+      return;
+    }
+    onFrame(msg);
   });
   return ws;
 }
-
-// A raw socket driving the reverse channel by hand still has to pass the version handshake, or every
-// canvas request it is sent holds on the compatibility gate until refused as the protocol floor.
-const answerVersionHandshake = (ws, msg) => {
-  if (msg.type === "GET_VERSION" && typeof msg.id === "string") {
-    ws.send(JSON.stringify({ type: "VERSION", id: msg.id, protocolVersion: PROTOCOL_VERSION }));
-    return true;
-  }
-  return false;
-};
 
 const refusedOrOpened = (ws) =>
   new Promise((res) => {
@@ -121,47 +158,58 @@ const refusedOrOpened = (ws) =>
   });
 const opened = (ws) => new Promise((res) => ws.on("open", res));
 
-const approvedEvents = [];
 let signInRequests = 0;
-const bridge = new PluginBridge(isolatedStore(), {
-  events: {
-    onSessionApproved: (session) => approvedEvents.push(session.authorizingUser),
-    onWriteAccessSignIn: () => signInRequests++,
-  },
-});
 let connected = 0;
-bridge.start([PORT], () => connected++);
+const bridge = bridgeOn(PORT, {
+  onConnect: () => connected++,
+  events: { onWriteAccessSignIn: () => signInRequests++ },
+});
 await wait(150);
 
-const plugin = await realPlugin(PORT);
-await until(() => bridge.protocolCompatibility() === "compatible", "the version verdict");
+// --- Pairing: an unpaired plugin is sent setup frames only, until its panel's code is confirmed ---
+const pluginStorage = new Map();
+const plugin = await realPlugin(PORT, { storage: pluginStorage });
 assert.equal(connected, 1, "the plugin (Origin:null) connects");
-
-// --- Version handshake ---
-const version = await bridge.request({ type: "GET_VERSION" });
-assert.equal(version.protocolVersion, PROTOCOL_VERSION, "the plugin speaks this server's protocol");
-assert.equal(typeof version.pluginVersion, "string", "and names its release");
+await until(async () => (await bridge.resolveLink()).kind === "unpaired", "the unpaired verdict");
+const offer = await bridge.offerPairing();
+const shown = await plugin.pairingCode();
+assert.deepEqual(
+  offer.attempts.map((attempt) => attempt.code),
+  [shown],
+  "the panel shows exactly the code the server offered",
+);
+assert.equal(
+  (await bridge.confirmPairing(shown === "0000-0000" ? "1111-1111" : "0000-0000")).kind,
+  "unknown-code",
+  "a code no panel shows pairs nothing",
+);
+const pairing = await bridge.confirmPairing(shown);
+assert.equal(pairing.kind, "paired", "the shown code pairs the link showing it");
+let link = pairing.link;
+assert.deepEqual(link.owner, LOOPBACK_USER, "the link carries the Figma user the plugin runs as");
+assert.equal(plugin.showsPairingCode(), false, "the panel stops showing the code once paired");
 console.log(
-  "✅ Version handshake round-trips {pluginVersion, protocolVersion} with the real plugin",
+  "✅ The panel shows the offered code, and confirming exactly it pairs and authenticates",
 );
 
 // --- Consent gate ---
-// A fresh connection mints a 4-digit pairing code. Until a human approves, a write is GATED
-// (PENDING_APPROVAL) — never run, never a hard error, so the agent can relay the code and retry.
-const pairingCode = bridge.getPairingCode();
-assert.match(String(pairingCode), /^\d{4}$/, "a 4-digit pairing code is minted per connection");
+// Until a human approves, a write is GATED (PENDING_APPROVAL) — never run, never a hard error.
 assert.equal(bridge.approvedSession(), null, "no session token before the first Allow");
-await introduce(bridge);
+await introduce(bridge, link);
 // A request the plugin can't read is refused BEFORE the consent gate — asking a human to approve a
 // doomed write would be asking consent for nothing. An envelope ERROR rejects: it can never be
 // mistaken for a run that completed with no result.
 await assert.rejects(
-  execute(bridge, { preamble: undefined }),
+  execute(bridge, link, { preamble: undefined }),
   /can't read the server's "EXECUTE_CODE" request/,
   "an EXECUTE_CODE without its std-lib is refused, not gated",
 );
-assert.equal((await execute(bridge)).type, "PENDING_APPROVAL", "a write before approval is gated");
-console.log(`✅ Pre-approval write returns PENDING_APPROVAL (code ${pairingCode} minted)`);
+assert.equal(
+  (await execute(bridge, link)).type,
+  "PENDING_APPROVAL",
+  "a write before approval is gated",
+);
+console.log("✅ Pre-approval write returns PENDING_APPROVAL");
 
 await plugin.allow();
 await until(() => bridge.approvedSession() !== null, "the handed-over token");
@@ -170,19 +218,13 @@ assert.match(
   /^[0-9a-z]{16,64}$/,
   "the token is persisted",
 );
-assert.deepEqual(
-  bridge.approvedSession()?.authorizingUser,
-  LOOPBACK_USER,
-  "writes are attributed to the Allower",
-);
-assert.deepEqual(approvedEvents, [LOOPBACK_USER], "each Allow fires onSessionApproved");
-assert.equal((await execute(bridge)).result, "ok", "the approved write runs");
-console.log("✅ After Allow, the same write runs, attributed to the human who clicked it");
+assert.equal((await execute(bridge, link)).result, "ok", "the approved write runs");
+console.log("✅ After Allow, the same write runs");
 
 // --- Protocol 8: write-access notices and the panel's sign-in click ---
 const notice = { kind: "sign-in-failed", message: "contract" };
 assert.equal(
-  (await bridge.request({ type: "WRITE_ACCESS", notice })).type,
+  (await bridge.request(link, { type: "WRITE_ACCESS", notice })).type,
   "WRITE_ACCESS_ACK",
   "the panel acks a write-access notice",
 );
@@ -192,14 +234,14 @@ console.log("✅ WRITE_ACCESS notices are acked and the panel's sign-in click re
 
 const t0 = Date.now();
 await assert.rejects(
-  bridge.request({ type: "FUTURE_THING", id: "ignored" }),
+  bridge.request(link, { type: "FUTURE_THING", id: "ignored" }),
   /can't read the server's "FUTURE_THING" request/,
   "an unknown request type is answered with a readable ERROR",
 );
 assert.ok(Date.now() - t0 < 1000, "rejects fast, not on the 15s timeout");
 console.log(`✅ Unknown type rejects in ${Date.now() - t0}ms (not a 15s hang)`);
 
-// --- Origins and the single slot ---
+// --- Origins, strangers, and the links beside the plugin ---
 for (const origin of ["https://evil.example.com", "https://www.figma.com"])
   assert.equal(
     await refusedOrOpened(new WebSocket(URL, { origin })),
@@ -207,91 +249,143 @@ for (const origin of ["https://evil.example.com", "https://www.figma.com"])
     `${origin} is refused: a page script, not the sandboxed plugin`,
   );
 assert.equal(connected, 1, "web origins never reach the connection handler");
-assert.equal(
-  await refusedOrOpened(new WebSocket(URL, { origin: "null" })),
-  "refused",
-  "a second connection is refused while an established plugin holds the slot",
+const stranger = rawPeer(URL, {
+  onFrame: (msg) => stranger.received.push(msg.type),
+});
+await opened(stranger);
+await wait(100);
+stranger.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: "plantedsessiontoken000000" }));
+stranger.send(JSON.stringify({ type: "REVOKE_SESSION" }));
+stranger.send(
+  JSON.stringify({ type: "CHANNEL_REQUEST", id: "q", runId: "r", capability: "images.fetch" }),
 );
-assert.equal((await execute(bridge)).result, "ok", "the original plugin still drives");
+await wait(100);
+assert.deepEqual(
+  [...new Set(stranger.received)],
+  ["HELLO", "AUTHENTICATE"],
+  "an unpaired stranger is sent setup frames and nothing else, not even a channel refusal",
+);
+assert.notEqual(
+  bridge.approvedSession()?.token,
+  "plantedsessiontoken000000",
+  "and nothing it sends is heard",
+);
+assert.equal((await execute(bridge, link)).result, "ok", "the plugin still drives beside it");
+stranger.close();
+console.log("✅ Web origins are refused; an unpaired stranger beside the plugin gets nothing");
+
+// A flood of links that never authenticate can't lock a redialing plugin out, or displace one.
+const flood = [];
+for (let i = 0; i < 12; i++) {
+  const mute = new WebSocket(URL, { origin: "null" });
+  mute.on("error", () => {});
+  flood.push(mute);
+  await refusedOrOpened(mute);
+}
+await wait(100);
+assert.equal(bridge.authenticatedLinks().length, 1, "the authenticated plugin is never displaced");
+assert.equal((await execute(bridge, link)).result, "ok", "and still drives");
+plugin.drop();
+await until(
+  () => bridge.authenticatedLinks().length === 1 && bridge.authenticatedLinks()[0] !== link,
+  "the plugin's redial through the flood",
+);
+link = await linkOf(bridge);
+for (const mute of flood) mute.close();
 console.log(
-  "✅ Web origins and a second connection are refused; the established plugin keeps the slot",
+  "✅ A flood of unauthenticated links neither displaces the plugin nor locks out its redial",
 );
 
 // --- Approval is sticky across a reconnect, but only once the server re-introduces itself ---
-// The socket drops (a server blip); the relay redials on its own. A fresh socket starts unapproved,
-// so a different server that grabbed the port can't ride the old approval; the server's echo of the
-// token it was handed re-keys approval to it, with no second Allow.
-plugin.drop();
-await until(() => connected === 2, "the relay's redial", 5_000);
-await until(() => bridge.protocolCompatibility() === "compatible", "the redial's verdict");
+// The redial above is a fresh link: it authenticated with no prompt (the plugin kept its pairing),
+// and starts unapproved until the server echoes the token it was handed.
+assert.equal(plugin.showsPairingCode(), false, "a paired plugin's redial shows no pairing code");
 assert.equal(
-  (await execute(bridge)).type,
+  (await execute(bridge, link)).type,
   "PENDING_APPROVAL",
   "a write before SESSION_INFO is gated",
 );
-await introduce(bridge);
-assert.equal((await execute(bridge)).result, "ok", "a reconnect stays approved (token echoed)");
+await introduce(bridge, link);
+assert.equal(
+  (await execute(bridge, link)).result,
+  "ok",
+  "a reconnect stays approved (token echoed)",
+);
 console.log(
-  "✅ Approval is sticky across reconnects (server echoes the token), never before SESSION_INFO",
+  "✅ A reconnect authenticates without pairing again, and approval is sticky once re-introduced",
 );
 
 // A disconnect mid-request rejects the in-flight call at once, not at its deadline.
 plugin.close();
 await wait(150);
-const mute = silentHolder(URL);
-await opened(mute);
-await wait(50); // let the handshake settle, so the write is sent rather than held
+const silentLinked = rawPeer(URL, { credentialDir: bridge.stateDir });
+const muteLink = await linkOf(bridge);
 const t1 = Date.now();
-const inflight = execute(bridge).catch((e) => e);
+const inflight = execute(bridge, muteLink).catch((e) => e);
 await wait(50);
-mute.terminate();
+silentLinked.terminate();
 const discErr = await inflight;
 assert.ok(discErr instanceof Error && /disconnect/i.test(discErr.message), "rejects on disconnect");
 assert.ok(Date.now() - t1 < 1000, "rejects fast on disconnect, not 15s");
 console.log(`✅ Disconnect rejects the in-flight request in ${Date.now() - t1}ms`);
 await wait(150);
 
-// --- A same-path squatter holding no token is re-prompted, by the same approved plugin ---
+// --- A server with no token is re-prompted, by the same approved plugin ---
 // The human approved the server above; a DIFFERENT local server announces the SAME identity but never
 // got an Allow handover, so it echoes no token. The same plugin (same storage) connecting to it must
 // gate: approval keys on the token, never on the forgeable identity.
 const sharedPluginStorage = new Map();
 const owner = await realPlugin(PORT, { storage: sharedPluginStorage });
-await until(() => bridge.protocolCompatibility() === "compatible", "the owner's verdict");
-await introduce(bridge);
+const ownerLink = await pairByPanel(bridge, owner);
+await introduce(bridge, ownerLink);
 await owner.allow();
-assert.equal((await execute(bridge)).result, "ok", "precondition: this plugin approved the server");
+assert.equal((await execute(bridge, ownerLink)).result, "ok", "precondition: approved");
 owner.close();
 const PORT_SQUAT = 19878;
-const squatBridge = new PluginBridge(isolatedStore());
-squatBridge.start([PORT_SQUAT]);
+const squatBridge = bridgeOn(PORT_SQUAT);
 await wait(150);
 const squatted = await realPlugin(PORT_SQUAT, { storage: sharedPluginStorage });
-await until(() => squatBridge.protocolCompatibility() === "compatible", "the squatter's verdict");
-assert.equal(squatBridge.approvedSession(), null, "a squatter server holds no session token");
-await introduce(squatBridge);
+const squatLink = await pairByPanel(squatBridge, squatted);
+assert.equal(squatBridge.approvedSession(), null, "a second server holds no session token");
+await introduce(squatBridge, squatLink);
 assert.equal(
-  (await execute(squatBridge)).type,
+  (await execute(squatBridge, squatLink)).type,
   "PENDING_APPROVAL",
-  "a same-identity squatter with no token is re-prompted",
+  "a same-identity server with no token is re-prompted",
 );
-console.log("✅ A same-path squatter with no token re-prompts, even on the same approved plugin");
+console.log("✅ A same-path server with no token re-prompts, even on the same approved plugin");
 squatted.close();
 squatBridge.stop();
 await wait(150);
 
+// --- One state dir, one pairing: every server on it authenticates the plugin unprompted ---
+const PAIRED_DIR_PORTS = [19893, 19894];
+const sharedPairingDir = freshStateDir();
+const firstOnDir = bridgeOn(PAIRED_DIR_PORTS[0], { stateDir: sharedPairingDir });
+const secondOnDir = bridgeOn(PAIRED_DIR_PORTS[1], { stateDir: sharedPairingDir });
+await wait(150);
+const both = await realPlugin(PAIRED_DIR_PORTS);
+await pairByPanel(firstOnDir, both);
+await linkOf(secondOnDir);
+assert.equal(both.showsPairingCode(), false, "the second server never offered a code");
+console.log("✅ Servers sharing a state dir are paired by one confirmation");
+both.close();
+firstOnDir.stop();
+secondOnDir.stop();
+await wait(150);
+
 // --- Durable approval: a restarted server reloads the persisted token; Revoke clears it ---
 // Persistence keys on (cwd, port), so a restarted server reloads only if it reclaims its own port —
-// what a real single-server restart does. The plugin's storage survives the restart, as in Figma.
-const sharedDir = mkdtempSync(join(tmpdir(), "flcm-approval-restart-"));
-const sharedStore = () => new ApprovalStore(process.cwd(), sharedDir);
+// what a real single-server restart does. The plugin's storage survives the restart, as in Figma,
+// and so does its pairing: the restarted server's challenge passes with no prompt.
+const sharedDir = freshStateDir();
 const RESTART_PORT = 19879;
 const restartStorage = new Map();
-const bridgeR1 = new PluginBridge(sharedStore());
-bridgeR1.start([RESTART_PORT]);
+const bridgeR1 = bridgeOn(RESTART_PORT, { stateDir: sharedDir });
 await wait(150);
 const r1 = await realPlugin(RESTART_PORT, { storage: restartStorage });
-await introduce(bridgeR1);
+const r1Link = await pairByPanel(bridgeR1, r1);
+await introduce(bridgeR1, r1Link);
 await r1.allow();
 await until(() => bridgeR1.approvedSession() !== null, "the persisted token");
 const persistedToken = bridgeR1.approvedSession()?.token;
@@ -299,32 +393,26 @@ r1.close();
 bridgeR1.stop();
 await wait(150);
 
-const bridgeR2 = new PluginBridge(sharedStore());
-bridgeR2.start([RESTART_PORT]);
+const bridgeR2 = bridgeOn(RESTART_PORT, { stateDir: sharedDir });
 await wait(150);
 assert.equal(
   bridgeR2.approvedSession()?.token,
   persistedToken,
   "a restart reloads the persisted token",
 );
-assert.deepEqual(
-  bridgeR2.approvedSession()?.authorizingUser,
-  LOOPBACK_USER,
-  "and who it's attributed to",
-);
 const r2 = await realPlugin(RESTART_PORT, { storage: restartStorage });
-await until(() => bridgeR2.protocolCompatibility() === "compatible", "the verdict after restart");
-await introduce(bridgeR2);
+const r2Link = await linkOf(bridgeR2);
+assert.equal(r2.showsPairingCode(), false, "the restarted server needs no pairing");
+await introduce(bridgeR2, r2Link);
 assert.equal(
-  (await execute(bridgeR2)).result,
+  (await execute(bridgeR2, r2Link)).result,
   "ok",
   "the reloaded token re-approves: no second Allow",
 );
-console.log("✅ Durable approval survives a same-port server restart (persisted token reloaded)");
+console.log("✅ Pairing and approval both survive a same-port server restart");
 
-// A concurrent same-cwd sibling on a DIFFERENT port inherits nothing: its key names another file.
-const bridgeSibling = new PluginBridge(sharedStore());
-bridgeSibling.start([19883]);
+// A concurrent same-cwd sibling on a DIFFERENT port inherits no approval: its key names another file.
+const bridgeSibling = bridgeOn(19883, { stateDir: sharedDir });
 await wait(150);
 assert.equal(
   bridgeSibling.approvedSession(),
@@ -341,8 +429,7 @@ await until(() => bridgeR2.approvedSession() === null, "the revoke");
 r2.close();
 bridgeR2.stop();
 await wait(150);
-const bridgeR3 = new PluginBridge(sharedStore());
-bridgeR3.start([RESTART_PORT]);
+const bridgeR3 = bridgeOn(RESTART_PORT, { stateDir: sharedDir });
 await wait(150);
 assert.equal(bridgeR3.approvedSession(), null, "after Revoke, a restart reloads nothing");
 console.log(
@@ -352,15 +439,15 @@ bridgeR3.stop();
 
 // --- A restart that races its own dying predecessor must reclaim its port, not slip to the next ---
 // A dev-watch save-restart is a photo finish: anything that slows the old process's exit makes the
-// successor see EADDRINUSE, and slipping one port means an EMPTY approval slot and a fresh pairing
-// code after a save nobody thought was a restart. A plain TCP listener models the not-yet-exited
+// successor see EADDRINUSE, and slipping one port means an EMPTY approval slot and a fresh Allow
+// after a save nobody thought was a restart. A plain TCP listener models the not-yet-exited
 // predecessor: the bind fails the same way.
 const SLIP_PORT = 19884;
-const bridgeS1 = new PluginBridge(sharedStore());
-bridgeS1.start([SLIP_PORT, SLIP_PORT + 1]);
+const bridgeS1 = bridgeOn([SLIP_PORT, SLIP_PORT + 1], { stateDir: sharedDir });
 await wait(150);
-const s1 = await realPlugin(SLIP_PORT);
-await introduce(bridgeS1);
+const s1 = await realPlugin(SLIP_PORT, { storage: restartStorage });
+const s1Link = await linkOf(bridgeS1);
+await introduce(bridgeS1, s1Link);
 await s1.allow();
 await until(() => bridgeS1.approvedSession() !== null, "the pre-restart approval");
 const slipToken = bridgeS1.approvedSession()?.token;
@@ -370,8 +457,7 @@ await wait(150);
 
 const predecessor = net.createServer();
 await new Promise((res) => predecessor.listen(SLIP_PORT, "127.0.0.1", res));
-const bridgeS2 = new PluginBridge(sharedStore());
-bridgeS2.start([SLIP_PORT, SLIP_PORT + 1]);
+const bridgeS2 = bridgeOn([SLIP_PORT, SLIP_PORT + 1], { stateDir: sharedDir });
 await wait(300);
 // HOLDING OFF, not merely tokenless: had it advanced it would be listening on SLIP_PORT+1 by now.
 assert.equal(
@@ -399,8 +485,10 @@ await wait(150);
 const NOAPP_PORT = 19880;
 const noAppHolder = net.createServer();
 await new Promise((res) => noAppHolder.listen(NOAPP_PORT, "127.0.0.1", res));
-const bridgeNoApp = new PluginBridge(sharedStore(), { reclaimWindowMs: 5_000 });
-bridgeNoApp.start([NOAPP_PORT, NOAPP_PORT + 1]);
+const bridgeNoApp = bridgeOn([NOAPP_PORT, NOAPP_PORT + 1], {
+  stateDir: sharedDir,
+  reclaimWindowMs: 5_000,
+});
 await wait(250);
 const advancedAtOnce = new WebSocket(`ws://127.0.0.1:${NOAPP_PORT + 1}`, { origin: "null" });
 assert.equal(
@@ -416,11 +504,11 @@ await wait(150);
 
 // (b) A holder that never lets go is abandoned AT THE DEADLINE, or startup hangs with no error.
 const STUCK_PORT = 19892;
-const bridgeD1 = new PluginBridge(sharedStore());
-bridgeD1.start([STUCK_PORT]);
+const bridgeD1 = bridgeOn(STUCK_PORT, { stateDir: sharedDir });
 await wait(150);
-const d1 = await realPlugin(STUCK_PORT);
-await introduce(bridgeD1);
+const d1 = await realPlugin(STUCK_PORT, { storage: restartStorage });
+const d1Link = await linkOf(bridgeD1);
+await introduce(bridgeD1, d1Link);
 await d1.allow();
 await until(() => bridgeD1.approvedSession() !== null, "precondition: the port is approved");
 d1.close();
@@ -429,8 +517,10 @@ await wait(150);
 
 const stuck = net.createServer(); // never released
 await new Promise((res) => stuck.listen(STUCK_PORT, "127.0.0.1", res));
-const bridgeD2 = new PluginBridge(sharedStore(), { reclaimWindowMs: 300 });
-bridgeD2.start([STUCK_PORT, STUCK_PORT + 1]);
+const bridgeD2 = bridgeOn([STUCK_PORT, STUCK_PORT + 1], {
+  stateDir: sharedDir,
+  reclaimWindowMs: 300,
+});
 await wait(700);
 const gaveUp = new WebSocket(`ws://127.0.0.1:${STUCK_PORT + 1}`, { origin: "null" });
 assert.equal(await refusedOrOpened(gaveUp), "opened", "a held port is abandoned at the deadline");
@@ -443,8 +533,7 @@ bridgeD2.stop();
 await wait(150);
 
 // (c) stop() cancels a re-probe in flight, or a discarded bridge silently rebinds its port.
-const bridgeD3 = new PluginBridge(sharedStore(), { reclaimWindowMs: 5_000 });
-bridgeD3.start([STUCK_PORT]);
+const bridgeD3 = bridgeOn(STUCK_PORT, { stateDir: sharedDir, reclaimWindowMs: 5_000 });
 await wait(150);
 bridgeD3.stop();
 await new Promise((res) => stuck.close(res));
@@ -462,8 +551,7 @@ await wait(150);
 
 // (d) …and disowns a bind the OS already accepted: its `listening` fires after stop() regardless.
 const FREE_PORT = 19886;
-const bridgeD4 = new PluginBridge(sharedStore());
-bridgeD4.start([FREE_PORT]);
+const bridgeD4 = bridgeOn(FREE_PORT, { stateDir: sharedDir });
 bridgeD4.stop();
 await wait(300);
 assert.equal(
@@ -473,220 +561,92 @@ assert.equal(
 );
 console.log("✅ stop() disowns a bind already in flight");
 
-// --- The compatibility verdict is connection-scoped ---
+// --- Heartbeat reaps a half-open link ---
+// An authenticated link whose socket goes half-open (crash, laptop sleep: no FIN) never fires
+// `close`; only the heartbeat, missing its pong, drops it and the calls it would strand.
 await wait(150);
-const current = await realPlugin(PORT);
-await until(() => bridge.protocolCompatibility() === "compatible", "the verdict");
-current.close();
-await until(() => bridge.protocolCompatibility() === "checking", "the reset on disconnect");
-console.log("✅ The compatibility verdict is connection-scoped (back to `checking` on disconnect)");
-
-// --- Heartbeat reaps a half-open holder ---
-// A handshaked holder whose socket goes half-open (crash, laptop sleep: no FIN) still blocks a second
-// connection; only the heartbeat, missing its pong, frees the slot for the live plugin.
-await wait(150);
-const dead = silentHolder(URL, { autoPong: false });
-await opened(dead);
-await until(() => bridge.protocolCompatibility() === "compatible", "the holder's handshake");
-assert.equal(
-  await refusedOrOpened(new WebSocket(URL, { origin: "null" })),
-  "refused",
-  "an established holder blocks a second connection until the heartbeat reaps it",
-);
+const dead = rawPeer(URL, { credentialDir: bridge.stateDir, autoPong: false });
+const deadLink = await linkOf(bridge);
 bridge.heartbeatTick();
 await wait(50);
 bridge.heartbeatTick(); // missed pong → terminate
-await wait(150);
-const revived = new WebSocket(URL, { origin: "null" });
-assert.equal(await refusedOrOpened(revived), "opened", "the reaped slot takes the next connection");
-console.log("✅ Heartbeat reaps a half-open holder so the live plugin can reconnect");
-revived.close();
+await until(() => !bridge.authenticatedLinks().includes(deadLink), "the reaped link");
+console.log("✅ Heartbeat reaps a half-open link");
 dead.close();
 await wait(150);
 
-// --- A new connection reclaims the slot from a non-handshaking squatter ---
-const squatter = new WebSocket(URL, { origin: "null" }); // connects, then stays mute
-await opened(squatter);
-const reclaimer = await realPlugin(PORT);
-await until(() => bridge.protocolCompatibility() === "compatible", "the reclaimer's verdict");
-await introduce(bridge);
-await reclaimer.allow();
-assert.equal((await execute(bridge)).result, "ok", "the reclaimer drives once it handshakes");
-assert.ok(
-  squatter.readyState === WebSocket.CLOSING || squatter.readyState === WebSocket.CLOSED,
-  "the displaced squatter is disconnected",
-);
-console.log("✅ A new connection reclaims the slot from a non-handshaking holder, then drives");
-reclaimer.close();
-await wait(150);
-
-// --- A displaced socket's close must not reject the newcomer's in-flight handshake ---
-// index.ts fires the newcomer's SESSION_INFO synchronously from onConnect; the displaced socket's
-// close lands a tick later and must fail only its own requests.
-const PORT2 = 19877;
-const bridge2 = new PluginBridge(isolatedStore());
-const handshakes = [];
-bridge2.start([PORT2], () => handshakes.push(introduce(bridge2).catch((e) => e)));
-await wait(150);
-const sq2 = new WebSocket(`ws://127.0.0.1:${PORT2}`, { origin: "null" });
-await opened(sq2);
-const real2 = await realPlugin(PORT2);
-await wait(150);
-const ack = await handshakes.at(-1);
-assert.equal(ack?.type, "SESSION_INFO_ACK", "the newcomer's handshake survives the old close");
-console.log("✅ A displaced socket's close doesn't reject the newcomer's in-flight handshake");
-sq2.close();
-real2.close();
-bridge2.stop();
-await wait(150);
-
-// --- A reclaimed connection's late handshake verdict can't clobber the newcomer ---
-// A mute squatter's GET_VERSION orphans when the plugin reclaims the slot and resolves LATE, on its
-// timeout, as the protocol floor; landing on the newcomer it would refuse every write.
-const GHOST_PORT = 19887;
-const ghostBridge = new PluginBridge(isolatedStore(), { requestTimeoutMs: 200 });
-ghostBridge.start([GHOST_PORT]);
-await wait(150);
-const ghost = new WebSocket(`ws://127.0.0.1:${GHOST_PORT}`, { origin: "null" });
-await opened(ghost);
-await wait(30);
-const heir = await realPlugin(GHOST_PORT);
-await wait(300); // outlast the orphaned handshake's timeout
-assert.equal(ghostBridge.protocolCompatibility(), "compatible", "the late verdict lands nowhere");
-console.log(
-  "✅ A reclaimed connection's late handshake can't clobber the current plugin's verdict",
-);
-heir.close();
-ghost.close();
-ghostBridge.stop();
-await wait(150);
-
-// --- A request held across a slot reclaim runs on the newcomer, instead of hanging ---
-const RECLAIM_PORT = 19889;
-const reclaimBridge = new PluginBridge(isolatedStore(), { requestTimeoutMs: 5_000 });
-reclaimBridge.start([RECLAIM_PORT]);
-await wait(150);
-const muteSquatter = new WebSocket(`ws://127.0.0.1:${RECLAIM_PORT}`, { origin: "null" });
-await opened(muteSquatter);
-await wait(30);
-assert.equal(
-  reclaimBridge.protocolCompatibility(),
-  "checking",
-  "the squatter's protocol is unknown",
-);
-let heldSettled = false;
-const heldWrite = execute(reclaimBridge).then(
-  (r) => ((heldSettled = true), r),
-  (e) => ((heldSettled = true), e),
-);
-await wait(50);
-assert.equal(heldSettled, false, "the write is held, not sent, while the protocol is unknown");
-// The newcomer's handshake is held open on purpose, so introducing and approving it happens INSIDE
-// the window — the test is about the hold, not about which round trip finishes first.
-const takeover = await realPlugin(RECLAIM_PORT, { holdVersionMs: 300 });
-await introduce(reclaimBridge);
-await takeover.allow();
-const heldResult = await Promise.race([heldWrite, wait(1500).then(() => "HUNG")]);
-assert.notEqual(heldResult, "HUNG", "a write held across a reclaim must not hang");
-assert.equal(heldResult.result, "ok", "it runs against the plugin that took the slot");
-console.log("✅ A write held across a slot reclaim runs on the newcomer instead of hanging");
-takeover.close();
-muteSquatter.close();
-reclaimBridge.stop();
-await wait(150);
-
-// --- A canvas request racing the version handshake is HELD, then refused ---
-// Without the hold, a write landing between connect and the VERSION answer would reach a plugin
-// below this server's protocol and run.
+// --- Link setup refuses another protocol: HELLO alone, nothing after, and a call is told why ---
+// A call waits out a link still in HELLO rather than guess; whatever the answer, a stale plugin is
+// never challenged, offered a code, or sent code.
 const RACE_PORT = 19888;
 const raceUrl = `ws://127.0.0.1:${RACE_PORT}`;
-const raceBridge = new PluginBridge(isolatedStore(), { requestTimeoutMs: 500 });
-raceBridge.start([RACE_PORT]);
+const raceBridge = bridgeOn(RACE_PORT, { requestTimeoutMs: 500 });
 await wait(150);
-const stale = stalePeer(
-  raceUrl,
-  { pluginVersion: "0.0.1", protocolVersion: PROTOCOL_VERSION - 1 },
-  250,
-);
+const stale = rawPeer(raceUrl, {
+  protocolVersion: PROTOCOL_VERSION - 1,
+  pluginVersion: "0.0.1",
+  helloDelayMs: 250,
+});
 await opened(stale);
-await wait(30);
-assert.equal(raceBridge.protocolCompatibility(), "checking", "the protocol is not known yet");
-await assert.rejects(
-  execute(raceBridge),
-  (e) => e.message.includes(`plugin v0.0.1 (protocol v${PROTOCOL_VERSION - 1})`),
-  "a write inside the handshake window is refused, naming the plugin it round-tripped",
+const staleResolution = await raceBridge.resolveLink();
+assert.equal(staleResolution.kind, "incompatible", "a resolution racing HELLO waits for it");
+assert.ok(
+  staleResolution.refusal.includes(`plugin v0.0.1 (protocol v${PROTOCOL_VERSION - 1})`),
+  "and names the plugin it round-tripped",
 );
-assert.equal(raceBridge.protocolCompatibility(), "incompatible", "the verdict landed meanwhile");
-await assert.rejects(execute(raceBridge), /protocol v/, "and it stays refused");
-assert.ok(!stale.received.includes("EXECUTE_CODE"), "the stale plugin never received the code");
-console.log("✅ A write racing the version handshake HOLDS, then is refused — never sent");
+assert.equal((await raceBridge.offerPairing()).kind, "none", "a stale plugin is offered no code");
+assert.deepEqual(stale.received, ["HELLO"], "and is sent nothing after HELLO");
+console.log("✅ A plugin on an older protocol is refused at HELLO and sent nothing more");
 stale.close();
 await wait(150);
 
-// A plugin predating the handshake (it ERRORs GET_VERSION) is the floor, refused on the same rule.
-const spikeEra = stalePeer(raceUrl, null);
+// A plugin predating HELLO (it ERRORs the request) is the floor, refused on the same rule.
+const spikeEra = rawPeer(raceUrl, { protocolVersion: null });
 await opened(spikeEra);
-await wait(30);
-await assert.rejects(execute(raceBridge), /protocol v/, "a plugin with no version is refused");
-assert.ok(!spikeEra.received.includes("EXECUTE_CODE"), "and never receives the code");
-console.log("✅ A plugin predating the handshake is refused (missing version → floor)");
+assert.match(
+  (await raceBridge.resolveLink()).refusal ?? "",
+  /protocol v0/,
+  "a plugin with no version is refused",
+);
+assert.deepEqual(spikeEra.received, ["HELLO"], "and is sent nothing after HELLO");
+console.log("✅ A plugin predating HELLO is refused (missing version → floor)");
 spikeEra.close();
 await wait(150);
 
 // A plugin NEWER than this server is refused too: its FlcmHost isn't the one this preamble targets.
-const newer = stalePeer(raceUrl, { pluginVersion: "9.9.9", protocolVersion: PROTOCOL_VERSION + 1 });
+const newer = rawPeer(raceUrl, { protocolVersion: PROTOCOL_VERSION + 1, pluginVersion: "9.9.9" });
 await opened(newer);
-await wait(30);
-await assert.rejects(
-  execute(raceBridge),
-  (e) => e.message.includes("is newer") && e.message.includes("update this Framelink MCP server"),
+const newerRefusal = (await raceBridge.resolveLink()).refusal ?? "";
+assert.ok(
+  newerRefusal.includes("is newer") && newerRefusal.includes("update this Framelink MCP server"),
   "a newer plugin is refused, telling the human to update the server",
 );
-assert.ok(!newer.received.includes("EXECUTE_CODE"), "and never receives the code");
 console.log(
   "✅ A plugin newer than the server is refused, naming the server as the side to update",
 );
 newer.close();
 await wait(150);
 
-// The hold DELAYS a current plugin, it doesn't break it.
-const currentRacer = await realPlugin(RACE_PORT, { holdVersionMs: 250 });
-await introduce(raceBridge);
-await currentRacer.allow();
-assert.equal(raceBridge.protocolCompatibility(), "checking", "still inside the handshake window");
-assert.equal(
-  (await execute(raceBridge)).result,
-  "ok",
-  "the held write runs once the verdict lands",
-);
-console.log("✅ The hold only delays a current plugin — its write runs once the verdict lands");
-currentRacer.close();
-await wait(150);
-
-// A disconnect INSIDE the handshake window leaves no false `incompatible` behind: with nothing
-// connected the agent must hear that, not be told to reinstall a plugin.
-const dropper = await realPlugin(RACE_PORT, { holdVersionMs: 5_000 });
+// A disconnect INSIDE the HELLO window leaves no false `incompatible` behind: with nothing connected
+// the agent must hear that, not be told to reinstall a plugin.
+const dropper = await realPlugin(RACE_PORT, { holdHelloMs: 5_000 });
 await wait(30);
-assert.equal(raceBridge.protocolCompatibility(), "checking", "still inside the handshake window");
+const pendingResolution = raceBridge.resolveLink();
 dropper.close();
-await wait(100);
-assert.equal(raceBridge.protocolCompatibility(), "checking", "the disconnect leaves no verdict");
-await assert.rejects(
-  execute(raceBridge),
-  /The Framelink plugin disconnected .* This call was not submitted/,
-  "with nothing connected the agent is told exactly that",
+assert.equal(
+  (await pendingResolution).kind,
+  "disconnected",
+  "a link that drops inside HELLO resolves as a disconnection",
 );
-console.log("✅ A disconnect inside the handshake window leaves no false `incompatible` behind");
+console.log("✅ A disconnect inside the HELLO window leaves no false `incompatible` behind");
 raceBridge.stop();
 await wait(150);
 
 // --- Port-block discovery: two servers sharing a block bind distinct ports ---
 const BLOCK = [19890, 19891];
-const bridgeA = new PluginBridge(isolatedStore());
-bridgeA.start(BLOCK);
+const bridgeA = bridgeOn(BLOCK);
 await wait(150);
-const bridgeB = new PluginBridge(isolatedStore());
-bridgeB.start(BLOCK);
+const bridgeB = bridgeOn(BLOCK);
 await wait(250);
 const onBase = new WebSocket(`ws://127.0.0.1:${BLOCK[0]}`, { origin: "null" });
 assert.equal(await refusedOrOpened(onBase), "opened", "the first server bound the base port");
@@ -721,7 +681,7 @@ console.log(
 // worded from the plugin's answer — "never executed; retry" and "inspect the canvas" differ.
 const PORT_T = 19895;
 const orphanReplies = [];
-const bridgeT = new PluginBridge(isolatedStore(), {
+const bridgeT = bridgeOn(PORT_T, {
   requestTimeoutMs: 400,
   events: {
     onRunEvent: (event) => {
@@ -730,20 +690,20 @@ const bridgeT = new PluginBridge(isolatedStore(), {
     },
   },
 });
-bridgeT.start([PORT_T]);
 await wait(150);
 const framesT = [];
 let disposition = "never-executed";
-const silent = silentHolder(`ws://127.0.0.1:${PORT_T}`, {
+const silent = rawPeer(`ws://127.0.0.1:${PORT_T}`, {
+  credentialDir: bridgeT.stateDir,
   onFrame: (msg) => {
     framesT.push(msg);
     if (msg.type === "CANCEL")
       silent.send(JSON.stringify({ type: "CANCEL_RESULT", runId: msg.runId, disposition }));
   },
 });
-await opened(silent);
+const silentLink = await linkOf(bridgeT);
 const tStall = Date.now();
-const timeoutErr = await execute(bridgeT, { code: "stall forever" }).catch((e) => e);
+const timeoutErr = await execute(bridgeT, silentLink, { code: "stall forever" }).catch((e) => e);
 assert.ok(
   /no traffic/.test(timeoutErr.message),
   "a stalled run rejects with the inactivity message",
@@ -760,10 +720,10 @@ console.log(
   "✅ A stalled run is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's answer",
 );
 
-// The holder wakes up: a result for a run its caller gave up on still reaches the meter, as it
+// The link wakes up: a result for a run its caller gave up on still reaches the meter, as it
 // came — whether it costs a Write is the meter's call.
 disposition = "was-running";
-await execute(bridgeT, { code: "changed late" }).catch(() => {});
+await execute(bridgeT, silentLink, { code: "changed late" }).catch(() => {});
 const lateRun = framesT.filter((f) => f.type === "EXECUTE_CODE").at(-1).id;
 const lateResult = (id, documentChanged) =>
   JSON.stringify({ type: "EXECUTE_CODE_RESULT", id, console: [], errors: null, documentChanged });
@@ -789,7 +749,7 @@ await wait(150);
 // no longer tracks is refused. Driven by a raw socket speaking the plugin's half on a timetable.
 const PORT_I = 19896;
 const servedBatches = [];
-const bridgeI = new PluginBridge(isolatedStore(), {
+const bridgeI = bridgeOn(PORT_I, {
   requestTimeoutMs: 500,
   capabilities: new Map([
     [
@@ -804,62 +764,61 @@ const bridgeI = new PluginBridge(isolatedStore(), {
     ],
   ]),
 });
-bridgeI.start([PORT_I]);
 await wait(150);
 const framesImg = [];
 let imagesReply = null;
-const pluginImg = new WebSocket(`ws://127.0.0.1:${PORT_I}`, { origin: "null" });
-pluginImg.on("message", (raw) => {
-  const msg = JSON.parse(raw.toString());
-  framesImg.push(msg);
-  if (answerVersionHandshake(pluginImg, msg)) return;
-  if (msg.type === "EXECUTE_CODE") {
-    // The urls repeat one entry on purpose: dedupe is the handler's job (the plugin is untrusted).
-    const urls = msg.code === "boom run" ? ["boom"] : ["u1", "u1", "u2"];
-    const preqId = msg.code === "boom run" ? "preq-2" : "preq-1";
-    setTimeout(() => {
-      pluginImg.send(
-        JSON.stringify({
-          type: "CHANNEL_REQUEST",
-          capability: "images.fetch",
-          id: preqId,
-          runId: msg.id,
-          payload: urls,
-        }),
-      );
-    }, 100);
-    pluginImg.runId = msg.id;
-  }
-  if (msg.type === "CHANNEL_RESPONSE" && msg.ok === true) {
-    imagesReply = msg;
-    setTimeout(() => {
+const pluginImg = rawPeer(`ws://127.0.0.1:${PORT_I}`, {
+  credentialDir: bridgeI.stateDir,
+  onFrame: (msg) => {
+    framesImg.push(msg);
+    if (msg.type === "EXECUTE_CODE") {
+      // The urls repeat one entry on purpose: dedupe is the handler's job (the plugin is untrusted).
+      const urls = msg.code === "boom run" ? ["boom"] : ["u1", "u1", "u2"];
+      const preqId = msg.code === "boom run" ? "preq-2" : "preq-1";
+      setTimeout(() => {
+        pluginImg.send(
+          JSON.stringify({
+            type: "CHANNEL_REQUEST",
+            capability: "images.fetch",
+            id: preqId,
+            runId: msg.id,
+            payload: urls,
+          }),
+        );
+      }, 100);
+      pluginImg.runId = msg.id;
+    }
+    if (msg.type === "CHANNEL_RESPONSE" && msg.ok === true) {
+      imagesReply = msg;
+      setTimeout(() => {
+        pluginImg.send(
+          JSON.stringify({
+            type: "EXECUTE_CODE_RESULT",
+            id: pluginImg.runId,
+            result: msg.payload,
+            console: [],
+            errors: null,
+            documentChanged: false,
+          }),
+        );
+      }, 100);
+    }
+    if (msg.type === "CHANNEL_RESPONSE" && msg.ok === false && msg.id === "preq-2") {
       pluginImg.send(
         JSON.stringify({
           type: "EXECUTE_CODE_RESULT",
           id: pluginImg.runId,
-          result: msg.payload,
           console: [],
-          errors: null,
+          errors: msg.error.message,
           documentChanged: false,
         }),
       );
-    }, 100);
-  }
-  if (msg.type === "CHANNEL_RESPONSE" && msg.ok === false && msg.id === "preq-2") {
-    pluginImg.send(
-      JSON.stringify({
-        type: "EXECUTE_CODE_RESULT",
-        id: pluginImg.runId,
-        console: [],
-        errors: msg.error.message,
-        documentChanged: false,
-      }),
-    );
-  }
+    }
+  },
 });
-await opened(pluginImg);
+const imgLink = await linkOf(bridgeI);
 
-const imgRun = await execute(bridgeI, { code: "render with images" });
+const imgRun = await execute(bridgeI, imgLink, { code: "render with images" });
 assert.deepEqual(imgRun.result, { u1: "b64-u1", u2: "b64-u2" }, "the run completed with the bytes");
 assert.equal(imagesReply.id, "preq-1", "the reply carries the PLUGIN-issued id");
 assert.deepEqual(servedBatches[0], ["u1", "u1", "u2"], "the handler received the raw batch");
@@ -868,7 +827,7 @@ console.log(
   "✅ Mid-run image fetch round-trips in ONE run, and serving suspends the run's deadline",
 );
 
-const boomRun = await execute(bridgeI, { code: "boom run" });
+const boomRun = await execute(bridgeI, imgLink, { code: "boom run" });
 assert.match(String(boomRun.errors), /could not load "boom"/, "a fetch failure reaches the run");
 console.log("✅ A failed fetch rejects the run's await via a typed CHANNEL_RESPONSE failure");
 
@@ -894,7 +853,7 @@ await wait(150);
 
 // --- Reverse-channel guards: only a code run can be drawn on; suspension is refcounted ---
 const PORT_C = 19897;
-const bridgeC = new PluginBridge(isolatedStore(), {
+const bridgeC = bridgeOn(PORT_C, {
   requestTimeoutMs: 500,
   capabilities: new Map([
     [
@@ -906,20 +865,17 @@ const bridgeC = new PluginBridge(isolatedStore(), {
     ],
   ]),
 });
-bridgeC.start([PORT_C]);
 await wait(150);
 const framesC = [];
-const pluginC = new WebSocket(`ws://127.0.0.1:${PORT_C}`, { origin: "null" });
-pluginC.on("message", (raw) => {
-  const msg = JSON.parse(raw.toString());
-  framesC.push(msg);
-  answerVersionHandshake(pluginC, msg);
+const pluginC = rawPeer(`ws://127.0.0.1:${PORT_C}`, {
+  credentialDir: bridgeC.stateDir,
+  onFrame: (msg) => framesC.push(msg),
 });
-await opened(pluginC);
+const linkC = await linkOf(bridgeC);
 
-// A handshake request is pending too; drawing on one would let a hostile holder burn fetches against
-// a pending it was never granted a run for. The refusal must leave that pending intact.
-const infoP = introduce(bridgeC).catch((e) => e);
+// A SESSION_INFO is pending too; drawing on one would let a hostile link burn fetches against a
+// pending it was never granted a run for. The refusal must leave that pending intact.
+const infoP = introduce(bridgeC, linkC).catch((e) => e);
 await wait(50);
 const infoId = framesC.find((f) => f.type === "SESSION_INFO").id;
 const imageRequest = (id, runId, payload) =>
@@ -939,7 +895,7 @@ console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse cha
 
 // Two overlapping services for ONE run: the deadline re-arms only when the LAST settles, or the
 // fast one's settle would restart a 500ms clock the slow (1200ms) fetch then outruns.
-const runP = execute(bridgeC, { code: "two fetches" }).catch((e) => e);
+const runP = execute(bridgeC, linkC, { code: "two fetches" }).catch((e) => e);
 await wait(50);
 const runIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
 imageRequest("preq-f", runIdC, ["fast"]);

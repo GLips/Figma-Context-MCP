@@ -18,7 +18,7 @@ import {
   writesUsedThisMonth,
 } from "~/commercial/entitlement/write-ledger.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
-import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
+import { answerLinkSetup } from "./fixtures/plugin-link-peer.js";
 
 // Exercise production startup/handshake/images/execution on an ephemeral test port.
 // Figma only scans its fixed production block, so these tests cannot drive a live document.
@@ -69,7 +69,12 @@ function run(flags: Parameters<typeof runExecute>[0] = {}) {
   return runExecute({ env: join(dir, ".env"), wait: 2, ...flags }, [file]);
 }
 
-async function plugin(handle: (frame: Frame, socket: WebSocket) => void, approval = true) {
+const CLI_TEST_OWNER = { figmaUserId: "cli-test-user", name: "Test User" };
+
+async function plugin(
+  handle: (frame: Frame, socket: WebSocket) => void,
+  { approval = true, owner = CLI_TEST_OWNER as typeof CLI_TEST_OWNER | null, paired = true } = {},
+) {
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
     const socket = new WebSocket(`ws://127.0.0.1:${ports[0]}`, { origin: "null" });
@@ -77,27 +82,12 @@ async function plugin(handle: (frame: Frame, socket: WebSocket) => void, approva
     const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
     socket.on("message", (data) => {
       const frame: Frame = JSON.parse(data.toString());
-      if (frame.type === "GET_VERSION") {
-        socket.send(
-          JSON.stringify({
-            type: "VERSION",
-            id: frame.id,
-            protocolVersion: PROTOCOL_VERSION,
-            pluginVersion: "test",
-          }),
-        );
-      } else if (frame.type === "PING") {
-        socket.send(JSON.stringify({ type: "PONG", id: frame.id, echo: frame.payload }));
-      } else if (frame.type === "SESSION_INFO") {
+      answerLinkSetup((reply) => socket.send(JSON.stringify(reply)), frame, { owner, paired });
+      if (frame.type === "SESSION_INFO")
         socket.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: frame.id }));
-      }
       if (frame.type === "SESSION_INFO" && approval)
         socket.send(
-          JSON.stringify({
-            type: "SESSION_TOKEN",
-            sessionToken: "clitestsessiontoken0000",
-            authorizingUser: { figmaUserId: "cli-test-user", name: "Test User" },
-          }),
+          JSON.stringify({ type: "SESSION_TOKEN", sessionToken: "clitestsessiontoken0000" }),
         );
       if (frame.type === "APPROVAL_STATUS" && approval)
         reply(socket, frame, { type: "APPROVAL_GRANTED" });
@@ -173,10 +163,7 @@ describe("saved-script CLI using production plugin services", () => {
     expect(attempts).toBe(1);
     expect(execution?.code).toBe(await readFile(file, "utf8"));
     expect(execution?.preamble).toContain("(function (__flcmHost) {");
-    expect(session).toMatchObject({
-      identity: process.cwd(),
-      pairingCode: expect.stringMatching(/^\d{4}$/),
-    });
+    expect(session).toMatchObject({ identity: process.cwd() });
     expect(imageReply).toMatchObject({
       type: "CHANNEL_RESPONSE",
       ok: true,
@@ -254,14 +241,17 @@ describe("saved-script CLI using production plugin services", () => {
     const claim = "k3claimfromtheplugin0000000000";
     const executions: Frame[] = [];
     const expired = expect(run({ wait: 1 })).rejects.toThrow(
-      /did not run. Blocked: session approval is pending, and this run has ended without sending the script. Required before re-running: someone clicks Allow on the request with pairing code \d{4}/,
+      /did not run. Blocked: session approval is pending, and this run has ended without sending the script. Required before re-running: someone clicks Allow on this run's request/,
     );
-    const first = await plugin((frame, socket) => {
-      if (frame.type === "EXECUTE_CODE") executions.push(frame);
-      if (frame.type !== "APPROVAL_STATUS") return;
-      socket.send(JSON.stringify({ type: "SESSION_CLAIM", sessionClaim: claim }));
-      reply(socket, frame, { type: "PENDING_APPROVAL" });
-    }, false);
+    const first = await plugin(
+      (frame, socket) => {
+        if (frame.type === "EXECUTE_CODE") executions.push(frame);
+        if (frame.type !== "APPROVAL_STATUS") return;
+        socket.send(JSON.stringify({ type: "SESSION_CLAIM", sessionClaim: claim }));
+        reply(socket, frame, { type: "PENDING_APPROVAL" });
+      },
+      { approval: false },
+    );
     await expired;
     await first.closed;
     expect(stdout).toBe("");
@@ -270,23 +260,22 @@ describe("saved-script CLI using production plugin services", () => {
     // lets the plugin hand it the token; that run's call is the first code anything sends.
     let presented: unknown;
     const next = run({ wait: 2 });
-    const second = await plugin((frame, socket) => {
-      if (frame.type === "SESSION_INFO") {
-        presented = frame.sessionClaim;
-        socket.send(
-          JSON.stringify({
-            type: "SESSION_TOKEN",
-            sessionToken: "lateallowsessiontoken0000",
-            authorizingUser: { figmaUserId: "cli-test-user", name: "Test User" },
-          }),
-        );
-      }
-      if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
-      if (frame.type === "EXECUTE_CODE") {
-        executions.push(frame);
-        reply(socket, frame, { result: { answer: 42 }, console: [], errors: null });
-      }
-    }, false);
+    const second = await plugin(
+      (frame, socket) => {
+        if (frame.type === "SESSION_INFO") {
+          presented = frame.sessionClaim;
+          socket.send(
+            JSON.stringify({ type: "SESSION_TOKEN", sessionToken: "lateallowsessiontoken0000" }),
+          );
+        }
+        if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
+        if (frame.type === "EXECUTE_CODE") {
+          executions.push(frame);
+          reply(socket, frame, { result: { answer: 42 }, console: [], errors: null });
+        }
+      },
+      { approval: false },
+    );
     await expect(next).resolves.toBe(0);
     await second.closed;
     expect(presented).toBe(claim);
@@ -403,11 +392,15 @@ describe("one-shot bridge lifecycle", () => {
       const request = new Promise((resolve, reject) => {
         bridge.start(ports, () => {
           bridge
-            .request({
-              type: "EXECUTE_CODE",
-              code: "return 1",
-              preamble: "test runtime",
-              lateChangeWindowMs: 60_000,
+            .resolveLink()
+            .then((resolution) => {
+              if (resolution.kind !== "linked") throw new Error(`plugin ${resolution.kind}`);
+              return bridge.request(resolution.link, {
+                type: "EXECUTE_CODE",
+                code: "return 1",
+                preamble: "test runtime",
+                lateChangeWindowMs: 60_000,
+              });
             })
             .then(resolve, reject);
         });
@@ -425,13 +418,27 @@ describe("one-shot bridge lifecycle", () => {
   }, 2000);
 });
 
-it("CLI cannot execute without an Authorizing User even when approval status claims granted", async () => {
-  const finished = expect(run()).rejects.toThrow("which Figma user approved");
+it("CLI sends nothing to an unpaired plugin and points at the pair command", async () => {
+  const finished = expect(run()).rejects.toThrow("npx figma-developer-mcp pair");
+  const frames: string[] = [];
+  const { closed } = await plugin((frame) => void frames.push(String(frame.type)), {
+    paired: false,
+  });
+  await finished;
+  await closed;
+  expect(new Set(frames)).toEqual(new Set(["HELLO", "AUTHENTICATE"]));
+});
+
+it("CLI cannot execute without a plugin owner even when approval status claims granted", async () => {
+  const finished = expect(run()).rejects.toThrow("which Figma user it is signed in as");
   let executions = 0;
-  const { closed } = await plugin((frame, socket) => {
-    if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
-    if (frame.type === "EXECUTE_CODE") executions++;
-  }, false);
+  const { closed } = await plugin(
+    (frame, socket) => {
+      if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
+      if (frame.type === "EXECUTE_CODE") executions++;
+    },
+    { owner: null },
+  );
   await finished;
   await closed;
   expect(executions).toBe(0);

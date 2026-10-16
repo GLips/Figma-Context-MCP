@@ -18,14 +18,15 @@ import * as telemetry from "~/telemetry/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
-  TEST_AUTHORIZING_USER,
+  TEST_PLUGIN_OWNER,
   createTestWriteAccess,
   grantedTestApproval,
+  linkedTestResolution,
 } from "./fixtures/write-access.js";
 
 /**
  * Code-mode tools are reported through the same seam as the read tools: one `tool_called` per call,
- * schema and unknown-param rejects included, attributed to the Figma user who allowed the run.
+ * schema and unknown-param rejects included, attributed to the Figma user the plugin link is signed in as.
  */
 async function connectedServer() {
   const bridge = {
@@ -36,11 +37,9 @@ async function connectedServer() {
       errors: null,
       documentChanged: false,
     }),
-    getPairingCode: () => "1234",
-    protocolRefusal: () => null,
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
-    isPluginConnected: () => true,
+    resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
@@ -70,7 +69,7 @@ const reported = () => vi.mocked(telemetry.captureToolCall).mock.calls.map(([eve
 afterEach(() => vi.mocked(telemetry.captureToolCall).mockClear());
 
 describe("code-mode tool telemetry", () => {
-  it("attributes an executed run to its Authorizing User, without the code or its result", async () => {
+  it("attributes an executed run to its Plugin Owner, without the code or its result", async () => {
     const { call, close } = await connectedServer();
     await call("figma_execute_code", { code: "return 'secret authored code'" });
     await close();
@@ -80,7 +79,7 @@ describe("code-mode tool telemetry", () => {
       tool: "figma_execute_code",
       isError: false,
       properties: {
-        figma_user_id: TEST_AUTHORIZING_USER.figmaUserId,
+        figma_user_id: TEST_PLUGIN_OWNER.figmaUserId,
         outcome: "executed",
         script_source: "code",
       },

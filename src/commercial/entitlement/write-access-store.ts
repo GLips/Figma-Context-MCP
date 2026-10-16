@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Write-access state on disk: this install's id, each signed-in Authorizing User's seat and bearer
+// Write-access state on disk: this install's id, each signed-in Plugin Owner's seat and bearer
 // token, and the free-allowance ledger. One 0600 file in the same state dir as session approvals.
 //
 // The FILE is shared state, not any one process's: several servers (one per agent) share it, so every
@@ -12,7 +12,7 @@
 //   • Writes already reported: the server's count for the month comes back on the next
 //     reconciliation (the effective count starts from the server's number).
 //   • Writes not yet reported, and bearer tokens: gone. Nothing else holds them — the Writes go
-//     uncounted and the Authorizing User signs in again.
+//     uncounted and the Plugin Owner signs in again.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

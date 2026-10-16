@@ -29,7 +29,11 @@ import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { ChannelRunContext, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
 import { createImageSourceFetcher } from "~/commercial/plugin-bridge/image-requests.js";
-import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  grantedTestApproval,
+  TEST_PLUGIN_LINK,
+} from "./fixtures/write-access.js";
 
 const Jimp = createJimp({ formats: [png] });
 const makePng = async () =>
@@ -97,10 +101,9 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
   let fetched: Promise<string> | undefined;
   const bridge = {
     request: async (
-      payload: ServerRequest,
-      _signal: unknown,
-      _onSubmitted: unknown,
-      run: ChannelRunContext,
+      _link: unknown,
+      _payload: ServerRequest,
+      { runContext: run }: { runContext: ChannelRunContext },
     ) => {
       fetched = fetchImage(source, run);
       await fetched.catch(() => {});
@@ -121,6 +124,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       writeMeter: createTestWriteAccess().writeMeter,
       readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
     },
+    TEST_PLUGIN_LINK,
     code,
   );
   return fetched!;

@@ -3,10 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Every sentence a caller (MCP tools, the bridge's own rejections, the `execute` CLI, the reference
-// tool) gives about pairing and approval, worded from the state it is in. Agents looped on the older
-// "…then retry" replies: each blocked message names the blocker, the action required, and that
-// retrying sooner cannot help. Submission status is part of the state's sentence where only one is
-// true; nothing outside this module words approval.
+// tool) gives about linking, pairing and approval, worded from the state it is in. Agents looped on
+// the older "…then retry" replies: each blocked message names the blocker, the action required, and
+// that retrying sooner cannot help. Submission status is part of the state's sentence where only one
+// is true; nothing outside this module words them.
 
 /** How long a disconnection counts as a redial blip before the reply escalates to a person. */
 export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
@@ -14,18 +14,20 @@ export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
 const REPORT_TO_PERSON = "Report this to the user or coordinating agent, and retry only after";
 
 /**
- * Where a call stands with the plugin's approval, as far as the wording goes. `waiting` is a call
- * still waiting on the human; `expired` is one whose wait ended with no Allow. The `reference-`
- * states come only from get_flcm_reference's status lookup, which never waits: an open request
- * nothing waits on, and a lookup that got no answer. Approved has no sentence, so it is not a state.
+ * Where a call stands with the plugin, as far as the wording goes. `waiting` is a call still waiting
+ * on the human's Allow; `expired` is one whose wait ended with none. The `reference-` states come only
+ * from get_flcm_reference's status lookup, which never waits. Approved has no sentence, so it is not a
+ * state.
  */
 export type ApprovalGuidanceState =
   | { kind: "disconnected"; elapsedMs: number | null }
   | { kind: "incompatible"; refusal: string }
-  | { kind: "reference-pending"; pairingCode: string | null }
-  | { kind: "waiting"; pairingCode: string | null }
-  | { kind: "expired"; pairingCode: string | null; waitMs: number }
-  | { kind: "rejected"; pairingCode: string | null }
+  | { kind: "unpaired" }
+  | { kind: "several-files"; count: number }
+  | { kind: "reference-pending" }
+  | { kind: "waiting" }
+  | { kind: "expired"; waitMs: number }
+  | { kind: "rejected" }
   | { kind: "unresponsive" }
   | { kind: "reference-status-unknown" };
 
@@ -45,19 +47,27 @@ export function approvalGuidance(state: ApprovalGuidanceState, surface: Guidance
       return surface === "reference"
         ? "No compatible Figma plugin is connected. Open the Framelink plugin in Figma, then check its connection before executing code. The reference is available below."
         : pluginDisconnectedNotSubmittedText(state.elapsedMs);
+    case "unpaired":
+      return unpairedGuidance(surface);
+    case "several-files":
+      return (
+        `Blocked: the Framelink plugin is open in ${state.count} Figma files, and this server can't ` +
+        `tell which one you mean, so nothing was submitted. Required before retrying: someone closes ` +
+        `the plugin in every file except the one to work in. ${REPORT_TO_PERSON} only one is open.`
+      );
     case "waiting":
-      return `Waiting for approval in Figma (pairing code ${state.pairingCode}). Code has not been submitted.`;
+      return "Waiting for approval in Figma. Code has not been submitted.";
     case "reference-pending":
-      return `Approval is required before executing code. Ask the user to allow pairing code ${state.pairingCode} in the Framelink plugin. This reference request does not wait for approval or submit code.`;
+      return "Approval is required before executing code. Ask the user to click Allow for this session in the Framelink plugin. This reference request does not wait for approval or submit code.";
     // On the reference, a rejected request reads like an open one: an Allow on that row still works.
     case "rejected":
       return surface === "reference"
-        ? approvalGuidance({ kind: "reference-pending", pairingCode: state.pairingCode }, surface)
+        ? approvalGuidance({ kind: "reference-pending" }, surface)
         : "Approval rejected; no code was submitted.";
     case "expired":
       return surface === "cli"
-        ? `The script did not run. ${approvalPendingRerunAction(state.pairingCode, state.waitMs)}`
-        : `This call did not run. ${approvalPendingAction(state.pairingCode, state.waitMs)}`;
+        ? `The script did not run. ${approvalPendingRerunAction(state.waitMs)}`
+        : `This call did not run. ${approvalPendingAction(state.waitMs)}`;
     case "unresponsive":
       return (
         `Blocked: the Framelink plugin is connected but did not answer the approval check before the wait ` +
@@ -67,6 +77,68 @@ export function approvalGuidance(state: ApprovalGuidanceState, surface: Guidance
     case "reference-status-unknown":
       return "The plugin's approval status could not be checked. Check the Framelink plugin connection before executing code. The reference is available below; no code was submitted.";
   }
+}
+
+function unpairedGuidance(surface: GuidanceSurface): string {
+  switch (surface) {
+    case "reference":
+      return "This server isn't paired with the Framelink plugin yet. Before executing code, call pair_figma_plugin, which shows a pairing code in the plugin panel for the user to confirm. The reference is available below.";
+    case "cli":
+      return (
+        `Blocked: this server isn't paired with the Framelink plugin, so the script did not run. ` +
+        `Required before re-running: someone runs \`npx figma-developer-mcp pair\` in a terminal and ` +
+        `types the code the Framelink plugin panel shows. Pairing is remembered, so this is needed once.`
+      );
+    case "mcp":
+      return "Blocked: this server isn't paired with the Framelink plugin, so nothing was submitted. Call pair_figma_plugin to start pairing.";
+  }
+}
+
+/**
+ * What the agent is told once a pairing code is showing and the client couldn't confirm it in a
+ * prompt: ask the person, then confirm with the code they saw. Only a code the person reports seeing
+ * may be confirmed — that comparison is the whole check.
+ */
+export function pairingConfirmationGuidance(codes: readonly string[], expiresInMs: number): string {
+  const shown =
+    codes.length === 1
+      ? `the pairing code ${codes[0]}`
+      : `one of these pairing codes: ${codes.join(", ")}`;
+  const call =
+    codes.length === 1
+      ? `pair_figma_plugin with { "code": "${codes[0]}" }`
+      : `pair_figma_plugin with { "code": "<the code they see>" }`;
+  return (
+    `Pairing required: this server isn't paired with the Framelink plugin yet, so nothing was ` +
+    `submitted. Ask the user whether the Framelink plugin panel in Figma shows ${shown}. Only if they ` +
+    `say it does, call ${call}, then retry. If the panel shows no code or a different one, do not ` +
+    `pair: something other than the plugin may be connected. The code expires in ` +
+    `${Math.max(1, Math.round(expiresInMs / 60_000))} minutes.`
+  );
+}
+
+/** The human said the panel doesn't show the code. That attempt is over; nothing paired. */
+export function pairingDeclinedText(): string {
+  return (
+    "The user said the Framelink plugin panel doesn't show the pairing code, so this server didn't " +
+    "pair with it and nothing was submitted. Something other than the plugin may be connected. " +
+    "Don't retry pairing unless the user asks to."
+  );
+}
+
+export function pairingRateLimitedText(retryAfterMs: number): string {
+  return (
+    `Blocked: too many pairing attempts were started recently, so no new code was shown and nothing ` +
+    `was submitted. Retry pairing after ${Math.ceil(retryAfterMs / 60_000)} minutes.`
+  );
+}
+
+/** A confirmation naming a code no open attempt shows: expired, already used, or mistyped. */
+export function pairingCodeUnknownText(code: string): string {
+  return (
+    `No pairing attempt is showing the code ${code}: it expired, was already used, or was mistyped. ` +
+    `Nothing was paired. Call pair_figma_plugin without a code to show a fresh one.`
+  );
 }
 
 /**
@@ -97,11 +169,10 @@ export function pluginDisconnectedAction(): string {
  * Allow approves the session, never the finished call: nothing is queued to replay, so the caller
  * must submit again.
  */
-function approvalPendingAction(pairingCode: string | null, waitMs: number): string {
-  const session = pairingCode ? `pairing code ${pairingCode}` : "this session";
+function approvalPendingAction(waitMs: number): string {
   return (
-    `Blocked: session approval is pending. Required before retrying: someone clicks Allow for ` +
-    `${session} in the Framelink plugin in Figma, where the request now shows as expired. ` +
+    `Blocked: session approval is pending. Required before retrying: someone clicks Allow for this ` +
+    `session in the Framelink plugin in Figma, where the request now shows as expired. ` +
     `${REPORT_TO_PERSON} they confirm the approval — each attempt waits up to ` +
     `${Math.round(waitMs / 1000)}s and cannot succeed without them. Approving later does not run ` +
     `this call; submit it again.`
@@ -113,16 +184,13 @@ function approvalPendingAction(pairingCode: string | null, waitMs: number): stri
  * an Allow there carries to the next run from this directory. Nothing replays — the person's Allow
  * approves the session, and only re-running sends the script.
  */
-function approvalPendingRerunAction(pairingCode: string | null, waitMs: number): string {
-  const request = pairingCode
-    ? `the request with pairing code ${pairingCode}`
-    : "this run's request";
+function approvalPendingRerunAction(waitMs: number): string {
   return (
     `Blocked: session approval is pending, and this run has ended without sending the script. ` +
-    `Required before re-running: someone clicks Allow on ${request} in the Framelink plugin in Figma, ` +
-    `where it now shows as expired. That approves the next run from this directory while the plugin ` +
-    `stays open, provided it reconnects on the same port; it does not run this one. If the next run ` +
-    `prints a new pairing code instead, approve that one. ${REPORT_TO_PERSON} they confirm the approval — this run ` +
-    `waited ${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`
+    `Required before re-running: someone clicks Allow on this run's request in the Framelink plugin ` +
+    `in Figma, where it now shows as expired. That approves the next run from this directory while ` +
+    `the plugin stays open, provided it reconnects on the same port; it does not run this one. ` +
+    `${REPORT_TO_PERSON} they confirm the approval — this run waited ` +
+    `${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`
   );
 }

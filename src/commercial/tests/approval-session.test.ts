@@ -7,11 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
-import {
-  ApprovalSession,
-  NO_SERVER_APPROVAL,
-  serverApprovalTransition,
-} from "~/commercial/plugin-bridge/approval-session.js";
+import { ApprovalSession } from "~/commercial/plugin-bridge/approval-session.js";
 import { TEST_APPROVED_SESSION } from "./fixtures/write-access.js";
 
 const PORT = 19_901;
@@ -22,7 +18,7 @@ function restartable() {
     mkdtempSync(join(tmpdir(), "flcm-as-")),
   );
   return () => {
-    const session = new ApprovalSession(store, () => {});
+    const session = new ApprovalSession(store);
     session.bind(PORT);
     return session;
   };
@@ -32,11 +28,11 @@ it("a handover spends the claim it answered, and a restart reloads the session a
   const start = restartable();
   const before = start();
   before.apply({ type: "claimed", claim: "claim-1" });
-  expect(before.sessionInfo("1234", "https://app.framelink.ai").sessionClaim).toBe("claim-1");
+  expect(before.sessionInfo("https://app.framelink.ai").sessionClaim).toBe("claim-1");
 
   before.apply({ type: "handedOver", session: TEST_APPROVED_SESSION });
 
-  const after = start().sessionInfo("1234", "https://app.framelink.ai");
+  const after = start().sessionInfo("https://app.framelink.ai");
   expect(after).toMatchObject({ sessionToken: TEST_APPROVED_SESSION.token, sessionClaim: null });
 });
 
@@ -51,16 +47,8 @@ it("a revoke forgets the session but keeps an open claim, across a restart too",
   before.apply({ type: "revoked" });
 
   expect(before.session).toBeNull();
-  expect(start().sessionInfo(null, "https://app.framelink.ai")).toMatchObject({
+  expect(start().sessionInfo("https://app.framelink.ai")).toMatchObject({
     sessionToken: null,
     sessionClaim: "claim-2",
   });
-});
-
-it("only a handover announces an approval", () => {
-  const announced = (event: Parameters<typeof serverApprovalTransition>[1]) =>
-    serverApprovalTransition(NO_SERVER_APPROVAL, event).effects.some((e) => e.type === "approved");
-  expect(announced({ type: "handedOver", session: TEST_APPROVED_SESSION })).toBe(true);
-  expect(announced({ type: "reloaded", session: TEST_APPROVED_SESSION, claim: null })).toBe(false);
-  expect(announced({ type: "claimed", claim: "c" })).toBe(false);
 });

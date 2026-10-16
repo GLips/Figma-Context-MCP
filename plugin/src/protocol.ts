@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -44,6 +44,10 @@ export const PROTOCOL_VERSION = 10;
  *     cancelled, and revoking a session cancels its runs. EXECUTE_CODE carries the late-change window,
  *     and a clean late watch ends in RUN_SETTLED. NOTIFY carries {serverProtocol}, not text,
  *     and the server refuses a newer plugin as it does an older one.
+ * v11: links are paired and authenticated. HELLO replaces GET_VERSION, NOTIFY and PING; AUTHENTICATE
+ *     challenges for the installation credential and carries the owner; PAIRING_OFFER, PAIRING_CLOSED
+ *     and PAIR_CONFIRMED provision it. SESSION_INFO loses its pairing code and reaches authenticated
+ *     links only; SESSION_TOKEN loses its Authorizing User.
  */
 
 // ---- Transport ----
@@ -114,21 +118,46 @@ export const NATIVE_OPERATIONS = ["page-create", "page-switch", "font-load", "fo
 export type NativeOperation = (typeof NATIVE_OPERATIONS)[number];
 
 /**
- * The Authorizing User: the human who clicked Allow for a session, as `figma.currentUser` reported
- * them then. Every write the session makes is attributed to `figmaUserId`; `name` is display-only.
+ * The owner of a plugin link: the Figma user signed in to the plugin (`figma.currentUser`), reported
+ * when the link authenticates. Writes through the link are charged to `figmaUserId`; `name` is
+ * display-only.
  */
-export interface AuthorizingUser {
+export interface PluginOwner {
   figmaUserId: string;
   name: string;
 }
 
-/** An Authorizing User off untrusted JSON; anything without a Figma user id is none. */
-export function parseAuthorizingUser(value: unknown): AuthorizingUser | null {
+/** A link owner off untrusted JSON; anything without a Figma user id is none. */
+export function parsePluginOwner(value: unknown): PluginOwner | null {
   if (!isRecord(value)) return null;
   const { figmaUserId, name } = value;
   if (typeof figmaUserId !== "string" || figmaUserId.length === 0) return null;
   return { figmaUserId, name: typeof name === "string" ? name : "" };
 }
+
+// ---- Link setup: hello, authentication, pairing ----
+
+/**
+ * What a link proof signs, beside the credential id and the server's nonce. Versioned so a proof
+ * minted for one scheme can never verify under another.
+ */
+export const LINK_PROOF_CONTEXT = "framelink-plugin-link-v1";
+
+/** The message a link proof is an HMAC-SHA256 of, keyed by the credential's secret. */
+export function linkProofMessage(credentialId: string, nonce: string): string {
+  return `${LINK_PROOF_CONTEXT}:${credentialId}:${nonce}`;
+}
+
+// Credential ids, secrets and nonces are server-minted base64url. Bounded here because the plugin
+// stores the id as part of a clientStorage key and both sides hash the rest.
+const LINK_TOKEN = /^[A-Za-z0-9_-]{8,128}$/;
+const LINK_PROOF = /^[0-9a-f]{64}$/;
+
+/**
+ * A pairing code: 8 Crockford base32 characters split by a dash (`7QKM-X2D9`), so it can't be
+ * mistaken for a session handle. It names one pairing attempt and is never a credential.
+ */
+export const PAIRING_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
 
 /** What the plugin panel shows about write access, pushed from the server. */
 export type WriteAccessNotice =
@@ -158,17 +187,21 @@ function parseWriteAccessNotice(value: unknown): WriteAccessNotice | null {
  * part of the payload: the bridge mints it and appends it last, so no field can overwrite it.
  */
 export type ServerRequest =
-  | { type: "PING"; payload: string }
-  | { type: "GET_VERSION" }
+  // FROZEN: every plugin build, past and future, must parse this frame and answer HELLO_RESULT, so a
+  // mismatched build is still told to re-import. The plugin words that notice itself from the number.
+  | { type: "HELLO"; serverProtocol: number }
+  // Prove possession of the credential `credentialId` names, by signing `nonce` (linkProofMessage).
+  | { type: "AUTHENTICATE"; credentialId: string; nonce: string }
+  // Show this code in the panel until the attempt closes or expires. Acked, never acted on.
+  | { type: "PAIRING_OFFER"; code: string; expiresInMs: number }
+  | { type: "PAIRING_CLOSED"; code: string }
+  // The human confirmed `code`: store this installation credential. Sent only to the link showing it.
+  | { type: "PAIR_CONFIRMED"; code: string; credentialId: string; secret: string }
   | { type: "APPROVAL_STATUS" }
-  // Sent only to a plugin whose protocol isn't the server's. The plugin words the toast itself, so a peer
-  // can never put its own text in front of the human.
-  | { type: "NOTIFY"; serverProtocol: number }
   | {
       type: "SESSION_INFO";
       identity: string;
-      // Null with no connection, and until the human's first Allow mints a token, respectively.
-      pairingCode: string | null;
+      // Null until the human's first Allow mints a token.
       sessionToken: string | null;
       // The claim the plugin gave this session's last approval request, so an Allow given while the
       // session was disconnected can be handed over now.
@@ -191,12 +224,17 @@ export type ServerRequest =
 export type ServerRequestType = ServerRequest["type"];
 
 /**
- * The requests a plugin of unknown vintage may be sent before its version is known — the handshake
- * can't wait on its own answer. Everything else holds for the verdict (bridge.ts). Deny-by-default:
- * adding a type here asserts it is safe to send to an unsupported plugin, so their shapes must not
- * change in a way an older plugin misreads.
+ * The only requests a link is sent before it authenticates (bridge.ts), and the only ones a
+ * mismatched build is sent at all is the first. Deny-by-default: adding a type here asserts it is
+ * safe to send to a page posing as the plugin, which is anyone who can open a socket with `Origin: null`.
  */
-export const HANDSHAKE_REQUEST_TYPES = ["PING", "GET_VERSION", "SESSION_INFO", "NOTIFY"] as const satisfies readonly ServerRequestType[];
+export const LINK_SETUP_REQUEST_TYPES = [
+  "HELLO",
+  "AUTHENTICATE",
+  "PAIRING_OFFER",
+  "PAIRING_CLOSED",
+  "PAIR_CONFIRMED",
+] as const satisfies readonly ServerRequestType[];
 
 /** The requests the plugin tracks as runs: queued, then running, and answerable by CANCEL_RESULT. */
 export const RUN_REQUEST_TYPES = ["EXECUTE_CODE", "SCREENSHOT"] as const satisfies readonly ServerRequestType[];
@@ -227,22 +265,30 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       return f.ok === true
         ? { type: "CHANNEL_RESPONSE", id, ok: true, payload: f.payload }
         : { type: "CHANNEL_RESPONSE", id, ok: false, error: f.error };
-    case "PING":
-      return { type: "PING", id, payload: typeof f.payload === "string" ? f.payload : "" };
-    case "GET_VERSION":
+    case "HELLO":
+      return typeof f.serverProtocol === "number" ? { type: "HELLO", id, serverProtocol: f.serverProtocol } : null;
+    case "AUTHENTICATE":
+      return isLinkToken(f.credentialId) && isLinkToken(f.nonce)
+        ? { type: "AUTHENTICATE", id, credentialId: f.credentialId, nonce: f.nonce }
+        : null;
+    case "PAIRING_OFFER":
+      return isPairingCode(f.code) && typeof f.expiresInMs === "number" && f.expiresInMs > 0
+        ? { type: "PAIRING_OFFER", id, code: f.code, expiresInMs: f.expiresInMs }
+        : null;
+    case "PAIRING_CLOSED":
+      return isPairingCode(f.code) ? { type: "PAIRING_CLOSED", id, code: f.code } : null;
+    case "PAIR_CONFIRMED":
+      return isPairingCode(f.code) && isLinkToken(f.credentialId) && isLinkToken(f.secret)
+        ? { type: "PAIR_CONFIRMED", id, code: f.code, credentialId: f.credentialId, secret: f.secret }
+        : null;
     case "APPROVAL_STATUS":
       return { type: f.type, id };
-    case "NOTIFY":
-      return typeof f.serverProtocol === "number"
-        ? { type: "NOTIFY", id, serverProtocol: f.serverProtocol }
-        : null;
     case "SESSION_INFO":
       if (typeof f.identity !== "string" || typeof f.framelinkOrigin !== "string") return null;
       return {
         type: "SESSION_INFO",
         id,
         identity: f.identity,
-        pairingCode: stringOrNull(f.pairingCode),
         sessionToken: stringOrNull(f.sessionToken),
         sessionClaim: stringOrNull(f.sessionClaim),
         framelinkOrigin: f.framelinkOrigin,
@@ -302,15 +348,22 @@ export type ExecuteCodeResult = {
 /** Exactly one of a base64 PNG or the failure. */
 export type ScreenshotResult = { type: "SCREENSHOT_RESULT"; image: string } | { type: "SCREENSHOT_RESULT"; errors: string };
 
-/** A plugin's versions. Both optional: a plugin that can't name them reads as the protocol floor. */
-export type VersionReply = { type: "VERSION"; pluginVersion?: string; protocolVersion?: number };
+/** FROZEN, like HELLO. Both optional: a plugin that can't name them reads as the protocol floor. */
+export type HelloReply = { type: "HELLO_RESULT"; pluginVersion?: string; protocolVersion?: number };
+
+/** The answer to AUTHENTICATE: a proof under the named credential, or that this plugin holds none. */
+export type AuthenticateReply =
+  | { type: "LINK_PROOF"; proof: string; owner: PluginOwner | null }
+  | { type: "LINK_UNPAIRED" };
 
 /** The one reply each request is owed, by request type. An ERROR may stand in for any of them. */
 export interface ReplyByRequest {
-  PING: { type: "PONG"; echo: string };
-  GET_VERSION: VersionReply;
+  HELLO: HelloReply;
+  AUTHENTICATE: AuthenticateReply;
+  PAIRING_OFFER: { type: "PAIRING_OFFER_ACK" };
+  PAIRING_CLOSED: { type: "PAIRING_CLOSED_ACK" };
+  PAIR_CONFIRMED: { type: "CREDENTIAL_STORED" };
   APPROVAL_STATUS: ApprovalStatusReply;
-  NOTIFY: { type: "NOTIFY_RESULT" };
   SESSION_INFO: { type: "SESSION_INFO_ACK" };
   // Write requests pass the consent gate first: an unapproved session is answered PENDING_APPROVAL.
   EXECUTE_CODE: ExecuteCodeResult | PendingApprovalReply;
@@ -341,21 +394,28 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
   const f = value;
   if (f.type === "ERROR") return typeof f.error === "string" ? { type: "ERROR", error: f.error } : null;
   switch (requestType) {
-    case "PING":
-      return f.type === "PONG" ? { type: "PONG", echo: typeof f.echo === "string" ? f.echo : "" } : null;
-    case "GET_VERSION":
-      if (f.type !== "VERSION") return null;
+    case "HELLO":
+      if (f.type !== "HELLO_RESULT") return null;
       return {
-        type: "VERSION",
+        type: "HELLO_RESULT",
         pluginVersion: typeof f.pluginVersion === "string" ? f.pluginVersion : undefined,
         protocolVersion: typeof f.protocolVersion === "number" ? f.protocolVersion : undefined,
       };
+    case "AUTHENTICATE":
+      if (f.type === "LINK_UNPAIRED") return { type: "LINK_UNPAIRED" };
+      return f.type === "LINK_PROOF" && typeof f.proof === "string" && LINK_PROOF.test(f.proof)
+        ? { type: "LINK_PROOF", proof: f.proof, owner: parsePluginOwner(f.owner) }
+        : null;
+    case "PAIRING_OFFER":
+      return f.type === "PAIRING_OFFER_ACK" ? { type: "PAIRING_OFFER_ACK" } : null;
+    case "PAIRING_CLOSED":
+      return f.type === "PAIRING_CLOSED_ACK" ? { type: "PAIRING_CLOSED_ACK" } : null;
+    case "PAIR_CONFIRMED":
+      return f.type === "CREDENTIAL_STORED" ? { type: "CREDENTIAL_STORED" } : null;
     case "APPROVAL_STATUS":
       return f.type === "APPROVAL_GRANTED" || f.type === "PENDING_APPROVAL" || f.type === "APPROVAL_REJECTED"
         ? { type: f.type }
         : null;
-    case "NOTIFY":
-      return f.type === "NOTIFY_RESULT" ? { type: "NOTIFY_RESULT" } : null;
     case "SESSION_INFO":
       return f.type === "SESSION_INFO_ACK" ? { type: "SESSION_INFO_ACK" } : null;
     case "WRITE_ACCESS":
@@ -394,8 +454,8 @@ export function parseExecuteCodeResult(value: unknown): ExecuteCodeResult | null
 
 /** Frames the plugin sends unprompted. None is a reply; CHANNEL_REQUEST carries the plugin's own id. */
 export type PluginEvent =
-  // The Allow handover: the token this session's approval keys on, and who clicked Allow.
-  | { type: "SESSION_TOKEN"; sessionToken: string; authorizingUser: AuthorizingUser | null }
+  // The Allow handover: the token this session's approval keys on.
+  | { type: "SESSION_TOKEN"; sessionToken: string }
   // The plugin's claim on this session's pending approval request, sent only to the socket that asked.
   | { type: "SESSION_CLAIM"; sessionClaim: string }
   // The human revoked this session in the panel: forget the token.
@@ -425,7 +485,7 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
   switch (f.type) {
     case "SESSION_TOKEN":
       return isPluginMintedToken(f.sessionToken)
-        ? { type: "SESSION_TOKEN", sessionToken: f.sessionToken, authorizingUser: parseAuthorizingUser(f.authorizingUser) }
+        ? { type: "SESSION_TOKEN", sessionToken: f.sessionToken }
         : null;
     case "SESSION_CLAIM":
       return isPluginMintedToken(f.sessionClaim) ? { type: "SESSION_CLAIM", sessionClaim: f.sessionClaim } : null;
@@ -479,6 +539,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isOneOf<T extends string>(words: readonly T[], value: unknown): value is T {
   return typeof value === "string" && (words as readonly string[]).includes(value);
+}
+
+function isLinkToken(value: unknown): value is string {
+  return typeof value === "string" && LINK_TOKEN.test(value);
+}
+
+function isPairingCode(value: unknown): value is string {
+  return typeof value === "string" && PAIRING_CODE_PATTERN.test(value);
 }
 
 function stringOrNull(value: unknown): string | null {

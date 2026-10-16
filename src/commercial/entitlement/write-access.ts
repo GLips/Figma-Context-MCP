@@ -9,12 +9,12 @@
 //
 // Network is NEVER on the path that says yes: the gate decides from the cached seat and the counts
 // on disk, so an outage can't stop a validated seat or an unspent allowance from writing. The only
-// awaited request is a seat re-check for a signed-in Authorizing User who would otherwise be refused.
+// awaited request is a seat re-check for a signed-in Plugin Owner who would otherwise be refused.
 //
 // What the gate counts is more than the file: executions authorized but not finished (WriteMeter's
 // reservations) and Writes the file couldn't take (a failed save, kept here). Both live in this
 // process's memory only, so they hold against its own parallel calls, not another server's.
-import type { AuthorizingUser } from "@framelink/plugin/protocol";
+import type { PluginOwner } from "@framelink/plugin/protocol";
 import { Logger } from "~/utils/logger.js";
 import { FramelinkApiError, type FramelinkApiClient } from "./framelink-api.js";
 import type {
@@ -38,11 +38,11 @@ import {
   type WriteLedger,
 } from "./write-ledger.js";
 
-// Batching: at most one usage report per Authorizing User per this interval (the app rate-limits installs).
+// Batching: at most one usage report per Plugin Owner per this interval (the app rate-limits installs).
 const USAGE_REPORT_INTERVAL_MS = 10_000;
 // How stale the server's count may get before a connected server asks again, pending writes or not.
 const USAGE_RECONCILE_MS = 30 * 60 * 1000;
-// A refused, signed-in Authorizing User may have just bought a seat; re-check at most this often while refused.
+// A refused, signed-in Plugin Owner may have just bought a seat; re-check at most this often while refused.
 const REFUSAL_SEAT_RECHECK_MS = 30_000;
 // How often to retry saving Writes the state file refused.
 const PERSIST_RETRY_MS = 30_000;
@@ -75,10 +75,10 @@ export class WriteAccess {
    * has authorized and not yet settled (WriteMeter's reservations). Synchronous, so the caller can
    * reserve on the same tick it decides.
    */
-  decide(authorizingUser: AuthorizingUser | null, inFlightWrites: number): WriteAuthorization {
+  decide(owner: PluginOwner | null, inFlightWrites: number): WriteAuthorization {
     const now = this.now();
     const state = this.readState();
-    const figmaUserId = authorizingUser?.figmaUserId ?? null;
+    const figmaUserId = owner?.figmaUserId ?? null;
     return authorizeWriteExecution({
       figmaUserId,
       seat: figmaUserId === null ? null : (state.seats[figmaUserId] ?? null),
@@ -90,7 +90,7 @@ export class WriteAccess {
     });
   }
 
-  /** A signed-in Authorizing User refused for the allowance may have just bought a seat: re-check, throttled. */
+  /** A signed-in Plugin Owner refused for the allowance may have just bought a seat: re-check, throttled. */
   async recheckRefusedSeat(figmaUserId: string): Promise<void> {
     const checkedAt = this.lastSeatCheckAt.get(figmaUserId) ?? 0;
     if (this.now().getTime() - checkedAt >= REFUSAL_SEAT_RECHECK_MS)
@@ -113,7 +113,7 @@ export class WriteAccess {
   }
 
   /**
-   * Re-check a signed-in Authorizing User's seat. Only a successful answer changes it: seat:false revokes,
+   * Re-check a signed-in Plugin Owner's seat. Only a successful answer changes it: seat:false revokes,
    * 401 (or a token bound to someone else) drops the token, and an outage or any other refusal leaves
    * it exactly as it was.
    */
@@ -146,8 +146,8 @@ export class WriteAccess {
   }
 
   /**
-   * Report unreported Writes and take the server's count back. Paid Authorizing Users don't report. Also
-   * used with an empty batch to reconcile: the server's count covers the Authorizing User's other devices.
+   * Report unreported Writes and take the server's count back. Paid Plugin Owners don't report. Also
+   * used with an empty batch to reconcile: the server's count covers the Plugin Owner's other devices.
    */
   reportWriteUsage(figmaUserId: string): Promise<void> {
     const inFlight = this.reportsInFlight.get(figmaUserId);
@@ -160,11 +160,11 @@ export class WriteAccess {
   }
 
   /**
-   * Bring an Authorizing User's seat and counts up to date with the server. `force` is session approval,
+   * Bring an Plugin Owner's seat and counts up to date with the server. `force` is session approval,
    * which checks unconditionally; otherwise each half runs only once it is stale.
    */
-  async syncWriteAccess(authorizingUser: AuthorizingUser, { force = false } = {}): Promise<void> {
-    const { figmaUserId } = authorizingUser;
+  async syncWriteAccess(owner: PluginOwner, { force = false } = {}): Promise<void> {
+    const { figmaUserId } = owner;
     const now = this.now();
     const state = this.readState();
     const seat = state.seats[figmaUserId];

@@ -15,18 +15,21 @@ import { startHttpServer, stopHttpServer } from "~/server.js";
 import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  grantedTestApproval,
+  linkedTestResolution,
+  TEST_PLUGIN_LINK,
+} from "./fixtures/write-access.js";
 
 const request = vi.fn();
 const readSavedScript = vi.fn();
 const plugin: PluginBridgeRuntime = {
   bridge: {
     request,
-    getPairingCode: () => "1234",
-    protocolRefusal: () => null,
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
-    isPluginConnected: () => true,
+    resolveLink: linkedTestResolution,
   } as unknown as PluginBridge,
   writeMeter: createTestWriteAccess().writeMeter,
   readSavedScript,
@@ -117,6 +120,7 @@ describe("a loopback bind", () => {
     );
     expect(result.isError).toBeUndefined();
     expect(request).toHaveBeenCalledWith(
+      TEST_PLUGIN_LINK,
       expect.objectContaining({ type: "SCREENSHOT" }),
       expect.anything(),
     );

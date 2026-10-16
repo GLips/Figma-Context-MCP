@@ -17,21 +17,21 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer as createMcpServer } from "~/mcp/index.js";
-import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import {
+  PluginBridge,
+  type LinkRequest,
+  type PluginLink,
+} from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
-import type {
-  PluginReply,
-  ReplyFor,
-  ServerRequest,
-  WriteAccessNotice,
-} from "@framelink/plugin/protocol";
+import type { PluginReply, ReplyFor, WriteAccessNotice } from "@framelink/plugin/protocol";
 import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
 import {
   createTestWriteAccess,
+  linkedTestResolution,
   TEST_APPROVED_SESSION,
-  TEST_AUTHORIZING_USER,
+  TEST_PLUGIN_OWNER,
 } from "./fixtures/write-access.js";
 
 /** The app's write endpoints, faithful to the contract, with knobs for what the test needs it to say. */
@@ -40,7 +40,7 @@ async function startFakeFramelinkApp() {
     down: false,
     seat: true,
     revoked: false,
-    // Writes the Authorizing User made on other devices, which only the server knows about.
+    // Writes the Plugin Owner made on other devices, which only the server knows about.
     otherDeviceWrites: 0,
     reportedExecutionIds: [] as string[],
     tokenPolls: 0,
@@ -76,7 +76,7 @@ async function startFakeFramelinkApp() {
         if (app.revoked || req.headers.authorization !== "Bearer tok-1")
           return json(401, { error: "invalid_token" });
         return json(200, {
-          figmaUserId: TEST_AUTHORIZING_USER.figmaUserId,
+          figmaUserId: TEST_PLUGIN_OWNER.figmaUserId,
           seat: app.seat,
           validatedAt: new Date().toISOString(),
         });
@@ -124,11 +124,11 @@ async function setup() {
   return { ...fake, ...access, notices };
 }
 
-const USER_ID = TEST_AUTHORIZING_USER.figmaUserId;
+const USER_ID = TEST_PLUGIN_OWNER.figmaUserId;
 
 /** What the gate would say to a new execution now. Hands back the reservation it takes. */
 async function gateAnswer(writeMeter: WriteMeter) {
-  const admission = await writeMeter.authorize(TEST_AUTHORIZING_USER, randomUUID());
+  const admission = await writeMeter.authorize(TEST_PLUGIN_OWNER, randomUUID());
   if (admission.kind === "refused") return admission.refusal;
   admission.charge.lost({ mayHaveRun: false });
   return admission.authorization;
@@ -142,13 +142,16 @@ function spendAllowance(writeAccess: WriteAccess, count: number): void {
 class MeteredBridge extends PluginBridge {
   documentChanged: boolean[] = [];
   executions = 0;
-  override isPluginConnected() {
-    return true;
+  override resolveLink() {
+    return linkedTestResolution();
   }
   override approvedSession() {
     return TEST_APPROVED_SESSION;
   }
-  override async request<T extends ServerRequest>(payload: T): Promise<ReplyFor<T["type"]>> {
+  override async request<T extends LinkRequest>(
+    _link: PluginLink,
+    payload: T,
+  ): Promise<ReplyFor<T["type"]>> {
     let reply: PluginReply;
     if (payload.type === "APPROVAL_STATUS") reply = { type: "APPROVAL_GRANTED" };
     else {
@@ -226,7 +229,7 @@ describe("write authorization", () => {
     });
 
     app.otherDeviceWrites = FREE_WRITE_ALLOWANCE - 2;
-    await writeAccess.reportWriteUsage(TEST_AUTHORIZING_USER.figmaUserId);
+    await writeAccess.reportWriteUsage(TEST_PLUGIN_OWNER.figmaUserId);
     expect(app.reportedExecutionIds).toEqual([executionId]);
     // During an outage the server's count can't grow, so the Writes it hasn't seen add to it.
     app.down = true;
@@ -239,7 +242,7 @@ describe("write authorization", () => {
 
   it("keeps a validated seat writing through an outage and through a rejected re-sign-in", async () => {
     const { app, writeAccess, notices, store, writeMeter, signIn } = await setup();
-    await signIn.start(TEST_AUTHORIZING_USER);
+    await signIn.start(TEST_PLUGIN_OWNER);
     expect(notices).toEqual([
       {
         kind: "sign-in-pending",
@@ -252,16 +255,16 @@ describe("write authorization", () => {
 
     // Signing in again with a token Framelink turns down leaves the validated seat as it was.
     app.issuedToken = "tok-rejected";
-    await signIn.start(TEST_AUTHORIZING_USER);
+    await signIn.start(TEST_PLUGIN_OWNER);
     expect(notices.at(-1)).toMatchObject({ kind: "sign-in-failed" });
     expect(store.read().seats[USER_ID]).toMatchObject({ token: "tok-1", seat: true });
 
     app.down = true;
-    await writeAccess.syncWriteAccess(TEST_AUTHORIZING_USER, { force: true });
+    await writeAccess.syncWriteAccess(TEST_PLUGIN_OWNER, { force: true });
     expect(await gateAnswer(writeMeter)).toEqual({
       kind: "authorized",
       via: "seat",
-      figmaUserId: TEST_AUTHORIZING_USER.figmaUserId,
+      figmaUserId: TEST_PLUGIN_OWNER.figmaUserId,
     });
   });
 
@@ -271,7 +274,7 @@ describe("write authorization", () => {
     // Three parallel calls for the last two Writes: the third must not start.
     const [readOnly, writes, oneTooMany] = await Promise.all(
       ["read-only", "writes", "one-too-many"].map((id) =>
-        writeMeter.authorize(TEST_AUTHORIZING_USER, id),
+        writeMeter.authorize(TEST_PLUGIN_OWNER, id),
       ),
     );
     expect([readOnly, writes, oneTooMany].map((d) => d.kind)).toEqual([
@@ -301,7 +304,7 @@ describe("write authorization", () => {
   it("charges a change reported after the reply to that same execution, once", async () => {
     const { app, writeAccess, writeMeter } = await setup();
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
-    const admission = await writeMeter.authorize(TEST_AUTHORIZING_USER, "late-writer");
+    const admission = await writeMeter.authorize(TEST_PLUGIN_OWNER, "late-writer");
     if (admission.kind !== "authorized") throw new Error("the last Write fits the allowance");
     // The reply said "no change", then the plugin saw one — and said so twice.
     admission.charge.submitted("run-7");
@@ -316,7 +319,7 @@ describe("write authorization", () => {
 
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {
     const { store, writeMeter, signIn } = await setup();
-    await signIn.start(TEST_AUTHORIZING_USER);
+    await signIn.start(TEST_PLUGIN_OWNER);
     chmodSync(store.file, 0o000);
     cleanups.push(async () => chmodSync(store.file, 0o600));
     await expect(gateAnswer(writeMeter)).rejects.toThrow(/EACCES/);
@@ -336,19 +339,19 @@ describe("write authorization", () => {
 
   it("ends the seat on seat:false, and drops the token on a 401", async () => {
     const { app, writeAccess, store, writeMeter, signIn } = await setup();
-    await signIn.start(TEST_AUTHORIZING_USER);
+    await signIn.start(TEST_PLUGIN_OWNER);
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE);
 
     app.seat = false;
-    await writeAccess.validateSeat(TEST_AUTHORIZING_USER.figmaUserId);
+    await writeAccess.validateSeat(TEST_PLUGIN_OWNER.figmaUserId);
     expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "refused",
       signedIn: true,
     });
 
     app.revoked = true;
-    await writeAccess.validateSeat(TEST_AUTHORIZING_USER.figmaUserId);
-    expect(store.read().seats[TEST_AUTHORIZING_USER.figmaUserId]).toBeUndefined();
+    await writeAccess.validateSeat(TEST_PLUGIN_OWNER.figmaUserId);
+    expect(store.read().seats[TEST_PLUGIN_OWNER.figmaUserId]).toBeUndefined();
     expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "refused",
       signedIn: false,

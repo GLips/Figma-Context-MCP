@@ -59,7 +59,7 @@
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
+import { linkForProbe } from "./probe-link.mjs";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -67,7 +67,6 @@ import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 // ship the actual std-lib, not a stand-in. Built once here through the same seam the server build
 // uses; the contract harness, whose fake plugin never evals anything, uses a stub instead.
 const PREAMBLE = await buildSandboxPreamble();
-
 
 const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 const t0 = Date.now();
@@ -96,7 +95,9 @@ const undosToRemove = async (id, cap) => {
 // verbs, or a first verb's empty history): rollback must never erase it. Hand-verified 2026-08-07
 // to OVERREACH (the undo eats the foreign step too) — kept, expected to fail, because the
 // bare-vs-1b difference IS the finding and a future Figma semantics change here should be noticed.
-const SCENARIO_1 = HELPERS + `
+const SCENARIO_1 =
+  HELPERS +
+  `
 const ids = {};
 ids.foreign = mk("flcm-undo-probe-foreign");
 const foreignBorn = await alive(ids.foreign);
@@ -118,7 +119,9 @@ return { pre, now, later };
 // interaction: after the rollback, how many undos take the user back past the PREVIOUS verb?
 // 1 = the rolled-back verb left no residue step; 2 = it minted an empty step slice 2.3's seal
 // placement must avoid.
-const SCENARIO_1B = HELPERS + `
+const SCENARIO_1B =
+  HELPERS +
+  `
 const ids = {};
 figma.commitUndo();                       // previous verb: entry seal
 ids.prev = mk("flcm-undo-probe-1b-prev");
@@ -142,7 +145,9 @@ return { pre, afterRollback, undosForPrev };
 // hiding between verb A's success commit and verb B's entry seal — it would only surface when
 // removing A takes 2 undos — so both counts are measured. Caps bound the walk (B: its commit is
 // the newest step, so 2 is already generous; A: content + a possible empty neighbor).
-const SCENARIO_2 = HELPERS + `
+const SCENARIO_2 =
+  HELPERS +
+  `
 const ids = {};
 figma.commitUndo();                       // verb A entry seal
 ids.a = mk("flcm-undo-probe-a");
@@ -159,13 +164,17 @@ return { undosForB, aSurvivedB, undosForA };
 // Scenario 3 — chunking across runs in one plugin session (real usage: many execute_code runs).
 // Two verb-shaped runs mint their steps; a third run counts undos per verb, same logic as
 // scenario 2.
-const scenarioVerbRun = (name) => HELPERS + `
+const scenarioVerbRun = (name) =>
+  HELPERS +
+  `
 figma.commitUndo();
 const id = mk(${JSON.stringify("flcm-undo-probe-" + name)});
 figma.commitUndo();
 return { id };
 `;
-const scenarioCrossRunUndo = (ids) => HELPERS + `
+const scenarioCrossRunUndo = (ids) =>
+  HELPERS +
+  `
 const undosForY = await undosToRemove(${JSON.stringify(ids.y)}, 2);
 const xSurvivedY = await alive(${JSON.stringify(ids.x)});
 const undosForX = undosForY === -1 ? null : await undosToRemove(${JSON.stringify(ids.x)}, 3);
@@ -192,12 +201,20 @@ async function exec(code) {
   // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so each
   // scenario would run repeatedly and then read its own run's reply as an unexpected approval status.
   const waited = await requestUntilApproved(
-    (signal) => bridge.approvalStatus(signal),
-    () => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
+    (signal) => bridge.approvalStatus(link, signal),
+    () =>
+      bridge.request(link, {
+        type: "EXECUTE_CODE",
+        code,
+        preamble: PREAMBLE,
+        lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+      }),
     { waitMs: APPROVAL_WINDOW_MS },
   );
   if (waited.type === "PENDING_APPROVAL") {
-    throw new Error("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
+    throw new Error(
+      "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
+    );
   }
   const reply = waited.result;
   // Any execution reply proves the session ran code — set BEFORE the errors check, so a scenario
@@ -207,21 +224,23 @@ async function exec(code) {
   return reply?.result;
 }
 
-// Re-introduce the session on EVERY connect: the plugin binds identity/pairing per connection, so
-// a mid-wait reconnect (Figma reload, plugin reopen) without a fresh SESSION_INFO would leave an
-// unidentifiable, unapprovable row on the strip. Scenarios still start only once.
+// Re-link on EVERY connect: a mid-wait reconnect (Figma reload, plugin reopen) is a new link, and
+// it needs its own SESSION_INFO or the strip shows an unidentifiable, unapprovable row. Scenarios
+// still start only once.
 async function introduceSession() {
-  log("plugin connected — introducing the session");
-  await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
-  log(`if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
+  link = await linkForProbe(bridge, log);
+  log("if the strip asks, click Allow");
 }
 
+let link = null;
 let started = false;
 async function runProbe() {
   try {
     await introduceSession();
   } catch (err) {
-    log(`session introduction failed (${err instanceof Error ? err.message : err}) — will retry on the next reconnect`);
+    log(
+      `session introduction failed (${err instanceof Error ? err.message : err}) — will retry on the next reconnect`,
+    );
     return;
   }
   if (started) return; // reconnects must not restart a probe already in flight
@@ -265,15 +284,23 @@ async function runProbe() {
 
     if (setupBroken || undoInert) {
       pass = false;
-      findings.push("scenarios 1b/2/3 skipped — their counting loops would walk blind without working in-run creation + undo.");
+      findings.push(
+        "scenarios 1b/2/3 skipped — their counting loops would walk blind without working in-run creation + undo.",
+      );
     } else {
       // Scenario 1b: commit-then-undo rollback — the implementable shape when bare overreaches.
       const s1b = await exec(SCENARIO_1B);
       log(`scenario 1b (commit-then-undo): ${JSON.stringify(s1b)}`);
       if (s1b.precondition) {
         pass = false;
-        findings.push(`scenario 1b PRECONDITION NOT MET (${JSON.stringify(s1b.precondition)}) — unverdicted.`);
-      } else if (s1b.afterRollback.prev === true && s1b.afterRollback.own1 === false && s1b.afterRollback.own2 === false) {
+        findings.push(
+          `scenario 1b PRECONDITION NOT MET (${JSON.stringify(s1b.precondition)}) — unverdicted.`,
+        );
+      } else if (
+        s1b.afterRollback.prev === true &&
+        s1b.afterRollback.own1 === false &&
+        s1b.afterRollback.own2 === false
+      ) {
         if (!rollbackShape) rollbackShape = "commit-then-undo";
         if (s1b.undosForPrev === 1) {
           findings.push(
@@ -286,7 +313,9 @@ async function runProbe() {
           );
         }
       } else {
-        findings.push(`rollback (commit-then-undo) FAILED: afterRollback=${JSON.stringify(s1b.afterRollback)}.`);
+        findings.push(
+          `rollback (commit-then-undo) FAILED: afterRollback=${JSON.stringify(s1b.afterRollback)}.`,
+        );
       }
       if (!rollbackShape) {
         pass = false;
@@ -299,7 +328,9 @@ async function runProbe() {
       const s2 = await exec(SCENARIO_2);
       log(`scenario 2 (chunking): ${JSON.stringify(s2)}`);
       if (s2.undosForB === 1 && s2.aSurvivedB && s2.undosForA === 1) {
-        findings.push("chunking: one undo = one verb, both verbs; adjacent entry/success commits mint NO empty step.");
+        findings.push(
+          "chunking: one undo = one verb, both verbs; adjacent entry/success commits mint NO empty step.",
+        );
       } else if (s2.undosForB === 1 && s2.aSurvivedB && s2.undosForA === 2) {
         pass = false;
         findings.push(
@@ -307,7 +338,9 @@ async function runProbe() {
         );
       } else {
         pass = false;
-        findings.push(`chunking FAILED: ${JSON.stringify(s2)} — per-verb undo steps don't hold in-run.`);
+        findings.push(
+          `chunking FAILED: ${JSON.stringify(s2)} — per-verb undo steps don't hold in-run.`,
+        );
       }
 
       // Scenario 3: chunking across runs, same counting.
@@ -316,10 +349,14 @@ async function runProbe() {
       const s3 = await exec(scenarioCrossRunUndo({ x: runX.id, y: runY.id }));
       log(`scenario 3 (cross-run): ${JSON.stringify(s3)}`);
       if (s3.undosForY === 1 && s3.xSurvivedY && s3.undosForX === 1) {
-        findings.push("cross-run: one undo per verb across separate runs; earlier runs' work stood until its own undo.");
+        findings.push(
+          "cross-run: one undo per verb across separate runs; earlier runs' work stood until its own undo.",
+        );
       } else {
         pass = false;
-        findings.push(`cross-run FAILED: ${JSON.stringify(s3)} — per-verb steps don't hold across runs.`);
+        findings.push(
+          `cross-run FAILED: ${JSON.stringify(s3)} — per-verb steps don't hold across runs.`,
+        );
       }
     }
 
@@ -335,7 +372,9 @@ async function runProbe() {
           "in the plan, naming the shape slice 2.3 must build.",
       );
     } else {
-      console.log("\nRecord the observed matrix in the plan and shape slice 2.3's seal placement from it.");
+      console.log(
+        "\nRecord the observed matrix in the plan and shape slice 2.3's seal placement from it.",
+      );
     }
     process.exit(pass ? 0 : 1);
   } catch (err) {

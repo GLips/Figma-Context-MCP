@@ -13,12 +13,7 @@
 // requests, matched back only by the claim the plugin gave that session.
 import type { ApprovalAnswer } from "./approval-lifecycle.js";
 import type { ConnKey, PanelSession } from "./panel.js";
-import {
-  APPROVAL_WAITING_GRACE_MS,
-  type AuthorizingUser,
-  type PluginFrame,
-  type PluginReply,
-} from "./protocol.js";
+import { APPROVAL_WAITING_GRACE_MS, type PluginFrame, type PluginReply } from "./protocol.js";
 
 export type Consent =
   | { kind: "unasked" }
@@ -28,11 +23,10 @@ export type Consent =
 /** A request whose socket closed before the human decided, kept so a late Allow still reaches it. */
 export interface AwayRequest {
   identity: string;
-  pairingCode: string | null;
   claim: string;
   askedAt: number;
   /** Set by an Allow given while away; the token is minted only for the connection that claims it. */
-  allowedBy?: { user: AuthorizingUser | null };
+  allowed?: true;
 }
 
 /** The away request an Allow collects, put back if its token never reaches the session. */
@@ -43,7 +37,6 @@ export interface CollectedAwayRequest {
 
 interface AllowInFlight {
   token: string;
-  user: AuthorizingUser | null;
   collecting: boolean;
 }
 
@@ -52,7 +45,6 @@ export interface SessionApproval {
   consent: Consent;
   allowing: AllowInFlight | null;
   identity: string | null;
-  pairingCode: string | null;
   framelinkOrigin: string | null;
 }
 
@@ -75,7 +67,6 @@ export type PluginApprovalEvent =
       type: "introduced";
       key: ConnKey;
       identity: string;
-      pairingCode: string | null;
       sessionToken: string | null;
       sessionClaim: string | null;
       framelinkOrigin: string;
@@ -83,7 +74,7 @@ export type PluginApprovalEvent =
       freshToken: string;
     }
   | { type: "asked"; key: ConnKey; now: number; freshClaim: string }
-  | { type: "decided"; key: ConnKey; approve: boolean; user: AuthorizingUser | null; freshToken: string }
+  | { type: "decided"; key: ConnKey; approve: boolean; freshToken: string }
   | { type: "allowReady"; key: ConnKey; token: string }
   | { type: "allowPersisted"; key: ConnKey; token: string; ok: boolean; from?: CollectedAwayRequest }
   | { type: "revoked"; key: ConnKey }
@@ -125,7 +116,6 @@ function freshConnection(): SessionApproval {
     consent: unasked,
     allowing: null,
     identity: null,
-    pairingCode: null,
     framelinkOrigin: null,
   };
 }
@@ -141,10 +131,14 @@ export function approvalOf(state: PluginApprovalState, key: ConnKey, store: Appr
   return stored !== "approved" && conn.allowing ? "unknown" : stored;
 }
 
-/** Whether a connected session still needs the human: neither approved nor rejected. */
+/**
+ * Whether an introduced session still needs the human: neither approved nor rejected. A socket the
+ * server never introduced is still authenticating or unpaired, and has nothing to approve yet.
+ */
 export function awaitingDecision(state: PluginApprovalState, store: ApprovalView): boolean {
   for (const [key, conn] of state.connections)
-    if (conn.consent.kind !== "rejected" && approvalOf(state, key, store) !== "approved") return true;
+    if (conn.identity !== null && conn.consent.kind !== "rejected" && approvalOf(state, key, store) !== "approved")
+      return true;
   return false;
 }
 
@@ -176,16 +170,16 @@ export function nextRequestLapse(state: PluginApprovalState, now: number): numbe
 
 export type ApprovalRow = Omit<PanelSession, "label" | "active" | "writeAccess">;
 
-/** The approval half of every panel row: live connections first, then live away requests. */
+/** The approval half of every panel row: introduced connections first, then live away requests. */
 export function approvalRows(state: PluginApprovalState, store: ApprovalView, now: number): ApprovalRow[] {
   const rows: ApprovalRow[] = [];
   for (const [key, conn] of state.connections) {
+    if (conn.identity === null) continue;
     const approved = approvalOf(state, key, store) === "approved";
     const rejected = !approved && conn.consent.kind === "rejected";
     rows.push({
       key,
       identity: conn.identity,
-      pairingCode: conn.pairingCode,
       approved,
       connected: true,
       request: !approved && conn.consent.kind === "requested" ? requestState(conn.consent.askedAt, now) : null,
@@ -198,12 +192,11 @@ export function approvalRows(state: PluginApprovalState, store: ApprovalView, no
     rows.push({
       key,
       identity: away.identity,
-      pairingCode: away.pairingCode,
       approved: false,
       connected: false,
       request: "expired",
       rejected: false,
-      allowedWhileAway: away.allowedBy !== undefined,
+      allowedWhileAway: away.allowed === true,
     });
   }
   return rows;
@@ -211,7 +204,7 @@ export function approvalRows(state: PluginApprovalState, store: ApprovalView, no
 
 /** Any remembered Allow not yet in the store: one given to a session while it was away. */
 export function hasAwayAllow(state: PluginApprovalState): boolean {
-  for (const away of state.away.values()) if (away.allowedBy) return true;
+  for (const away of state.away.values()) if (away.allowed) return true;
   return false;
 }
 
@@ -238,7 +231,6 @@ export function pluginApprovalTransition(
       const conn: SessionApproval = {
         ...existing,
         identity: event.identity,
-        pairingCode: event.pairingCode,
         framelinkOrigin: event.framelinkOrigin,
         credential: event.sessionToken ?? existing.credential,
       };
@@ -252,8 +244,8 @@ export function pluginApprovalTransition(
         event.sessionClaim === null ? undefined : takeAwayRequest(away, event.sessionClaim, event.identity, event.now);
       const claimed =
         conn.credential !== null && store.approval(conn.credential) === "approved" ? undefined : taken;
-      if (claimed?.request.allowedBy) {
-        conn.allowing = { token: event.freshToken, user: claimed.request.allowedBy.user, collecting: true };
+      if (claimed?.request.allowed) {
+        conn.allowing = { token: event.freshToken, collecting: true };
         effects.push({ type: "persistAllow", key: event.key, token: event.freshToken, from: claimed });
       } else if (claimed && conn.consent.kind !== "rejected") {
         conn.consent = { kind: "requested", claim: claimed.request.claim, askedAt: claimed.request.askedAt };
@@ -282,7 +274,7 @@ export function pluginApprovalTransition(
       if (!conn) {
         const request = away.get(event.key);
         if (!request) return unchanged;
-        if (event.approve) away.set(event.key, { ...request, allowedBy: { user: event.user } });
+        if (event.approve) away.set(event.key, { ...request, allowed: true });
         else away.delete(event.key);
         return next([{ type: "render" }]);
       }
@@ -292,7 +284,7 @@ export function pluginApprovalTransition(
       }
       connections.set(event.key, {
         ...conn,
-        allowing: { token: event.freshToken, user: event.user, collecting: false },
+        allowing: { token: event.freshToken, collecting: false },
       });
       return next([{ type: "awaitStore", key: event.key, token: event.freshToken }]);
     }
@@ -314,15 +306,10 @@ export function pluginApprovalTransition(
       const conn = connections.get(event.key);
       const allow = conn?.allowing?.token === event.token ? conn.allowing : null;
       if (conn && allow && event.ok) {
-        // The server spends its claim on this handover, so the request it named is over. The
-        // Authorizing User rides the handover: every write is attributed to whoever clicked Allow.
+        // The server spends its claim on this handover, so the request it named is over.
         connections.set(event.key, { ...conn, credential: event.token, consent: unasked, allowing: null });
         return next([
-          {
-            type: "send",
-            key: event.key,
-            frame: { type: "SESSION_TOKEN", sessionToken: event.token, authorizingUser: allow.user },
-          },
+          { type: "send", key: event.key, frame: { type: "SESSION_TOKEN", sessionToken: event.token } },
           allow.collecting ? { type: "render" } : { type: "settleExpansion" },
         ]);
       }
@@ -350,7 +337,7 @@ export function pluginApprovalTransition(
         connections.set(key, { ...conn, credential: null, allowing: null });
         effects.push(...revokeEffects(key, conn).filter((effect) => effect.type !== "forgetToken"));
       }
-      for (const [key, request] of state.away) if (request.allowedBy) away.delete(key);
+      for (const [key, request] of state.away) if (request.allowed) away.delete(key);
       effects.push({ type: "render" });
       return next(effects);
     }
@@ -370,7 +357,6 @@ export function pluginApprovalTransition(
       )
         retainAwayRequest(away, event.key, {
           identity: conn.identity,
-          pairingCode: conn.pairingCode,
           claim: consent.claim,
           askedAt: consent.askedAt,
         });

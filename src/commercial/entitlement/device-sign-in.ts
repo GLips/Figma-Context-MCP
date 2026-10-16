@@ -2,11 +2,11 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The Framelink device sign-in (RFC 8628) for an Authorizing User: request a code, show it in the
+// The Framelink device sign-in (RFC 8628) for an Plugin Owner: request a code, show it in the
 // plugin panel, poll until the human finishes in the browser, then hand the token to WriteAccess,
-// which decides whether to keep it. One flow per Authorizing User; a second click re-shows its code.
+// which decides whether to keep it. One flow per Plugin Owner; a second click re-shows its code.
 import { setTimeout as pause } from "node:timers/promises";
-import type { AuthorizingUser, WriteAccessNotice } from "@framelink/plugin/protocol";
+import type { PluginOwner, WriteAccessNotice } from "@framelink/plugin/protocol";
 import { Logger } from "~/utils/logger.js";
 import { FramelinkApiError, type FramelinkApiClient } from "./framelink-api.js";
 import type { WriteAccess } from "./write-access.js";
@@ -37,18 +37,18 @@ export class DeviceSignIn {
   }
 
   /**
-   * Start (or re-show) the sign-in for this Authorizing User. The panel gets the code and
+   * Start (or re-show) the sign-in for this Plugin Owner. The panel gets the code and
    * verification URL, then the outcome. Resolves when the flow ends, for callers that wait.
    */
-  start(authorizingUser: AuthorizingUser | null): Promise<void> {
-    if (!authorizingUser) {
+  start(owner: PluginOwner | null): Promise<void> {
+    if (!owner) {
       this.notifyPanel({
         kind: "sign-in-failed",
         message: "Allow this session first — the sign-in is for the Figma user who approves it.",
       });
       return Promise.resolve();
     }
-    const { figmaUserId } = authorizingUser;
+    const { figmaUserId } = owner;
     const live = this.flows.get(figmaUserId);
     if (live) {
       if (live.notice) this.notifyPanel(live.notice);

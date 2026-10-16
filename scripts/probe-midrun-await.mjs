@@ -30,9 +30,9 @@
 // dispatch broke the suspension the whole protocol rests on — that change must be revisited.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
+import { linkForProbe } from "./probe-link.mjs";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -40,7 +40,6 @@ import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 // ship the actual std-lib, not a stand-in. Built once here through the same seam the server build
 // uses; the contract harness, whose fake plugin never evals anything, uses a stub instead.
 const PREAMBLE = await buildSandboxPreamble();
-
 
 const SLOW_REPLY_MS = 4000;
 // A valid 1×1 transparent PNG — figma.createImage validates real image bytes.
@@ -52,13 +51,20 @@ const t0 = Date.now();
 
 let imagesRequests = 0;
 const bridge = new PluginBridge(undefined, {
-  capabilities: new Map([["images.fetch", async (urls) => {
-    imagesRequests++;
-    log(`plugin asked for ${urls.length} image url(s) MID-RUN — holding the reply ${SLOW_REPLY_MS}ms…`);
-    await new Promise((r) => setTimeout(r, SLOW_REPLY_MS));
-    log("releasing the image reply");
-    return Object.fromEntries(urls.map((u) => [u, TINY_PNG_B64]));
-  }]]),
+  capabilities: new Map([
+    [
+      "images.fetch",
+      async (urls) => {
+        imagesRequests++;
+        log(
+          `plugin asked for ${urls.length} image url(s) MID-RUN — holding the reply ${SLOW_REPLY_MS}ms…`,
+        );
+        await new Promise((r) => setTimeout(r, SLOW_REPLY_MS));
+        log("releasing the image reply");
+        return Object.fromEntries(urls.map((u) => [u, TINY_PNG_B64]));
+      },
+    ],
+  ]),
 });
 
 const PROBE_CODE = `
@@ -72,37 +78,33 @@ const built = await flcm.render(
 return { elapsedMs: Date.now() - t0, rootId: built.id };
 `;
 
+let link = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   try {
-    log("plugin connected — introducing the session");
-    await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
-
-    const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
-    // Gate on the server's own minimum rather than a literal, so a protocol bump doesn't silently
-    // leave this probe asserting a version nobody speaks anymore.
-    if (version.protocolVersion !== PROTOCOL_VERSION) {
-      fail(
-        `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
-          `${PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
-          `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
-      );
-    }
-    log(`plugin speaks protocol ${version.protocolVersion} (v${version.pluginVersion}) ✓`);
-    log(`sending the probe render — if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
+    link = await linkForProbe(bridge, log);
+    log(`sending the probe render — if the strip asks, click Allow`);
 
     const runStart = Date.now();
     // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
     // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so the probe
     // would execute repeatedly and then read its own run's reply as an unexpected approval status.
     const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(signal),
-      () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
+      (signal) => bridge.approvalStatus(link, signal),
+      () =>
+        bridge.request(link, {
+          type: "EXECUTE_CODE",
+          code: PROBE_CODE,
+          preamble: PREAMBLE,
+          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+        }),
     );
     if (waited.type === "PENDING_APPROVAL") {
-      fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
+      fail(
+        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
+      );
     }
     const reply = waited.result;
     if (reply?.errors) {
@@ -111,7 +113,9 @@ async function runProbe() {
     const { elapsedMs, rootId } = reply?.result ?? {};
     const wallMs = Date.now() - runStart;
 
-    log(`run completed: sandbox-side elapsed ${elapsedMs}ms, wall ${wallMs}ms, image requests: ${imagesRequests}`);
+    log(
+      `run completed: sandbox-side elapsed ${elapsedMs}ms, wall ${wallMs}ms, image requests: ${imagesRequests}`,
+    );
 
     const suspended = typeof elapsedMs === "number" && elapsedMs >= SLOW_REPLY_MS;
     const oneExecuteOneFetch = imagesRequests === 1;
@@ -122,18 +126,22 @@ async function runProbe() {
       );
     }
     if (!oneExecuteOneFetch) {
-      fail(`expected exactly 1 mid-run image request, saw ${imagesRequests} — check the bridge logs above.`);
+      fail(
+        `expected exactly 1 mid-run image request, saw ${imagesRequests} — check the bridge logs above.`,
+      );
     }
 
     // The loop must survive the suspension: run a second script that cleans the probe frame up.
-    const cleanup = await bridge.request({
+    const cleanup = await bridge.request(link, {
       type: "EXECUTE_CODE",
       code: `const n = await figma.getNodeByIdAsync(${JSON.stringify(rootId)}); if (n) n.remove(); return "cleaned";`,
       preamble: PREAMBLE,
       lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
     });
     if (cleanup?.result !== "cleaned") {
-      log(`⚠️ cleanup run returned ${JSON.stringify(cleanup?.result)} — delete the small "flcm-probe" frame by hand.`);
+      log(
+        `⚠️ cleanup run returned ${JSON.stringify(cleanup?.result)} — delete the small "flcm-probe" frame by hand.`,
+      );
     } else {
       log("second run cleaned the probe frame — the loop survived the suspension ✓");
     }

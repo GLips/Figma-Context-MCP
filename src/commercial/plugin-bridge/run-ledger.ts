@@ -262,8 +262,8 @@ export class RunLedger {
 
   /**
    * Deliver the plugin's cancel answer to the caller waiting on it, once. Answers arriving on a
-   * connection other than the one the CANCEL went out on are dropped: a displaced holder carries
-   * live run ids and must not narrate the current connection's runs.
+   * link other than the one the CANCEL went out on are dropped: one link must not narrate another
+   * link's runs.
    */
   settleCancelAnswer(
     id: string,

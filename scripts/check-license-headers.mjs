@@ -28,6 +28,7 @@ export const COMMERCIAL_PATHS = [
   "scripts/probe-grid.mjs",
   "scripts/probe-line-fill.mjs",
   "scripts/probe-midrun-await.mjs",
+  "scripts/probe-link.mjs",
   "scripts/probe-constraints-stretch.mjs",
   "scripts/probe-queued-writes.mjs",
   "scripts/probe-vector.mjs",

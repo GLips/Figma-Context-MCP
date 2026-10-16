@@ -23,10 +23,14 @@ import { createServer } from "~/mcp/index.js";
 import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  grantedTestApproval,
+  linkedTestResolution,
+} from "./fixtures/write-access.js";
 
 function connectedServer() {
-  const request = vi.fn().mockImplementation(async (_payload: ServerRequest) => ({
+  const request = vi.fn().mockImplementation(async (_link: unknown, _payload: ServerRequest) => ({
     type: "EXECUTE_CODE_RESULT",
     result: "ok",
     console: [],
@@ -35,11 +39,9 @@ function connectedServer() {
   }));
   const bridge = {
     request,
-    getPairingCode: () => "1234",
-    protocolRefusal: () => null,
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
-    isPluginConnected: () => true,
+    resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
@@ -72,10 +74,10 @@ describe("figma_execute_code ships the flcm std-lib", () => {
     try {
       await call("figma_execute_code", { code: "return 1" });
 
-      expect(request.mock.calls.filter(([p]) => p.type === "EXECUTE_CODE")).toHaveLength(1);
+      expect(request.mock.calls.filter(([, p]) => p.type === "EXECUTE_CODE")).toHaveLength(1);
       // Named against the real union member, not a hand-written shape: drop `preamble` from
       // ServerRequest and this file stops compiling rather than quietly asserting on `undefined`.
-      const sent = request.mock.calls[0][0] as Extract<ServerRequest, { type: "EXECUTE_CODE" }>;
+      const sent = request.mock.calls[0][1] as Extract<ServerRequest, { type: "EXECUTE_CODE" }>;
       expect(sent.type).toBe("EXECUTE_CODE");
       expect(sent.code).toBe("return 1");
 

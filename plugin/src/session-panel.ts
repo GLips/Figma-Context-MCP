@@ -3,11 +3,12 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // The plugin's only human surface: an always-visible status strip that expands into the session list.
-// It paints what the approval gate says about each session, plus what is the panel's own to know:
-// whether it is expanded, who holds the driving baton, and each row's write-access card.
+// It paints what link authentication says about unpaired sockets and what the approval gate says
+// about each session, plus what is the panel's own to know: whether it is expanded, who holds the
+// driving baton, and each row's write-access card.
 import type { ApprovalRow } from "./session-approval.js";
 import { toServer } from "./outbound.js";
-import type { ConnKey, PanelRender, PanelSession } from "./panel.js";
+import type { ConnKey, PanelPairing, PanelRender, PanelSession } from "./panel.js";
 import type { WriteAccessNotice } from "./protocol.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
@@ -52,7 +53,7 @@ function httpOriginOf(url: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
-export function createSessionPanel(source: SessionPanelSource) {
+export function createSessionPanel(source: SessionPanelSource, pairingRows: () => PanelPairing[]) {
   // It starts VISIBLE and is never hidden. A running plugin's only summonable surface is its own
   // iframe — a menu command re-RUNS the plugin, tearing down the relay and every live connection —
   // so a hidden window would leave the human no way to check a session or reach Revoke. The iframe
@@ -104,6 +105,7 @@ export function createSessionPanel(source: SessionPanelSource) {
   function render(showOrientation = false): void {
     const now = Date.now();
     const update: PanelRender = {
+      pairings: pairingRows(),
       sessions: sessions(now),
       expanded,
       showOrientation,

@@ -9,11 +9,7 @@
 // Callers see only an ExecutionCharge: authorize hands one out, the caller reports what became of the
 // run through it, and the plugin's run events arrive through runEvent. Seats get a charge that does
 // nothing — seats carry no usage counters.
-import type {
-  AuthorizingUser,
-  ExecuteCodeResult,
-  WriteAccessNotice,
-} from "@framelink/plugin/protocol";
+import type { PluginOwner, ExecuteCodeResult, WriteAccessNotice } from "@framelink/plugin/protocol";
 import type { WriteAccess } from "./write-access.js";
 import {
   allowanceExhaustedNotice,
@@ -92,21 +88,18 @@ export class WriteMeter {
   }
 
   /**
-   * May an execution attributed to this Authorizing User start? An allowance authorization reserves
+   * May an execution attributed to this Plugin Owner start? An allowance authorization reserves
    * a Write until its charge ends. Allowance refusals also go to the plugin panel.
    */
-  async authorize(
-    authorizingUser: AuthorizingUser | null,
-    executionId: string,
-  ): Promise<ExecutionAdmission> {
-    let decision = this.decide(authorizingUser);
+  async authorize(owner: PluginOwner | null, executionId: string): Promise<ExecutionAdmission> {
+    let decision = this.decide(owner);
     if (
       decision.kind === "refused" &&
       decision.reason === "allowance-exhausted" &&
       decision.signedIn
     ) {
       await this.access.recheckRefusedSeat(decision.figmaUserId);
-      decision = this.decide(authorizingUser);
+      decision = this.decide(owner);
     }
     // Synchronous with the decision above, so no other call can decide in between.
     if (decision.kind === "refused") {
@@ -158,11 +151,12 @@ export class WriteMeter {
     }
   }
 
-  private decide(authorizingUser: AuthorizingUser | null): WriteAuthorization {
-    const figmaUserId = authorizingUser?.figmaUserId;
+  private decide(owner: PluginOwner | null): WriteAuthorization {
+    const figmaUserId = owner?.figmaUserId;
     let reserved = 0;
-    for (const owner of this.reservations.values()) if (owner === figmaUserId) reserved++;
-    return this.access.decide(authorizingUser, reserved);
+    for (const reservedFor of this.reservations.values())
+      if (reservedFor === figmaUserId) reserved++;
+    return this.access.decide(owner, reserved);
   }
 
   private allowanceCharge(figmaUserId: string, executionId: string): ExecutionCharge {

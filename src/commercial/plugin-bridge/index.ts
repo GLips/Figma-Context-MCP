@@ -2,9 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
-import { PluginBridge } from "./bridge.js";
+import { PluginBridge, type PluginLink } from "./bridge.js";
 import { createLocalImageReader, type LocalImageReader } from "./images.js";
 import { ImageUploadStore } from "./image-intake.js";
 import { startUploadEndpoint, type UploadEndpoint } from "./upload-endpoint.js";
@@ -18,13 +17,14 @@ import {
 import { createCommentPinsCapability } from "./comment-pins.js";
 import { WS_PORT_BLOCK, type WriteAccessNotice } from "@framelink/plugin/protocol";
 import { resolveStateDir } from "~/commercial/state-dir.js";
+import { LinkCredentialStore } from "./link-credential.js";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 
-// How often a connected server checks whether its Authorizing User's seat or counts have gone stale. The
+// How often a connected server checks whether its plugin owners' seats or counts have gone stale. The
 // staleness rules themselves live in WriteAccess.syncWriteAccess; this is only the polling tick.
 const WRITE_ACCESS_SYNC_TICK_MS = 10 * 60 * 1000;
 
@@ -81,7 +81,7 @@ export function bindPluginAdvertisement(
 }
 
 /**
- * Start the WS relay on the port block and wire the per-connection handshake. Called once per
+ * Start the WS relay on the port block and wire what each authenticated link is told. Called once per
  * process from server startup; every MCP server instance (one for stdio, one per stateless HTTP
  * request) shares the returned runtime.
  */
@@ -121,21 +121,30 @@ export function startPluginBridge({
   }
   const api = new FramelinkApiClient(framelinkApiUrl);
   const writeAccess = new WriteAccess(api, new WriteAccessStore());
+  // Notices go to every authenticated link: none of them can yet be told apart by the call that
+  // caused the notice, and each is a plugin of this installation.
   const notifyPanel = (notice: WriteAccessNotice) => {
-    bridge.request({ type: "WRITE_ACCESS", notice }).catch(() => {});
+    for (const link of bridge.authenticatedLinks())
+      bridge.request(link, { type: "WRITE_ACCESS", notice }).catch(() => {});
   };
   const writeMeter = new WriteMeter(writeAccess, { notifyPanel });
   const signIn = new DeviceSignIn(api, writeAccess, notifyPanel);
   const framelinkOrigin = new URL(framelinkApiUrl).origin;
-  // The Allower of the session this server holds, for the background syncs that follow it.
-  const heldAuthorizingUser = () => bridge.approvedSession()?.authorizingUser ?? null;
-  const bridge = new PluginBridge(undefined, {
+  const syncOwnerWriteAccess = (link: PluginLink, options?: { force: boolean }) => {
+    if (link.owner) inBackground(writeAccess.syncWriteAccess(link.owner, options));
+  };
+  const linkCredentials = new LinkCredentialStore();
+  const bridge: PluginBridge = new PluginBridge(undefined, {
+    linkCredentials,
     events: {
-      onSessionApproved: ({ authorizingUser }) => {
-        if (authorizingUser)
-          inBackground(writeAccess.syncWriteAccess(authorizingUser, { force: true }));
+      onLinkAuthenticated: (link) => {
+        // Fire-and-forget: the plugin acks at once and records what to display and the token proving
+        // a prior Allow. It must NOT block on the human — approval arrives later, via the panel.
+        bridge.request(link, bridge.sessionInfo(framelinkOrigin)).catch(() => {});
+        syncOwnerWriteAccess(link);
       },
-      onWriteAccessSignIn: () => inBackground(signIn.start(heldAuthorizingUser())),
+      onSessionApproved: (link) => syncOwnerWriteAccess(link, { force: true }),
+      onWriteAccessSignIn: (link) => inBackground(signIn.start(link.owner)),
       onRunEvent: (event) => writeMeter.runEvent(event),
     },
     capabilities: new Map([
@@ -153,33 +162,14 @@ export function startPluginBridge({
       ["comments.pins", createCommentPinsCapability()],
     ]),
   });
-  // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so
-  // an operator should be able to see (and locate/inspect) it at startup. Override via FRAMELINK_STATE_DIR.
-  Logger.log(`Session approvals persisted under ${join(resolveStateDir(), "approvals")}`);
+  // Surface where the plugin link credential and approvals live — both are 0600 secrets, so an
+  // operator should be able to locate and inspect them at startup. Override via FRAMELINK_STATE_DIR.
+  Logger.log(`Plugin pairing and session approvals persisted under ${resolveStateDir()}`);
   // Callbacks awaiting the first plugin connection; null once it has happened (the latch fired).
   // One variable, not a boolean + array pair, so "latched but callbacks still queued" can't exist.
   let pendingFirstConnect: (() => void)[] | null = [];
 
   bridge.start(WS_PORT_BLOCK, () => {
-    // Connection smoke test: the instant a plugin connects, prove the full loop
-    //   server → WS → relay (ui.ts) → postMessage → code.ts → figma.* → back
-    // works end to end. If the WS won't round-trip, no tool call can — so surface it loudly here.
-    bridge
-      .request({ type: "PING", payload: "ping from server" })
-      .then((reply) =>
-        Logger.log(`✅ Bridge smoke test passed — sandbox replied: ${JSON.stringify(reply)}`),
-      )
-      .catch((err: Error) => Logger.log(`❌ Bridge smoke test failed: ${err.message}`));
-
-    // The version handshake is NOT fired here — PluginBridge runs it itself on every connection,
-    // because the compatibility hold it feeds is only safe if a verdict always lands (bridge.ts).
-    // Fire-and-forget: the plugin acks at once and records what to display and the token proving a
-    // prior Allow. It must NOT block on the human here — approval arrives later, via the panel.
-    bridge.request(bridge.sessionInfo(framelinkOrigin)).catch(() => {});
-    // A reconnect (or a restart that reloaded an approval) is "connected" for revalidation purposes.
-    const user = heldAuthorizingUser();
-    if (user) inBackground(writeAccess.syncWriteAccess(user));
-
     if (pendingFirstConnect) {
       const callbacks = pendingFirstConnect;
       pendingFirstConnect = null;
@@ -188,8 +178,7 @@ export function startPluginBridge({
   });
 
   const writeAccessTick = setInterval(() => {
-    const user = heldAuthorizingUser();
-    if (user && bridge.isPluginConnected()) inBackground(writeAccess.syncWriteAccess(user));
+    for (const link of bridge.authenticatedLinks()) syncOwnerWriteAccess(link);
   }, WRITE_ACCESS_SYNC_TICK_MS);
   writeAccessTick.unref();
 

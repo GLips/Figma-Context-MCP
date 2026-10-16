@@ -10,9 +10,8 @@ import { createLocalWebSocketServer, type LocalListenerPolicy } from "~/utils/lo
 // Match the WS inbound ceiling, including the envelope. Image-specific caps remain in its adapter.
 export const MAX_CHANNEL_BYTES = 100 * 1024 * 1024;
 
-// How often the server pings the holder to prove the socket is still alive. A half-open socket
-// (Figma crash / laptop sleep sends no TCP FIN) is reaped within ~2 ticks. Kept comfortably above
-// the relay's 1s reconnect cadence so the live plugin reclaims the freed slot on its very next retry.
+// How often the server pings each link to prove its socket is still alive. A half-open socket
+// (Figma crash / laptop sleep sends no TCP FIN) is reaped within ~2 ticks.
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
 // How long a starting server keeps re-probing a busy port that THIS project holds a persisted approval
@@ -30,8 +29,8 @@ const RECLAIM_RETRY_MS = 100;
 /**
  * A Figma plugin UI runs in a sandboxed iframe, so its handshake carries `Origin: null`; a non-browser
  * client sends none. Any real origin is a script on an identifiable web page, which must not reach the
- * eval socket — `figma.com` included, since the plugin itself never presents it. The in-Figma consent
- * gate, not this, is the trust boundary.
+ * eval socket — `figma.com` included, since the plugin itself never presents it. An opaque origin is
+ * not proof of the plugin, though: link authentication, not this, is the trust boundary.
  */
 export const RELAY_LISTENER_POLICY: LocalListenerPolicy = {
   browsers: "opaque-origin-only",
@@ -39,7 +38,7 @@ export const RELAY_LISTENER_POLICY: LocalListenerPolicy = {
 };
 
 export interface RelayListenerHooks {
-  /** Whether a new upgrade may take the slot: false while an established plugin holds it. */
+  /** Whether a new upgrade may become a link, making room for it first if the bridge can. */
   admitsNewcomer(): boolean;
   /** Whether this project holds an unexpired approval for `port` — the evidence a reclaim wait needs. */
   holdsApprovalFor(port: number): boolean;
@@ -52,7 +51,7 @@ export interface RelayListenerHooks {
 /**
  * The relay's network edge: probe-binds the first free port in the block, refuses web origins (through
  * the local-listener boundary) and hijack attempts at the upgrade, and drives the heartbeat. It holds
- * no connection state — the bridge owns the slot, and is asked through `hooks`.
+ * no connection state — the bridge owns the links, and is asked through `hooks`.
  */
 export class RelayListener {
   // The winning WebSocketServer, retained only so `stop()` can close it (free the port).
@@ -128,16 +127,14 @@ export class RelayListener {
     // runtime) falls back to 127.0.0.1 instantly when the ::1 attempt is refused. Don't widen this to
     // a non-loopback host to "match" localhost — that would breach the boundary.
     //
-    // Past the policy, refuse the upgrade while an ESTABLISHED plugin holds the channel. A holder that
-    // has NOT handshaked must not trap the real plugin — it is a pre-consent squatter or a half-open
-    // socket whose plugin died — so the newcomer is admitted and the bridge reclaims the slot. A
-    // half-open holder that DID handshake looks established here and is reaped by the heartbeat.
+    // Past the policy, the bridge decides: it caps links that haven't authenticated, and never
+    // displaces one that has.
     const wss = createLocalWebSocketServer(
       RELAY_LISTENER_POLICY,
       { maxPayload: MAX_CHANNEL_BYTES, host: "127.0.0.1", port },
       () => {
         if (this.hooks.admitsNewcomer()) return true;
-        Logger.log("Refused second WS connection — an established plugin holds the channel");
+        Logger.log("Refused WS connection — every waiting plugin link is showing a pairing code");
         return false;
       },
     );

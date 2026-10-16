@@ -25,7 +25,6 @@ export interface PanelSession {
   key: ConnKey;
   identity: string | null;
   label: string;
-  pairingCode: string | null;
   approved: boolean;
   active: boolean;
   writeAccess: WriteAccessNotice | null;
@@ -41,8 +40,18 @@ export interface PanelSession {
   allowedWhileAway: boolean;
 }
 
+/**
+ * A socket from a server this installation isn't paired with. `code` is the pairing attempt it is
+ * showing: the human confirms it with their agent, never here, so the row has no buttons.
+ */
+export interface PanelPairing {
+  key: ConnKey;
+  code: string | null;
+}
+
 /** Everything the panel paints, pushed whole on every change. */
 export interface PanelRender {
+  pairings: PanelPairing[];
   sessions: PanelSession[];
   expanded: boolean;
   showOrientation: boolean;

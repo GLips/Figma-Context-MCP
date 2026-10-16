@@ -1,5 +1,6 @@
 import type { Command } from "cleye";
 import { executeCommand } from "~/commercial/commands/execute.js";
+import { pairCommand } from "~/commercial/commands/pair.js";
 import { referenceCommand } from "~/commercial/commands/reference.js";
 import { uploadCommand } from "~/commercial/commands/upload.js";
 import { commentsCommand } from "./comments.js";
@@ -11,16 +12,23 @@ export const CLI_COMMANDS: Command[] = [
   executeCommand,
   referenceCommand,
   uploadCommand,
+  pairCommand,
 ];
 
 /**
  * A tool's CLI counterpart, capability by capability: every input the tool takes names the flag
  * (`--kebab-case`) or positional (as the command declares it, e.g. `<script>`) that carries it.
+ * `prompts` names inputs the command asks for at its own prompt instead, saying what it asks.
  * `figmaRest` marks a tool whose server-side run spends the server's Figma credential, so its
  * command must accept one too.
  */
 type CliCounterpart =
-  | { command: string; inputs: Record<string, string>; figmaRest?: true }
+  | {
+      command: string;
+      inputs: Record<string, string>;
+      prompts?: Record<string, string>;
+      figmaRest?: true;
+    }
   | { exempt: string };
 
 /**
@@ -66,4 +74,11 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
     },
   },
   get_flcm_reference: { command: "reference", inputs: { sections: "[sections...]" } },
+  // The code is minted by the process that shows it, so a flag could only carry a code from some
+  // other process's attempt. `pair` prints its own and asks whether the panel matches.
+  pair_figma_plugin: {
+    command: "pair",
+    inputs: {},
+    prompts: { code: "a y/N confirmation that the plugin panel shows the code pair printed" },
+  },
 };

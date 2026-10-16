@@ -18,7 +18,6 @@ import {
   type PluginApprovalEvent,
   type PluginApprovalState,
 } from "@framelink/plugin/session-approval";
-import { TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 function pair() {
   const durable = new Set<string>();
@@ -42,13 +41,7 @@ function pair() {
         if (effect.frame.type === "SESSION_CLAIM")
           toServer({ type: "claimed", claim: effect.frame.sessionClaim });
         if (effect.frame.type === "SESSION_TOKEN")
-          toServer({
-            type: "handedOver",
-            session: {
-              token: effect.frame.sessionToken,
-              authorizingUser: effect.frame.authorizingUser,
-            },
-          });
+          toServer({ type: "handedOver", session: { token: effect.frame.sessionToken } });
         if (effect.frame.type === "REVOKE_SESSION") toServer({ type: "revoked" });
       }
       if (effect.type === "awaitStore")
@@ -73,7 +66,6 @@ function pair() {
       type: "introduced",
       key,
       identity: "/proj",
-      pairingCode: String(key).repeat(4),
       sessionToken: server.session?.token ?? null,
       sessionClaim: server.claim,
       framelinkOrigin: "https://app.framelink.ai",
@@ -89,7 +81,6 @@ function pair() {
         type: "decided",
         key,
         approve: true,
-        user: TEST_AUTHORIZING_USER,
         freshToken: `token-${++minted}`,
       }),
     close: (key: number) => toPlugin({ type: "closed", key, now: 0 }),
@@ -115,10 +106,7 @@ it("an Allow given while the session was away reaches it on reconnect, and both 
   sides.connect(2);
 
   expect(sides.approved(2)).toBe(true);
-  expect(sides.server).toMatchObject({
-    session: { authorizingUser: TEST_AUTHORIZING_USER },
-    claim: null,
-  });
+  expect(sides.server).toMatchObject({ session: { token: expect.any(String) }, claim: null });
 });
 
 it("a reconnect presenting the handed-over token is approved without asking, until a revoke", () => {

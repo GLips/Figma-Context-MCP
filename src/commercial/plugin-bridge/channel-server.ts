@@ -16,7 +16,7 @@ export type CapabilityHandler = (
 ) => Promise<unknown>;
 
 // How many channel services one run may have in flight. Excess requests are refused, not queued,
-// to bound work from a runaway or hostile holder. The run ceiling bounds the total service window.
+// to bound work from a runaway or hostile plugin link. The run ceiling bounds the total service window.
 const MAX_INFLIGHT_SERVICES_PER_RUN = 4;
 
 /**
@@ -36,7 +36,7 @@ export class ChannelServer {
   constructor(
     capabilities: ReadonlyMap<string, CapabilityHandler>,
     private readonly ledger: RunLedger,
-    /** Whether `connection` still holds the slot — a displaced socket's result must not leak. */
+    /** Whether `connection` is still an authenticated open link — a dropped link's result must not leak. */
     private readonly isCurrent: (connection: RelayConnection) => boolean,
   ) {
     this.capabilities = new Map(capabilities);
@@ -64,9 +64,9 @@ export class ChannelServer {
       );
       return;
     }
-    // Only a code run may call the server. Every server-issued request (GET_VERSION, SESSION_INFO,
-    // APPROVAL_STATUS, …) is in the ledger under an id the holder was sent, so without this gate a
-    // holder could burn server work — and hold a suspension — against a request that is no run.
+    // Only a code run may call the server. Every server-issued request (HELLO, SESSION_INFO,
+    // APPROVAL_STATUS, …) is in the ledger under an id the link was sent, so without this gate a
+    // link could burn server work — and hold a suspension — against a request that is no run.
     if (run.payloadType !== "EXECUTE_CODE") {
       refuse(
         "INVALID_INPUT",
@@ -118,7 +118,7 @@ export class ChannelServer {
       .finally(release);
   }
 
-  /** Reply on the connection a request arrived on, and only while it still holds the slot. */
+  /** Reply on the link a request arrived on, and only while it is still authenticated and open. */
   private responder(
     connection: RelayConnection,
     id: string,

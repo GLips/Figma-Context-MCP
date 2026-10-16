@@ -11,20 +11,22 @@ import { createServer } from "~/mcp/index.js";
 import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  grantedTestApproval,
+  linkedTestResolution,
+} from "./fixtures/write-access.js";
 
 function connectedServer() {
-  const request = vi.fn().mockImplementation(async (_payload: ServerRequest) => ({
+  const request = vi.fn().mockImplementation(async (_link: unknown, _payload: ServerRequest) => ({
     type: "SCREENSHOT_RESULT",
     image: "AQ==",
   }));
   const bridge = {
     request,
-    getPairingCode: () => "1234",
-    protocolRefusal: () => null,
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
-    isPluginConnected: () => true,
+    resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
@@ -56,7 +58,7 @@ describe("contextual screenshot boundary", () => {
     const { call, request, close } = connectedServer();
     try {
       const result = await call("get_screenshot", { nodeId: "1:2", context: true, margin: 0 });
-      expect(request.mock.calls.find(([p]) => p.type === "SCREENSHOT")?.[0]).toMatchObject({
+      expect(request.mock.calls.find(([, p]) => p.type === "SCREENSHOT")?.[1]).toMatchObject({
         context: true,
         margin: 0,
       });

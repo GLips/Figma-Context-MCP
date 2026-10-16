@@ -39,7 +39,11 @@ async function running(
   });
   const socket = await connectFakePlugin(bridge);
   const result = bridge
-    .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 }, signal)
+    .request(
+      socket.link,
+      { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
+      { signal },
+    )
     .catch((e) => e);
   await Promise.resolve();
   const runId = socket.frames[0].id;
@@ -308,7 +312,7 @@ it.each([false, true])(
     });
     panel({ type: "UI_DECISION", approve: true });
     await allowed;
-    const result = (await bridge.request({
+    const result = (await bridge.request(socket.link, {
       type: "EXECUTE_CODE",
       lateChangeWindowMs: 60_000,
       // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
@@ -465,10 +469,9 @@ it("hands each channel request the credentials of the request that started its r
   const runs = [alice, bob].map((figma) =>
     bridge
       .request(
+        socket.link,
         { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
-        undefined,
-        undefined,
-        { figma, uploadHandles: new Set(), readLocalImage: null },
+        { runContext: { figma, uploadHandles: new Set(), readLocalImage: null } },
       )
       .catch((e) => e),
   );

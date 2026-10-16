@@ -8,7 +8,9 @@ import { ApprovalStore } from "./approval-store.js";
 import { ApprovalSession, type ApprovedSession } from "./approval-session.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
-import { RelayConnection } from "./relay-connection.js";
+import { LinkCredentialStore, mintLinkNonce } from "./link-credential.js";
+import { PairingAttempts, normalizePairingCode } from "./link-pairing.js";
+import { RelayConnection, isSettlingLinkStage } from "./relay-connection.js";
 import { MAX_CHANNEL_BYTES, RECLAIM_WINDOW_MS, RelayListener } from "./relay-listener.js";
 import { RequestTrace } from "./request-trace.js";
 import {
@@ -19,38 +21,46 @@ import {
   RunLedger,
   type ChannelRunContext,
 } from "./run-ledger.js";
-import { refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
+import { refuseProtocolSkew } from "./version.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
 import {
-  HANDSHAKE_REQUEST_TYPES,
   PROTOCOL_VERSION,
   parseExecuteCodeResult,
   parsePluginEvent,
+  type LINK_SETUP_REQUEST_TYPES,
   type PendingApprovalReply,
   type PluginEvent,
   type PluginEventType,
-  type PluginReply,
   type ReplyFor,
   type ServerRequest,
-  type ServerRequestType,
 } from "@framelink/plugin/protocol";
 
 export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
 export type { CapabilityHandler } from "./channel-server.js";
+export type { LinkStage } from "./relay-connection.js";
 
-/**
- * Unsolicited plugin events the bridge relays but doesn't own. All arrive only from the current
- * holder, and the first two only once its version handshake passes. `onSessionApproved` fires on each
- * Allow handover — the moment write access is checked.
- */
+/** One plugin link: a socket from one plugin incarnation, in whatever stage of setup it reached. */
+export type PluginLink = RelayConnection;
+
+/** Every request an authenticated link may be sent; the setup envelope is the bridge's own to send. */
+export type LinkRequest = Exclude<
+  ServerRequest,
+  { type: (typeof LINK_SETUP_REQUEST_TYPES)[number] }
+>;
+type SetupRequest = Extract<ServerRequest, { type: (typeof LINK_SETUP_REQUEST_TYPES)[number] }>;
+
+/** Unsolicited plugin events the bridge relays but doesn't own. All come from authenticated links. */
 export interface PluginBridgeEvents {
-  onSessionApproved?: (session: ApprovedSession) => void;
-  /** The human clicked the panel's sign-in button. */
-  onWriteAccessSignIn?: () => void;
+  /** A link proved it holds the installation credential: introduce this server to it. */
+  onLinkAuthenticated?: (link: PluginLink) => void;
+  /** The human clicked Allow for this server in this link's plugin. */
+  onSessionApproved?: (link: PluginLink) => void;
+  /** The human clicked the panel's sign-in button in this link's plugin. */
+  onWriteAccessSignIn?: (link: PluginLink) => void;
   /**
-   * What the current holder says about a run outside its caller's reply: RUN_CHANGED, RUN_SETTLED,
-   * or a result that arrived after the caller gave up. Forwarded as-is — what it costs is the
-   * write meter's call. May fire more than once for a run, and for run ids this server never issued.
+   * What a link says about a run outside its caller's reply: RUN_CHANGED, RUN_SETTLED, or a result
+   * that arrived after the caller gave up. Forwarded as-is — what it costs is the write meter's
+   * call. May fire more than once for a run, and for run ids this server never issued.
    */
   onRunEvent?: (event: RunEvent) => void;
 }
@@ -61,141 +71,124 @@ export type ApprovalStatus =
   | PendingApprovalReply
   | { type: "APPROVAL_REJECTED" };
 
-// The only requests exempt from the compatibility hold in `request()`; see the protocol's list.
-const HANDSHAKE_REQUESTS = new Set<ServerRequestType>(HANDSHAKE_REQUEST_TYPES);
-
 /**
- * Who may send a plugin event. `any` connection — diagnostics only, never settling anything; the
- * current `holder`; or a holder whose version handshake passed (`compatible-holder`), for anything
- * that changes durable approval state or starts network work. `verifyClient` admits any Origin-less
- * or `null`-origin client into a free slot, so "is the current socket" alone would let a page or local
- * process plant or wipe the persisted approval. Any peer that echoes GET_VERSION passes, so this raises
- * the bar rather than authenticating; the plugin's approved-token check stays the real gate.
+ * Which link a call that needs the plugin runs on. Until calls can name their document, exactly one
+ * authenticated link resolves, and several refuse rather than pick: picking is the wrong-file hazard.
  */
-type Acceptance = "any" | "holder" | "compatible-holder";
-type EventRoute<K extends PluginEventType> = {
-  from: Acceptance;
-  handle: (connection: RelayConnection, event: Extract<PluginEvent, { type: K }>) => void;
+export type LinkResolution =
+  | { kind: "linked"; link: PluginLink }
+  | { kind: "unpaired" }
+  | { kind: "several"; count: number }
+  | { kind: "incompatible"; refusal: string }
+  | { kind: "disconnected"; elapsedMs: number | null };
+
+/** What an offer to pair put in front of the human: the codes the panels now show. */
+export type PairingOffer =
+  | { kind: "offered"; attempts: { code: string; expiresAt: number }[] }
+  | { kind: "rate-limited"; retryAfterMs: number }
+  | { kind: "none" };
+
+export type PairingConfirmation =
+  | { kind: "paired"; link: PluginLink }
+  | { kind: "unknown-code" }
+  | { kind: "failed"; reason: string };
+
+// Links that haven't authenticated, at once. A real one is a plugin instance per open file, so this
+// is generous. Past it, a newcomer evicts the oldest one showing no pairing code: a flood of mute
+// sockets can't lock out a plugin that redials, and authenticated links never count or go.
+const MAX_UNAUTHENTICATED_LINKS = 8;
+
+// How long a link may sit without authenticating, unless a pairing attempt on it runs longer. The
+// plugin redials at once when closed, so this only recycles links, never strands a real plugin.
+const UNAUTHENTICATED_LINK_MS = 10 * 60 * 1000;
+
+type EventRoutes = {
+  [K in PluginEventType]: (link: PluginLink, event: Extract<PluginEvent, { type: K }>) => void;
 };
-type EventRoutes = { [K in PluginEventType]: EventRoute<K> };
 
 /**
- * The relay to the Figma plugin: one connection slot, and the composition of its parts — the
- * listener (network edge), the run ledger (requests and their clocks), the channel server (the
- * reverse direction) and the approval session (what this server presents and persists).
+ * The relay to the Figma plugin: every plugin link, and the composition of its parts — the listener
+ * (network edge), the run ledger (requests and their clocks), the channel server (the reverse
+ * direction), the approval session (what this server presents and persists), and link setup.
  *
- * The slot is the one place holder identity lives: a frame is honored per its event's Acceptance,
- * and a socket that no longer holds the slot is ignored. Every connection runs its own GET_VERSION
- * handshake, and a request that isn't part of it is held until the verdict lands, then sent or refused.
+ * Every link sets itself up the same way: HELLO (an exact protocol check), then AUTHENTICATE (proof
+ * it holds this state dir's installation credential). Until a link authenticates it is sent only
+ * that envelope and the pairing frames, and nothing it sends but replies to them is heard.
  */
 export class PluginBridge {
-  private current: RelayConnection | null = null;
+  private readonly links = new Set<RelayConnection>();
   private disconnectedAt: number | null = null;
   private onConnect: (() => void) | undefined;
+  private readonly setupDeadlines = new Map<RelayConnection, ReturnType<typeof setTimeout>>();
   private readonly listener: RelayListener;
   private readonly ledger: RunLedger;
   private readonly channel: ChannelServer;
   private readonly approval: ApprovalSession;
+  private readonly credentials: LinkCredentialStore;
+  private readonly attempts = new PairingAttempts<RelayConnection>();
+  private readonly unauthenticatedLinkMs: number;
   private readonly events: PluginBridgeEvents;
 
   private readonly routes: EventRoutes = {
-    // Diagnostic traffic is observed even from a displaced request owner. It never participates in
-    // settlement or inactivity rearming, and the trace retains no response contents.
-    RUN_TRACE: {
-      from: "any",
-      handle: (connection, event) => this.ledger.trace.recordHost(event.runId, connection, event),
+    RUN_TRACE: (link, event) => this.ledger.trace.recordHost(event.runId, link, event),
+    SESSION_TOKEN: (link, event) => {
+      this.approval.apply({ type: "handedOver", session: { token: event.sessionToken } });
+      this.events.onSessionApproved?.(link);
     },
-    SESSION_TOKEN: {
-      from: "compatible-holder",
-      handle: (_, event) =>
-        this.approval.apply({
-          type: "handedOver",
-          session: { token: event.sessionToken, authorizingUser: event.authorizingUser },
-        }),
-    },
-    SESSION_CLAIM: {
-      from: "compatible-holder",
-      handle: (_, event) => this.approval.apply({ type: "claimed", claim: event.sessionClaim }),
-    },
-    REVOKE_SESSION: {
-      from: "compatible-holder",
-      handle: () => this.approval.apply({ type: "revoked" }),
-    },
-    WRITE_ACCESS_SIGN_IN: {
-      from: "compatible-holder",
-      handle: () => this.events.onWriteAccessSignIn?.(),
-    },
-    CHANNEL_REQUEST: {
-      from: "holder",
-      handle: (connection, event) => {
-        // A reverse request proves the holder speaks the envelope, exactly like a matched reply.
-        connection.markEstablished();
-        this.channel.serve(connection, event);
-      },
-    },
-    RUN_STATE: {
-      from: "holder",
-      handle: (connection, event) => this.ledger.runState(connection, event),
-    },
+    SESSION_CLAIM: (_, event) =>
+      this.approval.apply({ type: "claimed", claim: event.sessionClaim }),
+    REVOKE_SESSION: () => this.approval.apply({ type: "revoked" }),
+    WRITE_ACCESS_SIGN_IN: (link) => this.events.onWriteAccessSignIn?.(link),
+    CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
+    RUN_STATE: (link, event) => this.ledger.runState(link, event),
     // Run-scoped, so it settles here rather than through the correlated-reply path.
-    CANCEL_RESULT: {
-      from: "holder",
-      handle: (connection, event) =>
-        this.ledger.settleCancelAnswer(event.runId, event.disposition, connection),
-    },
+    CANCEL_RESULT: (link, event) =>
+      this.ledger.settleCancelAnswer(event.runId, event.disposition, link),
     // Metering outlives the caller, so these go to the meter, never to the run's caller.
-    RUN_CHANGED: {
-      from: "holder",
-      handle: (_, event) => this.events.onRunEvent?.({ type: "changed", runId: event.runId }),
-    },
-    RUN_SETTLED: {
-      from: "holder",
-      handle: (_, event) => this.events.onRunEvent?.({ type: "settled", runId: event.runId }),
-    },
+    RUN_CHANGED: (_, event) => this.events.onRunEvent?.({ type: "changed", runId: event.runId }),
+    RUN_SETTLED: (_, event) => this.events.onRunEvent?.({ type: "settled", runId: event.runId }),
   };
 
-  // Everything injectable for the tests and the contract harness: `store` isolates persistence to a
-  // temp dir; the clocks let them pin timeout behaviour without waiting out the real deadlines; `trace`
-  // lets a test read what the trace kept. Production takes the defaults, and index.ts registers the
-  // production capability allowlist.
+  // Everything injectable for the tests and the contract harness: `store` and `linkCredentials`
+  // isolate persistence to a temp dir; the clocks let them pin timeout behaviour without waiting out
+  // the real deadlines; `trace` lets a test read what the trace kept. Production takes the defaults,
+  // and index.ts registers the production capability allowlist.
   constructor(
     store: ApprovalStore = new ApprovalStore(),
     {
+      linkCredentials = new LinkCredentialStore(),
       requestTimeoutMs = DEFAULT_TIMEOUT_MS,
       runCeilingMs = DEFAULT_RUN_CEILING_MS,
       reclaimWindowMs = RECLAIM_WINDOW_MS,
+      unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
       capabilities = new Map(),
       events = {},
       trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
     }: {
+      linkCredentials?: LinkCredentialStore;
       requestTimeoutMs?: number;
       runCeilingMs?: number;
       reclaimWindowMs?: number;
+      unauthenticatedLinkMs?: number;
       capabilities?: ReadonlyMap<string, CapabilityHandler>;
       events?: PluginBridgeEvents;
       trace?: RequestTrace;
     } = {},
   ) {
     this.events = events;
-    this.approval = new ApprovalSession(store, (session) =>
-      this.events.onSessionApproved?.(session),
-    );
+    this.credentials = linkCredentials;
+    this.unauthenticatedLinkMs = unauthenticatedLinkMs;
+    this.approval = new ApprovalSession(store);
     this.ledger = new RunLedger({
       requestTimeoutMs,
       runCeilingMs,
       trace,
       disconnectedDurationMs: () => this.disconnectedDurationMs(),
     });
-    this.channel = new ChannelServer(
-      capabilities,
-      this.ledger,
-      (connection) => connection === this.current,
-    );
+    this.channel = new ChannelServer(capabilities, this.ledger, (link) => this.isLive(link));
     this.listener = new RelayListener(
       {
-        // Anti-hijack, liveness-aware: an ESTABLISHED holder is never displaced, so a page or local
-        // process can't steal a live plugin's channel by connecting after it.
-        admitsNewcomer: () => !(this.current?.isOpen && this.current.isEstablished),
+        admitsNewcomer: () => this.makeRoomForNewcomer(),
         holdsApprovalFor: (port) => this.approval.holdsApprovalFor(port),
         bound: (port) => this.approval.bind(port),
         accept: (socket) => this.accept(socket),
@@ -205,7 +198,7 @@ export class PluginBridge {
     );
   }
 
-  /** Bind the first free port in the block; `onConnect` runs after each connection's handshake is sent. */
+  /** Bind the first free port in the block; `onConnect` runs as each socket is accepted. */
   start(ports: readonly number[], onConnect?: () => void): void {
     this.onConnect = onConnect;
     this.listener.start(ports);
@@ -216,39 +209,18 @@ export class PluginBridge {
     return this.listener.port;
   }
 
-  /**
-   * Take an admitted socket as the holder. Anything the listener admits displaces the current holder,
-   * which is by then non-established (a pre-consent squatter or a half-open dead socket) — an
-   * established one is refused before a socket exists.
-   */
+  /** Take an admitted socket as a new link, and set it up. */
   accept(socket: WebSocket): void {
-    const previous = this.current;
-    // Abandon the outgoing connection before swapping in this one: a canvas request holding for its
-    // verdict is suspended on it, and wakes to re-read the slot and hold for the newcomer instead.
-    previous?.abandon();
-    const connection = new RelayConnection(socket);
-    this.current = connection;
+    const link = new RelayConnection(socket);
+    this.links.add(link);
     this.disconnectedAt = null;
-    socket.on("pong", () => connection.pong());
-    socket.on("message", (data) => this.receive(connection, data.toString()));
+    socket.on("pong", () => link.pong());
+    socket.on("message", (data) => this.receive(link, data.toString()));
     let disconnected = false;
     const disconnect = (): void => {
       if (disconnected) return;
       disconnected = true;
-      // A displaced socket's close fires a tick AFTER the newcomer's handshake went out; failing
-      // everything here would reject the newcomer's requests. Its own were failed at displacement.
-      if (this.current !== connection) {
-        Logger.log("Displaced WS socket closed");
-        return;
-      }
-      this.current = null;
-      this.disconnectedAt = Date.now();
-      connection.abandon();
-      this.ledger.fail(
-        "Figma plugin disconnected before replying. Completion is unconfirmed; inspect affected nodes before retrying.",
-        connection,
-      );
-      Logger.log("Plugin disconnected from WS bridge");
+      this.drop(link);
     };
     socket.on("close", disconnect);
     // Receiver errors (including maxPayload rejection) belong to the accepted socket. Settle its runs
@@ -257,61 +229,149 @@ export class PluginBridge {
       disconnect();
       socket.terminate();
     });
-    if (previous) {
-      if (previous.isOpen)
-        Logger.log("Reclaiming WS slot from a non-handshaked holder for a new connection");
-      this.ledger.fail("Figma connection replaced. Completion is unconfirmed.", previous);
-      previous.socket.terminate();
-    }
     Logger.log("Plugin connected to WS bridge");
-    // Ask what we're talking to FIRST, from here rather than the caller: holding canvas requests until
-    // a verdict lands is only safe if a verdict ALWAYS lands, so the connection runs its own handshake.
-    void this.handshake(connection);
+    this.armSetupDeadline(link, this.unauthenticatedLinkMs);
+    void this.setUp(link);
     this.onConnect?.();
   }
 
   /**
-   * One heartbeat cycle for the holder. Public so the contract harness can drive liveness
+   * One heartbeat cycle for every link. Public so the contract harness can drive liveness
    * deterministically instead of waiting out the real interval.
    */
   heartbeatTick(): void {
-    this.current?.heartbeat();
+    for (const link of this.links) link.heartbeat();
   }
 
   /**
-   * Close the listener (freeing its port) and drop the holder. NOT part of the normal server
+   * Close the listener (freeing its port) and drop every link. NOT part of the normal server
    * lifecycle — the relay lives for the whole process. It exists for one-shot CLI runs and for tests
    * that model a server RESTART honestly: free the port, then rebind it with a fresh bridge.
    */
   stop(): void {
     this.listener.stop();
     this.ledger.fail("Bridge stopped. Completion is unconfirmed.");
-    const connection = this.current;
-    this.current = null;
-    connection?.abandon();
-    connection?.socket.terminate();
+    for (const link of [...this.links]) {
+      this.drop(link);
+      link.socket.terminate();
+    }
+  }
+
+  /** Every link that has authenticated and is still open. */
+  authenticatedLinks(): PluginLink[] {
+    return [...this.links].filter((link) => this.isLive(link));
+  }
+
+  /** Is any plugin on the wire right now, authenticated or not? The plain liveness question. */
+  isPluginConnected(): boolean {
+    return [...this.links].some((link) => link.isOpen);
+  }
+
+  disconnectedDurationMs(): number | null {
+    if (this.isPluginConnected() || this.disconnectedAt === null) return null;
+    return Date.now() - this.disconnectedAt;
   }
 
   /**
-   * Where the current connection stands with the version handshake. Canvas requests hold on
-   * `checking` and are refused on `incompatible`; read directly for diagnostics and by the harness.
+   * Which link a call runs on. Unpaired links are challenged again first, since a credential another
+   * server or plugin instance provisioned since may now pass, and links still setting up are waited
+   * out rather than guessed about.
    */
-  protocolCompatibility(): ProtocolCompatibility {
-    return this.current?.compatibility ?? "checking";
+  async resolveLink(signal?: AbortSignal): Promise<LinkResolution> {
+    for (const link of this.links)
+      if (link.isOpen && link.stage.kind === "unpaired") void this.authenticate(link);
+    for (;;) {
+      const settling = [...this.links].filter(
+        (link) => link.isOpen && isSettlingLinkStage(link.stage),
+      );
+      if (!settling.length) break;
+      await waitForSignal(Promise.race(settling.map((link) => link.stageChanged)), signal);
+    }
+    const open = [...this.links].filter((link) => link.isOpen);
+    const authenticated = open.filter((link) => link.isAuthenticated);
+    if (authenticated.length === 1) return { kind: "linked", link: authenticated[0] };
+    if (authenticated.length > 1) return { kind: "several", count: authenticated.length };
+    if (open.some((link) => link.stage.kind === "unpaired")) return { kind: "unpaired" };
+    for (const link of open)
+      if (link.stage.kind === "incompatible")
+        return { kind: "incompatible", refusal: link.stage.refusal };
+    return { kind: "disconnected", elapsedMs: this.disconnectedDurationMs() };
   }
 
   /**
-   * The refusal text when the current connection's verdict is `incompatible`, else null. The one
-   * reader that ISN'T a canvas request is the docs tool, which still serves on a stale plugin and
-   * leads with the refusal so the agent learns the re-import fix before its first refused write.
+   * Show a pairing code in every unpaired link's panel: the link's open attempt, or a fresh one.
+   * Resolves once each panel acknowledged its code, so the human can see what the agent is told.
    */
-  protocolRefusal(): string | null {
-    return this.current?.skewRefusal ?? null;
+  async offerPairing(): Promise<PairingOffer> {
+    const unpaired = [...this.links].filter(
+      (link) => link.isOpen && link.stage.kind === "unpaired",
+    );
+    if (!unpaired.length) return { kind: "none" };
+    const offered = await Promise.all(
+      unpaired.map(async (link) => {
+        const open = this.attempts.of(link);
+        if (open) return { code: open.code, expiresAt: open.expiresAt };
+        const attempt = this.attempts.start(link);
+        if (!attempt) return null;
+        const expiresInMs = attempt.expiresAt - Date.now();
+        // The link lives at least as long as the code it shows.
+        this.armSetupDeadline(link, expiresInMs);
+        try {
+          await this.sendSetup(link, { type: "PAIRING_OFFER", code: attempt.code, expiresInMs });
+        } catch {
+          this.attempts.end(link);
+          return null;
+        }
+        return { code: attempt.code, expiresAt: attempt.expiresAt };
+      }),
+    );
+    const attempts = offered.filter((attempt) => attempt !== null);
+    if (attempts.length) return { kind: "offered", attempts };
+    const retryAfterMs = this.attempts.retryAfterMs();
+    return retryAfterMs > 0 ? { kind: "rate-limited", retryAfterMs } : { kind: "none" };
   }
 
-  /** The current connection's pairing code, or null when no plugin is connected. */
-  getPairingCode(): string | null {
-    return this.current?.pairingCode ?? null;
+  /**
+   * The human confirmed that a panel shows `typedCode`: provision the installation credential to the
+   * one link showing it, and authenticate that link. Never pairs a link showing any other code.
+   */
+  async confirmPairing(typedCode: string): Promise<PairingConfirmation> {
+    const code = normalizePairingCode(typedCode);
+    const attempt = code === null ? undefined : this.attempts.showing(code);
+    if (!attempt || !attempt.link.isOpen) return { kind: "unknown-code" };
+    const { link } = attempt;
+    // One confirmation per code: it is spent here, whatever happens next.
+    this.attempts.end(link);
+    const credential = this.credentials.readOrCreate();
+    try {
+      await this.sendSetup(link, {
+        type: "PAIR_CONFIRMED",
+        code: attempt.code,
+        credentialId: credential.id,
+        secret: credential.secret,
+      });
+    } catch (error) {
+      return { kind: "failed", reason: (error as Error).message };
+    }
+    await this.authenticate(link);
+    if (!link.isAuthenticated)
+      return {
+        kind: "failed",
+        reason: "The plugin stored the pairing but didn't prove it on the next challenge.",
+      };
+    // Other instances of the same installation share its storage, so they pass now too.
+    for (const other of this.links)
+      if (other.isOpen && other.stage.kind === "unpaired") void this.authenticate(other);
+    return { kind: "paired", link };
+  }
+
+  /** The human said a panel doesn't show `typedCode`: that attempt ends, and its panel stops showing it. */
+  declinePairing(typedCode: string): void {
+    const code = normalizePairingCode(typedCode);
+    const attempt = code === null ? undefined : this.attempts.showing(code);
+    if (!attempt) return;
+    this.attempts.end(attempt.link);
+    this.sendSetup(attempt.link, { type: "PAIRING_CLOSED", code: attempt.code }).catch(() => {});
   }
 
   /** The session this server holds a token for — what it presents as a prior Allow — or null. */
@@ -319,14 +379,9 @@ export class PluginBridge {
     return this.approval.session;
   }
 
-  /** What this server says about itself to the connected plugin: who it is, and its prior approval. */
+  /** What this server says about itself to an authenticated link: who it is, and its prior approval. */
   sessionInfo(framelinkOrigin: string): Extract<ServerRequest, { type: "SESSION_INFO" }> {
-    return this.approval.sessionInfo(this.getPairingCode(), framelinkOrigin);
-  }
-
-  /** Is a plugin on the wire right now? The plain liveness question, with no approval in it. */
-  isPluginConnected(): boolean {
-    return this.current?.isOpen ?? false;
+    return this.approval.sessionInfo(framelinkOrigin);
   }
 
   /** Whether the approval found at bind was used recently — see ApprovalSession.hasRecentApproval. */
@@ -343,113 +398,167 @@ export class PluginBridge {
     this.approval.touch(session);
   }
 
-  disconnectedDurationMs(): number | null {
-    return this.disconnectedAt === null ? null : Date.now() - this.disconnectedAt;
-  }
-
   /**
-   * Poll the plugin's approval decision. A GRANTED carries the session this server held at that same
+   * Poll a link's approval decision. A GRANTED carries the session this server held at that same
    * instant, so whatever it admits is attributed to the Allow that admitted it, with no second read.
    */
-  async approvalStatus(signal?: AbortSignal): Promise<ApprovalStatus> {
-    const reply = await this.request({ type: "APPROVAL_STATUS" }, signal);
+  async approvalStatus(link: PluginLink, signal?: AbortSignal): Promise<ApprovalStatus> {
+    const reply = await this.request(link, { type: "APPROVAL_STATUS" }, { signal });
     return reply.type === "APPROVAL_GRANTED"
       ? { type: "APPROVAL_GRANTED", session: this.approvedSession() }
       : reply;
   }
 
   /**
-   * Send a request and resolve with its reply, admitted by the protocol's parser for that request
-   * type. An ERROR reply, or one that isn't the shape its request is owed, rejects.
+   * Send a request on an authenticated link and resolve with its reply, admitted by the protocol's
+   * parser for that request type. An ERROR reply, or one that isn't the shape its request is owed,
+   * rejects. A link that dropped or never authenticated is refused before anything is sent.
    *
    * `onSubmitted` receives the run id the plugin will know this request by (its correlation id),
    * just before it goes on the wire — for callers that must match a later run-scoped event to it.
    */
-  request<T extends ServerRequest>(
+  request<T extends LinkRequest>(
+    link: PluginLink,
     payload: T,
-    signal?: AbortSignal,
-    onSubmitted?: (runId: string) => void,
-    runContext: ChannelRunContext = NO_RUN_CONTEXT,
+    {
+      signal,
+      onSubmitted,
+      runContext = NO_RUN_CONTEXT,
+    }: {
+      signal?: AbortSignal;
+      onSubmitted?: (runId: string) => void;
+      runContext?: ChannelRunContext;
+    } = {},
   ): Promise<ReplyFor<T["type"]>> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    // Handshake messages send SYNCHRONOUSLY (no await before the send): the connection contract
-    // depends on the newcomer's handshake being in flight before a displaced socket's close fires a
-    // tick later. Everything else goes through the compatibility hold.
-    const reply = HANDSHAKE_REQUESTS.has(payload.type)
-      ? this.sendToHolder(payload, signal, onSubmitted, runContext)
-      : this.sendOnceCompatible(payload, signal, onSubmitted, runContext);
-    // Sound because the ledger resolves only what parseReply admitted for this payload's type.
-    return reply as Promise<ReplyFor<T["type"]>>;
-  }
-
-  /**
-   * Send a canvas request only once the holder's protocol is known to be supported: hold while its
-   * verdict is `checking`, refuse when it came back mismatched.
-   *
-   * A LOOP, not a single await: each abandonment settles the connection's verdict promise, which
-   * wakes us to re-read the slot. A reclaim mid-hold puts a fresh `checking` connection there, so we
-   * hold again on the newcomer; a socket that dies drops out of the loop into the not-connected
-   * rejection.
-   */
-  private async sendOnceCompatible(
-    payload: ServerRequest,
-    signal: AbortSignal | undefined,
-    onSubmitted: ((runId: string) => void) | undefined,
-    runContext: ChannelRunContext,
-  ): Promise<PluginReply> {
-    for (
-      let connection = this.current;
-      connection?.isOpen && connection.compatibility === "checking";
-      connection = this.current
-    )
-      await waitForSignal(connection.verdictSettled, signal);
-    // Refuse rather than send: a plugin executing agent code against a wire contract this server
-    // doesn't speak is the failure the version gate exists to prevent.
-    const refusal = this.current?.skewRefusal;
-    if (refusal) throw new BridgeRequestError(refusal, "not-submitted");
-    return this.sendToHolder(payload, signal, onSubmitted, runContext);
-  }
-
-  private sendToHolder(
-    payload: ServerRequest,
-    signal: AbortSignal | undefined,
-    onSubmitted: ((runId: string) => void) | undefined,
-    runContext: ChannelRunContext,
-  ): Promise<PluginReply> {
-    const connection = this.current;
-    if (!connection?.isOpen)
+    if (!this.isLive(link))
       return Promise.reject(
         new BridgeRequestError(
           pluginDisconnectedNotSubmittedText(this.disconnectedDurationMs()),
           "not-submitted",
         ),
       );
-    return this.ledger.submit(connection, payload, signal, onSubmitted, runContext);
+    // Sound because the ledger resolves only what parseReply admitted for this payload's type.
+    return this.ledger.submit(link, payload, signal, onSubmitted, runContext) as Promise<
+      ReplyFor<T["type"]>
+    >;
+  }
+
+  private sendSetup<T extends SetupRequest>(
+    link: PluginLink,
+    payload: T,
+  ): Promise<ReplyFor<T["type"]>> {
+    return this.ledger.submit(link, payload, undefined, undefined, NO_RUN_CONTEXT) as Promise<
+      ReplyFor<T["type"]>
+    >;
+  }
+
+  private isLive(link: PluginLink): boolean {
+    return this.links.has(link) && link.isOpen && link.isAuthenticated;
+  }
+
+  private makeRoomForNewcomer(): boolean {
+    const waiting = [...this.links].filter((link) => link.isOpen && !link.isAuthenticated);
+    if (waiting.length < MAX_UNAUTHENTICATED_LINKS) return true;
+    // Oldest first: the set iterates in insertion order.
+    const evictable = waiting.find((link) => !this.attempts.of(link));
+    if (!evictable) return false;
+    Logger.log("Too many plugin links waiting to authenticate — closing the oldest");
+    evictable.socket.terminate();
+    return true;
   }
 
   /**
-   * Ask a fresh connection for its versions and record its verdict, releasing any canvas request
-   * holding for it. A plugin predating the handshake answers with an envelope ERROR, a silent one
-   * times out, and a malformed answer is refused at parse — each catches into null, the protocol floor,
-   * and is refused. So every path settles.
+   * HELLO, then AUTHENTICATE. A plugin predating HELLO answers with an envelope ERROR, a silent one
+   * times out, and a malformed answer is refused at parse — each reads as the protocol floor and is
+   * refused, so every link settles. A mismatched build was told by HELLO itself to re-import (the
+   * plugin words that toast) and is sent nothing more.
    */
-  private async handshake(connection: RelayConnection): Promise<void> {
-    const reply = await this.request({ type: "GET_VERSION" }).catch(() => null);
-    // A displaced or disconnected connection's answer is about a socket nobody is driving: an orphaned
-    // GET_VERSION resolving on its timeout must not condemn the plugin that took the slot since.
-    if (this.current !== connection) return;
-    const refusal = refuseProtocolSkew(reply);
-    connection.decide(refusal);
-    if (!refusal) return;
-    Logger.log(
-      `⚠️ Version skew — plugin reported ${JSON.stringify(reply)}; refusing canvas requests`,
-    );
-    // Human channel: a toast the plugin words itself. Fire-and-forget — a plugin predating the NOTIFY
-    // handler envelope-ERRORs and the toast is dropped; the agent still gets every refusal.
-    this.request({ type: "NOTIFY", serverProtocol: PROTOCOL_VERSION }).catch(() => {});
+  private async setUp(link: PluginLink): Promise<void> {
+    const hello = await this.sendSetup(link, {
+      type: "HELLO",
+      serverProtocol: PROTOCOL_VERSION,
+    }).catch(() => null);
+    if (!link.isOpen) return;
+    const refusal = refuseProtocolSkew(hello);
+    if (refusal) {
+      Logger.log(
+        `⚠️ Version skew — plugin reported ${JSON.stringify(hello)}; it will not be driven`,
+      );
+      link.advance({ kind: "incompatible", refusal });
+      return;
+    }
+    await this.authenticate(link);
   }
 
-  private receive(connection: RelayConnection, raw: string): void {
+  /**
+   * Challenge a link for the installation credential, read fresh so a credential another process
+   * created is the one checked. A wrong proof or a silent link is closed: neither is a plugin that
+   * merely hasn't paired, which answers LINK_UNPAIRED.
+   */
+  private async authenticate(link: PluginLink): Promise<void> {
+    if (link.stage.kind === "authenticating") return link.stageChanged;
+    link.advance({ kind: "authenticating" });
+    const credential = this.credentials.readOrCreate();
+    const nonce = mintLinkNonce();
+    const reply = await this.sendSetup(link, {
+      type: "AUTHENTICATE",
+      credentialId: credential.id,
+      nonce,
+    }).catch(() => null);
+    if (!link.isOpen) return;
+    if (reply?.type === "LINK_UNPAIRED") {
+      link.advance({ kind: "unpaired" });
+      return;
+    }
+    if (
+      reply?.type !== "LINK_PROOF" ||
+      !this.credentials.verify(credential.id, nonce, reply.proof)
+    ) {
+      Logger.log("A plugin link failed its authentication challenge — closing it");
+      link.socket.terminate();
+      return;
+    }
+    this.attempts.end(link);
+    clearTimeout(this.setupDeadlines.get(link));
+    this.setupDeadlines.delete(link);
+    link.advance({ kind: "authenticated", owner: reply.owner });
+    Logger.log(
+      `Plugin link authenticated (${reply.owner ? reply.owner.name || "a Figma user" : "no Figma user"})`,
+    );
+    this.events.onLinkAuthenticated?.(link);
+  }
+
+  /** Close a link that hasn't authenticated by `ms` from now, unless its pairing attempt runs longer. */
+  private armSetupDeadline(link: PluginLink, ms: number): void {
+    clearTimeout(this.setupDeadlines.get(link));
+    const timer = setTimeout(() => {
+      this.setupDeadlines.delete(link);
+      if (link.isAuthenticated || !link.isOpen) return;
+      const attempt = this.attempts.of(link);
+      if (attempt) return this.armSetupDeadline(link, attempt.expiresAt - Date.now());
+      Logger.log("A plugin link didn't authenticate in time — closing it");
+      link.socket.terminate();
+    }, ms);
+    timer.unref();
+    this.setupDeadlines.set(link, timer);
+  }
+
+  private drop(link: PluginLink): void {
+    if (!this.links.delete(link)) return;
+    clearTimeout(this.setupDeadlines.get(link));
+    this.setupDeadlines.delete(link);
+    this.attempts.end(link);
+    link.abandon();
+    if (!this.isPluginConnected()) this.disconnectedAt = Date.now();
+    this.ledger.fail(
+      "Figma plugin disconnected before replying. Completion is unconfirmed; inspect affected nodes before retrying.",
+      link,
+    );
+    Logger.log("Plugin disconnected from WS bridge");
+  }
+
+  private receive(link: PluginLink, raw: string): void {
     // Measure the received frame, never recursively stringify parsed, untrusted input. All
     // synchronous boundary dispatch stays inside this guard, including envelope validation.
     try {
@@ -459,53 +568,40 @@ export class PluginBridge {
       }
       const msg: unknown = JSON.parse(raw);
       if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
-      this.dispatch(connection, msg as Record<string, unknown>);
+      this.dispatch(link, msg as Record<string, unknown>);
     } catch {
       Logger.log("Ignoring invalid plugin message");
     }
   }
 
-  private dispatch(connection: RelayConnection, msg: Record<string, unknown>): void {
+  private dispatch(link: PluginLink, msg: Record<string, unknown>): void {
     const event = parsePluginEvent(msg);
     if (event) {
-      this.route(connection, event);
+      // Events are heard only from authenticated links: the setup envelope is all a link that
+      // hasn't proved itself takes part in.
+      if (this.isLive(link)) this.route(link, event);
       return;
     }
     if (typeof msg.id !== "string") return;
     // A CHANNEL_REQUEST the parser refused still carries the plugin's id, and the plugin's call is
     // suspended on it: answer, or the run hangs until its own deadline.
     if (msg.type === "CHANNEL_REQUEST") {
-      this.channel.refuseMalformed(connection, msg.id);
+      if (this.isLive(link)) this.channel.refuseMalformed(link, msg.id);
       return;
     }
-    const outcome = this.ledger.settleReply(connection, msg.id, msg);
-    // A reply matching its request proves the holder speaks the frozen envelope — a real plugin, not a
-    // dead or mute squatter — which is what protects it from slot-reclaim, malformed or not.
-    if (outcome === "settled") connection.markEstablished();
+    const outcome = this.ledger.settleReply(link, msg.id, msg);
     // A run whose caller gave up still reports what it did; a Write it made is owed regardless.
-    else if (outcome === "late" && connection === this.current) {
+    if (outcome === "late" && this.isLive(link)) {
       const reply = parseExecuteCodeResult(msg);
       if (reply) this.events.onRunEvent?.({ type: "orphanReply", runId: msg.id, reply });
     }
   }
 
   private route<K extends PluginEventType>(
-    connection: RelayConnection,
+    link: PluginLink,
     event: Extract<PluginEvent, { type: K }>,
   ): void {
-    const route: EventRoute<K> = this.routes[event.type as K];
-    const apply = () => route.handle(connection, event);
-    if (route.from === "any") return apply();
-    if (connection !== this.current) return;
-    if (route.from === "holder" || connection.compatibility === "compatible") return apply();
-    // Deferred, not dropped, while the verdict is pending: the plugin can hand over a token in answer
-    // to SESSION_INFO, which follows GET_VERSION closely enough to arrive before its verdict lands.
-    if (connection.compatibility === "checking")
-      void connection.verdictSettled
-        .then(() => {
-          if (connection === this.current && connection.compatibility === "compatible") apply();
-        })
-        .catch(() => Logger.log("Ignoring invalid plugin message"));
+    (this.routes[event.type as K] as EventRoutes[K])(link, event);
   }
 }
 

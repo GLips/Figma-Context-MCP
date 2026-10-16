@@ -2,10 +2,9 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Approval-mutating relay messages are honored only from a connection that passed the version
-// handshake. A squatter holding the free slot (any Origin-less local process, or a page using
-// `Origin: null`) must not plant or wipe the durable approval; a real plugin's handover, which can
-// arrive right behind its GET_VERSION reply, must still land.
+// Approval-mutating relay messages are honored only from an authenticated link. A local process or
+// a page using `Origin: null` that never proves the installation credential must not plant or wipe
+// the durable approval, whether it answers HELLO or not; a paired plugin's handover must land.
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -15,7 +14,7 @@ import { afterEach, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
-import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
+import { answerLinkSetup } from "./fixtures/plugin-link-peer.js";
 
 const SEEDED = "seededsessiontoken0000000";
 const PLANTED = "plantedsessiontoken000000";
@@ -38,7 +37,7 @@ async function startBridge() {
     mkdtempSync(join(tmpdir(), "session-gate-")),
   );
   const port = await freePort();
-  store.save(port, SEEDED, "test", null, Date.now());
+  store.save(port, SEEDED, "test", Date.now());
   const bridge = new PluginBridge(store);
   bridge.start([port]);
   cleanup.push(() => bridge.stop());
@@ -46,39 +45,38 @@ async function startBridge() {
   return { bridge, store, port, url: `ws://127.0.0.1:${port}` };
 }
 
-async function connect(url: string, answerVersion: boolean): Promise<WebSocket> {
+async function connect(url: string, setup: "silent" | "unpaired" | "paired"): Promise<WebSocket> {
   const ws = new WebSocket(url);
   cleanup.push(() => ws.close());
   ws.on("message", (raw) => {
-    const frame = JSON.parse(raw.toString()) as { id?: string; type?: string };
-    if (!answerVersion || frame.type !== "GET_VERSION") return;
-    ws.send(
-      JSON.stringify({
-        type: "VERSION",
-        id: frame.id,
-        protocolVersion: PROTOCOL_VERSION,
-        pluginVersion: "t",
-      }),
-    );
-    // Back-to-back with the reply, before the bridge can have settled its verdict.
-    ws.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: PLANTED }));
+    const frame = JSON.parse(raw.toString()) as Record<string, unknown>;
+    if (setup === "silent") return;
+    answerLinkSetup((reply) => ws.send(JSON.stringify(reply)), frame, {
+      paired: setup === "paired",
+    });
   });
   await once(ws, "open");
   return ws;
 }
 
-it("a connection that never passed the version handshake can neither plant nor revoke approval", async () => {
-  const { bridge, store, port, url } = await startBridge();
-  const squatter = await connect(url, false);
-  squatter.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: PLANTED }));
-  squatter.send(JSON.stringify({ type: "REVOKE_SESSION" }));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  expect(bridge.approvedSession()?.token).toBe(SEEDED);
-  expect(store.loadRecord(port, Date.now())?.token).toBe(SEEDED);
-});
+it.each(["silent", "unpaired"] as const)(
+  "a %s link can neither plant nor revoke approval",
+  async (setup) => {
+    const { bridge, store, port, url } = await startBridge();
+    const squatter = await connect(url, setup);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    squatter.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: PLANTED }));
+    squatter.send(JSON.stringify({ type: "REVOKE_SESSION" }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(bridge.approvedSession()?.token).toBe(SEEDED);
+    expect(store.loadRecord(port, Date.now())?.token).toBe(SEEDED);
+  },
+);
 
-it("a compatible plugin's handover lands even when it arrives before the verdict", async () => {
+it("a paired plugin's handover lands", async () => {
   const { bridge, url } = await startBridge();
-  await connect(url, true);
+  const plugin = await connect(url, "paired");
+  await expect.poll(() => bridge.authenticatedLinks().length).toBe(1);
+  plugin.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: PLANTED }));
   await expect.poll(() => bridge.approvedSession()?.token).toBe(PLANTED);
 });

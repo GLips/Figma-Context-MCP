@@ -15,9 +15,9 @@
 // growth is a fallback nothing here relies on.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
+import { linkForProbe } from "./probe-link.mjs";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -114,31 +114,25 @@ try {
 }
 `;
 
+let link = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   try {
-    log("plugin connected — introducing the session");
-    await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
-
-    const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
-    if (version.protocolVersion !== PROTOCOL_VERSION) {
-      fail(
-        `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
-          `${PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
-          `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
-      );
-    }
-    log(`plugin speaks protocol ${version.protocolVersion} (v${version.pluginVersion}) ✓`);
-    log(
-      `sending the probe render — if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`,
-    );
+    link = await linkForProbe(bridge, log);
+    log(`sending the probe render — if the strip asks, click Allow`);
 
     // Poll status separately so approval retries cannot execute the probe more than once.
     const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(signal),
-      () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
+      (signal) => bridge.approvalStatus(link, signal),
+      () =>
+        bridge.request(link, {
+          type: "EXECUTE_CODE",
+          code: PROBE_CODE,
+          preamble: PREAMBLE,
+          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+        }),
     );
     if (waited.type === "PENDING_APPROVAL") {
       fail(

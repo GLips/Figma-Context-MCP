@@ -9,6 +9,9 @@ import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 
 const bridges: PluginBridge[] = [];
+// A request with a trivial reply, for tests about the ledger rather than the payload.
+const introduce = (bridge: PluginBridge) => bridge.sessionInfo("https://framelink.test");
+
 function create(options: ConstructorParameters<typeof PluginBridge>[1] = {}) {
   const bridge = new PluginBridge(
     new ApprovalStore("/test", "/tmp/execution-test-unused"),
@@ -22,30 +25,35 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("connection-owned execution", () => {
-  it("uses globally unique IDs, fails a replaced connection's runs, and ignores its replies and approval controls", async () => {
+describe("link-owned execution", () => {
+  it("uses globally unique IDs, fails only a dropped link's runs, and ignores replies from another link", async () => {
     const bridge = create();
     const old = await connectFakePlugin(bridge);
-    const oldCall = bridge.request({ type: "PING", payload: "old" }).catch((e: unknown) => e);
     const next = await connectFakePlugin(bridge);
-    const newCall = bridge.request({ type: "PING", payload: "new" });
+    const oldCall = bridge.request(old.link, introduce(bridge)).catch((e: unknown) => e);
+    const newCall = bridge.request(next.link, introduce(bridge));
     const id = next.frames[0].id;
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
     expect(id).not.toBe(old.frames[0].id);
+    // A reply naming another link's request id is not that request's answer.
+    old.receive({ id, type: "SESSION_INFO_ACK" });
+    old.terminate();
     expect(await oldCall).toMatchObject({ outcome: "unconfirmed" });
-    expect(String(await oldCall)).toContain("Figma connection replaced");
-    old.receive({ id, type: "PONG", echo: "OLD_BODY" });
-    old.receive({ type: "SESSION_TOKEN", sessionToken: "oldsessiontoken000000" });
-    expect(bridge.approvedSession()).toBeNull();
-    next.receive({ id, type: "PONG", echo: "NEW_BODY" });
-    expect(await newCall).toMatchObject({ echo: "NEW_BODY" });
+    expect(String(await oldCall)).toContain("disconnected before replying");
+    next.receive({ id, type: "SESSION_INFO_ACK" });
+    expect(await newCall).toMatchObject({ type: "SESSION_INFO_ACK" });
   });
   it("hedges only when nothing answers the cancellation", async () => {
     vi.useFakeTimers();
     const bridge = create({ requestTimeoutMs: 100 });
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
+      .request(socket.link, {
+        type: "EXECUTE_CODE",
+        code: "x",
+        preamble: "x",
+        lateChangeWindowMs: 60_000,
+      })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
@@ -64,7 +72,12 @@ describe("connection-owned execution", () => {
     const bridge = create({ requestTimeoutMs: 100, runCeilingMs: 600 });
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
+      .request(socket.link, {
+        type: "EXECUTE_CODE",
+        code: "x",
+        preamble: "x",
+        lateChangeWindowMs: 60_000,
+      })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
@@ -85,7 +98,12 @@ describe("connection-owned execution", () => {
     const bridge = create({ requestTimeoutMs: 100 });
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
+      .request(socket.link, {
+        type: "EXECUTE_CODE",
+        code: "x",
+        preamble: "x",
+        lateChangeWindowMs: 60_000,
+      })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
@@ -106,7 +124,12 @@ describe("connection-owned execution", () => {
     const bridge = create();
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
+      .request(socket.link, {
+        type: "EXECUTE_CODE",
+        code: "x",
+        preamble: "x",
+        lateChangeWindowMs: 60_000,
+      })
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
@@ -125,30 +148,18 @@ describe("connection-owned execution", () => {
     socket.receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
     expect(await call).toMatchObject({ phase: "running" });
   });
-  it("caller abort removes tracking, sends one cancellation, and never submits through a cancelled handshake hold", async () => {
+  it("caller abort removes tracking and sends one cancellation", async () => {
     const bridge = create();
     const socket = await connectFakePlugin(bridge);
     const abort = new AbortController();
     const call = bridge
-      .request({ type: "PING", payload: "x" }, abort.signal)
+      .request(socket.link, introduce(bridge), { signal: abort.signal })
       .catch((e: unknown) => e);
     abort.abort();
     expect(await call).toMatchObject({ outcome: "unconfirmed" });
     expect(socket.frames.filter((f) => f.type === "CANCEL")).toHaveLength(1);
-    // A connection that never answers its version handshake: the request holds for a verdict.
-    const silent = await connectFakePlugin(bridge, { answersVersion: false });
-    const held = new AbortController();
-    const hold = bridge
-      .request(
-        { type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 },
-        held.signal,
-      )
-      .catch((e: unknown) => e);
-    held.abort(new Error("abandoned"));
-    expect(String(await hold)).toContain("abandoned");
-    expect(silent.frames.some((f) => f.type === "EXECUTE_CODE")).toBe(false);
   });
-  it("withholds an old image service after replacement and leaves new run accounting intact", async () => {
+  it("withholds a dropped link's image service and leaves another link's run accounting intact", async () => {
     let release!: (images: Record<string, string>) => void;
     const bridge = create({
       capabilities: new Map([
@@ -162,8 +173,14 @@ describe("connection-owned execution", () => {
       ]),
     });
     const old = await connectFakePlugin(bridge);
+    const next = await connectFakePlugin(bridge);
     const oldCall = bridge
-      .request({ type: "EXECUTE_CODE", code: "old", preamble: "x", lateChangeWindowMs: 60_000 })
+      .request(old.link, {
+        type: "EXECUTE_CODE",
+        code: "old",
+        preamble: "x",
+        lateChangeWindowMs: 60_000,
+      })
       .catch(() => {});
     await Promise.resolve();
     old.receive({
@@ -174,14 +191,15 @@ describe("connection-owned execution", () => {
       payload: ["x"],
     });
     await Promise.resolve();
-    const next = await connectFakePlugin(bridge);
-    const newCall = bridge.request({ type: "PING", payload: "new" });
+    old.terminate();
+    const newCall = bridge.request(next.link, introduce(bridge));
     release({ x: "old bytes" });
     await Promise.resolve();
     await Promise.resolve();
+    expect(old.frames.some((f) => f.type === "CHANNEL_RESPONSE")).toBe(false);
     expect(next.frames).toHaveLength(1);
-    next.receive({ id: next.frames[0].id, type: "PONG", echo: "new" });
-    expect(await newCall).toMatchObject({ echo: "new" });
+    next.receive({ id: next.frames[0].id, type: "SESSION_INFO_ACK" });
+    expect(await newCall).toMatchObject({ type: "SESSION_INFO_ACK" });
     bridge.stop();
     await oldCall;
   });

@@ -28,9 +28,9 @@
 // Safe to re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
-import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
+import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
-import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
+import { linkForProbe } from "./probe-link.mjs";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -41,9 +41,17 @@ const PREAMBLE = await buildSandboxPreamble();
 const EXPECTED = { width: 200, height: 100 };
 const CASES = [
   { name: "no constraints, no padding", constraints: null, padding: null },
-  { name: "constraints stretch/stretch", constraints: { x: "stretch", y: "stretch" }, padding: null },
+  {
+    name: "constraints stretch/stretch",
+    constraints: { x: "stretch", y: "stretch" },
+    padding: null,
+  },
   { name: "no constraints, padding 8", constraints: null, padding: 8 },
-  { name: "constraints stretch + padding 8", constraints: { x: "stretch", y: "stretch" }, padding: 8 },
+  {
+    name: "constraints stretch + padding 8",
+    constraints: { x: "stretch", y: "stretch" },
+    padding: 8,
+  },
 ];
 
 const t0 = Date.now();
@@ -84,34 +92,32 @@ for (const id of roots) { const n = await figma.getNodeByIdAsync(id); if (n) n.r
 return out;
 `;
 
+let link = null;
 let started = false;
 async function runProbe() {
   if (started) return; // reconnects must not restart a probe already in flight
   started = true;
   try {
-    log("plugin connected — introducing the session");
-    await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
-
-    const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
-    if (version.protocolVersion !== PROTOCOL_VERSION) {
-      fail(
-        `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
-          `${PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
-          `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
-      );
-    }
-    log(`plugin speaks protocol ${version.protocolVersion} (v${version.pluginVersion}) ✓`);
-    log(`sending the probe render — if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
+    link = await linkForProbe(bridge, log);
+    log(`sending the probe render — if the strip asks, click Allow`);
 
     // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
     // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, and the
     // granted run's own reply then reads as an unexpected approval status.
     const waited = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(signal),
-      () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
+      (signal) => bridge.approvalStatus(link, signal),
+      () =>
+        bridge.request(link, {
+          type: "EXECUTE_CODE",
+          code: PROBE_CODE,
+          preamble: PREAMBLE,
+          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+        }),
     );
     if (waited.type === "PENDING_APPROVAL") {
-      fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
+      fail(
+        "the session was never approved — click Allow on the Framelink strip and re-run the probe.",
+      );
     }
     const reply = waited.result;
     if (reply?.errors) fail(`the probe script errored in the sandbox:\n${reply.errors}`);
@@ -122,7 +128,9 @@ async function runProbe() {
     }
 
     let failures = 0;
-    console.log(`\nauthored 200×100 absolute child inside a 200×100 frame — expected ${EXPECTED.width}×${EXPECTED.height} in every case\n`);
+    console.log(
+      `\nauthored 200×100 absolute child inside a 200×100 frame — expected ${EXPECTED.width}×${EXPECTED.height} in every case\n`,
+    );
     for (const { name, box } of results) {
       const ok = box.width === EXPECTED.width && box.height === EXPECTED.height;
       if (!ok) failures++;
@@ -148,7 +156,7 @@ function fail(reason) {
 const bridge = new PluginBridge();
 
 console.log(
-  "Framelink probe: does `constraints: \"stretch\"` resize an authored absolute child?\n" +
+  'Framelink probe: does `constraints: "stretch"` resize an authored absolute child?\n' +
     "Waiting for the Figma plugin to connect… (open it in a scratch file and approve this session\n" +
     "when asked; Ctrl-C to abort)\n",
 );

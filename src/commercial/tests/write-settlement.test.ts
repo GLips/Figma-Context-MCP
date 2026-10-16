@@ -5,7 +5,7 @@
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess, TEST_PLUGIN_OWNER } from "./fixtures/write-access.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -14,7 +14,7 @@ afterEach(() => {
 
 /** An allowance run that reached the plugin as `runId` and replied "no change". */
 async function readOnlyRun(writeMeter: WriteMeter, runId: string) {
-  const admission = await writeMeter.authorize(TEST_AUTHORIZING_USER, `${runId}-execution`);
+  const admission = await writeMeter.authorize(TEST_PLUGIN_OWNER, `${runId}-execution`);
   if (admission.kind !== "authorized") throw new Error("a fresh allowance authorizes");
   admission.charge.submitted(runId);
   return admission.charge;
@@ -79,7 +79,7 @@ it("runtime shutdown interrupts device polling without another authentication re
       if (notice.kind === "sign-in-pending") notified();
     },
   });
-  const signingIn = signIn.start(TEST_AUTHORIZING_USER);
+  const signingIn = signIn.start(TEST_PLUGIN_OWNER);
   await pending;
   signIn.stop();
   await signingIn;
