@@ -99,9 +99,11 @@ By default the HTTP server binds `127.0.0.1`, so every caller is you: it gets th
 Save JavaScript as an async function body in a `.js` file. The plugin provides `figma` and the current `flcm` runtime; use `await` and `return` directly rather than module imports or exports. `execute --help` ends with the `flcm` quick-start, and `figma-developer-mcp reference <section...>` prints the full authoring reference.
 
 ```sh
-npx figma-developer-mcp execute workflow.js --output artifacts/result.json
-npx figma-developer-mcp execute workflow.js --screenshot artifacts/page.png --scale 2
+npx figma-developer-mcp execute workflow.js --intent "Build the pricing card" --output artifacts/result.json
+npx figma-developer-mcp execute workflow.js --intent "Build the pricing card" --screenshot artifacts/page.png --scale 2
 ```
+
+Every run states its intent: one line of up to 80 characters saying what it is for. The plugin panel shows it in the file's activity list, with the session it ran in and how it ended, and on any Allow or pick prompt the run raises, so the person in Figma can see what each agent is doing. It is display text only and never picks the file. In MCP, `figma_execute_code` and `get_screenshot` take it as `intent`.
 
 Open Framelink in the intended Figma file. The plugin must already be paired with this machine: run `npx figma-developer-mcp pair` once, and answer `y` if the code it prints is the code the plugin panel shows. Pairing is remembered for every server and `execute` run sharing this machine's Framelink state directory (`FRAMELINK_STATE_DIR`).
 
