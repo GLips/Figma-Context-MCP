@@ -8,6 +8,7 @@ import { RequestTrace, type TraceEvent } from "~/commercial/plugin-bridge/reques
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -23,7 +24,7 @@ async function connectedBridge(timeout = 100, ceiling = 1000) {
   // Another authenticated link: wired to the bridge, but not the one the runs go out on.
   const stranger = await connectFakePlugin(bridge);
   const socket = await connectFakePlugin(bridge);
-  const sent = socket.frames as { id?: string; type: string; runId?: string }[];
+  const sent = socket.frames as { id?: string; type: string; executionId?: string }[];
   const receive = (message: Record<string, unknown>, owner: FakePluginSocket = socket) =>
     owner.receive(message);
   return { bridge, trace, sent, socket, stranger, receive, link: socket.link };
@@ -33,22 +34,26 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, link, trace, sent, socket, receive } = await connectedBridge();
   const result = bridge
-    .request(link, {
-      type: "EXECUTE_CODE",
-      session: TEST_SESSION_REQUEST,
-      fileKey: "FAKEfile1",
-      code: "private code",
-      preamble: "private preamble",
-      lateChangeWindowMs: 60_000,
-    })
+    .submitRun(
+      link,
+      {
+        type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
+        fileKey: "FAKEfile1",
+        code: "private code",
+        preamble: "private preamble",
+        lateChangeWindowMs: 60_000,
+      },
+      mintExecutionId(),
+    )
     .catch((error) => error);
   const id = sent[0].id!;
-  receive({ type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
+  receive({ type: "RUN_STATE", executionId: id, phase: "running", at: Date.now() });
   for (let i = 0; i < 4; i++) {
     await vi.advanceTimersByTimeAsync(20);
     receive({
       type: "RUN_TRACE",
-      runId: id,
+      executionId: id,
       stage: "native-start",
       elapsedMs: i * 20,
       code: "secret",
@@ -57,7 +62,7 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
   await vi.advanceTimersByTimeAsync(20);
   // The deadline's CANCEL is answered from the plugin's own phase, and that answer is what the
   // caller's rejection is worded from (protocol 6).
-  receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
+  receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain("was executing when it was cancelled");
@@ -73,22 +78,26 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, link, trace, sent, stranger, receive } = await connectedBridge(100, 150);
   const result = bridge
-    .request(link, {
-      type: "EXECUTE_CODE",
-      session: TEST_SESSION_REQUEST,
-      fileKey: "FAKEfile1",
-      code: "",
-      preamble: "",
-      lateChangeWindowMs: 60_000,
-    })
+    .submitRun(
+      link,
+      {
+        type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
+        fileKey: "FAKEfile1",
+        code: "",
+        preamble: "",
+        lateChangeWindowMs: 60_000,
+      },
+      mintExecutionId(),
+    )
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
-  receive({ type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
-  receive({ type: "RUN_TRACE", runId: id, stage: "native-start", elapsedMs: 0 }, stranger);
-  receive({ type: "RUN_TRACE", runId: id, stage: "eval-start", elapsedMs: 0 });
+  receive({ type: "RUN_STATE", executionId: id, phase: "running", at: Date.now() });
+  receive({ type: "RUN_TRACE", executionId: id, stage: "native-start", elapsedMs: 0 }, stranger);
+  receive({ type: "RUN_TRACE", executionId: id, stage: "eval-start", elapsedMs: 0 });
   await vi.advanceTimersByTimeAsync(70);
-  receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
+  receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain("absolute 150ms");
@@ -128,7 +137,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
     const { bridge, link, trace, sent, socket, receive } = await connectedBridge();
     const controller = new AbortController();
     const result = bridge
-      .request(
+      .submitRun(
         link,
         {
           type: "EXECUTE_CODE",
@@ -138,14 +147,15 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
           preamble: "",
           lateChangeWindowMs: 60_000,
         },
+        mintExecutionId(),
         { signal: controller.signal },
       )
       .catch((error) => error);
     const id = sent[0].id!;
-    receive({ type: "RUN_STATE", runId: id, phase: "queued", at: Date.now() });
+    receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: Date.now() });
     receive({
       type: "RUN_TRACE",
-      runId: id,
+      executionId: id,
       stage: "native-start",
       elapsedMs: 0,
       operation: "page-switch",
@@ -180,14 +190,18 @@ test("execution error result is traced as error without changing successful enve
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, link, trace, sent, receive } = await connectedBridge();
-  const result = bridge.request(link, {
-    type: "EXECUTE_CODE",
-    session: TEST_SESSION_REQUEST,
-    fileKey: "FAKEfile1",
-    code: "",
-    preamble: "",
-    lateChangeWindowMs: 60_000,
-  });
+  const result = bridge.submitRun(
+    link,
+    {
+      type: "EXECUTE_CODE",
+      session: TEST_SESSION_REQUEST,
+      fileKey: "FAKEfile1",
+      code: "",
+      preamble: "",
+      lateChangeWindowMs: 60_000,
+    },
+    mintExecutionId(),
+  );
   const id = sent[0].id!;
   const reply = {
     type: "EXECUTE_CODE_RESULT",

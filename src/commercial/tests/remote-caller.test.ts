@@ -26,7 +26,7 @@ const request = vi.fn();
 const readSavedScript = vi.fn();
 const plugin: PluginBridgeRuntime = {
   bridge: {
-    request,
+    submitRun: request,
     targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge,
@@ -121,6 +121,7 @@ describe("a loopback bind", () => {
     expect(request).toHaveBeenCalledWith(
       TEST_PLUGIN_LINK,
       expect.objectContaining({ type: "SCREENSHOT" }),
+      expect.any(String),
       expect.anything(),
     );
   });

@@ -37,11 +37,11 @@ it("an unpaired link is sent only the setup envelope, and nothing it sends is he
 
   socket.receive({ type: "DOCUMENT_CLAIMED", fileKey: "SQUATfile1" });
   socket.receive({ type: "GRANT_CHANGED", project: "/p", fileKey: "SQUATfile1", granted: true });
-  socket.receive({ type: "RUN_CHANGED", runId: "r" });
+  socket.receive({ type: "RUN_CHANGED", executionId: "r" });
   socket.receive({
     type: "CHANNEL_REQUEST",
     id: "q",
-    runId: "r",
+    executionId: "r",
     capability: "images.fetch",
     payload: [],
   });

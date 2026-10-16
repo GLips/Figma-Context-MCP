@@ -101,9 +101,10 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
   });
   let fetched: Promise<string> | undefined;
   const bridge = {
-    request: async (
+    submitRun: async (
       _link: unknown,
       _payload: ServerRequest,
+      _executionId: string,
       { runContext: run }: { runContext: ChannelRunContext },
     ) => {
       fetched = fetchImage(source, run);

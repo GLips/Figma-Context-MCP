@@ -46,7 +46,7 @@ export class ChannelServer {
   refuseMalformed(connection: RelayConnection, id: string): void {
     this.responder(connection, id).refuse(
       "INVALID_INPUT",
-      "flcm: the channel request was missing its run id or capability — it was refused.",
+      "flcm: the channel request was missing its execution id or capability — it was refused.",
     );
   }
 
@@ -54,13 +54,13 @@ export class ChannelServer {
     connection: RelayConnection,
     request: Extract<PluginEvent, { type: "CHANNEL_REQUEST" }>,
   ): void {
-    const { id, runId } = request;
+    const { id, executionId } = request;
     const { send, refuse } = this.responder(connection, id);
-    const run = this.ledger.get(runId);
+    const run = this.ledger.get(executionId);
     if (!run || run.connection !== connection) {
       refuse(
         "RUN_INACTIVE",
-        `flcm: run ${runId} is no longer active on this server (cancelled, timed out, or already finished) — the channel request was refused.`,
+        `flcm: run ${executionId} is no longer active on this server (cancelled, timed out, or already finished) — the channel request was refused.`,
       );
       return;
     }
@@ -70,7 +70,7 @@ export class ChannelServer {
     if (run.payloadType !== "EXECUTE_CODE") {
       refuse(
         "INVALID_INPUT",
-        `flcm: run ${runId} is not a code run — only EXECUTE_CODE runs may call server capabilities.`,
+        `flcm: run ${executionId} is not a code run — only EXECUTE_CODE runs may call server capabilities.`,
       );
       return;
     }
@@ -82,7 +82,7 @@ export class ChannelServer {
     if (run.services >= MAX_INFLIGHT_SERVICES_PER_RUN) {
       refuse(
         "TOO_MANY_REQUESTS",
-        `flcm: run ${runId} already has ${run.services} channel requests in flight — this one was refused.`,
+        `flcm: run ${executionId} already has ${run.services} channel requests in flight — this one was refused.`,
       );
       return;
     }
@@ -98,7 +98,7 @@ export class ChannelServer {
           // The run died during service; withhold the result rather than resume a zombie.
           refuse(
             "RUN_INACTIVE",
-            `flcm: run ${runId} is no longer active on this server — the channel reply was withheld.`,
+            `flcm: run ${executionId} is no longer active on this server — the channel reply was withheld.`,
           );
           return;
         }

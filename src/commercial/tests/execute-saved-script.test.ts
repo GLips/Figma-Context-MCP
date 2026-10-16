@@ -46,7 +46,7 @@ function connectedServer() {
     documentChanged: false,
   }));
   const bridge = {
-    request,
+    submitRun: request,
     targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;

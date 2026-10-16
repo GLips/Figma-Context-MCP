@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { randomUUID } from "node:crypto";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import type { RelayConnection } from "./relay-connection.js";
@@ -125,10 +124,11 @@ export interface RunLedgerOptions {
 }
 
 /**
- * Every server→plugin request in flight, and the clocks that bound it. `submit` stamps a fresh id
- * and resolves when a reply carrying that same id arrives; replies without a matching entry are
- * dropped. A deadline never silently abandons a request: it sends the id-less CANCEL and words the
- * caller's rejection from the plugin's CANCEL_RESULT (see cancel()).
+ * Every server→plugin request in flight, and the clocks that bound it. `submit` sends a request under
+ * the id its caller chose — a run's execution id, or a fresh correlation id — and resolves when a
+ * reply carrying that same id arrives; replies without a matching entry are dropped. A deadline never
+ * silently abandons a request: it sends the id-less CANCEL and words the caller's rejection from the
+ * plugin's CANCEL_RESULT (see cancel()).
  */
 export class RunLedger {
   private readonly entries = new Map<string, LedgerEntry>();
@@ -146,7 +146,7 @@ export class RunLedger {
     return this.options.trace;
   }
 
-  /** The live entry for a run id, if any. */
+  /** The live entry for an execution id, if any. */
   get(id: string): LedgerEntry | undefined {
     return this.entries.get(id);
   }
@@ -156,16 +156,15 @@ export class RunLedger {
     return this.entries.get(entry.id) === entry;
   }
 
-  /** Stamp a correlation id on the payload, send it, and resolve when the reply carrying that id lands. */
+  /** Send the payload under `id`, and resolve when the reply carrying that id lands. */
   submit(
     connection: RelayConnection,
     payload: ServerRequest,
+    id: string,
     signal: AbortSignal | undefined,
-    onSubmitted: ((runId: string) => void) | undefined,
     runContext: ChannelRunContext,
   ): Promise<PluginReply> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    const id = randomUUID();
     return new Promise((resolve, reject) => {
       const cancel = () => this.cancel(id, "caller cancelled");
       signal?.addEventListener("abort", cancel, { once: true });
@@ -187,8 +186,7 @@ export class RunLedger {
       this.entries.set(id, entry);
       this.armInactivityDeadline(entry);
       if (payload.type === "EXECUTE_CODE") this.trace.start(id, connection);
-      onSubmitted?.(id);
-      // `id` last: the generated correlation id is authoritative and a payload field must never
+      // `id` last: the caller's id is authoritative and a payload field must never
       // overwrite it, or the reply could never be matched to this entry.
       connection.send({ ...payload, id });
     });
@@ -238,12 +236,12 @@ export class RunLedger {
 
   /** A run entered a phase on the connection that owns it: record it and re-arm its deadline. */
   runState(connection: RelayConnection, event: Extract<PluginEvent, { type: "RUN_STATE" }>): void {
-    const entry = this.entries.get(event.runId);
+    const entry = this.entries.get(event.executionId);
     if (entry?.connection !== connection) return;
     entry.phase = event.phase;
-    this.trace.record(event.runId, connection, event.phase);
+    this.trace.record(event.executionId, connection, event.phase);
     Logger.log(
-      `Bridge request ${event.runId}: ${event.phase} after ${Date.now() - entry.startedAt}ms`,
+      `Bridge request ${event.executionId}: ${event.phase} after ${Date.now() - entry.startedAt}ms`,
     );
     this.armInactivityDeadline(entry, phaseAge(event.at, this.options.requestTimeoutMs));
   }
@@ -370,7 +368,7 @@ export class RunLedger {
     const callerWithdrew = why === "caller cancelled";
     if (callerWithdrew) this.trace.record(id, entry.connection, "caller-cancelled");
     const open = entry.connection.isOpen;
-    if (open) entry.connection.send({ type: "CANCEL", runId: id });
+    if (open) entry.connection.send({ type: "CANCEL", executionId: id });
     const reject = (disposition: CancelDisposition): void =>
       entry.reject(cancelRejection(entry, why, disposition));
     // Three requests have no answer worth waiting for: one on a dead socket, a non-run one (the plugin

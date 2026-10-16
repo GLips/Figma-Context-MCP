@@ -27,7 +27,7 @@ export interface TraceEvent {
   operation?: NativeOperation;
 }
 /** A RUN_TRACE as the protocol admitted it — only a known stage and a bounded elapsed time. */
-export type HostTrace = Omit<Extract<PluginEvent, { type: "RUN_TRACE" }>, "type" | "runId">;
+export type HostTrace = Omit<Extract<PluginEvent, { type: "RUN_TRACE" }>, "type" | "executionId">;
 interface RecordEntry {
   owner: object;
   started: number;

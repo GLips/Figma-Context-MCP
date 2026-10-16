@@ -30,7 +30,7 @@ import {
  */
 async function connectedServer() {
   const bridge = {
-    request: vi.fn().mockResolvedValue({
+    submitRun: vi.fn().mockResolvedValue({
       type: "EXECUTE_CODE_RESULT",
       result: "secret design text",
       console: [],

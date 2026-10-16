@@ -22,7 +22,10 @@ import { WS_PORT_BLOCK, type WriteAccessNotice } from "@framelink/plugin/protoco
 import { resolveStateDir } from "~/commercial/state-dir.js";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
-import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
+import {
+  DeviceSignIn,
+  SIGN_IN_NEEDS_FIGMA_USER_NOTICE,
+} from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 
@@ -129,14 +132,17 @@ export function startPluginBridge({
   }
   const api = new FramelinkApiClient(framelinkApiUrl);
   const writeAccess = new WriteAccess(api, new WriteAccessStore());
-  // Notices go to every authenticated link: none of them can yet be told apart by the call that
-  // caused the notice, and each is a plugin of this installation.
-  const notifyPanel = (notice: WriteAccessNotice) => {
-    for (const link of bridge.authenticatedLinks())
-      bridge.request(link, { type: "WRITE_ACCESS", notice }).catch(() => {});
+  const notifyLinkPanel = (link: PluginLink, notice: WriteAccessNotice) => {
+    bridge.request(link, { type: "WRITE_ACCESS", notice }).catch(() => {});
   };
-  const writeMeter = new WriteMeter(writeAccess, { notifyPanel });
-  const signIn = new DeviceSignIn(api, writeAccess, notifyPanel);
+  // A write-access notice is about one owner's seat and allowance on this server, so it reaches every
+  // panel signed in as that owner here — and no other Figma user's, though theirs share this machine.
+  const notifyOwnerPanels = (figmaUserId: string, notice: WriteAccessNotice) => {
+    for (const link of bridge.authenticatedLinks())
+      if (link.owner?.figmaUserId === figmaUserId) notifyLinkPanel(link, notice);
+  };
+  const writeMeter = new WriteMeter(writeAccess, { notifyPanel: notifyOwnerPanels });
+  const signIn = new DeviceSignIn(api, writeAccess, notifyOwnerPanels);
   const framelinkOrigin = new URL(framelinkApiUrl).origin;
   const syncOwnerWriteAccess = (link: PluginLink, options?: { force: boolean }) => {
     if (link.owner) inBackground(writeAccess.syncWriteAccess(link.owner, options));
@@ -155,7 +161,10 @@ export function startPluginBridge({
       onGrantChanged: (link, granted) => {
         if (granted) syncOwnerWriteAccess(link, { force: true });
       },
-      onWriteAccessSignIn: (link) => inBackground(signIn.start(link.owner)),
+      onWriteAccessSignIn: (link) => {
+        if (link.owner) inBackground(signIn.start(link.owner));
+        else notifyLinkPanel(link, SIGN_IN_NEEDS_FIGMA_USER_NOTICE);
+      },
       onRunEvent: (event) => writeMeter.runEvent(event),
     },
     capabilities: new Map([

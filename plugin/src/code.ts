@@ -189,7 +189,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     return;
   }
   if (msg.type === "CANCEL") {
-    executor.cancel(key, msg.runId);
+    executor.cancel(key, msg.executionId);
     return;
   }
   // Reverse-direction replies: answers to PLUGIN-issued requests, in the plugin's id namespace.

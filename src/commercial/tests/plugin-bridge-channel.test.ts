@@ -11,6 +11,7 @@ import type { FigmaService } from "~/services/figma.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
 
 const bridges: PluginBridge[] = [];
 function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
@@ -37,7 +38,7 @@ async function running(
   });
   const socket = await connectFakePlugin(bridge);
   const result = bridge
-    .request(
+    .submitRun(
       socket.link,
       {
         type: "EXECUTE_CODE",
@@ -47,14 +48,15 @@ async function running(
         preamble: "x",
         lateChangeWindowMs: 60_000,
       },
+      mintExecutionId(),
       { signal },
     )
     .catch((e) => e);
   await Promise.resolve();
-  const runId = socket.frames[0].id;
+  const executionId = socket.frames[0].id;
   const request = (id: string, capability = "test.only", payload: unknown = null) =>
-    socket.receive({ type: "CHANNEL_REQUEST", id, runId, capability, payload });
-  return { bridge, socket, runId, result, request };
+    socket.receive({ type: "CHANNEL_REQUEST", id, executionId, capability, payload });
+  return { bridge, socket, executionId, result, request };
 }
 
 it("refuses unknown names, including prototype names, without invoking any handler", async () => {
@@ -89,7 +91,7 @@ it("suspends until the last service settles, then rearms inactivity; limits conc
   // Run-state traffic must not accidentally rearm a suspended clock.
   h.socket.receive({
     type: "RUN_STATE",
-    runId: h.runId,
+    executionId: h.executionId,
     phase: "running",
     at: Date.now(),
   });
@@ -105,10 +107,10 @@ it("suspends until the last service settles, then rearms inactivity; limits conc
     payload: 42,
   });
   await vi.advanceTimersByTimeAsync(1);
-  expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: h.runId });
+  expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
   h.socket.receive({
     type: "CANCEL_RESULT",
-    runId: h.runId,
+    executionId: h.executionId,
     disposition: "was-running",
   });
   expect(await h.result).toBeInstanceOf(BridgeRequestError);
@@ -126,10 +128,10 @@ it("never suspends the ceiling and refuses both late requests and late service r
   const h = await running(handler, { runCeilingMs: 300 });
   h.request("first");
   await vi.advanceTimersByTimeAsync(300);
-  expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: h.runId });
+  expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
   h.socket.receive({
     type: "CANCEL_RESULT",
-    runId: h.runId,
+    executionId: h.executionId,
     disposition: "was-running",
   });
   await h.result;
@@ -175,7 +177,7 @@ it.each([false, true])(
 it("accepts a deeply nested raw payload without reserializing the request", async () => {
   const handler = vi.fn(async () => "processed");
   const h = await running(handler);
-  const raw = `{"type":"CHANNEL_REQUEST","id":"deep","runId":${JSON.stringify(h.runId)},"capability":"test.only","payload":${"[".repeat(10000)}0${"]".repeat(10000)}}`;
+  const raw = `{"type":"CHANNEL_REQUEST","id":"deep","executionId":${JSON.stringify(h.executionId)},"capability":"test.only","payload":${"[".repeat(10000)}0${"]".repeat(10000)}}`;
   expect(Buffer.byteLength(raw)).toBeLessThan(21000);
   expect(() => h.socket.receiveRaw(raw)).not.toThrow();
   await new Promise((resolve) => setImmediate(resolve));
@@ -228,13 +230,13 @@ it.each(["cancel", "complete", "shutdown"])(
     h.request("work");
     await new Promise((resolve) => setImmediate(resolve));
     expect(signalSeen?.aborted).toBe(false);
-    if (end === "complete") h.socket.receive({ type: "EXECUTE_CODE_RESULT", id: h.runId });
+    if (end === "complete") h.socket.receive({ type: "EXECUTE_CODE_RESULT", id: h.executionId });
     else if (end === "shutdown") h.bridge.stop();
     else {
       caller.abort(new Error("caller cancelled"));
       h.socket.receive({
         type: "CANCEL_RESULT",
-        runId: h.runId,
+        executionId: h.executionId,
         disposition: "was-running",
       });
     }
@@ -367,15 +369,19 @@ it.each([false, true])(
     const granted = awaitFrame((frame) => frame.type === "GRANT_CHANGED");
     panel({ type: "UI_DECISION", approve: true });
     await granted;
-    const result = (await bridge.request(socket.link, {
-      type: "EXECUTE_CODE",
-      session: TEST_SESSION_REQUEST,
-      fileKey: "FAKEfile1",
-      lateChangeWindowMs: 60_000,
-      // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
-      preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })`,
-      code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
-    })) as { result: string; errors: string | null };
+    const result = (await bridge.submitRun(
+      socket.link,
+      {
+        type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
+        fileKey: "FAKEfile1",
+        lateChangeWindowMs: 60_000,
+        // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
+        preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })`,
+        code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
+      },
+      mintExecutionId(),
+    )) as { result: string; errors: string | null };
     expect(result.errors).toBeNull();
     expect(handler.mock.calls[0]?.[0]).toEqual(request);
     expect(JSON.parse(result.result)).toEqual({ detail: failure, message: failure.message });
@@ -525,7 +531,7 @@ it("hands each channel request the credentials of the request that started its r
   const bob = { user: "bob" } as unknown as FigmaService;
   const runs = [alice, bob].map((figma) =>
     bridge
-      .request(
+      .submitRun(
         socket.link,
         {
           type: "EXECUTE_CODE",
@@ -535,6 +541,7 @@ it("hands each channel request the credentials of the request that started its r
           preamble: "x",
           lateChangeWindowMs: 60_000,
         },
+        mintExecutionId(),
         {
           runContext: {
             figma,
@@ -548,11 +555,11 @@ it("hands each channel request the credentials of the request that started its r
   );
   await Promise.resolve();
   const [aliceRun, bobRun] = socket.frames.map((frame) => frame.id);
-  for (const runId of [bobRun, aliceRun])
+  for (const executionId of [bobRun, aliceRun])
     socket.receive({
       type: "CHANNEL_REQUEST",
-      id: `q-${runId}`,
-      runId,
+      id: `q-${executionId}`,
+      executionId,
       capability: "test.who",
     });
   await vi.waitFor(() => expect(seen).toEqual([bob, alice]));

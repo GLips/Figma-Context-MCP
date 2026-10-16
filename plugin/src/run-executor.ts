@@ -80,7 +80,7 @@ export function createRunExecutor({
     // `at` because the frame only leaves once this thread goes idle: a run that opens with seconds of
     // synchronous work delivers "running" seconds late, and the server would start its deadline then.
     const at = Date.now();
-    toServer(to.connKey, { type: "RUN_STATE", runId: to.id, phase, at });
+    toServer(to.connKey, { type: "RUN_STATE", executionId: to.id, phase, at });
     return at;
   }
 
@@ -166,7 +166,7 @@ export function createRunExecutor({
     const traceStarted = Date.now();
     const trace = (stage: HostTraceStage, operation?: NativeOperation) => {
       try {
-        toServer(to.connKey, { type: "RUN_TRACE", runId: to.id, stage, operation, elapsedMs: Date.now() - traceStarted });
+        toServer(to.connKey, { type: "RUN_TRACE", executionId: to.id, stage, operation, elapsedMs: Date.now() - traceStarted });
       } catch { /* A diagnostic must never change execution or cleanup. */ }
     };
     trace("eval-start");
@@ -269,8 +269,8 @@ export function createRunExecutor({
         // records the Write under the run's execution, so a duplicate is harmless.
         documentChanges.watchLate(
           {
-            onChange: () => toServer(to.connKey, { type: "RUN_CHANGED", runId: to.id }),
-            onSettled: () => toServer(to.connKey, { type: "RUN_SETTLED", runId: to.id }),
+            onChange: () => toServer(to.connKey, { type: "RUN_CHANGED", executionId: to.id }),
+            onSettled: () => toServer(to.connKey, { type: "RUN_SETTLED", executionId: to.id }),
           },
           lateChangeWindowMs,
         );
@@ -357,10 +357,10 @@ export function createRunExecutor({
      * its caller for this one frame, and a queued run's own refusal only fires once the run ahead
      * finishes. Rejecting its pending server calls then kills a run suspended at its await right now.
      */
-    cancel(connKey: ConnKey, runId: string): void {
-      toServer(connKey, { type: "CANCEL_RESULT", runId, disposition: cancelledRuns.recordCancellation(connKey, runId) });
+    cancel(connKey: ConnKey, executionId: string): void {
+      toServer(connKey, { type: "CANCEL_RESULT", executionId, disposition: cancelledRuns.recordCancellation(connKey, executionId) });
       serverCalls.reject(
-        (call) => call.runId === runId && call.connKey === connKey,
+        (call) => call.executionId === executionId && call.connKey === connKey,
         "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
       );
     },

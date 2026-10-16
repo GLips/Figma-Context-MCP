@@ -26,6 +26,7 @@ import {
 } from "@framelink/plugin/protocol";
 import { answerLinkSetup } from "./fixtures/plugin-link-peer.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
 
 // Exercise production startup/handshake/images/execution on an ephemeral test port.
 // Figma only scans its fixed production block, so these tests cannot drive a live document.
@@ -190,7 +191,7 @@ describe("saved-script CLI using production plugin services", () => {
             JSON.stringify({
               type: "CHANNEL_REQUEST",
               id: "image-1",
-              runId: frame.id,
+              executionId: frame.id,
               capability: "images.fetch",
               payload: ["./asset.png"],
             }),
@@ -371,7 +372,7 @@ describe("saved-script CLI using production plugin services", () => {
           JSON.stringify({
             type: "CHANNEL_REQUEST",
             id: "pins-1",
-            runId: frame.id,
+            executionId: frame.id,
             capability: "comments.pins",
             payload: {},
           }),
@@ -413,14 +414,18 @@ describe("one-shot bridge lifecycle", () => {
             .resolveLink()
             .then((resolution) => {
               if (resolution.kind !== "linked") throw new Error(`plugin ${resolution.kind}`);
-              return bridge.request(resolution.links[0], {
-                type: "EXECUTE_CODE",
-                session: TEST_SESSION_REQUEST,
-                fileKey: "FAKEfile1",
-                code: "return 1",
-                preamble: "test runtime",
-                lateChangeWindowMs: 60_000,
-              });
+              return bridge.submitRun(
+                resolution.links[0],
+                {
+                  type: "EXECUTE_CODE",
+                  session: TEST_SESSION_REQUEST,
+                  fileKey: "FAKEfile1",
+                  code: "return 1",
+                  preamble: "test runtime",
+                  lateChangeWindowMs: 60_000,
+                },
+                mintExecutionId(),
+              );
             })
             .then(resolve, reject);
         });
@@ -526,17 +531,17 @@ it("delivers JSON before settlement and charges a late document change before cl
     done = true;
     return result;
   });
-  let runId: unknown;
+  let executionId: unknown;
   const { socket, closed } = await plugin((frame, socket) => {
     if (frame.type === "EXECUTE_CODE") {
-      runId = frame.id;
+      executionId = frame.id;
       reply(socket, frame, { console: [], errors: null, result: "read", documentChanged: false });
     }
   });
   for (let i = 0; i < 100 && !stdout; i++) await delay(5);
   expect(JSON.parse(stdout).result).toBe("read");
   expect(done).toBe(false);
-  socket.send(JSON.stringify({ type: "RUN_CHANGED", runId }));
+  socket.send(JSON.stringify({ type: "RUN_CHANGED", executionId }));
   expect(await finished).toBe(0);
   await closed;
   expect(

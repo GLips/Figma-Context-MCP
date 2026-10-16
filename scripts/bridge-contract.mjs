@@ -33,6 +33,7 @@ import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { LinkCredentialStore, linkProof } from "../src/commercial/plugin-bridge/link-credential.ts";
 import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handle.ts";
+import { mintExecutionId } from "../src/commercial/plugin-bridge/execution-id.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import {
@@ -58,16 +59,20 @@ const contractFile = figmaFiles.file("CONTRACTfile1", "Contract file");
 // The real plugin evals what it is sent, so it gets the real std-lib (ADR-0010).
 const PREAMBLE = await buildSandboxPreamble();
 const execute = (bridge, link, fields = {}) =>
-  bridge.request(link, {
-    type: "EXECUTE_CODE",
-    fileKey: contractFile.key,
-    // Fresh each run: a real plugin refuses a created handle it already holds.
-    session: { handle: mintSessionHandle(), create: true },
-    code: "return 'ok';",
-    preamble: PREAMBLE,
-    lateChangeWindowMs: 60_000,
-    ...fields,
-  });
+  bridge.submitRun(
+    link,
+    {
+      type: "EXECUTE_CODE",
+      fileKey: contractFile.key,
+      // Fresh each run: a real plugin refuses a created handle it already holds.
+      session: { handle: mintSessionHandle(), create: true },
+      code: "return 'ok';",
+      preamble: PREAMBLE,
+      lateChangeWindowMs: 60_000,
+      ...fields,
+    },
+    mintExecutionId(),
+  );
 const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
 /** Bind a call to `fileKey` (null: let the human pick), waiting `waitMs` for the plugin's answer. */
@@ -287,7 +292,12 @@ stranger.send(
 );
 stranger.send(JSON.stringify({ type: "DOCUMENT_CLAIMED", fileKey: "PLANTEDfile1" }));
 stranger.send(
-  JSON.stringify({ type: "CHANNEL_REQUEST", id: "q", runId: "r", capability: "images.fetch" }),
+  JSON.stringify({
+    type: "CHANNEL_REQUEST",
+    id: "q",
+    executionId: "r",
+    capability: "images.fetch",
+  }),
 );
 await wait(100);
 assert.deepEqual(
@@ -566,7 +576,11 @@ const bridgeT = bridgeOn(PORT_T, {
   events: {
     onRunEvent: (event) => {
       if (event.type === "orphanReply")
-        orphanReplies.push([event.runId, event.reply.documentChanged]);
+        orphanReplies.push([
+          event.executionId,
+          event.link === silentLink,
+          event.reply.documentChanged,
+        ]);
     },
   },
 });
@@ -578,7 +592,9 @@ const silent = rawPeer(`ws://127.0.0.1:${PORT_T}`, {
   onFrame: (msg) => {
     framesT.push(msg);
     if (msg.type === "CANCEL")
-      silent.send(JSON.stringify({ type: "CANCEL_RESULT", runId: msg.runId, disposition }));
+      silent.send(
+        JSON.stringify({ type: "CANCEL_RESULT", executionId: msg.executionId, disposition }),
+      );
   },
 });
 const silentLink = await linkOf(bridgeT);
@@ -594,7 +610,7 @@ assert.equal(timeoutErr.outcome, "not-submitted", "a run that never executed is 
 await wait(50);
 const cancelFrame = framesT.find((f) => f.type === "CANCEL");
 const stalled = framesT.find((f) => f.type === "EXECUTE_CODE");
-assert.equal(cancelFrame?.runId, stalled.id, "the CANCEL is scoped to the stalled run");
+assert.equal(cancelFrame?.executionId, stalled.id, "the CANCEL is scoped to the stalled run");
 assert.equal(cancelFrame.id, undefined, "CANCEL is id-less — a notification, never a request");
 console.log(
   "✅ A stalled run is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's answer",
@@ -613,12 +629,14 @@ await until(() => orphanReplies.length === 2, "the late results");
 assert.deepEqual(
   orphanReplies,
   [
-    [stalled.id, false],
-    [lateRun, true],
+    [stalled.id, true, false],
+    [lateRun, true, true],
   ],
   "a late result reaches the meter with what it says about the document",
 );
-console.log("✅ A late result reaches the meter under its run id, with its documentChanged");
+console.log(
+  "✅ A late result reaches the meter under its execution id, with its link and documentChanged",
+);
 silent.close();
 bridgeT.stop();
 await wait(150);
@@ -661,12 +679,12 @@ const pluginImg = rawPeer(`ws://127.0.0.1:${PORT_I}`, {
             type: "CHANNEL_REQUEST",
             capability: "images.fetch",
             id: preqId,
-            runId: msg.id,
+            executionId: msg.id,
             payload: urls,
           }),
         );
       }, 100);
-      pluginImg.runId = msg.id;
+      pluginImg.executionId = msg.id;
     }
     if (msg.type === "CHANNEL_RESPONSE" && msg.ok === true) {
       imagesReply = msg;
@@ -674,7 +692,7 @@ const pluginImg = rawPeer(`ws://127.0.0.1:${PORT_I}`, {
         pluginImg.send(
           JSON.stringify({
             type: "EXECUTE_CODE_RESULT",
-            id: pluginImg.runId,
+            id: pluginImg.executionId,
             result: msg.payload,
             console: [],
             errors: null,
@@ -687,7 +705,7 @@ const pluginImg = rawPeer(`ws://127.0.0.1:${PORT_I}`, {
       pluginImg.send(
         JSON.stringify({
           type: "EXECUTE_CODE_RESULT",
-          id: pluginImg.runId,
+          id: pluginImg.executionId,
           console: [],
           errors: msg.error.message,
           documentChanged: false,
@@ -716,7 +734,7 @@ pluginImg.send(
     type: "CHANNEL_REQUEST",
     capability: "images.fetch",
     id: "preq-9",
-    runId: "req-9999",
+    executionId: "req-9999",
     payload: ["u3"],
   }),
 );
@@ -758,9 +776,15 @@ const linkC = await linkOf(bridgeC);
 const statusP = bridgeC.grantStatus(linkC, null, "none").catch((e) => e);
 await wait(50);
 const infoId = framesC.find((f) => f.type === "GRANT_STATUS").id;
-const imageRequest = (id, runId, payload) =>
+const imageRequest = (id, executionId, payload) =>
   pluginC.send(
-    JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id, runId, payload }),
+    JSON.stringify({
+      type: "CHANNEL_REQUEST",
+      capability: "images.fetch",
+      id,
+      executionId,
+      payload,
+    }),
   );
 imageRequest("preq-g", infoId, ["u1"]);
 await wait(100);
@@ -777,10 +801,10 @@ console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse cha
 // fast one's settle would restart a 500ms clock the slow (1200ms) fetch then outruns.
 const runP = execute(bridgeC, linkC, { code: "two fetches" }).catch((e) => e);
 await wait(50);
-const runIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
-imageRequest("preq-f", runIdC, ["fast"]);
+const executionIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
+imageRequest("preq-f", executionIdC, ["fast"]);
 await wait(20);
-imageRequest("preq-s", runIdC, ["slow"]);
+imageRequest("preq-s", executionIdC, ["slow"]);
 await wait(1400);
 const served = (id) => framesC.some((f) => f.type === "CHANNEL_RESPONSE" && f.ok && f.id === id);
 assert.ok(served("preq-f") && served("preq-s"), "both services replied");
@@ -791,7 +815,7 @@ assert.ok(
 pluginC.send(
   JSON.stringify({
     type: "EXECUTE_CODE_RESULT",
-    id: runIdC,
+    id: executionIdC,
     result: "built",
     console: [],
     errors: null,

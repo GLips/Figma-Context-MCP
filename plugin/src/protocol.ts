@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -58,6 +58,8 @@ export const PROTOCOL_VERSION = 13;
  * v13: per-agent sessions. EXECUTE_CODE names the session it runs in, created or resumed, and may be
  *     answered SESSION_NOT_FOUND or SESSION_HANDLE_TAKEN; SESSION_LOOKUP asks which plugin holds one.
  *     FlcmHost.getSession keeps the run's session rather than one store per plugin run.
+ * v14: one execution id. A run's request id is its execution id, minted by the server once per call
+ *     and never resubmitted once admitted; every run-scoped frame names it as `executionId`.
  */
 
 // ---- Transport ----
@@ -283,7 +285,8 @@ function parseWriteAccessNotice(value: unknown): WriteAccessNotice | null {
 /**
  * Every request the server sends, each answered by exactly one reply carrying its `id` (ReplyFor).
  * Closed, so an EXECUTE_CODE without its std-lib is a compile error on the sending side. `id` is not
- * part of the payload: the bridge mints it and appends it last, so no field can overwrite it.
+ * part of the payload: the bridge appends it last, so no field can overwrite it. For a run
+ * (RUN_REQUEST_TYPES) the id is its execution id, which every run-scoped frame names.
  */
 export type ServerRequest =
   // FROZEN: every plugin build, past and future, must parse this frame and answer HELLO_RESULT, so a
@@ -355,7 +358,7 @@ export const RUN_REQUEST_TYPES = ["EXECUTE_CODE", "SCREENSHOT"] as const satisfi
 /** The server's one-way frames: neither is a request, and neither is answered by a reply. */
 export type ServerOneWay =
   // The server gave up on a run: run-scoped and id-less. Answered by the CANCEL_RESULT event.
-  | { type: "CANCEL"; runId: string }
+  | { type: "CANCEL"; executionId: string }
   // The answer to a plugin-issued CHANNEL_REQUEST, in the PLUGIN's id namespace. Payload and error
   // cross opaquely: a capability can change its shapes with no plugin release.
   | { type: "CHANNEL_RESPONSE"; id: string; ok: true; payload: unknown }
@@ -370,7 +373,7 @@ export type ServerFrame = (ServerRequest & { id: string }) | ServerOneWay;
 export function parseServerFrame(value: unknown): ServerFrame | null {
   if (!isRecord(value)) return null;
   const f = value;
-  if (f.type === "CANCEL") return typeof f.runId === "string" ? { type: "CANCEL", runId: f.runId } : null;
+  if (f.type === "CANCEL") return typeof f.executionId === "string" ? { type: "CANCEL", executionId: f.executionId } : null;
   if (typeof f.id !== "string") return null;
   const id = f.id;
   switch (f.type) {
@@ -616,18 +619,18 @@ export type PluginEvent =
   // The human clicked the panel's sign-in button.
   | { type: "WRITE_ACCESS_SIGN_IN" }
   // A mid-run call to a server capability, tagged with the run it serves.
-  | { type: "CHANNEL_REQUEST"; id: string; runId: string; capability: string; payload: unknown }
+  | { type: "CHANNEL_REQUEST"; id: string; executionId: string; capability: string; payload: unknown }
   // A run entered a phase; `at` is the plugin's stamp for when (the frame leaves only once the
   // plugin thread goes idle, so arrival can be seconds late).
-  | { type: "RUN_STATE"; runId: string; phase: RunPhase; at: number }
-  | { type: "RUN_TRACE"; runId: string; stage: HostTraceStage; operation?: NativeOperation; elapsedMs: number }
+  | { type: "RUN_STATE"; executionId: string; phase: RunPhase; at: number }
+  | { type: "RUN_TRACE"; executionId: string; stage: HostTraceStage; operation?: NativeOperation; elapsedMs: number }
   // The answer to a CANCEL.
-  | { type: "CANCEL_RESULT"; runId: string; disposition: CancelDisposition }
+  | { type: "CANCEL_RESULT"; executionId: string; disposition: CancelDisposition }
   // The document changed after the run's reply said it hadn't. At most one per run.
-  | { type: "RUN_CHANGED"; runId: string }
+  | { type: "RUN_CHANGED"; executionId: string }
   // The run's late-change watch closed with no change: nothing more will be reported for it. Never
   // sent for a run whose reply said documentChanged, nor alongside a RUN_CHANGED.
-  | { type: "RUN_SETTLED"; runId: string };
+  | { type: "RUN_SETTLED"; executionId: string };
 
 export type PluginEventType = PluginEvent["type"];
 
@@ -645,28 +648,28 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
     case "WRITE_ACCESS_SIGN_IN":
       return { type: f.type };
     case "CHANNEL_REQUEST":
-      return typeof f.id === "string" && typeof f.runId === "string" && typeof f.capability === "string"
-        ? { type: "CHANNEL_REQUEST", id: f.id, runId: f.runId, capability: f.capability, payload: f.payload }
+      return typeof f.id === "string" && typeof f.executionId === "string" && typeof f.capability === "string"
+        ? { type: "CHANNEL_REQUEST", id: f.id, executionId: f.executionId, capability: f.capability, payload: f.payload }
         : null;
     case "RUN_STATE":
-      return typeof f.runId === "string" && isOneOf(RUN_PHASES, f.phase) && typeof f.at === "number" && Number.isFinite(f.at)
-        ? { type: "RUN_STATE", runId: f.runId, phase: f.phase, at: f.at }
+      return typeof f.executionId === "string" && isOneOf(RUN_PHASES, f.phase) && typeof f.at === "number" && Number.isFinite(f.at)
+        ? { type: "RUN_STATE", executionId: f.executionId, phase: f.phase, at: f.at }
         : null;
     case "RUN_TRACE": {
-      if (typeof f.runId !== "string" || !isOneOf(HOST_TRACE_STAGES, f.stage)) return null;
+      if (typeof f.executionId !== "string" || !isOneOf(HOST_TRACE_STAGES, f.stage)) return null;
       if (typeof f.elapsedMs !== "number" || !(f.elapsedMs >= 0 && f.elapsedMs <= 3_600_000)) return null;
-      const event: PluginEvent = { type: "RUN_TRACE", runId: f.runId, stage: f.stage, elapsedMs: f.elapsedMs };
+      const event: PluginEvent = { type: "RUN_TRACE", executionId: f.executionId, stage: f.stage, elapsedMs: f.elapsedMs };
       if (isOneOf(NATIVE_OPERATIONS, f.operation)) event.operation = f.operation;
       return event;
     }
     case "CANCEL_RESULT":
       // An unrecognized word reads as "the plugin cannot say", which is what `unknown` means.
-      return typeof f.runId === "string"
-        ? { type: "CANCEL_RESULT", runId: f.runId, disposition: isOneOf(CANCEL_DISPOSITIONS, f.disposition) ? f.disposition : "unknown" }
+      return typeof f.executionId === "string"
+        ? { type: "CANCEL_RESULT", executionId: f.executionId, disposition: isOneOf(CANCEL_DISPOSITIONS, f.disposition) ? f.disposition : "unknown" }
         : null;
     case "RUN_CHANGED":
     case "RUN_SETTLED":
-      return typeof f.runId === "string" ? { type: f.type, runId: f.runId } : null;
+      return typeof f.executionId === "string" ? { type: f.type, executionId: f.executionId } : null;
     default:
       return null;
   }

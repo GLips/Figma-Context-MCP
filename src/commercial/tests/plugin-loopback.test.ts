@@ -493,6 +493,28 @@ it("after a server restart, a session's plugin that redials later than another p
   expect((await runIn(after, { session }, "return session.kept;")).reply.result).toBe(true);
 });
 
+it("a reconnect during a run leaves its outcome unknown, and never runs it a second time", async () => {
+  const bridge = startBridge(dir, ports[0]);
+  const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
+  await pairByPanel(bridge, plugin);
+  await target(bridge, "FILEkeyA", () => plugin.allow());
+
+  const interrupted = run(
+    bridge,
+    (await target(bridge, "FILEkeyA")).target,
+    `globalThis.runs = (globalThis.runs ?? 0) + 1;
+     figma.notify("run started");
+     await new Promise((resolve) => setTimeout(resolve, 500));`,
+  ).catch((error: unknown) => error);
+  await expect.poll(() => plugin.toasts).toContain("run started");
+  plugin.drop();
+  expect(await interrupted).toMatchObject({ outcome: "unconfirmed", phase: "running" });
+
+  await settlesTo(bridge, "linked");
+  // Queued behind the interrupted run, so this reads its count once that one has finished.
+  expect((await runIn(bridge, "FILEkeyA", "return globalThis.runs;")).reply.result).toBe(1);
+});
+
 it("a handle passed with another file's key refuses without running, and without asking either panel", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();

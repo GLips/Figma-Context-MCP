@@ -21,7 +21,9 @@ import {
   PluginBridge,
   type LinkRequest,
   type PluginLink,
+  type RunRequest,
 } from "~/commercial/plugin-bridge/bridge.js";
+import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
@@ -31,6 +33,7 @@ import {
   createTestWriteAccess,
   linkedTestResolution,
   targetedTestCall,
+  TEST_PLUGIN_LINK,
   TEST_PLUGIN_OWNER,
 } from "./fixtures/write-access.js";
 
@@ -116,10 +119,13 @@ async function setup() {
   const fake = await startFakeFramelinkApp();
   cleanups.push(fake.close);
   const notices: WriteAccessNotice[] = [];
-  // The panel is the other reader of every refusal; capture what it would be shown.
+  // The panel is the other reader of every refusal; capture what its owner would be shown.
   const access = createTestWriteAccess({
     apiUrl: fake.baseUrl,
-    notifyPanel: (notice) => notices.push(notice),
+    notifyPanel: (figmaUserId, notice) => {
+      expect(figmaUserId).toBe(TEST_PLUGIN_OWNER.figmaUserId);
+      notices.push(notice);
+    },
   });
   return { ...fake, ...access, notices };
 }
@@ -128,7 +134,7 @@ const USER_ID = TEST_PLUGIN_OWNER.figmaUserId;
 
 /** What the gate would say to a new execution now. Hands back the reservation it takes. */
 async function gateAnswer(writeMeter: WriteMeter) {
-  const admission = await writeMeter.authorize(TEST_PLUGIN_OWNER, randomUUID());
+  const admission = await writeMeter.authorize(TEST_PLUGIN_LINK, mintExecutionId());
   if (admission.kind === "refused") return admission.refusal;
   admission.charge.lost({ mayHaveRun: false });
   return admission.authorization;
@@ -148,22 +154,22 @@ class MeteredBridge extends PluginBridge {
   override targetCall() {
     return targetedTestCall();
   }
-  override async request<T extends LinkRequest>(
+  override async request<T extends Exclude<LinkRequest, RunRequest>>(
     _link: PluginLink,
     payload: T,
   ): Promise<ReplyFor<T["type"]>> {
-    let reply: PluginReply;
-    if (payload.type === "GRANT_PROMPT_CLOSED") reply = { type: "GRANT_PROMPT_CLOSED_ACK" };
-    else {
-      this.executions++;
-      reply = {
-        type: "EXECUTE_CODE_RESULT",
-        result: "ok",
-        console: [],
-        errors: null,
-        documentChanged: this.documentChanged.shift()!,
-      };
-    }
+    if (payload.type !== "GRANT_PROMPT_CLOSED") throw new Error(`unexpected ${payload.type}`);
+    return { type: "GRANT_PROMPT_CLOSED_ACK" } as ReplyFor<T["type"]>;
+  }
+  override async submitRun<T extends RunRequest>(): Promise<ReplyFor<T["type"]>> {
+    this.executions++;
+    const reply: PluginReply = {
+      type: "EXECUTE_CODE_RESULT",
+      result: "ok",
+      console: [],
+      errors: null,
+      documentChanged: this.documentChanged.shift()!,
+    };
     return reply as ReplyFor<T["type"]>;
   }
 }
@@ -272,9 +278,10 @@ describe("write authorization", () => {
     const { app, writeAccess, store, writeMeter } = await setup();
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 2);
     // Three parallel calls for the last two Writes: the third must not start.
+    const writesId = mintExecutionId();
     const [readOnly, writes, oneTooMany] = await Promise.all(
-      ["read-only", "writes", "one-too-many"].map((id) =>
-        writeMeter.authorize(TEST_PLUGIN_OWNER, id),
+      [mintExecutionId(), writesId, mintExecutionId()].map((id) =>
+        writeMeter.authorize(TEST_PLUGIN_LINK, id),
       ),
     );
     expect([readOnly, writes, oneTooMany].map((d) => d.kind)).toEqual([
@@ -297,24 +304,34 @@ describe("write authorization", () => {
     });
     chmodSync(stateDir, 0o700);
     await writeAccess.reportWriteUsage(USER_ID);
-    expect(app.reportedExecutionIds).toContain("writes");
-    expect(store.read().ledger[USER_ID]?.executions.map((e) => e.executionId)).toContain("writes");
+    expect(app.reportedExecutionIds).toContain(writesId);
+    expect(store.read().ledger[USER_ID]?.executions.map((e) => e.executionId)).toContain(writesId);
   });
 
-  it("charges a change reported after the reply to that same execution, once", async () => {
+  it("charges an execution once, however many times and ways it is settled", async () => {
     const { app, writeAccess, writeMeter } = await setup();
-    spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
-    const admission = await writeMeter.authorize(TEST_PLUGIN_OWNER, "late-writer");
-    if (admission.kind !== "authorized") throw new Error("the last Write fits the allowance");
-    // The reply said "no change", then the plugin saw one — and said so twice.
-    admission.charge.submitted("run-7");
+    spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 2);
+    const executionId = mintExecutionId();
+    const admission = await writeMeter.authorize(TEST_PLUGIN_LINK, executionId);
+    if (admission.kind !== "authorized") throw new Error("a Write still fits the allowance");
+    // The reply said "no change", then the plugin saw one — and said so twice, then its result
+    // arrived again late, and the caller ended the charge a second time.
     admission.charge.replied(false);
-    writeMeter.runEvent({ type: "changed", runId: "run-7" });
-    writeMeter.runEvent({ type: "changed", runId: "run-7" });
-    writeMeter.runEvent({ type: "changed", runId: "a-run-this-server-never-issued" });
-    expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "refused" });
+    const link = TEST_PLUGIN_LINK;
+    writeMeter.runEvent({ type: "changed", executionId, link });
+    writeMeter.runEvent({ type: "changed", executionId, link });
+    writeMeter.runEvent({
+      type: "orphanReply",
+      executionId,
+      link,
+      reply: { type: "EXECUTE_CODE_RESULT", console: [], errors: null, documentChanged: true },
+    });
+    admission.charge.lost({ mayHaveRun: true });
+    writeMeter.runEvent({ type: "changed", executionId: mintExecutionId(), link });
+    // One Write spent, so exactly one of the last two remains.
+    expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "authorized" });
     await writeAccess.reportWriteUsage(USER_ID);
-    expect(app.reportedExecutionIds.filter((id) => id === "late-writer")).toHaveLength(1);
+    expect(app.reportedExecutionIds.filter((id) => id === executionId)).toHaveLength(1);
   });
 
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {

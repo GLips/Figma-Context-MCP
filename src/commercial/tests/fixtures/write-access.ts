@@ -60,7 +60,10 @@ export const TEST_SESSION_REQUEST: SessionRequest = {
 export function createTestWriteAccess({
   apiUrl = "http://127.0.0.1:9",
   notifyPanel = () => {},
-}: { apiUrl?: string; notifyPanel?: (notice: WriteAccessNotice) => void } = {}): {
+}: {
+  apiUrl?: string;
+  notifyPanel?: (figmaUserId: string, notice: WriteAccessNotice) => void;
+} = {}): {
   writeAccess: WriteAccess;
   writeMeter: WriteMeter;
   signIn: DeviceSignIn;

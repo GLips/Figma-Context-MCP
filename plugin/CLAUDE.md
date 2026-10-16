@@ -18,7 +18,7 @@ Tests: `pnpm test:plugin` from the repo root (node:test, not vitest).
 factory parameter; only curated `flcm` verbs reach agent code. Agent code uses indirect eval so it
 cannot capture the plugin's local host or transport functions.
 
-The wire uses `{ type: "CHANNEL_REQUEST", id, runId, capability, payload }` and one response type:
+The wire uses `{ type: "CHANNEL_REQUEST", id, executionId, capability, payload }` and one response type:
 `{ type: "CHANNEL_RESPONSE", id, ok: true, payload }` or
 `{ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message, details?, ...extensions } }`. The UI routes these through its existing
 server envelope without interpreting them. Keep capability-specific fields out of the frame.

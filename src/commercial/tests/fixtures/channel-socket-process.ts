@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
+import { mintExecutionId } from "../../plugin-bridge/execution-id.js";
 import { answerLinkSetup } from "./plugin-link-peer.js";
 import { TEST_SESSION_REQUEST } from "./write-access.js";
 
@@ -70,7 +71,7 @@ async function peer() {
         JSON.stringify({
           type: "CHANNEL_REQUEST",
           id: "work",
-          runId: message.id,
+          executionId: message.id,
           capability: "test.wait",
           payload: null,
         }),
@@ -110,14 +111,18 @@ try {
   } else {
     const { ws, link } = await peer();
     const result = bridge
-      .request(link, {
-        type: "EXECUTE_CODE",
-        session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
-        code: "unused",
-        preamble: "unused",
-        lateChangeWindowMs: 60_000,
-      })
+      .submitRun(
+        link,
+        {
+          type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
+          fileKey: "FAKEfile1",
+          code: "unused",
+          preamble: "unused",
+          lateChangeWindowMs: 60_000,
+        },
+        mintExecutionId(),
+      )
       .catch((error) => error);
     await serviceStarted;
     const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));

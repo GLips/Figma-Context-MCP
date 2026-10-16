@@ -215,7 +215,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       `a result for ${id}`,
     ) as Promise<any>;
   const running = (id: string, key: ConnKey) =>
-    frame((f, connKey) => f.type === "RUN_STATE" && f.runId === id && connKey === key && f.phase === "running", `${id} running`);
+    frame((f, connKey) => f.type === "RUN_STATE" && f.executionId === id && connKey === key && f.phase === "running", `${id} running`);
   return { sent, context, storage, shared, sendFrame, sendControl, ask, introduce, prove, allow, connect, frame, render, result, running, deliverChanges };
 }
 
@@ -235,7 +235,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   await h.connect(2);
   run(2, "same-id", "writes.push('new'); return 'new';");
   run(2, "queued", "writes.push('must never run');");
-  h.sendFrame(2, { type: "CANCEL", runId: "queued" });
+  h.sendFrame(2, { type: "CANCEL", executionId: "queued" });
   release();
   // Runs dequeue in order, so the cancelled one answering means everything before it has run.
   await h.result("same-id", 2);
@@ -245,7 +245,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
     h.sent.some(
       ({ connKey, frame: f }) =>
         f.type === "RUN_STATE" &&
-        f.runId === "same-id" &&
+        f.executionId === "same-id" &&
         connKey === 2 &&
         f.phase === "running",
     ),
@@ -268,11 +268,11 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   await h.running("executing", 1);
   // No flush between these and the assertion: the answer must come from state the plugin already
   // holds. The queued run's own refusal can only speak once "executing" finishes — far too late.
-  h.sendFrame(1, { type: "CANCEL", runId: "waiting" });
-  h.sendFrame(1, { type: "CANCEL", runId: "executing" });
-  h.sendFrame(1, { type: "CANCEL", runId: "never-heard-of" });
+  h.sendFrame(1, { type: "CANCEL", executionId: "waiting" });
+  h.sendFrame(1, { type: "CANCEL", executionId: "executing" });
+  h.sendFrame(1, { type: "CANCEL", executionId: "never-heard-of" });
   assert.deepEqual(
-    h.sent.filter(({ frame: f }) => f.type === "CANCEL_RESULT").map(({ connKey, frame: f }) => [f.runId, f.disposition, connKey]),
+    h.sent.filter(({ frame: f }) => f.type === "CANCEL_RESULT").map(({ connKey, frame: f }) => [f.executionId, f.disposition, connKey]),
     [
       ["waiting", "never-executed", 1],
       ["executing", "was-running", 1],
@@ -513,7 +513,7 @@ test("the relay routes a frame only to the socket generation it belongs to", () 
   assert.notEqual(oldKey, newKey);
   // A late reply for the closed generation is dropped, never sent on whatever replaced it.
   ui.fromHost({ to: "server", connKey: oldKey, frame: { type: "EXECUTE_CODE_RESULT", id: "same-id" } });
-  old.onmessage({ data: JSON.stringify({ type: "CANCEL", runId: "same-id" }) });
+  old.onmessage({ data: JSON.stringify({ type: "CANCEL", executionId: "same-id" }) });
   assert.equal(next.frames.length, 0);
   assert(!forwarded.some((f) => f.frame?.type === "CANCEL"));
   ui.fromHost({ to: "server", connKey: newKey, frame: { type: "EXECUTE_CODE_RESULT", id: "same-id", result: "new" } });
@@ -736,7 +736,7 @@ test("two calls reorder and re-append a stored tree while preserving live ids", 
 test("a raw figma write counts even when its change event lands after the reply", async () => {
   const h = host();
   await h.connect(1);
-  const changedLate = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_CHANGED" && f.runId === id);
+  const changedLate = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_CHANGED" && f.executionId === id);
   const read = await execute(h, `return 1;`) as any;
   assert.equal(read.documentChanged, false);
   // Someone else in the file edits while this run is being watched: not this run's Write.
@@ -753,7 +753,7 @@ test("a raw figma write counts even when its change event lands after the reply"
   assert.equal(changedLate(raw.id), true);
   assert.equal(changedLate(read.id), false);
   // A watch that closed clean says so, ending the server's wait; the next run's start closes it.
-  const settled = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_SETTLED" && f.runId === id);
+  const settled = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_SETTLED" && f.executionId === id);
   assert.equal(settled(read.id), true);
   assert.equal(settled(raw.id), false);
 });
@@ -791,7 +791,7 @@ test("queued calls observe completed session writes and cancelled queued calls c
   const send = (id: string, code: string) => h.sendFrame(1, { type: "EXECUTE_CODE", id, preamble, code });
   send("first", `session.count = 1; await hold; session.count++; return session.count;`);
   send("cancelled", `session.count = 100; return 100;`);
-  h.sendFrame(1, { type: "CANCEL", runId: "cancelled" });
+  h.sendFrame(1, { type: "CANCEL", executionId: "cancelled" });
   const next = execute(h, `return [session.count, session.last];`);
   release();
   const result = await next;

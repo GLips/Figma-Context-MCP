@@ -6,10 +6,11 @@
 // execution ends recorded, or released into a late window in which a change the plugin reports later
 // is still charged to it — and a short-lived runtime stays up (drain) until every window closes.
 //
-// Callers see only an ExecutionCharge: authorize hands one out, the caller reports what became of the
-// run through it, and the plugin's run events arrive through runEvent. Seats get a charge that does
-// nothing — seats carry no usage counters.
+// Everything is keyed by the execution id the caller minted, which is also the run's id on the wire,
+// and pinned to the plugin link the run went out on. Callers see only an ExecutionCharge; the plugin's
+// run events arrive through runEvent. Seats get a charge that does nothing — they carry no counters.
 import type { PluginOwner, ExecuteCodeResult, WriteAccessNotice } from "@framelink/plugin/protocol";
+import type { ExecutionId } from "../plugin-bridge/execution-id.js";
 import type { WriteAccess } from "./write-access.js";
 import {
   allowanceExhaustedNotice,
@@ -27,22 +28,29 @@ export const LATE_CHANGE_WINDOW_MS = 60_000;
 const LATE_DOCUMENT_CHANGE_MS = LATE_CHANGE_WINDOW_MS + 30_000;
 
 /**
- * What the plugin says about a run after its caller may have stopped listening. The bridge forwards
- * these as they come, without judging them; what they cost is decided here.
- * `orphanReply` is a run's result that arrived after its caller gave up on it.
+ * The plugin link a run was pinned to, as the meter sees it: compared by identity, and charged to its
+ * owner. An authenticated link's owner is fixed when it authenticates, so the link alone pins both.
  */
-export type RunEvent =
-  | { type: "changed"; runId: string }
-  | { type: "settled"; runId: string }
-  | { type: "orphanReply"; runId: string; reply: ExecuteCodeResult };
+export interface MeteredLink {
+  readonly owner: PluginOwner | null;
+}
 
 /**
- * What became of one authorized execution, reported by the caller that runs it. End it exactly once,
- * with replied or lost, on every path — an unended allowance charge holds its reservation for good.
+ * What a plugin link says about a run after its caller may have stopped listening. The bridge
+ * forwards these as they come, with the link that said them; whether they settle or charge anything
+ * is decided here. `orphanReply` is a run's result that arrived after its caller gave up on it.
+ */
+export type RunEvent =
+  | { type: "changed"; executionId: string; link: MeteredLink }
+  | { type: "settled"; executionId: string; link: MeteredLink }
+  | { type: "orphanReply"; executionId: string; link: MeteredLink; reply: ExecuteCodeResult };
+
+/**
+ * What became of one authorized execution, reported by the caller that runs it. End it with replied
+ * or lost on every path — an unended allowance charge holds its reservation for good. Only the first
+ * end counts.
  */
 export interface ExecutionCharge {
-  /** The execution reached the plugin as `runId`. Call on submission: run events can beat the reply. */
-  submitted(runId: string): void;
   /** The plugin answered. `documentChanged: false` stays provisional until the run settles. */
   replied(documentChanged: boolean): void;
   /** No answer. `mayHaveRun`: the run may have touched the document, so it is charged. */
@@ -57,19 +65,23 @@ export type ExecutionAdmission =
     }
   | { kind: "refused"; refusal: WriteRefusal };
 
-const SEAT_CHARGE: ExecutionCharge = { submitted() {}, replied() {}, lost() {} };
+const SEAT_CHARGE: ExecutionCharge = { replied() {}, lost() {} };
 
-type LateRun = { figmaUserId: string; executionId: string; expiresAt: number };
+/** An allowance-authorized execution not yet known to be a Write or not. */
+interface UnsettledExecution {
+  figmaUserId: string;
+  link: MeteredLink;
+  /**
+   * Infinity while the caller still waits on it: a reservation, counted as spent so parallel calls
+   * can't all pass the gate on the same last Write. Then the end of its late window.
+   */
+  lateWindowEndsAt: number;
+}
 
 export class WriteMeter {
-  // executionId → figmaUserId: allowance-authorized executions not yet known to be a Write or not.
-  // Counted as spent, so parallel calls can't all pass the gate on the same last Write.
-  private readonly reservations = new Map<string, string>();
-  // runId (the plugin's name for an execution) → the execution a late change is charged to.
-  // expiresAt is Infinity while the caller still waits on the run.
-  private readonly lateRuns = new Map<string, LateRun>();
-  private readonly lateRunWaiters = new Set<() => void>();
-  private readonly notifyPanel: (notice: WriteAccessNotice) => void;
+  private readonly unsettled = new Map<string, UnsettledExecution>();
+  private readonly settleWaiters = new Set<() => void>();
+  private readonly notifyPanel: (figmaUserId: string, notice: WriteAccessNotice) => void;
   private readonly now: () => Date;
 
   constructor(
@@ -77,7 +89,11 @@ export class WriteMeter {
     {
       notifyPanel = () => {},
       now = () => new Date(),
-    }: { notifyPanel?: (notice: WriteAccessNotice) => void; now?: () => Date } = {},
+    }: {
+      /** Show a notice in the panels of the plugin owner it concerns, and no one else's. */
+      notifyPanel?: (figmaUserId: string, notice: WriteAccessNotice) => void;
+      now?: () => Date;
+    } = {},
   ) {
     this.notifyPanel = notifyPanel;
     this.now = now;
@@ -88,50 +104,57 @@ export class WriteMeter {
   }
 
   /**
-   * May an execution attributed to this Plugin Owner start? An allowance authorization reserves
-   * a Write until its charge ends. Allowance refusals also go to the plugin panel.
+   * May an execution through `link` start? It is attributed to the link's owner, and pinned to the
+   * link: only events from it can settle or charge `executionId`. An allowance authorization reserves
+   * a Write until its charge ends. Allowance refusals also go to that owner's panels.
    */
-  async authorize(owner: PluginOwner | null, executionId: string): Promise<ExecutionAdmission> {
-    let decision = this.decide(owner);
+  async authorize(link: MeteredLink, executionId: ExecutionId): Promise<ExecutionAdmission> {
+    let decision = this.decide(link.owner);
     if (
       decision.kind === "refused" &&
       decision.reason === "allowance-exhausted" &&
       decision.signedIn
     ) {
       await this.access.recheckRefusedSeat(decision.figmaUserId);
-      decision = this.decide(owner);
+      decision = this.decide(link.owner);
     }
     // Synchronous with the decision above, so no other call can decide in between.
     if (decision.kind === "refused") {
       if (decision.reason === "allowance-exhausted")
-        this.notifyPanel(allowanceExhaustedNotice(decision));
+        this.notifyPanel(decision.figmaUserId, allowanceExhaustedNotice(decision));
       return { kind: "refused", refusal: decision };
     }
     if (decision.via === "seat")
       return { kind: "authorized", authorization: decision, charge: SEAT_CHARGE };
-    this.reservations.set(executionId, decision.figmaUserId);
+    this.unsettled.set(executionId, {
+      figmaUserId: decision.figmaUserId,
+      link,
+      lateWindowEndsAt: Infinity,
+    });
     return {
       kind: "authorized",
       authorization: decision,
-      charge: this.allowanceCharge(decision.figmaUserId, executionId),
+      charge: {
+        replied: (documentChanged) => this.callerFinished(executionId, documentChanged),
+        lost: ({ mayHaveRun }) => this.callerFinished(executionId, mayHaveRun),
+      },
     };
   }
 
-  /** The bridge's one wiring point for the plugin's run events. */
+  /**
+   * The bridge's one wiring point for the plugin's run events. Heard only from the link the execution
+   * was pinned to; any other link naming its id is ignored. Each execution settles once: whatever
+   * arrives after that, from the caller or the plugin, changes nothing.
+   */
   runEvent(event: RunEvent): void {
-    if (event.type === "settled") {
-      if (this.lateRuns.delete(event.runId)) this.wakeLateRunWaiters();
-      return;
-    }
+    const execution = this.unsettled.get(event.executionId);
+    if (!execution || execution.link !== event.link) return;
     if (event.type === "orphanReply" && !event.reply.documentChanged) return;
-    // A change after the caller finished with the run, or one it gave up waiting for: recorded under
-    // the run's own execution, so a second report — or one for a run already counted — changes nothing.
-    const late = this.lateRuns.get(event.runId);
-    if (!late) return;
-    this.lateRuns.delete(event.runId);
-    if (late.expiresAt > this.now().getTime())
-      this.access.recordWrite(late.figmaUserId, late.executionId);
-    this.wakeLateRunWaiters();
+    // A change seen during the run, after its reply, or after its caller gave up: all one Write.
+    this.settle(
+      event.executionId,
+      event.type !== "settled" && execution.lateWindowEndsAt > this.now().getTime(),
+    );
   }
 
   /**
@@ -147,83 +170,78 @@ export class WriteMeter {
       if (!remaining) return;
       if (!announced) onWaiting?.(remaining);
       announced = true;
-      await this.nextLateRunChange(remaining, signal);
+      await this.nextSettlement(remaining, signal);
     }
   }
 
   private decide(owner: PluginOwner | null): WriteAuthorization {
     const figmaUserId = owner?.figmaUserId;
     let reserved = 0;
-    for (const reservedFor of this.reservations.values())
-      if (reservedFor === figmaUserId) reserved++;
+    for (const execution of this.unsettled.values())
+      if (execution.figmaUserId === figmaUserId && execution.lateWindowEndsAt === Infinity)
+        reserved++;
     return this.access.decide(owner, reserved);
   }
 
-  private allowanceCharge(figmaUserId: string, executionId: string): ExecutionCharge {
-    let ended = false;
-    const end = (wrote: boolean) => {
-      if (ended) return;
-      ended = true;
-      if (wrote) this.access.recordWrite(figmaUserId, executionId);
-      this.release(executionId, { charged: wrote });
-    };
-    return {
-      submitted: (runId) => {
-        if (!ended) this.lateRuns.set(runId, { figmaUserId, executionId, expiresAt: Infinity });
-      },
-      replied: (documentChanged) => end(documentChanged),
-      lost: ({ mayHaveRun }) => end(mayHaveRun),
-    };
+  /**
+   * The caller is done with the execution. A Write is recorded now; otherwise its reservation ends
+   * and the late window opens, for a change the plugin reports after the reply.
+   */
+  private callerFinished(executionId: ExecutionId, wrote: boolean): void {
+    const execution = this.unsettled.get(executionId);
+    if (!execution || execution.lateWindowEndsAt !== Infinity) return;
+    if (wrote) return this.settle(executionId, true);
+    execution.lateWindowEndsAt = this.now().getTime() + LATE_DOCUMENT_CHANGE_MS;
+    this.closeExpiredWindows();
   }
 
-  /**
-   * The caller is done with the execution. Frees its reservation; unless it was charged, its run
-   * stays watched until the ceiling for a change reported late. Also prunes expired windows.
-   */
-  private release(executionId: string, { charged }: { charged: boolean }): void {
-    this.reservations.delete(executionId);
+  private settle(executionId: string, wrote: boolean): void {
+    const execution = this.unsettled.get(executionId);
+    if (!execution) return;
+    this.unsettled.delete(executionId);
+    if (wrote) this.access.recordWrite(execution.figmaUserId, executionId);
+    this.closeExpiredWindows();
+    this.wakeSettleWaiters();
+  }
+
+  private closeExpiredWindows(): void {
     const now = this.now().getTime();
     let closed = false;
-    for (const [runId, late] of this.lateRuns) {
-      if (late.executionId === executionId) {
-        if (charged) {
-          this.lateRuns.delete(runId);
-          closed = true;
-        } else this.lateRuns.set(runId, { ...late, expiresAt: now + LATE_DOCUMENT_CHANGE_MS });
-      } else if (late.expiresAt <= now) {
-        this.lateRuns.delete(runId);
+    for (const [executionId, execution] of this.unsettled)
+      if (execution.lateWindowEndsAt <= now) {
+        this.unsettled.delete(executionId);
         closed = true;
       }
-    }
-    if (closed) this.wakeLateRunWaiters();
+    if (closed) this.wakeSettleWaiters();
   }
 
   private longestOpenWindowMs(): number {
     const now = this.now().getTime();
     let longest = 0;
-    for (const late of this.lateRuns.values())
-      if (Number.isFinite(late.expiresAt)) longest = Math.max(longest, late.expiresAt - now);
+    for (const execution of this.unsettled.values())
+      if (Number.isFinite(execution.lateWindowEndsAt))
+        longest = Math.max(longest, execution.lateWindowEndsAt - now);
     return longest;
   }
 
-  private nextLateRunChange(timeoutMs: number, signal: AbortSignal): Promise<void> {
+  private nextSettlement(timeoutMs: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       const finish = (error?: unknown) => {
         clearTimeout(timer);
         signal.removeEventListener("abort", abort);
-        this.lateRunWaiters.delete(wake);
+        this.settleWaiters.delete(wake);
         if (error) reject(error);
         else resolve();
       };
       const wake = () => finish();
       const abort = () => finish(signal.reason);
       const timer = setTimeout(wake, timeoutMs);
-      this.lateRunWaiters.add(wake);
+      this.settleWaiters.add(wake);
       signal.addEventListener("abort", abort, { once: true });
     });
   }
 
-  private wakeLateRunWaiters(): void {
-    for (const wake of [...this.lateRunWaiters]) wake();
+  private wakeSettleWaiters(): void {
+    for (const wake of [...this.settleWaiters]) wake();
   }
 }

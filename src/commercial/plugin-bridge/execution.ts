@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { randomUUID } from "node:crypto";
 import type {
   ExecuteCodeResult,
   NotGrantedReason,
@@ -15,6 +14,7 @@ import {
   type ChannelRunContext,
   type PluginLink,
 } from "./bridge.js";
+import { mintExecutionId } from "./execution-id.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { mintSessionHandle, type SessionHandle } from "./session-handle.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
@@ -52,41 +52,21 @@ export type ExecutionOutcome =
 const SESSION_MINT_ATTEMPTS = 4;
 
 /**
- * Shared MCP/CLI submission and accounting boundary. The call was bound to its document and grant
- * before this; the plugin checks the grant again on arrival and may still refuse.
+ * Shared MCP/CLI submission and accounting boundary: one call is one execution, under one execution
+ * id, metered to the link's owner. The call was bound to its document and grant before this; the
+ * plugin checks the grant again on arrival and may still refuse.
  */
 export async function executePluginCode(
-  runtime: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
-  target: PluginCallTarget,
-  code: string,
-  context: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } = { figma: null },
-): Promise<ExecutionOutcome> {
-  // A taken handle is refused before the plugin admits the run, so minting another and resubmitting
-  // never runs the code twice.
-  for (let attempt = 1; ; attempt++) {
-    const session = target.session
-      ? { handle: target.session, create: false }
-      : { handle: mintSessionHandle(), create: true };
-    const outcome = await submitPluginCode(runtime, target, code, session, context);
-    if (outcome !== "handle-taken") return outcome;
-    if (attempt === SESSION_MINT_ATTEMPTS)
-      throw new Error(
-        `The Figma plugin refused ${SESSION_MINT_ATTEMPTS} fresh session handles in a row as already taken, so nothing ran. Reopen the Framelink plugin, then retry.`,
-      );
-  }
-}
-
-async function submitPluginCode(
   {
     bridge,
     writeMeter,
     readLocalImage,
   }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
-  { link, document }: PluginCallTarget,
+  { link, document, session: namedSession }: PluginCallTarget,
   code: string,
-  session: { handle: SessionHandle; create: boolean },
-  { figma, signal }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal },
-): Promise<ExecutionOutcome | "handle-taken"> {
+  { figma, signal }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } = { figma: null },
+): Promise<ExecutionOutcome> {
+  const executionId = mintExecutionId();
   // The upload grant comes from the code as submitted here, by the trusted caller — never from the
   // plugin, which executes the code and so could otherwise name any handle it has seen.
   const runContext: ChannelRunContext = {
@@ -95,8 +75,7 @@ async function submitPluginCode(
     uploadHandles: uploadHandlesNamedIn(code),
     readLocalImage,
   };
-  // The run is metered to the link's owner — the Figma user the authenticated plugin is signed in as.
-  const admission = await writeMeter.authorize(link.owner, randomUUID());
+  const admission = await writeMeter.authorize(link, executionId);
   if (admission.kind === "refused")
     return {
       kind: "refused",
@@ -104,38 +83,49 @@ async function submitPluginCode(
       message: writeRefusalText(admission.refusal, writeMeter.framelinkApiUrl),
     };
   const { charge } = admission;
-  const reply = await bridge
-    .request(
-      link,
-      {
-        type: "EXECUTE_CODE",
-        code,
-        fileKey: document.fileKey,
-        session,
-        preamble: flcmSandboxPreamble(),
-        lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
-      },
-      { signal, onSubmitted: (runId) => charge.submitted(runId), runContext },
-    )
-    .catch((error: unknown) => {
-      charge.lost({ mayHaveRun: mayHaveRun(error) });
-      throw error;
-    });
-  if (reply.type !== "EXECUTE_CODE_RESULT") {
+  // Every refusal below lands before the plugin admits the run, so resubmitting the same execution
+  // id with a freshly minted handle never runs the code twice.
+  for (let attempt = 1; ; attempt++) {
+    const session = namedSession
+      ? { handle: namedSession, create: false }
+      : { handle: mintSessionHandle(), create: true };
+    const reply = await bridge
+      .submitRun(
+        link,
+        {
+          type: "EXECUTE_CODE",
+          code,
+          fileKey: document.fileKey,
+          session,
+          preamble: flcmSandboxPreamble(),
+          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
+        },
+        executionId,
+        { signal, runContext },
+      )
+      .catch((error: unknown) => {
+        charge.lost({ mayHaveRun: mayHaveRun(error) });
+        throw error;
+      });
+    if (reply.type === "EXECUTE_CODE_RESULT") {
+      const { documentChanged, console, errors } = reply;
+      charge.replied(documentChanged);
+      // `result` stays absent when the run returned nothing: undefined isn't JSON.
+      return {
+        kind: "executed",
+        reply: "result" in reply ? { result: reply.result, console, errors } : { console, errors },
+        session: session.handle,
+      };
+    }
+    if (reply.type === "SESSION_HANDLE_TAKEN" && attempt < SESSION_MINT_ATTEMPTS) continue;
     charge.lost({ mayHaveRun: false });
     if (reply.type === "NOT_GRANTED") return { kind: "not-granted", reason: reply.reason };
     if (reply.type === "SESSION_NOT_FOUND")
       return { kind: "session-not-found", session: session.handle };
-    return "handle-taken";
+    throw new Error(
+      `The Figma plugin refused ${SESSION_MINT_ATTEMPTS} fresh session handles in a row as already taken, so nothing ran. Reopen the Framelink plugin, then retry.`,
+    );
   }
-  const { documentChanged, console, errors } = reply;
-  charge.replied(documentChanged);
-  // `result` stays absent when the run returned nothing: undefined isn't JSON.
-  return {
-    kind: "executed",
-    reply: "result" in reply ? { result: reply.result, console, errors } : { console, errors },
-    session: session.handle,
-  };
 }
 
 /** A failed submission may have touched the document unless the bridge proved it never started. */
@@ -155,9 +145,10 @@ export async function capturePluginScreenshot(
 ): Promise<
   { kind: "captured"; reply: ScreenshotResult } | { kind: "not-granted"; reason: NotGrantedReason }
 > {
-  const reply = await bridge.request(
+  const reply = await bridge.submitRun(
     link,
     { type: "SCREENSHOT", fileKey: document.fileKey, ...target },
+    mintExecutionId(),
     { signal },
   );
   return reply.type === "NOT_GRANTED"

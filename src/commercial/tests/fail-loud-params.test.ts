@@ -28,7 +28,7 @@ function connectedServer(
   })),
 ) {
   const bridge = {
-    request,
+    submitRun: request,
     // A plugin is on the wire in these tests, so the disconnect reply never fires.
     targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
@@ -81,6 +81,7 @@ describe("unknown MCP tool params fail loud", () => {
     expect(request).toHaveBeenCalledWith(
       TEST_PLUGIN_LINK,
       { type: "SCREENSHOT", fileKey: "TESTfile1", nodeId: "1:2", scale: 2 },
+      expect.any(String),
       { signal: expect.any(AbortSignal) },
     );
     expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });

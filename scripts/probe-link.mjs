@@ -13,6 +13,7 @@ import { terminalPairingCodeAsker } from "../src/commercial/commands/terminal-pa
 import { FigmaService, staticCredentialSource } from "../src/services/figma.ts";
 import { figmaFileKey } from "../src/utils/figma-url.ts";
 import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handle.ts";
+import { mintExecutionId } from "../src/commercial/plugin-bridge/execution-id.ts";
 
 // A person may be finding the plugin window: long enough not to rush them.
 const PROBE_GRANT_WAIT_MS = 10 * 60_000;
@@ -61,12 +62,16 @@ export async function targetForProbe(bridge, log) {
  * nothing ran.
  */
 export async function executeOnProbeTarget(bridge, { link, document }, fields) {
-  const reply = await bridge.request(link, {
-    type: "EXECUTE_CODE",
-    fileKey: document.fileKey,
-    session: { handle: mintSessionHandle(), create: true },
-    ...fields,
-  });
+  const reply = await bridge.submitRun(
+    link,
+    {
+      type: "EXECUTE_CODE",
+      fileKey: document.fileKey,
+      session: { handle: mintSessionHandle(), create: true },
+      ...fields,
+    },
+    mintExecutionId(),
+  );
   if (reply.type !== "EXECUTE_CODE_RESULT")
     throw new Error(
       `the plugin refused the run (${reply.type === "NOT_GRANTED" ? reply.reason : reply.type}); nothing executed.`,

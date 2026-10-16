@@ -14,7 +14,7 @@ import type { ServerFrame } from "./protocol.js";
 export interface PendingServerCall {
   resolve: (payload: unknown) => void;
   reject: (err: Error) => void;
-  runId: string;
+  executionId: string;
   connKey: ConnKey;
 }
 
@@ -25,7 +25,7 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
   return {
     /**
      * Call a capability on the run's server and await its opaque response. Tagged with the run's
-     * correlation id so the server can (a) suspend the run's inactivity deadline while IT is the side
+     * execution id so the server can (a) suspend the run's inactivity deadline while IT is the side
      * doing the work, and (b) refuse a request for a run it no longer tracks — that refusal rejects
      * this promise, which is what makes a zombie run die at its suspension point instead of resuming
      * into canvas writes.
@@ -49,8 +49,8 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       }
       return new Promise((resolve, reject) => {
         const id = "preq-" + ++nextChannelRequestId;
-        pending.set(id, { resolve, reject, runId: to.id, connKey: to.connKey });
-        toServer(to.connKey, { type: "CHANNEL_REQUEST", id, runId: to.id, capability, payload });
+        pending.set(id, { resolve, reject, executionId: to.id, connKey: to.connKey });
+        toServer(to.connKey, { type: "CHANNEL_REQUEST", id, executionId: to.id, capability, payload });
       });
     },
 

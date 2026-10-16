@@ -12,8 +12,8 @@ export interface RunRef {
   connKey: number;
 }
 
-function runKey(connKey: number, runId: string): string {
-  return String(connKey) + ":" + runId;
+function runKey(connKey: number, executionId: string): string {
+  return String(connKey) + ":" + executionId;
 }
 
 /**
@@ -49,8 +49,8 @@ export function createRunCancellationRegistry() {
      * already settled. The latter is retained by nobody, which is what keeps the table from leaking
      * a row per socket generation.
      */
-    recordCancellation(connKey: number, runId: string): CancelDisposition {
-      const run = runs.get(runKey(connKey, runId));
+    recordCancellation(connKey: number, executionId: string): CancelDisposition {
+      const run = runs.get(runKey(connKey, executionId));
       if (!run) return "unknown";
       run.cancelled ??= "server";
       return run.phase === "queued" ? "never-executed" : "was-running";

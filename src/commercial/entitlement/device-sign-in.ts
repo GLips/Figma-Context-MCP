@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The Framelink device sign-in (RFC 8628) for a Plugin Owner: request a code, show it in the
-// plugin panel, poll until the human finishes in the browser, then hand the token to WriteAccess,
+// The Framelink device sign-in (RFC 8628) for a Plugin Owner: request a code, show it in that owner's
+// plugin panels, poll until the human finishes in the browser, then hand the token to WriteAccess,
 // which decides whether to keep it. One flow per Plugin Owner; a second click re-shows its code.
 import { setTimeout as pause } from "node:timers/promises";
 import type { PluginOwner, WriteAccessNotice } from "@framelink/plugin/protocol";
@@ -16,6 +16,13 @@ const SLOW_DOWN_STEP_MS = 5_000;
 
 type SignInFlow = { notice: WriteAccessNotice | null; done: Promise<void> };
 
+/** What a panel whose plugin reports no Figma user is told when its sign-in button is clicked. */
+export const SIGN_IN_NEEDS_FIGMA_USER_NOTICE: WriteAccessNotice = {
+  kind: "sign-in-failed",
+  message:
+    "Figma didn't report a signed-in user to the plugin. Sign in to Figma, reopen the Framelink plugin, then sign in here.",
+};
+
 export class DeviceSignIn {
   // Keyed by figmaUserId.
   private readonly flows = new Map<string, SignInFlow>();
@@ -25,7 +32,8 @@ export class DeviceSignIn {
   constructor(
     private readonly api: FramelinkApiClient,
     private readonly access: WriteAccess,
-    private readonly notifyPanel: (notice: WriteAccessNotice) => void,
+    /** Show a notice in the panels of the plugin owner signing in, and no one else's. */
+    private readonly notifyPanel: (figmaUserId: string, notice: WriteAccessNotice) => void,
     { now = () => new Date() }: { now?: () => Date } = {},
   ) {
     this.now = now;
@@ -37,28 +45,20 @@ export class DeviceSignIn {
   }
 
   /**
-   * Start (or re-show) the sign-in for this Plugin Owner. The panel gets the code and
+   * Start (or re-show) the sign-in for this Plugin Owner. Their panels get the code and
    * verification URL, then the outcome. Resolves when the flow ends, for callers that wait.
    */
-  start(owner: PluginOwner | null): Promise<void> {
-    if (!owner) {
-      this.notifyPanel({
-        kind: "sign-in-failed",
-        message:
-          "Figma didn't report a signed-in user to the plugin. Sign in to Figma, reopen the Framelink plugin, then sign in here.",
-      });
-      return Promise.resolve();
-    }
+  start(owner: PluginOwner): Promise<void> {
     const { figmaUserId } = owner;
     const live = this.flows.get(figmaUserId);
     if (live) {
-      if (live.notice) this.notifyPanel(live.notice);
+      if (live.notice) this.notifyPanel(figmaUserId, live.notice);
       return live.done;
     }
     const flow: SignInFlow = { notice: null, done: Promise.resolve() };
     flow.done = this.run(figmaUserId, (notice) => {
       flow.notice = notice;
-      this.notifyPanel(notice);
+      this.notifyPanel(figmaUserId, notice);
     }).finally(() => this.flows.delete(figmaUserId));
     this.flows.set(figmaUserId, flow);
     return flow.done;

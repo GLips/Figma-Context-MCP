@@ -7,6 +7,7 @@ import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bri
 import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { mintExecutionId } from "~/commercial/plugin-bridge/execution-id.js";
 
 const bridges: PluginBridge[] = [];
 // A request with a trivial reply, for tests about the ledger rather than the payload.
@@ -45,20 +46,24 @@ describe("link-owned execution", () => {
     const bridge = create({ requestTimeoutMs: 100 });
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request(socket.link, {
-        type: "EXECUTE_CODE",
-        session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
-        code: "x",
-        preamble: "x",
-        lateChangeWindowMs: 60_000,
-      })
+      .submitRun(
+        socket.link,
+        {
+          type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
+          fileKey: "FAKEfile1",
+          code: "x",
+          preamble: "x",
+          lateChangeWindowMs: 60_000,
+        },
+        mintExecutionId(),
+      )
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
     // Submitted, never acknowledged: the inactivity deadline still covers a plugin that says nothing.
     await vi.advanceTimersByTimeAsync(100);
-    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
+    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
     // Nothing answers the cancellation — the one case where "unconfirmed" is the true word.
     await vi.advanceTimersByTimeAsync(1_000);
     const error = await call;
@@ -71,24 +76,28 @@ describe("link-owned execution", () => {
     const bridge = create({ requestTimeoutMs: 100, runCeilingMs: 600 });
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request(socket.link, {
-        type: "EXECUTE_CODE",
-        session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
-        code: "x",
-        preamble: "x",
-        lateChangeWindowMs: 60_000,
-      })
+      .submitRun(
+        socket.link,
+        {
+          type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
+          fileKey: "FAKEfile1",
+          code: "x",
+          preamble: "x",
+          lateChangeWindowMs: 60_000,
+        },
+        mintExecutionId(),
+      )
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    socket.receive({ type: "RUN_STATE", runId: id, phase: "queued", at: Date.now() });
+    socket.receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: Date.now() });
     // Five times the inactivity deadline: a run waiting behind another one is not silence.
     await vi.advanceTimersByTimeAsync(500);
     expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
     await vi.advanceTimersByTimeAsync(200);
-    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
-    socket.receive({ type: "CANCEL_RESULT", runId: id, disposition: "never-executed" });
+    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
+    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "never-executed" });
     const error = await call;
     expect(error).toMatchObject({ outcome: "not-submitted", phase: "queued" });
     expect(String(error)).toContain("run ceiling");
@@ -99,22 +108,26 @@ describe("link-owned execution", () => {
     const bridge = create({ requestTimeoutMs: 100 });
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request(socket.link, {
-        type: "EXECUTE_CODE",
-        session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
-        code: "x",
-        preamble: "x",
-        lateChangeWindowMs: 60_000,
-      })
+      .submitRun(
+        socket.link,
+        {
+          type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
+          fileKey: "FAKEfile1",
+          code: "x",
+          preamble: "x",
+          lateChangeWindowMs: 60_000,
+        },
+        mintExecutionId(),
+      )
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    socket.receive({ type: "RUN_STATE", runId: id, phase: "queued", at: Date.now() });
-    socket.receive({ type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
+    socket.receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: Date.now() });
+    socket.receive({ type: "RUN_STATE", executionId: id, phase: "running", at: Date.now() });
     await vi.advanceTimersByTimeAsync(100);
-    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
-    socket.receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
+    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
+    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
     const error = await call;
     expect(error).toMatchObject({ outcome: "unconfirmed", phase: "running" });
     expect(String(error)).toContain("was executing when it was cancelled");
@@ -127,22 +140,26 @@ describe("link-owned execution", () => {
     const bridge = create();
     const socket = await connectFakePlugin(bridge);
     const call = bridge
-      .request(socket.link, {
-        type: "EXECUTE_CODE",
-        session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
-        code: "x",
-        preamble: "x",
-        lateChangeWindowMs: 60_000,
-      })
+      .submitRun(
+        socket.link,
+        {
+          type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
+          fileKey: "FAKEfile1",
+          code: "x",
+          preamble: "x",
+          lateChangeWindowMs: 60_000,
+        },
+        mintExecutionId(),
+      )
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
     const runStartedAt = Date.now();
     const heldThreadMs = 6_000;
     await vi.advanceTimersByTimeAsync(heldThreadMs);
-    socket.receive({ type: "RUN_STATE", runId: id, phase: "queued", at: runStartedAt });
-    socket.receive({ type: "RUN_STATE", runId: id, phase: "running", at: runStartedAt });
+    socket.receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: runStartedAt });
+    socket.receive({ type: "RUN_STATE", executionId: id, phase: "running", at: runStartedAt });
     const cancelled = () => socket.frames.some((f) => f.type === "CANCEL");
     // The run's own clock, with no server call in flight: the plugin refuses writes from here.
     const runDeadlinePassed = () => Date.now() - runStartedAt >= RUN_INACTIVITY_DEADLINE_MS;
@@ -150,7 +167,7 @@ describe("link-owned execution", () => {
     expect([cancelled(), runDeadlinePassed()]).toEqual([false, false]);
     await vi.advanceTimersByTimeAsync(1);
     expect([cancelled(), runDeadlinePassed()]).toEqual([true, true]);
-    socket.receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
+    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
     expect(await call).toMatchObject({ phase: "running" });
   });
   it("caller abort removes tracking and sends one cancellation", async () => {
@@ -180,21 +197,25 @@ describe("link-owned execution", () => {
     const old = await connectFakePlugin(bridge);
     const next = await connectFakePlugin(bridge);
     const oldCall = bridge
-      .request(old.link, {
-        type: "EXECUTE_CODE",
-        session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
-        code: "old",
-        preamble: "x",
-        lateChangeWindowMs: 60_000,
-      })
+      .submitRun(
+        old.link,
+        {
+          type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
+          fileKey: "FAKEfile1",
+          code: "old",
+          preamble: "x",
+          lateChangeWindowMs: 60_000,
+        },
+        mintExecutionId(),
+      )
       .catch(() => {});
     await Promise.resolve();
     old.receive({
       type: "CHANNEL_REQUEST",
       capability: "images.fetch",
       id: "image",
-      runId: old.frames[0].id,
+      executionId: old.frames[0].id,
       payload: ["x"],
     });
     await Promise.resolve();

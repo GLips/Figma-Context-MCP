@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
@@ -42,6 +43,7 @@ import {
   type ChannelRunContext,
 } from "./run-ledger.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
+import type { ExecutionId } from "./execution-id.js";
 import {
   PLUGIN_REDIAL_MAX_MS,
   parseExecuteCodeResult,
@@ -52,6 +54,7 @@ import {
   type PluginEvent,
   type PluginEventType,
   type ReplyFor,
+  type RUN_REQUEST_TYPES,
   type ServerRequest,
 } from "@framelink/plugin/protocol";
 
@@ -80,6 +83,9 @@ export type LinkRequest = Exclude<
   { type: (typeof LINK_SETUP_REQUEST_TYPES)[number] }
 >;
 
+/** The requests the plugin runs as executions, each sent under the execution id its caller minted. */
+export type RunRequest = Extract<LinkRequest, { type: (typeof RUN_REQUEST_TYPES)[number] }>;
+
 /** Unsolicited plugin events the bridge relays but doesn't own. All come from authenticated links. */
 export interface PluginBridgeEvents {
   /** A link proved it holds the installation credential: introduce this server to it. */
@@ -90,8 +96,9 @@ export interface PluginBridgeEvents {
   onWriteAccessSignIn?: (link: PluginLink) => void;
   /**
    * What a link says about a run outside its caller's reply: RUN_CHANGED, RUN_SETTLED, or a result
-   * that arrived after the caller gave up. Forwarded as-is — what it costs is the write meter's
-   * call. May fire more than once for a run, and for run ids this server never issued.
+   * that arrived after the caller gave up. Forwarded as-is with the link that said it — whether it is
+   * the run's own link, and what it costs, is the write meter's call. May fire more than once for an
+   * execution, and for execution ids this server never issued.
    */
   onRunEvent?: (event: RunEvent) => void;
 }
@@ -140,7 +147,7 @@ export class PluginBridge {
   private readonly events: PluginBridgeEvents;
 
   private readonly routes: EventRoutes = {
-    RUN_TRACE: (link, event) => this.ledger.trace.recordHost(event.runId, link, event),
+    RUN_TRACE: (link, event) => this.ledger.trace.recordHost(event.executionId, link, event),
     // Every other plugin instance of the same owner re-reads its storage: one file open in two
     // instances must honor a grant or revoke made in either.
     GRANT_CHANGED: (link, event) => {
@@ -160,10 +167,12 @@ export class PluginBridge {
     RUN_STATE: (link, event) => this.ledger.runState(link, event),
     // Run-scoped, so it settles here rather than through the correlated-reply path.
     CANCEL_RESULT: (link, event) =>
-      this.ledger.settleCancelAnswer(event.runId, event.disposition, link),
+      this.ledger.settleCancelAnswer(event.executionId, event.disposition, link),
     // Metering outlives the caller, so these go to the meter, never to the run's caller.
-    RUN_CHANGED: (_, event) => this.events.onRunEvent?.({ type: "changed", runId: event.runId }),
-    RUN_SETTLED: (_, event) => this.events.onRunEvent?.({ type: "settled", runId: event.runId }),
+    RUN_CHANGED: (link, event) =>
+      this.events.onRunEvent?.({ type: "changed", executionId: event.executionId, link }),
+    RUN_SETTLED: (link, event) =>
+      this.events.onRunEvent?.({ type: "settled", executionId: event.executionId, link }),
   };
 
   // Everything injectable for the tests and the contract harness: `linkCredentials` isolates
@@ -214,7 +223,7 @@ export class PluginBridge {
       links: () => this.links,
       // Sound because the ledger resolves only what parseReply admitted for this payload's type.
       send: <T extends LinkSetupRequest>(link: PluginLink, payload: T) =>
-        this.ledger.submit(link, payload, undefined, undefined, NO_RUN_CONTEXT) as Promise<
+        this.ledger.submit(link, payload, randomUUID(), undefined, NO_RUN_CONTEXT) as Promise<
           ReplyFor<T["type"]>
         >,
       onAuthenticated: (link) => {
@@ -415,25 +424,42 @@ export class PluginBridge {
   }
 
   /**
-   * Send a request on an authenticated link and resolve with its reply, admitted by the protocol's
-   * parser for that request type. An ERROR reply, or one that isn't the shape its request is owed,
-   * rejects. A link that dropped or never authenticated is refused before anything is sent.
-   *
-   * `onSubmitted` receives the run id the plugin will know this request by (its correlation id),
-   * just before it goes on the wire — for callers that must match a later run-scoped event to it.
+   * Send a request that is no run on an authenticated link, under a fresh correlation id, and resolve
+   * with its reply, admitted by the protocol's parser for that request type. An ERROR reply, or one
+   * that isn't the shape its request is owed, rejects. A link that dropped or never authenticated is
+   * refused before anything is sent.
    */
-  request<T extends LinkRequest>(
+  request<T extends Exclude<LinkRequest, RunRequest>>(
     link: PluginLink,
     payload: T,
+    { signal }: { signal?: AbortSignal } = {},
+  ): Promise<ReplyFor<T["type"]>> {
+    return this.submit(link, payload, randomUUID(), signal, NO_RUN_CONTEXT);
+  }
+
+  /**
+   * Submit a run on an authenticated link under `executionId`, the one id its queueing, cancellation,
+   * reverse calls and late events are matched by. Pinned to `link`: nothing another link sends can
+   * settle it. Never resubmit an id the plugin admitted — a lost outcome is unknown, not retried.
+   */
+  submitRun<T extends RunRequest>(
+    link: PluginLink,
+    payload: T,
+    executionId: ExecutionId,
     {
       signal,
-      onSubmitted,
       runContext = NO_RUN_CONTEXT,
-    }: {
-      signal?: AbortSignal;
-      onSubmitted?: (runId: string) => void;
-      runContext?: ChannelRunContext;
-    } = {},
+    }: { signal?: AbortSignal; runContext?: ChannelRunContext } = {},
+  ): Promise<ReplyFor<T["type"]>> {
+    return this.submit(link, payload, executionId, signal, runContext);
+  }
+
+  private submit<T extends LinkRequest>(
+    link: PluginLink,
+    payload: T,
+    id: string,
+    signal: AbortSignal | undefined,
+    runContext: ChannelRunContext,
   ): Promise<ReplyFor<T["type"]>> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     if (!this.isLive(link))
@@ -444,7 +470,7 @@ export class PluginBridge {
         ),
       );
     // Sound because the ledger resolves only what parseReply admitted for this payload's type.
-    return this.ledger.submit(link, payload, signal, onSubmitted, runContext) as Promise<
+    return this.ledger.submit(link, payload, id, signal, runContext) as Promise<
       ReplyFor<T["type"]>
     >;
   }
@@ -501,7 +527,8 @@ export class PluginBridge {
     // A run whose caller gave up still reports what it did; a Write it made is owed regardless.
     if (outcome === "late" && this.isLive(link)) {
       const reply = parseExecuteCodeResult(msg);
-      if (reply) this.events.onRunEvent?.({ type: "orphanReply", runId: msg.id, reply });
+      if (reply)
+        this.events.onRunEvent?.({ type: "orphanReply", executionId: msg.id, link, reply });
     }
   }
 

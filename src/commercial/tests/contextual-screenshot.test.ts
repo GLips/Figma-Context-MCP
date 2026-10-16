@@ -23,7 +23,7 @@ function connectedServer() {
     image: "AQ==",
   }));
   const bridge = {
-    request,
+    submitRun: request,
     targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
