@@ -47,6 +47,25 @@ export type ExecutionOutcome =
   | { kind: "session-not-found"; session: SessionHandle }
   | { kind: "refused"; refusal: WriteRefusal; message: string };
 
+/**
+ * A run's reply lost after the plugin may have admitted it, naming the session it was admitted
+ * under: a fresh one exists nowhere else, and its session.last is how the agent learns what ran.
+ */
+export class ExecutionReplyLostError extends BridgeRequestError {
+  constructor(
+    lost: BridgeRequestError,
+    readonly session: SessionHandle,
+  ) {
+    super(
+      `${lost.message} The run was submitted in session ${session}: continue that session to read ` +
+        `its session.last and see what the run did.`,
+      lost.outcome,
+      lost.phase,
+    );
+    this.name = "ExecutionReplyLostError";
+  }
+}
+
 // A freshly minted handle collides with one the plugin holds about once in 2^44 mints; a few retries
 // are already beyond any real collision, so running out means a plugin that refuses every handle.
 const SESSION_MINT_ATTEMPTS = 4;
@@ -106,6 +125,8 @@ export async function executePluginCode(
       )
       .catch((error: unknown) => {
         charge.lost({ mayHaveRun: mayHaveRun(error) });
+        if (error instanceof BridgeRequestError && error.outcome === "unconfirmed")
+          throw new ExecutionReplyLostError(error, session.handle);
         throw error;
       });
     if (reply.type === "EXECUTE_CODE_RESULT") {

@@ -17,6 +17,7 @@ import { figmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { mintLinkNonce } from "./link-credential.js";
 import type { RelayConnection } from "./relay-connection.js";
+import { BridgeRequestError } from "./run-ledger.js";
 
 /**
  * Which file an authenticated link is in, as far as this server knows. `claimed` is the plugin's
@@ -27,8 +28,18 @@ import type { RelayConnection } from "./relay-connection.js";
 export type LinkDocument =
   | { kind: "unknown" }
   | { kind: "unclaimed" }
-  | { kind: "claimed"; fileKey: FigmaFileKey; problem: string | null }
+  | { kind: "claimed"; fileKey: FigmaFileKey; problem: ClaimProblem | null }
   | { kind: "proven"; fileKey: FigmaFileKey; fileName: string };
+
+/**
+ * Why a claim couldn't be proven. `unmarkable`: the plugin refused to write the nonce (a view-only
+ * file), which holds for the incarnation, and such a file couldn't be edited anyway. `unverified`:
+ * the file couldn't be read or the link didn't answer, so where the link is stays unknown.
+ */
+export interface ClaimProblem {
+  kind: "unmarkable" | "unverified";
+  message: string;
+}
 
 /** A file's name and the proof nonces its root holds, as Figma's REST API reports them. */
 export interface FileProofRead {
@@ -217,12 +228,16 @@ export class LinkDocuments {
           await this.options.send(link, { type: "PROVE_DOCUMENT", nonce });
           nonces.set(link, nonce);
         } catch (error) {
-          // A view-only file can't be marked, so it can't be proven — and couldn't be edited anyway.
+          // The plugin answers PROVE_DOCUMENT with an ERROR only when it can't write the nonce; a
+          // BridgeRequestError is the link not answering, which says nothing about the file.
           if (this.claims(link, fileKey))
             this.documents.set(link, {
               kind: "claimed",
               fileKey,
-              problem: (error as Error).message,
+              problem: {
+                kind: error instanceof BridgeRequestError ? "unverified" : "unmarkable",
+                message: (error as Error).message,
+              },
             });
         }
       }),
@@ -286,7 +301,11 @@ export class LinkDocuments {
     } else if (problem !== null) {
       outcome = { kind: "abandoned" };
       if (this.claims(link, fileKey))
-        this.documents.set(link, { kind: "claimed", fileKey, problem });
+        this.documents.set(link, {
+          kind: "claimed",
+          fileKey,
+          problem: { kind: "unverified", message: problem },
+        });
     } else if (this.claims(link, fileKey)) {
       // The file was read and the nonce isn't in it: the claim was wrong — a duplicate, most often.
       outcome = { kind: "refuted", fileKey };

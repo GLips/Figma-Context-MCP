@@ -24,7 +24,11 @@ import {
   type SessionHandle,
 } from "~/commercial/plugin-bridge/session-handle.js";
 import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
-import { executePluginCode, type ExecutionOutcome } from "~/commercial/plugin-bridge/execution.js";
+import {
+  executePluginCode,
+  ExecutionReplyLostError,
+  type ExecutionOutcome,
+} from "~/commercial/plugin-bridge/execution.js";
 import { runPair } from "~/commercial/commands/pair.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import { writesUsedThisMonth } from "~/commercial/entitlement/write-ledger.js";
@@ -316,6 +320,33 @@ it("a call without a file runs in the one granted file, and asks once two grante
   expect(ambiguous.target.kind).toBe("blocked");
 });
 
+it("a call without a file asks while another panel's file can't be read, and reads that file once per call", async () => {
+  const bridge = startBridge(dir, ports[0]);
+  const storage = new Map<string, unknown>();
+  const checkout = startPlugin(ports[0], { storage, file: figma.file("FILEkeyA", "Checkout") });
+  await pairByPanel(bridge, checkout);
+  await target(bridge, "FILEkeyA", () => checkout.allow());
+  // A file this server's token can't read: its claim can never be proven here.
+  const unreadable = figma.file("FILEkeyG", "Elsewhere");
+  unreadable.shared.set("framelink/fileKey", "FILEkeyG");
+  figma.files.delete("FILEkeyG");
+  startPlugin(ports[0], { storage, file: unreadable });
+  await expect
+    .poll(() =>
+      bridge
+        .authenticatedLinks()
+        .map((link) => bridge.documentOf(link).kind)
+        .sort(),
+    )
+    .toEqual(["claimed", "proven"]);
+
+  const readsBefore = figma.reads.get("FILEkeyG") ?? 0;
+  const unnamed = await target(bridge, null, undefined, 300);
+  expect(unnamed.prompted).toBe(true);
+  expect(unnamed.target).toMatchObject({ kind: "blocked", block: { kind: "grant-pending" } });
+  expect(figma.reads.get("FILEkeyG")).toBe(readsBefore + 1);
+});
+
 it("a call naming a file no plugin is in is refused without asking any panel", async () => {
   const bridge = startBridge(dir, ports[0]);
   const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
@@ -409,7 +440,11 @@ it("a proof that never finishes reading the file keeps the file's claim", async 
   await expect
     .poll(() => bridge.authenticatedLinks().map((link) => bridge.documentOf(link)))
     .toEqual([
-      { kind: "claimed", fileKey: "FILEkeyA", problem: expect.stringContaining("timed out") },
+      {
+        kind: "claimed",
+        fileKey: "FILEkeyA",
+        problem: { kind: "unverified", message: expect.stringContaining("timed out") },
+      },
     ]);
   expect(file.shared.get("framelink/fileKey")).toBe("FILEkeyA");
 });
@@ -493,7 +528,7 @@ it("after a server restart, a session's plugin that redials later than another p
   expect((await runIn(after, { session }, "return session.kept;")).reply.result).toBe(true);
 });
 
-it("a reconnect during a run leaves its outcome unknown, and never runs it a second time", async () => {
+it("a reconnect during a run leaves its outcome unknown, names its session, and never runs it a second time", async () => {
   const bridge = startBridge(dir, ports[0]);
   const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
   await pairByPanel(bridge, plugin);
@@ -504,15 +539,23 @@ it("a reconnect during a run leaves its outcome unknown, and never runs it a sec
     (await target(bridge, "FILEkeyA")).target,
     `globalThis.runs = (globalThis.runs ?? 0) + 1;
      figma.notify("run started");
-     await new Promise((resolve) => setTimeout(resolve, 500));`,
+     await new Promise((resolve) => setTimeout(resolve, 500));
+     return "interrupted run's result";`,
   ).catch((error: unknown) => error);
   await expect.poll(() => plugin.toasts).toContain("run started");
   plugin.drop();
-  expect(await interrupted).toMatchObject({ outcome: "unconfirmed", phase: "running" });
+  const lost = await interrupted;
+  if (!(lost instanceof ExecutionReplyLostError)) throw lost;
+  expect(lost).toMatchObject({ outcome: "unconfirmed", phase: "running" });
+  expect(lost.message).toContain(lost.session);
 
   await settlesTo(bridge, "linked");
-  // Queued behind the interrupted run, so this reads its count once that one has finished.
-  expect((await runIn(bridge, "FILEkeyA", "return globalThis.runs;")).reply.result).toBe(1);
+  // Queued behind the interrupted run, so this reads what it did once it has finished.
+  const read = "return [globalThis.runs, session.last];";
+  expect((await runIn(bridge, { session: lost.session }, read)).reply.result).toEqual([
+    1,
+    "interrupted run's result",
+  ]);
 });
 
 it("a handle passed with another file's key refuses without running, and without asking either panel", async () => {

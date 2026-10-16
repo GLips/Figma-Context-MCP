@@ -76,14 +76,28 @@ describe("link-aware reference guidance", () => {
     expect(status).not.toHaveBeenCalled();
   });
 
+  it("a granted file beside one whose file or grant is unknown gets a note to pass fileKey", async () => {
+    const alpha = provenIn("A", "Alpha");
+    const unreadable = linkIn({
+      kind: "claimed",
+      fileKey: figmaFileKey("G"),
+      problem: { kind: "unverified", message: "Figma API 429" },
+    });
+    for (const links of [
+      [alpha, unreadable],
+      [alpha, provenIn("G", "Gamma")],
+    ])
+      expect(
+        await referenceGrantNote(
+          lookupOf({ kind: "linked", links }, async (_link, fileKey) => {
+            if (fileKey === "G") throw Error("gone");
+            return "granted";
+          }),
+        ),
+      ).toContain("Pass fileKey");
+  });
+
   it("failed or unresponsive lookups return guidance within the bound", async () => {
-    expect(
-      await referenceGrantNote(
-        lookupOf({ kind: "linked", links: [provenIn("A", "Alpha")] }, async () => {
-          throw Error("gone");
-        }),
-      ),
-    ).toContain("could not be checked");
     let signal: AbortSignal | undefined;
     expect(
       await referenceGrantNote(

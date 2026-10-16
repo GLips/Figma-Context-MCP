@@ -31,11 +31,14 @@ export async function referenceGrantNote(
   try {
     const resolution = await Promise.race([lookup.resolveLink(controller.signal), timedOut]);
     if (resolution.kind !== "linked") return linkGuidance(resolution, "reference");
-    const granted = await Promise.race([
+    const census = await Promise.race([
       grantedOpenDocuments(resolution.links, lookup, controller.signal),
       timedOut,
     ]);
-    return referenceGrantGuidance([...granted.values()].map(({ document }) => document.fileName));
+    return referenceGrantGuidance({
+      fileNames: [...census.granted.values()].map(({ document }) => document.fileName),
+      complete: census.complete,
+    });
   } catch {
     return referenceGrantGuidance(null);
   } finally {

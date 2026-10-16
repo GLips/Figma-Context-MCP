@@ -10,8 +10,8 @@
 //   another file, it is refused and never falls through to the rules below.
 // - A call naming a file runs only there. Its panels prompt for a grant; no other panel is asked,
 //   and if no link can be proven to be in that file, the call is refused.
-// - A call naming none runs in the one open document already granted to this project. Otherwise
-//   every panel is asked: proven ones to pick their file, the rest for their file's link. The first
+// - A call naming none runs in the one open document already granted to this project, once every
+//   panel's file and grant is known. Otherwise every panel is asked: proven ones to pick their file, the rest for their file's link. The first
 //   pick wins and the other prompts close, so a late click can't redirect a call already bound.
 //
 // Documents are counted, not links: one file open in two plugin instances is one document.
@@ -103,6 +103,7 @@ export interface CallTargetDeps {
 /** What counting granted documents reads: each link's document, and its plugin's grant on it. */
 export interface GrantedDocumentLookup {
   documentOf(link: RelayConnection): LinkDocument;
+  /** Rejects when the plugin couldn't be asked. */
   grantStatus(
     link: RelayConnection,
     fileKey: FigmaFileKey,
@@ -117,24 +118,36 @@ export interface GrantedOpenDocument {
   document: CallDocument;
 }
 
+export interface GrantedOpenDocuments {
+  granted: Map<FigmaFileKey, GrantedOpenDocument>;
+  /**
+   * Whether `granted` is the whole answer. False when some link's file is unknown, or its claim is
+   * unproven for a reason that may pass, or its plugin couldn't be asked for its grant: that link
+   * could be in another granted document.
+   */
+  complete: boolean;
+}
+
 /**
  * The open documents this project may edit, without prompting: every proven link is asked, and
- * documents are counted, not links, so one file in two plugin instances is one entry. A failed ask
- * rejects; the caller decides what that means.
+ * documents are counted, not links, so one file in two plugin instances is one entry.
  */
 export async function grantedOpenDocuments(
   links: readonly RelayConnection[],
   lookup: GrantedDocumentLookup,
   signal: AbortSignal,
-): Promise<Map<FigmaFileKey, GrantedOpenDocument>> {
-  const proven = links.flatMap((link) => {
-    const document = lookup.documentOf(link);
+): Promise<GrantedOpenDocuments> {
+  const documents = links.map((link) => lookup.documentOf(link));
+  const proven = links.flatMap((link, index) => {
+    const document = documents[index];
     return document.kind === "proven"
       ? [{ link, document: { fileKey: document.fileKey, fileName: document.fileName } }]
       : [];
   });
   const states = await Promise.all(
-    proven.map(({ link, document }) => lookup.grantStatus(link, document.fileKey, "none", signal)),
+    proven.map(({ link, document }) =>
+      lookup.grantStatus(link, document.fileKey, "none", signal).catch(() => null),
+    ),
   );
   signal.throwIfAborted();
   const granted = new Map<FigmaFileKey, GrantedOpenDocument>();
@@ -142,7 +155,21 @@ export async function grantedOpenDocuments(
     if (states[index] === "granted" && !granted.has(entry.document.fileKey))
       granted.set(entry.document.fileKey, entry);
   });
-  return granted;
+  const complete = documents.every(isDocumentSettled) && !states.includes(null);
+  return { granted, complete };
+}
+
+/**
+ * Whether this server knows a link isn't in some editable file it hasn't proven. An unclaimed link
+ * isn't in a granted file: proving a file writes its claim into the root, so a fresh run there
+ * claims it.
+ */
+function isDocumentSettled(document: LinkDocument): boolean {
+  return (
+    document.kind === "proven" ||
+    document.kind === "unclaimed" ||
+    (document.kind === "claimed" && document.problem?.kind === "unmarkable")
+  );
 }
 
 export async function targetPluginCall(
@@ -182,7 +209,7 @@ async function targetSession(
       problem: !options.reader
         ? "this server has no Figma token to read the file with"
         : document.kind === "claimed" && document.problem
-          ? document.problem
+          ? document.problem.message
           : "the plugin holding the session didn't name a file this server could read",
     });
   if (fileKey !== null && fileKey !== document.fileKey)
@@ -307,16 +334,13 @@ async function targetUnnamed(
   // first, so a file that already holds a grant runs without a click.
   if (options.reader)
     await abortable(documents.proveClaims(deps.links(), options.reader), options.signal);
-  const granted = await grantedOpenDocuments(
+  const { granted, complete } = await grantedOpenDocuments(
     deps.links(),
-    {
-      documentOf: (link) => documents.documentOf(link),
-      grantStatus: (link, fileKey, prompt, signal) =>
-        deps.askGrant(link, fileKey, prompt, signal).catch(() => "absent" as const),
-    },
+    { documentOf: (link) => documents.documentOf(link), grantStatus: deps.askGrant },
     options.signal,
   );
-  if (granted.size === 1) return targeted(documents, [...granted.values()][0].link);
+  // With a link whose file or grant is unknown, the one granted document may not be the only one.
+  if (complete && granted.size === 1) return targeted(documents, [...granted.values()][0].link);
 
   const anyProven = deps.links().some((link) => documents.documentOf(link).kind === "proven");
   if (!anyProven && !options.reader)
@@ -330,7 +354,14 @@ async function targetUnnamed(
       deps.links().map((link) => {
         const document = documents.documentOf(link);
         // An unproven panel asks for its file's link; a link the human pasted is proven meanwhile.
-        if (document.kind === "claimed" && options.reader && !documents.isBusy(link))
+        // A claim that already failed isn't re-proven each round: each try reads the file over
+        // REST, and a file this token can't read would spend the token's rate limit.
+        if (
+          document.kind === "claimed" &&
+          document.problem === null &&
+          options.reader &&
+          !documents.isBusy(link)
+        )
           void documents.prove([link], document.fileKey, options.reader);
         return {
           link,

@@ -158,12 +158,17 @@ export function notGrantedText(reason: "no-grant" | "other-document", fileName: 
  * get_flcm_reference's note on where this project stands with the open files. It never prompts:
  * it reads grants, and says what an execute call will ask.
  */
-export function referenceGrantGuidance(grantedFiles: readonly string[] | null): string | undefined {
-  if (grantedFiles === null)
+export function referenceGrantGuidance(
+  granted: { fileNames: readonly string[]; complete: boolean } | null,
+): string | undefined {
+  if (granted === null)
     return "The plugin's grants could not be checked. Check the Framelink plugin connection before executing code. The reference is available below; no code was submitted.";
-  if (grantedFiles.length === 1) return undefined;
-  if (grantedFiles.length > 1)
-    return `This project may edit ${grantedFiles.length} open Figma files (${grantedFiles.map((name) => `"${name}"`).join(", ")}). Pass fileKey when executing code to name one; without it the user is asked to pick.`;
+  const { fileNames, complete } = granted;
+  if (fileNames.length > 1)
+    return `This project may edit ${fileNames.length} open Figma files (${fileNames.map((name) => `"${name}"`).join(", ")}). Pass fileKey when executing code to name one; without it the user is asked to pick.`;
+  if (!complete)
+    return "Not every open Figma file's grant could be checked, so executing code without fileKey may ask the user to pick a file. Pass fileKey to name one. This reference request does not ask or submit code.";
+  if (fileNames.length === 1) return undefined;
   return "This project isn't allowed to edit any open Figma file yet. Executing code asks the user to allow it in the Framelink plugin; pass fileKey to name the file. This reference request does not ask or submit code.";
 }
 
