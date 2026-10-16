@@ -43,7 +43,13 @@ import {
 import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
 import { formatExecuteCodeReply } from "./token-tree.js";
-import { linkForPluginCall, type PairingCodeAsker } from "./plugin-call-link.js";
+import {
+  PAIRING_GUIDANCE_MIN_LIFE_MS,
+  linkForPluginCall,
+  pairPluginLink,
+  type PairingCodeAsker,
+  type PluginCallLink,
+} from "~/commercial/plugin-bridge/plugin-call-link.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
 // the schema single-source + narrative — so the agent-facing contract can't drift from the code
@@ -183,6 +189,10 @@ function registerCodeModeTools(
   function pairingCodeAsker(extra: ToolExtra): PairingCodeAsker | null {
     if (!server.server.getClientCapabilities()?.elicitation?.form) return null;
     return async (code, expiresInMs, signal) => {
+      // A client that advertises prompts but never answers must hand back while the code still has
+      // time for the agent to ask instead.
+      const timeout = Math.min(PAIRING_PROMPT_MAX_MS, expiresInMs - PAIRING_GUIDANCE_MIN_LIFE_MS);
+      if (timeout <= 0) return "unanswered";
       try {
         const answer = await server.server.elicitInput(
           {
@@ -199,7 +209,7 @@ function registerCodeModeTools(
               required: ["shown"],
             },
           },
-          { signal, timeout: expiresInMs, relatedRequestId: extra.requestId },
+          { signal, timeout, relatedRequestId: extra.requestId },
         );
         if (answer.action === "decline") return "not-shown";
         if (answer.action === "accept")
@@ -221,9 +231,7 @@ function registerCodeModeTools(
   ): Promise<{ link: PluginLink } | { reply: CallToolResult }> {
     const linked = await linkForPluginCall(bridge, pairingCodeAsker(extra), extra.signal);
     if (linked.kind === "linked") return { link: linked.link };
-    call.record({ ...facts, outcome: "not_run", failure: linked.block });
-    const content = [{ type: "text" as const, text: linked.text }];
-    return { reply: linked.isError ? { isError: true, content } : { content } };
+    return { reply: blockedCallReply(call, facts, linked) };
   }
 
   function approvalOptions(extra: ToolExtra) {
@@ -519,9 +527,14 @@ Returns a PNG image.`,
           call.record({ outcome: "not_run" });
           const { bridge } = runtime;
           if (code === undefined) {
-            const linked = await pluginCallLink(runtime, call, {}, extra);
-            if ("reply" in linked) return linked.reply;
-            call.record({ ...ownedBy(linked.link), outcome: "paired" });
+            const pairing = await pairPluginLink(
+              bridge,
+              pairingCodeAsker(extra),
+              extra.signal,
+              "mcp",
+            );
+            if (pairing.kind === "blocked") return blockedCallReply(call, {}, pairing);
+            call.record({ ...(pairing.link ? ownedBy(pairing.link) : {}), outcome: "paired" });
             return retryableToolReply(PAIRED_TEXT);
           }
           const confirmed = await bridge.confirmPairing(code);
@@ -535,8 +548,11 @@ Returns a PNG image.`,
           }
           // An agent retrying a confirmation that already went through is told so, not sent round.
           const resolution = await bridge.resolveLink(extra.signal);
-          if (resolution.kind === "linked") {
-            call.record({ ...ownedBy(resolution.link), outcome: "paired" });
+          if (resolution.kind === "linked" || resolution.kind === "several") {
+            call.record({
+              ...(resolution.kind === "linked" ? ownedBy(resolution.link) : {}),
+              outcome: "paired",
+            });
             return retryableToolReply(PAIRED_TEXT);
           }
           call.record({ outcome: "not_run", failure: "pairing_code_unknown" });
@@ -564,6 +580,20 @@ Returns a PNG image.`,
     }
   });
 }
+
+/** Why a call got no plugin link, recorded and answered. */
+function blockedCallReply(
+  call: FramelinkToolCall<CodeModeFacts>,
+  facts: CodeModeFacts,
+  blocked: Extract<PluginCallLink, { kind: "blocked" }>,
+): CallToolResult {
+  call.record({ ...facts, outcome: "not_run", failure: blocked.block });
+  const content = [{ type: "text" as const, text: blocked.text }];
+  return blocked.isError ? { isError: true, content } : { content };
+}
+
+// How long a client's pairing prompt may stay open before the call falls back to agent guidance.
+const PAIRING_PROMPT_MAX_MS = 90_000;
 
 const PAIRED_TEXT =
   "Paired: this server and the Framelink plugin are linked, and stay linked across restarts. Retry the call that needed the plugin.";

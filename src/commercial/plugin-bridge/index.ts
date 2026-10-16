@@ -17,7 +17,6 @@ import {
 import { createCommentPinsCapability } from "./comment-pins.js";
 import { WS_PORT_BLOCK, type WriteAccessNotice } from "@framelink/plugin/protocol";
 import { resolveStateDir } from "~/commercial/state-dir.js";
-import { LinkCredentialStore } from "./link-credential.js";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
@@ -133,9 +132,7 @@ export function startPluginBridge({
   const syncOwnerWriteAccess = (link: PluginLink, options?: { force: boolean }) => {
     if (link.owner) inBackground(writeAccess.syncWriteAccess(link.owner, options));
   };
-  const linkCredentials = new LinkCredentialStore();
   const bridge: PluginBridge = new PluginBridge(undefined, {
-    linkCredentials,
     events: {
       onLinkAuthenticated: (link) => {
         // Fire-and-forget: the plugin acks at once and records what to display and the token proving

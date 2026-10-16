@@ -4,7 +4,7 @@
  */
 // Pairing from an MCP call: confirmed in the client's own prompt when it has one, and through the
 // agent and pair_figma_plugin when it hasn't, or when the prompt goes unanswered.
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -21,11 +21,12 @@ import { createTestWriteAccess } from "./fixtures/write-access.js";
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
 /** An unpaired plugin that, once paired, grants approval and runs whatever it is sent. */
-async function setup(answerPrompt?: (message: string) => ElicitResult) {
+async function setup(answerPrompt?: (message: string) => ElicitResult | Promise<ElicitResult>) {
   const bridge = new PluginBridge();
   cleanups.push(() => bridge.stop());
   const socket = await connectFakePlugin(bridge, { paired: false });
@@ -71,6 +72,8 @@ async function setup(answerPrompt?: (message: string) => ElicitResult) {
     const result = await client.request(
       { method: "tools/call", params: { name, arguments: args } },
       CallToolResultSchema,
+      // Past the SDK's 60s default: a test may advance fake time beyond it.
+      { timeout: 10 * 60 * 1000 },
     );
     const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
     return { ...result, text };
@@ -139,5 +142,27 @@ it("a No in the client's prompt pairs nothing and takes the code off the panel",
   expect((await call("pair_figma_plugin", { code })).text).toContain(
     `No pairing attempt is showing the code ${code}`,
   );
+  expect(executions(socket)).toBe(0);
+});
+
+it("a client that advertises prompts but never answers gets guidance for a code that is still live", async () => {
+  const { socket, call } = await setup(() => new Promise<ElicitResult>(() => {}));
+  vi.useFakeTimers();
+
+  const pending = call("figma_execute_code", { code: "return 1" });
+  await vi.advanceTimersByTimeAsync(90_000);
+  const blocked = await pending;
+  const code = shownCode(socket);
+  expect(blocked.text).toContain(`pair_figma_plugin with { "code": "${code}" }`);
+  expect((await call("pair_figma_plugin", { code })).text).toContain("Paired");
+});
+
+it("with several codes showing, the agent has the user read the code out, and is given none", async () => {
+  const { bridge, socket, call } = await setup();
+  const other = await connectFakePlugin(bridge, { paired: false });
+
+  const blocked = await call("figma_execute_code", { code: "return 1" });
+  expect(blocked.text).toContain("read out the exact pairing code");
+  for (const shown of [socket, other]) expect(blocked.text).not.toContain(shownCode(shown));
   expect(executions(socket)).toBe(0);
 });

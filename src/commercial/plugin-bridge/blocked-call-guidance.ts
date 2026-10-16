@@ -2,11 +2,13 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Every sentence a caller (MCP tools, the bridge's own rejections, the `execute` CLI, the reference
+// Every sentence a caller (MCP tools, the bridge's own rejections, the CLI commands, the reference
 // tool) gives about linking, pairing and approval, worded from the state it is in. Agents looped on
 // the older "…then retry" replies: each blocked message names the blocker, the action required, and
 // that retrying sooner cannot help. Submission status is part of the state's sentence where only one
 // is true; nothing outside this module words them.
+import { CLI_NAME } from "~/utils/cli-help.js";
+import type { UnlinkedResolution } from "./bridge.js";
 
 /** How long a disconnection counts as a redial blip before the reply escalates to a person. */
 export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
@@ -14,16 +16,44 @@ export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
 const REPORT_TO_PERSON = "Report this to the user or coordinating agent, and retry only after";
 
 /**
- * Where a call stands with the plugin, as far as the wording goes. `waiting` is a call still waiting
- * on the human's Allow; `expired` is one whose wait ended with none. The `reference-` states come only
- * from get_flcm_reference's status lookup, which never waits. Approved has no sentence, so it is not a
+ * Who reads it. `mcp` is a tool result on a server that outlives the call; `cli` is a command whose
+ * relay ends with the run; `reference` is get_flcm_reference's note above the docs, which never
+ * waits on approval, never pairs, and never submits code.
+ */
+export type GuidanceSurface = "mcp" | "cli" | "reference";
+
+/** Why a call that needs the plugin has no link to run on. */
+export function linkGuidance(resolution: UnlinkedResolution, surface: GuidanceSurface): string {
+  switch (resolution.kind) {
+    case "incompatible":
+      return resolution.refusal;
+    case "disconnected":
+      return surface === "reference"
+        ? "No compatible Figma plugin is connected. Open the Framelink plugin in Figma, then check its connection before executing code. The reference is available below."
+        : pluginDisconnectedNotSubmittedText(resolution.elapsedMs);
+    case "unpaired":
+      return unpairedGuidance(surface);
+    case "several":
+      return (
+        `Blocked: the Framelink plugin is open in ${resolution.count} Figma files, and this server ` +
+        `can't tell which one you mean, so nothing was submitted. Required before retrying: someone ` +
+        `closes the plugin in every file except the one to work in. ${REPORT_TO_PERSON} only one is open.`
+      );
+    case "credential-unusable":
+      return (
+        `Blocked: this server can't use its Framelink plugin pairing credential, so nothing was ` +
+        `submitted. ${resolution.problem} ${REPORT_TO_PERSON} it is fixed.`
+      );
+  }
+}
+
+/**
+ * Where a call on a resolved link stands with the human's Allow. `waiting` is a call still waiting;
+ * `expired` is one whose wait ended with none. The `reference-` states come only from
+ * get_flcm_reference's status lookup, which never waits. Approved has no sentence, so it is not a
  * state.
  */
 export type ApprovalGuidanceState =
-  | { kind: "disconnected"; elapsedMs: number | null }
-  | { kind: "incompatible"; refusal: string }
-  | { kind: "unpaired" }
-  | { kind: "several-files"; count: number }
   | { kind: "reference-pending" }
   | { kind: "waiting" }
   | { kind: "expired"; waitMs: number }
@@ -31,30 +61,9 @@ export type ApprovalGuidanceState =
   | { kind: "unresponsive" }
   | { kind: "reference-status-unknown" };
 
-/**
- * Who reads it. `mcp` is a tool result on a server that outlives the call; `cli` is the `execute`
- * command, whose relay ends with the run; `reference` is get_flcm_reference's note above the docs,
- * which never waits on approval and never submits code.
- */
-export type GuidanceSurface = "mcp" | "cli" | "reference";
-
 /** The sentence for `state` on `surface`. */
 export function approvalGuidance(state: ApprovalGuidanceState, surface: GuidanceSurface): string {
   switch (state.kind) {
-    case "incompatible":
-      return state.refusal;
-    case "disconnected":
-      return surface === "reference"
-        ? "No compatible Figma plugin is connected. Open the Framelink plugin in Figma, then check its connection before executing code. The reference is available below."
-        : pluginDisconnectedNotSubmittedText(state.elapsedMs);
-    case "unpaired":
-      return unpairedGuidance(surface);
-    case "several-files":
-      return (
-        `Blocked: the Framelink plugin is open in ${state.count} Figma files, and this server can't ` +
-        `tell which one you mean, so nothing was submitted. Required before retrying: someone closes ` +
-        `the plugin in every file except the one to work in. ${REPORT_TO_PERSON} only one is open.`
-      );
     case "waiting":
       return "Waiting for approval in Figma. Code has not been submitted.";
     case "reference-pending":
@@ -86,8 +95,8 @@ function unpairedGuidance(surface: GuidanceSurface): string {
     case "cli":
       return (
         `Blocked: this server isn't paired with the Framelink plugin, so the script did not run. ` +
-        `Required before re-running: someone runs \`npx figma-developer-mcp pair\` in a terminal and ` +
-        `types the code the Framelink plugin panel shows. Pairing is remembered, so this is needed once.`
+        `Required before re-running: someone runs \`npx ${CLI_NAME} pair\` in a terminal and ` +
+        `confirms the code the Framelink plugin panel shows. Pairing is remembered, so this is needed once.`
       );
     case "mcp":
       return "Blocked: this server isn't paired with the Framelink plugin, so nothing was submitted. Call pair_figma_plugin to start pairing.";
@@ -95,25 +104,39 @@ function unpairedGuidance(surface: GuidanceSurface): string {
 }
 
 /**
- * What the agent is told once a pairing code is showing and the client couldn't confirm it in a
- * prompt: ask the person, then confirm with the code they saw. Only a code the person reports seeing
- * may be confirmed — that comparison is the whole check.
+ * What the agent is told once pairing codes are showing and the client couldn't confirm them in a
+ * prompt. Only a code the person reports seeing may be confirmed — that comparison is the whole
+ * check. With several codes showing (a page posing as the plugin beside it, say), the reply names
+ * none of them, so a bare "yes" can't confirm one the person wasn't shown.
  */
 export function pairingConfirmationGuidance(codes: readonly string[], expiresInMs: number): string {
-  const shown =
-    codes.length === 1
-      ? `the pairing code ${codes[0]}`
-      : `one of these pairing codes: ${codes.join(", ")}`;
-  const call =
-    codes.length === 1
-      ? `pair_figma_plugin with { "code": "${codes[0]}" }`
-      : `pair_figma_plugin with { "code": "<the code they see>" }`;
+  const minutes = Math.max(1, Math.floor(expiresInMs / 60_000));
+  const expires = `The code expires within ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+  const lead =
+    "Pairing required: this server isn't paired with the Framelink plugin yet, so nothing was submitted.";
+  if (codes.length === 1)
+    return (
+      `${lead} Ask the user whether the Framelink plugin panel in Figma shows the pairing code ` +
+      `${codes[0]}. Only if they say it does, call pair_figma_plugin with { "code": "${codes[0]}" }, ` +
+      `then retry. If the panel shows no code or a different one, do not pair: something other than ` +
+      `the plugin may be connected. ${expires}`
+    );
   return (
-    `Pairing required: this server isn't paired with the Framelink plugin yet, so nothing was ` +
-    `submitted. Ask the user whether the Framelink plugin panel in Figma shows ${shown}. Only if they ` +
-    `say it does, call ${call}, then retry. If the panel shows no code or a different one, do not ` +
-    `pair: something other than the plugin may be connected. The code expires in ` +
-    `${Math.max(1, Math.round(expiresInMs / 60_000))} minutes.`
+    `${lead} More than one connection is waiting to pair, so something other than the plugin may be ` +
+    `connected. Ask the user to read out the exact pairing code the Framelink plugin panel in Figma ` +
+    `shows, then call pair_figma_plugin with { "code": "<the code they read out>" }, and retry. Pass ` +
+    `only the code the user reads out, never one guessed or taken from anywhere else. If the panel ` +
+    `shows no code, do not pair. ${expires}`
+  );
+}
+
+/** Every code shown for this call lapsed before anyone confirmed it. */
+export function pairingCodeExpiredText(surface: "mcp" | "cli"): string {
+  return (
+    `The pairing code expired before it was confirmed, so nothing was paired or submitted. ` +
+    (surface === "mcp"
+      ? "Retry the call to show a fresh code."
+      : "Run the command again to show a fresh code.")
   );
 }
 

@@ -15,7 +15,7 @@ import {
 import { FIGMA_REST_CREDENTIAL_FLAGS } from "~/commands/rest-command.js";
 import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
-import { startPluginBridge, type PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { startPluginBridge } from "~/commercial/plugin-bridge/index.js";
 import {
   executePluginCode,
   capturePluginScreenshot,
@@ -25,15 +25,17 @@ import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
   approvalGuidance,
-  pluginDisconnectedAction,
+  linkGuidance,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
-import { unlinkedGuidanceState } from "~/commercial/plugin-bridge/session-guidance.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
 import { withoutTokenMarks } from "~/commercial/tools/token-tree.js";
 import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-
-const DEFAULT_WAIT_SECONDS = 600;
+import {
+  DEFAULT_PLUGIN_WAIT_SECONDS,
+  pluginWaitMs,
+  waitForPluginConnection,
+} from "./plugin-wait.js";
 
 export const executeCommand: Command = command(
   {
@@ -101,7 +103,7 @@ resubmitted automatically.`,
       wait: {
         type: Number,
         placeholder: "<seconds>",
-        description: `Wait this long for the plugin to connect, and again for each approval (default ${DEFAULT_WAIT_SECONDS}; 0 fails at once)`,
+        description: `Wait this long for the plugin to connect, and again for each approval (default ${DEFAULT_PLUGIN_WAIT_SECONDS}; 0 fails at once)`,
       },
       assetRoot: {
         type: String,
@@ -151,12 +153,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   if (positionals.length !== 1 || !isSavedScriptPath(positionals[0])) {
     throw new UsageError("execute requires one .js file containing an async function body.");
   }
-  const waitMs = (flags.wait ?? DEFAULT_WAIT_SECONDS) * 1000;
-  if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > 2_147_483_647) {
-    throw new UsageError(
-      "--wait must be a finite, nonnegative number of seconds within the timer range.",
-    );
-  }
+  const waitMs = pluginWaitMs(flags.wait);
   const target = {
     nodeId: flags.nodeId,
     key: flags.key,
@@ -209,12 +206,16 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   process.once("SIGTERM", terminate);
   try {
     console.error(`Waiting up to ${waitMs / 1000}s for the Framelink plugin in Figma.`);
-    await waitForPlugin(runtime, waitMs, controller.signal);
+    await waitForPluginConnection(
+      runtime.bridge,
+      waitMs,
+      controller.signal,
+      "the script was not submitted",
+    );
     const resolution = await runtime.bridge.resolveLink(controller.signal);
     // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
     // may be a pipe or an agent's shell can't count on.
-    if (resolution.kind !== "linked")
-      throw new Error(approvalGuidance(unlinkedGuidanceState(resolution), "cli"));
+    if (resolution.kind !== "linked") throw new Error(linkGuidance(resolution, "cli"));
     const { link } = resolution;
     console.error("Figma connected.");
     const options = {
@@ -274,33 +275,4 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     if (runtime.stop) runtime.stop();
     else runtime.bridge.stop();
   }
-}
-
-function waitForPlugin(
-  runtime: PluginBridgeRuntime,
-  waitMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  if (signal.aborted) return Promise.reject(signal.reason);
-  if (runtime.bridge.isPluginConnected()) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const finish = (error?: unknown) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      if (error) reject(error);
-      else resolve();
-    };
-    const abort = () => finish(signal.reason);
-    const timer = setTimeout(
-      () =>
-        finish(
-          new Error(
-            `Blocked: no Figma plugin connected before --wait expired, so the script was not submitted. ${pluginDisconnectedAction()}`,
-          ),
-        ),
-      waitMs,
-    );
-    signal.addEventListener("abort", abort, { once: true });
-    runtime.onFirstConnect(() => finish());
-  });
 }

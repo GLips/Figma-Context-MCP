@@ -4,9 +4,13 @@
  */
 // What a plugin link must prove before it is driven, and what pairing may confirm.
 import { afterEach, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 
@@ -79,6 +83,23 @@ it("a wrong proof closes the link", async () => {
 
   expect(await bridge.resolveLink()).toMatchObject({ kind: "disconnected" });
   expect(socket.readyState).toBe(3);
+});
+
+it("a credential file the server can't read blocks calls with the reason, until it is fixed", async () => {
+  vi.spyOn(Logger, "log").mockImplementation(() => {});
+  const dir = await mkdtemp(join(tmpdir(), "flcm-credential-"));
+  const file = join(dir, "plugin-link-credential.json");
+  await writeFile(file, "not json");
+  const bridge = create({ linkCredentials: new LinkCredentialStore(dir) });
+  bridge.accept(new FakePluginSocket(true, null) as unknown as WebSocket);
+
+  const blocked = await bridge.resolveLink();
+  expect(blocked).toMatchObject({ kind: "credential-unusable" });
+  expect(JSON.stringify(blocked)).toContain("is malformed. Delete it and pair");
+
+  await rm(file);
+  expect(await bridge.resolveLink()).toEqual({ kind: "unpaired" });
+  await rm(dir, { recursive: true });
 });
 
 it("a confirmation pairs only the link showing its code, once", async () => {

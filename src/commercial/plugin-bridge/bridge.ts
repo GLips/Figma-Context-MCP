@@ -8,8 +8,14 @@ import { ApprovalStore } from "./approval-store.js";
 import { ApprovalSession, type ApprovedSession } from "./approval-session.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
-import { LinkCredentialStore, mintLinkNonce } from "./link-credential.js";
-import { PairingAttempts, normalizePairingCode } from "./link-pairing.js";
+import { LinkCredentialStore } from "./link-credential.js";
+import {
+  LinkSetup,
+  UNAUTHENTICATED_LINK_MS,
+  type LinkSetupRequest,
+  type PairingConfirmation,
+  type PairingOffer,
+} from "./link-setup.js";
 import { RelayConnection, isSettlingLinkStage } from "./relay-connection.js";
 import { MAX_CHANNEL_BYTES, RECLAIM_WINDOW_MS, RelayListener } from "./relay-listener.js";
 import { RequestTrace } from "./request-trace.js";
@@ -21,10 +27,8 @@ import {
   RunLedger,
   type ChannelRunContext,
 } from "./run-ledger.js";
-import { refuseProtocolSkew } from "./version.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
 import {
-  PROTOCOL_VERSION,
   parseExecuteCodeResult,
   parsePluginEvent,
   type LINK_SETUP_REQUEST_TYPES,
@@ -38,6 +42,7 @@ import {
 export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
 export type { CapabilityHandler } from "./channel-server.js";
 export type { LinkStage } from "./relay-connection.js";
+export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
 
 /** One plugin link: a socket from one plugin incarnation, in whatever stage of setup it reached. */
 export type PluginLink = RelayConnection;
@@ -47,7 +52,6 @@ export type LinkRequest = Exclude<
   ServerRequest,
   { type: (typeof LINK_SETUP_REQUEST_TYPES)[number] }
 >;
-type SetupRequest = Extract<ServerRequest, { type: (typeof LINK_SETUP_REQUEST_TYPES)[number] }>;
 
 /** Unsolicited plugin events the bridge relays but doesn't own. All come from authenticated links. */
 export interface PluginBridgeEvents {
@@ -79,28 +83,12 @@ export type LinkResolution =
   | { kind: "linked"; link: PluginLink }
   | { kind: "unpaired" }
   | { kind: "several"; count: number }
+  | { kind: "credential-unusable"; problem: string }
   | { kind: "incompatible"; refusal: string }
   | { kind: "disconnected"; elapsedMs: number | null };
 
-/** What an offer to pair put in front of the human: the codes the panels now show. */
-export type PairingOffer =
-  | { kind: "offered"; attempts: { code: string; expiresAt: number }[] }
-  | { kind: "rate-limited"; retryAfterMs: number }
-  | { kind: "none" };
-
-export type PairingConfirmation =
-  | { kind: "paired"; link: PluginLink }
-  | { kind: "unknown-code" }
-  | { kind: "failed"; reason: string };
-
-// Links that haven't authenticated, at once. A real one is a plugin instance per open file, so this
-// is generous. Past it, a newcomer evicts the oldest one showing no pairing code: a flood of mute
-// sockets can't lock out a plugin that redials, and authenticated links never count or go.
-const MAX_UNAUTHENTICATED_LINKS = 8;
-
-// How long a link may sit without authenticating, unless a pairing attempt on it runs longer. The
-// plugin redials at once when closed, so this only recycles links, never strands a real plugin.
-const UNAUTHENTICATED_LINK_MS = 10 * 60 * 1000;
+/** Every way a call can resolve no link. */
+export type UnlinkedResolution = Exclude<LinkResolution, { kind: "linked" }>;
 
 type EventRoutes = {
   [K in PluginEventType]: (link: PluginLink, event: Extract<PluginEvent, { type: K }>) => void;
@@ -109,24 +97,22 @@ type EventRoutes = {
 /**
  * The relay to the Figma plugin: every plugin link, and the composition of its parts — the listener
  * (network edge), the run ledger (requests and their clocks), the channel server (the reverse
- * direction), the approval session (what this server presents and persists), and link setup.
+ * direction), the approval session (what this server presents and persists), and link setup (HELLO,
+ * AUTHENTICATE and pairing).
  *
- * Every link sets itself up the same way: HELLO (an exact protocol check), then AUTHENTICATE (proof
- * it holds this state dir's installation credential). Until a link authenticates it is sent only
- * that envelope and the pairing frames, and nothing it sends but replies to them is heard.
+ * Until a link authenticates it is sent only the setup envelope, and nothing it sends but replies
+ * to that is heard.
  */
 export class PluginBridge {
   private readonly links = new Set<RelayConnection>();
   private disconnectedAt: number | null = null;
   private onConnect: (() => void) | undefined;
-  private readonly setupDeadlines = new Map<RelayConnection, ReturnType<typeof setTimeout>>();
+  private readonly connectionWaiters = new Set<() => void>();
   private readonly listener: RelayListener;
   private readonly ledger: RunLedger;
   private readonly channel: ChannelServer;
   private readonly approval: ApprovalSession;
-  private readonly credentials: LinkCredentialStore;
-  private readonly attempts = new PairingAttempts<RelayConnection>();
-  private readonly unauthenticatedLinkMs: number;
+  private readonly setup: LinkSetup;
   private readonly events: PluginBridgeEvents;
 
   private readonly routes: EventRoutes = {
@@ -176,8 +162,6 @@ export class PluginBridge {
     } = {},
   ) {
     this.events = events;
-    this.credentials = linkCredentials;
-    this.unauthenticatedLinkMs = unauthenticatedLinkMs;
     this.approval = new ApprovalSession(store);
     this.ledger = new RunLedger({
       requestTimeoutMs,
@@ -185,10 +169,21 @@ export class PluginBridge {
       trace,
       disconnectedDurationMs: () => this.disconnectedDurationMs(),
     });
+    this.setup = new LinkSetup({
+      credentials: linkCredentials,
+      unauthenticatedLinkMs,
+      links: () => this.links,
+      // Sound because the ledger resolves only what parseReply admitted for this payload's type.
+      send: <T extends LinkSetupRequest>(link: PluginLink, payload: T) =>
+        this.ledger.submit(link, payload, undefined, undefined, NO_RUN_CONTEXT) as Promise<
+          ReplyFor<T["type"]>
+        >,
+      onAuthenticated: (link) => this.events.onLinkAuthenticated?.(link),
+    });
     this.channel = new ChannelServer(capabilities, this.ledger, (link) => this.isLive(link));
     this.listener = new RelayListener(
       {
-        admitsNewcomer: () => this.makeRoomForNewcomer(),
+        admitsNewcomer: () => this.setup.makeRoomForNewcomer(),
         holdsApprovalFor: (port) => this.approval.holdsApprovalFor(port),
         bound: (port) => this.approval.bind(port),
         accept: (socket) => this.accept(socket),
@@ -230,9 +225,23 @@ export class PluginBridge {
       socket.terminate();
     });
     Logger.log("Plugin connected to WS bridge");
-    this.armSetupDeadline(link, this.unauthenticatedLinkMs);
-    void this.setUp(link);
+    this.setup.admit(link);
     this.onConnect?.();
+    for (const wake of this.connectionWaiters) wake();
+    this.connectionWaiters.clear();
+  }
+
+  /** Resolves once any plugin is on the wire: now, or at the next accepted socket. */
+  whenPluginConnected(signal: AbortSignal): Promise<void> {
+    if (this.isPluginConnected()) return Promise.resolve();
+    let wake!: () => void;
+    const connected = new Promise<void>((resolve) => (wake = resolve));
+    this.connectionWaiters.add(wake);
+    const forget = () => this.connectionWaiters.delete(wake);
+    signal.addEventListener("abort", forget, { once: true });
+    return waitForSignal(connected, signal).finally(() =>
+      signal.removeEventListener("abort", forget),
+    );
   }
 
   /**
@@ -273,13 +282,11 @@ export class PluginBridge {
   }
 
   /**
-   * Which link a call runs on. Unpaired links are challenged again first, since a credential another
-   * server or plugin instance provisioned since may now pass, and links still setting up are waited
-   * out rather than guessed about.
+   * Which link a call runs on. Links a credential failed are challenged again first, and links still
+   * setting up are waited out rather than guessed about.
    */
   async resolveLink(signal?: AbortSignal): Promise<LinkResolution> {
-    for (const link of this.links)
-      if (link.isOpen && link.stage.kind === "unpaired") void this.authenticate(link);
+    this.setup.rechallenge();
     for (;;) {
       const settling = [...this.links].filter(
         (link) => link.isOpen && isSettlingLinkStage(link.stage),
@@ -291,6 +298,10 @@ export class PluginBridge {
     const authenticated = open.filter((link) => link.isAuthenticated);
     if (authenticated.length === 1) return { kind: "linked", link: authenticated[0] };
     if (authenticated.length > 1) return { kind: "several", count: authenticated.length };
+    // Ahead of unpaired: with no usable credential, no link could pass, and pairing can't help.
+    for (const link of open)
+      if (link.stage.kind === "credential-unusable")
+        return { kind: "credential-unusable", problem: link.stage.problem };
     if (open.some((link) => link.stage.kind === "unpaired")) return { kind: "unpaired" };
     for (const link of open)
       if (link.stage.kind === "incompatible")
@@ -298,80 +309,24 @@ export class PluginBridge {
     return { kind: "disconnected", elapsedMs: this.disconnectedDurationMs() };
   }
 
-  /**
-   * Show a pairing code in every unpaired link's panel: the link's open attempt, or a fresh one.
-   * Resolves once each panel acknowledged its code, so the human can see what the agent is told.
-   */
-  async offerPairing(): Promise<PairingOffer> {
-    const unpaired = [...this.links].filter(
-      (link) => link.isOpen && link.stage.kind === "unpaired",
-    );
-    if (!unpaired.length) return { kind: "none" };
-    const offered = await Promise.all(
-      unpaired.map(async (link) => {
-        const open = this.attempts.of(link);
-        if (open) return { code: open.code, expiresAt: open.expiresAt };
-        const attempt = this.attempts.start(link);
-        if (!attempt) return null;
-        const expiresInMs = attempt.expiresAt - Date.now();
-        // The link lives at least as long as the code it shows.
-        this.armSetupDeadline(link, expiresInMs);
-        try {
-          await this.sendSetup(link, { type: "PAIRING_OFFER", code: attempt.code, expiresInMs });
-        } catch {
-          this.attempts.end(link);
-          return null;
-        }
-        return { code: attempt.code, expiresAt: attempt.expiresAt };
-      }),
-    );
-    const attempts = offered.filter((attempt) => attempt !== null);
-    if (attempts.length) return { kind: "offered", attempts };
-    const retryAfterMs = this.attempts.retryAfterMs();
-    return retryAfterMs > 0 ? { kind: "rate-limited", retryAfterMs } : { kind: "none" };
+  /** Show a pairing code in every unpaired link's panel — see LinkSetup.offer. */
+  offerPairing(): Promise<PairingOffer> {
+    return this.setup.offer();
   }
 
-  /**
-   * The human confirmed that a panel shows `typedCode`: provision the installation credential to the
-   * one link showing it, and authenticate that link. Never pairs a link showing any other code.
-   */
-  async confirmPairing(typedCode: string): Promise<PairingConfirmation> {
-    const code = normalizePairingCode(typedCode);
-    const attempt = code === null ? undefined : this.attempts.showing(code);
-    if (!attempt || !attempt.link.isOpen) return { kind: "unknown-code" };
-    const { link } = attempt;
-    // One confirmation per code: it is spent here, whatever happens next.
-    this.attempts.end(link);
-    const credential = this.credentials.readOrCreate();
-    try {
-      await this.sendSetup(link, {
-        type: "PAIR_CONFIRMED",
-        code: attempt.code,
-        credentialId: credential.id,
-        secret: credential.secret,
-      });
-    } catch (error) {
-      return { kind: "failed", reason: (error as Error).message };
-    }
-    await this.authenticate(link);
-    if (!link.isAuthenticated)
-      return {
-        kind: "failed",
-        reason: "The plugin stored the pairing but didn't prove it on the next challenge.",
-      };
-    // Other instances of the same installation share its storage, so they pass now too.
-    for (const other of this.links)
-      if (other.isOpen && other.stage.kind === "unpaired") void this.authenticate(other);
-    return { kind: "paired", link };
+  /** Pair the one link showing `typedCode`, and only that one — see LinkSetup.confirm. */
+  confirmPairing(typedCode: string): Promise<PairingConfirmation> {
+    return this.setup.confirm(typedCode);
   }
 
   /** The human said a panel doesn't show `typedCode`: that attempt ends, and its panel stops showing it. */
   declinePairing(typedCode: string): void {
-    const code = normalizePairingCode(typedCode);
-    const attempt = code === null ? undefined : this.attempts.showing(code);
-    if (!attempt) return;
-    this.attempts.end(attempt.link);
-    this.sendSetup(attempt.link, { type: "PAIRING_CLOSED", code: attempt.code }).catch(() => {});
+    this.setup.decline(typedCode);
+  }
+
+  /** When the attempt showing `typedCode` expires, or null when no open link shows it. */
+  pairingCodeExpiresAt(typedCode: string): number | null {
+    return this.setup.pairingCodeExpiresAt(typedCode);
   }
 
   /** The session this server holds a token for — what it presents as a prior Allow — or null. */
@@ -444,111 +399,13 @@ export class PluginBridge {
     >;
   }
 
-  private sendSetup<T extends SetupRequest>(
-    link: PluginLink,
-    payload: T,
-  ): Promise<ReplyFor<T["type"]>> {
-    return this.ledger.submit(link, payload, undefined, undefined, NO_RUN_CONTEXT) as Promise<
-      ReplyFor<T["type"]>
-    >;
-  }
-
   private isLive(link: PluginLink): boolean {
     return this.links.has(link) && link.isOpen && link.isAuthenticated;
   }
 
-  private makeRoomForNewcomer(): boolean {
-    const waiting = [...this.links].filter((link) => link.isOpen && !link.isAuthenticated);
-    if (waiting.length < MAX_UNAUTHENTICATED_LINKS) return true;
-    // Oldest first: the set iterates in insertion order.
-    const evictable = waiting.find((link) => !this.attempts.of(link));
-    if (!evictable) return false;
-    Logger.log("Too many plugin links waiting to authenticate — closing the oldest");
-    evictable.socket.terminate();
-    return true;
-  }
-
-  /**
-   * HELLO, then AUTHENTICATE. A plugin predating HELLO answers with an envelope ERROR, a silent one
-   * times out, and a malformed answer is refused at parse — each reads as the protocol floor and is
-   * refused, so every link settles. A mismatched build was told by HELLO itself to re-import (the
-   * plugin words that toast) and is sent nothing more.
-   */
-  private async setUp(link: PluginLink): Promise<void> {
-    const hello = await this.sendSetup(link, {
-      type: "HELLO",
-      serverProtocol: PROTOCOL_VERSION,
-    }).catch(() => null);
-    if (!link.isOpen) return;
-    const refusal = refuseProtocolSkew(hello);
-    if (refusal) {
-      Logger.log(
-        `⚠️ Version skew — plugin reported ${JSON.stringify(hello)}; it will not be driven`,
-      );
-      link.advance({ kind: "incompatible", refusal });
-      return;
-    }
-    await this.authenticate(link);
-  }
-
-  /**
-   * Challenge a link for the installation credential, read fresh so a credential another process
-   * created is the one checked. A wrong proof or a silent link is closed: neither is a plugin that
-   * merely hasn't paired, which answers LINK_UNPAIRED.
-   */
-  private async authenticate(link: PluginLink): Promise<void> {
-    if (link.stage.kind === "authenticating") return link.stageChanged;
-    link.advance({ kind: "authenticating" });
-    const credential = this.credentials.readOrCreate();
-    const nonce = mintLinkNonce();
-    const reply = await this.sendSetup(link, {
-      type: "AUTHENTICATE",
-      credentialId: credential.id,
-      nonce,
-    }).catch(() => null);
-    if (!link.isOpen) return;
-    if (reply?.type === "LINK_UNPAIRED") {
-      link.advance({ kind: "unpaired" });
-      return;
-    }
-    if (
-      reply?.type !== "LINK_PROOF" ||
-      !this.credentials.verify(credential.id, nonce, reply.proof)
-    ) {
-      Logger.log("A plugin link failed its authentication challenge — closing it");
-      link.socket.terminate();
-      return;
-    }
-    this.attempts.end(link);
-    clearTimeout(this.setupDeadlines.get(link));
-    this.setupDeadlines.delete(link);
-    link.advance({ kind: "authenticated", owner: reply.owner });
-    Logger.log(
-      `Plugin link authenticated (${reply.owner ? reply.owner.name || "a Figma user" : "no Figma user"})`,
-    );
-    this.events.onLinkAuthenticated?.(link);
-  }
-
-  /** Close a link that hasn't authenticated by `ms` from now, unless its pairing attempt runs longer. */
-  private armSetupDeadline(link: PluginLink, ms: number): void {
-    clearTimeout(this.setupDeadlines.get(link));
-    const timer = setTimeout(() => {
-      this.setupDeadlines.delete(link);
-      if (link.isAuthenticated || !link.isOpen) return;
-      const attempt = this.attempts.of(link);
-      if (attempt) return this.armSetupDeadline(link, attempt.expiresAt - Date.now());
-      Logger.log("A plugin link didn't authenticate in time — closing it");
-      link.socket.terminate();
-    }, ms);
-    timer.unref();
-    this.setupDeadlines.set(link, timer);
-  }
-
   private drop(link: PluginLink): void {
     if (!this.links.delete(link)) return;
-    clearTimeout(this.setupDeadlines.get(link));
-    this.setupDeadlines.delete(link);
-    this.attempts.end(link);
+    this.setup.forget(link);
     link.abandon();
     if (!this.isPluginConnected()) this.disconnectedAt = Date.now();
     this.ledger.fail(

@@ -160,7 +160,7 @@ export class WriteAccess {
   }
 
   /**
-   * Bring an Plugin Owner's seat and counts up to date with the server. `force` is session approval,
+   * Bring a Plugin Owner's seat and counts up to date with the server. `force` is session approval,
    * which checks unconditionally; otherwise each half runs only once it is stale.
    */
   async syncWriteAccess(owner: PluginOwner, { force = false } = {}): Promise<void> {

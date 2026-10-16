@@ -9,7 +9,8 @@ import { Logger } from "~/utils/logger.js";
 /**
  * Where one plugin link stands. Every socket starts at `hello` (the version check), then either
  * stops at `incompatible` or is challenged (`authenticating`) and lands `unpaired` or
- * `authenticated`. An unpaired link can be re-challenged, so it may return to `authenticating`.
+ * `authenticated` — or `credential-unusable`, when this server can't read or create the credential
+ * to challenge with. Those two can be re-challenged, so they may return to `authenticating`.
  * Only an authenticated link is sent anything but the setup envelope, or heard on anything else.
  */
 export type LinkStage =
@@ -17,6 +18,7 @@ export type LinkStage =
   | { kind: "incompatible"; refusal: string }
   | { kind: "authenticating" }
   | { kind: "unpaired" }
+  | { kind: "credential-unusable"; problem: string }
   | { kind: "authenticated"; owner: PluginOwner | null };
 
 /** A stage still settling: a call that needs a plugin waits these out rather than guess. */

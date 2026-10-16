@@ -3,19 +3,17 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { type Command, command } from "cleye";
-import { createInterface, type Interface } from "node:readline/promises";
+import { createInterface } from "node:readline/promises";
 import { WS_PORT_BLOCK } from "@framelink/plugin/protocol";
-import { UsageError } from "~/config.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
-import {
-  approvalGuidance,
-  pairingRateLimitedText,
-  pluginDisconnectedAction,
-} from "~/commercial/plugin-bridge/blocked-call-guidance.js";
-import { unlinkedGuidanceState } from "~/commercial/plugin-bridge/session-guidance.js";
+import { pairPluginLink } from "~/commercial/plugin-bridge/plugin-call-link.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-
-const DEFAULT_WAIT_SECONDS = 600;
+import {
+  DEFAULT_PLUGIN_WAIT_SECONDS,
+  pluginWaitMs,
+  waitForPluginConnection,
+} from "./plugin-wait.js";
+import { terminalPairingCodeAsker } from "./terminal-pairing.js";
 
 /** The CLI twin of pair_figma_plugin: one whole pairing attempt, confirmed at this terminal. */
 export const pairCommand: Command = command(
@@ -37,7 +35,7 @@ Exits 0 when the plugin is paired (or already was), 1 otherwise.`,
       wait: {
         type: Number,
         placeholder: "<seconds>",
-        description: `Wait this long for the plugin to connect (default ${DEFAULT_WAIT_SECONDS})`,
+        description: `Wait this long for the plugin to connect (default ${DEFAULT_PLUGIN_WAIT_SECONDS})`,
       },
     },
   },
@@ -65,98 +63,36 @@ export async function runPair(
     bridge = new PluginBridge(),
   }: { input?: NodeJS.ReadableStream; bridge?: PluginBridge } = {},
 ): Promise<number> {
-  const waitMs = (wait ?? DEFAULT_WAIT_SECONDS) * 1000;
-  if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > 2_147_483_647)
-    throw new UsageError(
-      "--wait must be a finite, nonnegative number of seconds within the timer range.",
-    );
+  const waitMs = pluginWaitMs(wait);
   const controller = new AbortController();
   const interrupt = () => controller.abort(new Error("Interrupted"));
   process.once("SIGINT", interrupt);
   const lines = createInterface({ input, output: process.stderr, terminal: false });
   try {
     console.error(`Waiting up to ${waitMs / 1000}s for the Framelink plugin in Figma.`);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () =>
-          reject(
-            new Error(
-              `Blocked: no Figma plugin connected before --wait expired. ${pluginDisconnectedAction()}`,
-            ),
-          ),
-        waitMs,
-      );
-      bridge.start(WS_PORT_BLOCK, () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
-    const resolution = await bridge.resolveLink(controller.signal);
-    if (resolution.kind === "linked" || resolution.kind === "several") {
+    bridge.start(WS_PORT_BLOCK);
+    await waitForPluginConnection(bridge, waitMs, controller.signal, "nothing was paired");
+    const pairing = await pairPluginLink(
+      bridge,
+      terminalPairingCodeAsker(lines),
+      controller.signal,
+      "cli",
+    );
+    if (pairing.kind === "blocked") {
+      console.error(`Not paired. ${pairing.text}`);
+      return 1;
+    }
+    if (pairing.kind === "already-paired") {
       console.error("Already paired: the Framelink plugin trusts this machine. Nothing to do.");
       return 0;
-    }
-    if (resolution.kind !== "unpaired")
-      throw new Error(approvalGuidance(unlinkedGuidanceState(resolution), "cli"));
-    const offer = await bridge.offerPairing();
-    if (offer.kind === "rate-limited") throw new Error(pairingRateLimitedText(offer.retryAfterMs));
-    if (offer.kind === "none") {
-      const settled = await bridge.resolveLink(controller.signal);
-      if (settled.kind !== "linked")
-        throw new Error("The Framelink plugin disconnected before pairing.");
-      console.error("Already paired: the Framelink plugin trusts this machine. Nothing to do.");
-      return 0;
-    }
-    for (const { code, expiresAt } of offer.attempts) {
-      const shown = await confirmCodeShown(lines, code, expiresAt - Date.now(), controller.signal);
-      if (!shown) {
-        bridge.declinePairing(code);
-        continue;
-      }
-      const confirmed = await bridge.confirmPairing(code);
-      if (confirmed.kind === "paired") {
-        console.error(
-          "Paired. Framelink servers and execute runs on this machine can now reach the plugin.",
-        );
-        return 0;
-      }
-      throw new Error(
-        confirmed.kind === "failed"
-          ? confirmed.reason
-          : `The pairing code ${code} expired before it was confirmed. Run pair again.`,
-      );
     }
     console.error(
-      "Not paired: no code was confirmed. If the panel showed a different code, something other than the plugin may be connected.",
+      "Paired. Framelink servers and execute runs on this machine can now reach the plugin.",
     );
-    return 1;
+    return 0;
   } finally {
     process.removeListener("SIGINT", interrupt);
     lines.close();
     bridge.stop();
   }
-}
-
-/** Ask whether the panel shows `code`. Only `y`/`yes` is a Yes; EOF, expiry and anything else are No. */
-async function confirmCodeShown(
-  lines: Interface,
-  code: string,
-  expiresInMs: number,
-  signal: AbortSignal,
-): Promise<boolean> {
-  const expired = AbortSignal.timeout(Math.max(0, expiresInMs));
-  const closed = new Promise<string>((resolve) => lines.once("close", () => resolve("")));
-  const answer = await Promise.race([
-    lines.question(
-      `Does the Framelink plugin panel in Figma show the pairing code ${code}? [y/N] `,
-      {
-        signal: AbortSignal.any([signal, expired]),
-      },
-    ),
-    closed,
-  ]).catch(() => {
-    if (signal.aborted) throw signal.reason;
-    return "";
-  });
-  return /^\s*y(es)?\s*$/i.test(answer);
 }

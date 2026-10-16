@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The Framelink device sign-in (RFC 8628) for an Plugin Owner: request a code, show it in the
+// The Framelink device sign-in (RFC 8628) for a Plugin Owner: request a code, show it in the
 // plugin panel, poll until the human finishes in the browser, then hand the token to WriteAccess,
 // which decides whether to keep it. One flow per Plugin Owner; a second click re-shows its code.
 import { setTimeout as pause } from "node:timers/promises";
@@ -44,7 +44,8 @@ export class DeviceSignIn {
     if (!owner) {
       this.notifyPanel({
         kind: "sign-in-failed",
-        message: "Allow this session first — the sign-in is for the Figma user who approves it.",
+        message:
+          "Figma didn't report a signed-in user to the plugin. Sign in to Figma, reopen the Framelink plugin, then sign in here.",
       });
       return Promise.resolve();
     }
