@@ -554,7 +554,7 @@ async function waitForGrant(
     links: () => links,
     decide: (answers) => {
       const granted = answers.find((answer) => answer.state === "granted");
-      if (granted) return targeted(deps, granted.link);
+      if (granted) return targeted(granted.link, file);
       if (answers.some((answer) => answer.state === "denied"))
         return blocked({ kind: "grant-denied", fileName: file.fileName });
       if (answers.length && answers.every((answer) => answer.state === "absent"))
@@ -566,8 +566,12 @@ async function waitForGrant(
   });
 }
 
-function targeted(deps: CallTargetDeps, link: RelayConnection): Targeted {
-  const file = identifiedFile(deps.documentOf(link))!;
+/**
+ * Bound to the file the panels were asked about, never the link's document now: a link re-stamped
+ * while other panels answered must not carry the call to its new document. The plugin refuses an
+ * execution whose document it isn't in.
+ */
+function targeted(link: RelayConnection, file: OpenFile): Targeted {
   return {
     kind: "targeted",
     link,

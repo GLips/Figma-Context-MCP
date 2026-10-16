@@ -101,7 +101,8 @@ export function openDocumentsText(open: OpenDocumentSnapshot, surface: GuidanceS
     lines.push(`A plugin can't be used because it couldn't mark its file: ${problem}`);
   if (!open.complete)
     lines.push(
-      "Not every open plugin has said which file it is in, or whether this project may edit it, so " +
+      "Not every open plugin has reconnected and said which file it is in, or whether this project " +
+        "may edit it, so " +
         "this list may be missing some.",
     );
   if (open.documents.length)
@@ -274,11 +275,38 @@ export function referenceDocumentsGuidance(
   if (open === null)
     return "The open Figma files could not be listed. Check the Framelink plugin connection before executing code. No code was submitted.";
   const unnamed = unnamedCallDefault(open);
+  const flag = documentFlag(surface);
   const binding =
     unnamed.kind === "default"
-      ? `Executing code without ${documentFlag(surface)} runs in ${quoteFigmaName(unnamed.document.fileName)}.`
-      : `Executing code without ${documentFlag(surface)} is refused until exactly one open file is allowed; name the file to edit.`;
+      ? `Executing code without ${flag} runs in ${quoteFigmaName(unnamed.document.fileName)}.`
+      : unnamed.kind === "incomplete"
+        ? `Not every open file is known yet, so where executing code without ${flag} runs isn't settled; name the file to edit.`
+        : `Executing code without ${flag} is refused until exactly one open file is allowed; name the file to edit.`;
   return `${binding}\n${openDocumentsText(open, surface)}`;
+}
+
+/**
+ * Why the open files couldn't be listed, on the reference note above the docs or by `reference
+ * --files`, which pairs with the `pair` command, not the MCP tool.
+ */
+export function referenceLinkGuidance(
+  resolution: UnlinkedResolution,
+  surface: "reference" | "cli",
+): string {
+  if (surface === "reference") return linkGuidance(resolution, "reference");
+  switch (resolution.kind) {
+    case "disconnected":
+      return `Blocked: no compatible Figma plugin is connected, so no files were listed. ${pluginDisconnectedAction()}`;
+    case "unpaired":
+      return (
+        `Blocked: this server isn't paired with the Framelink plugin, so no files were listed. ` +
+        `Required before re-running: someone runs \`npx ${CLI_NAME} pair\` in a terminal and ` +
+        `confirms the code the Framelink plugin panel shows. Pairing is remembered, so this is needed once.`
+      );
+    case "incompatible":
+    case "credential-unusable":
+      return linkGuidance(resolution, "cli");
+  }
 }
 
 function unpairedGuidance(surface: GuidanceSurface): string {

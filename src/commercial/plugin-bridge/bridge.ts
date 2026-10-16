@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { setTimeout as delay } from "node:timers/promises";
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
 import { Logger } from "~/utils/logger.js";
@@ -380,7 +381,7 @@ export class PluginBridge {
       {
         ...this.documentLookup,
         links: () => this.authenticatedLinks(),
-        linksSettleAt: () => this.linksUnsettledSince + this.linkSettleMs,
+        linksSettleAt: () => this.linksSettleAt(),
         documentsSettled: (links) => this.documents.settled(links),
         closePrompt: (link, executionId) => {
           this.request(link, { type: "GRANT_PROMPT_CLOSED", executionId }).catch(() => {});
@@ -396,12 +397,29 @@ export class PluginBridge {
   /**
    * Every open plugin's document and this project's grant on it, asked without prompting, once each
    * link's introduction has answered. What a refusal and the reference show an agent to choose from.
+   * Incomplete while a plugin still open may be on its redial backoff, as an unnamed call reads it.
    */
   async openDocuments(signal: AbortSignal): Promise<OpenDocumentSnapshot> {
     const links = this.authenticatedLinks();
     await this.documents.settled(links);
     // Only a key for the plugin's prompt-free answer: nothing runs under this id.
-    return openDocumentSnapshot(links, this.documentLookup, mintExecutionId(), signal);
+    const open = await openDocumentSnapshot(links, this.documentLookup, mintExecutionId(), signal);
+    return Date.now() < this.linksSettleAt() ? { ...open, complete: false } : open;
+  }
+
+  /** Resolves once every plugin still open should be back on a link: see PLUGIN_LINK_SETTLE_MS. */
+  async whenLinksSettled(signal: AbortSignal): Promise<void> {
+    // The window restarts when a link drops, so it is re-read after each wait.
+    for (
+      let wait = this.linksSettleAt() - Date.now();
+      wait > 0;
+      wait = this.linksSettleAt() - Date.now()
+    )
+      await delay(wait, undefined, { signal });
+  }
+
+  private linksSettleAt(): number {
+    return this.linksUnsettledSince + this.linkSettleMs;
   }
 
   /** Which file `link` is in, as far as this server knows. */

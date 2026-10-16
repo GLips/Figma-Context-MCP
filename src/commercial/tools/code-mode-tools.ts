@@ -486,7 +486,7 @@ function registerCodeModeTools(
           const note = runtime && (await referenceDocumentsNote(runtime.bridge, "reference"));
           return {
             content: [
-              ...(note ? [{ type: "text" as const, text: note }] : []),
+              ...(note ? [{ type: "text" as const, text: note.text }] : []),
               { type: "text" as const, text: buildReferenceSections(sections, MCP_DOCS_CHANNEL) },
             ],
           };
