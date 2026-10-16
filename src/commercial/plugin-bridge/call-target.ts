@@ -13,22 +13,23 @@
 //
 // Documents are counted, not links: one file open in two plugin instances is one document.
 import { GRANT_POLL_MS, type GrantPrompt, type GrantState } from "@framelink/plugin/protocol";
-import type { DocumentReader, LinkDocuments } from "./link-documents.js";
+import type { FigmaFileKey } from "~/utils/figma-url.js";
+import type { DocumentReader, LinkDocument, LinkDocuments } from "./link-documents.js";
 import type { RelayConnection } from "./relay-connection.js";
 
 /** The document a call was bound to: what it ran against, and what its reply names. */
 export interface CallDocument {
-  fileKey: string;
+  fileKey: FigmaFileKey;
   fileName: string;
 }
 
 /** Why a call got no document. Nothing was submitted in any of them. */
 export type CallTargetBlock =
-  | { kind: "document-not-open"; fileKey: string }
-  | { kind: "document-unprovable"; fileKey: string | null; problem: string }
+  | { kind: "document-not-open"; fileKey: FigmaFileKey }
+  | { kind: "document-unprovable"; fileKey: FigmaFileKey | null; problem: string }
   | { kind: "grant-denied"; fileName: string }
   | { kind: "grant-unavailable"; fileName: string }
-  | { kind: "grant-expired"; fileName: string | null };
+  | { kind: "grant-pending"; fileName: string | null };
 
 export type CallTarget =
   | { kind: "targeted"; link: RelayConnection; document: CallDocument }
@@ -55,27 +56,61 @@ export interface CallTargetDeps {
   documents: LinkDocuments;
   askGrant(
     link: RelayConnection,
-    fileKey: string | null,
+    fileKey: FigmaFileKey | null,
     prompt: GrantPrompt,
     signal: AbortSignal,
   ): Promise<GrantState>;
   closePrompt(link: RelayConnection): void;
 }
 
-type Proven = Extract<RelayConnection["document"], { kind: "proven" }>;
-
-function provenDocument(link: RelayConnection): Proven | null {
-  return link.document.kind === "proven" ? link.document : null;
+/** What counting granted documents reads: each link's document, and its plugin's grant on it. */
+export interface GrantedDocumentLookup {
+  documentOf(link: RelayConnection): LinkDocument;
+  grantStatus(
+    link: RelayConnection,
+    fileKey: FigmaFileKey,
+    prompt: GrantPrompt,
+    signal: AbortSignal,
+  ): Promise<GrantState>;
 }
 
-function documentOf(link: RelayConnection): CallDocument {
-  const { fileKey, fileName } = provenDocument(link)!;
-  return { fileKey, fileName };
+/** A proven, open document this project holds a grant on, and one link that is in it. */
+export interface GrantedOpenDocument {
+  link: RelayConnection;
+  document: CallDocument;
+}
+
+/**
+ * The open documents this project may edit, without prompting: every proven link is asked, and
+ * documents are counted, not links, so one file in two plugin instances is one entry. A failed ask
+ * rejects; the caller decides what that means.
+ */
+export async function grantedOpenDocuments(
+  links: readonly RelayConnection[],
+  lookup: GrantedDocumentLookup,
+  signal: AbortSignal,
+): Promise<Map<FigmaFileKey, GrantedOpenDocument>> {
+  const proven = links.flatMap((link) => {
+    const document = lookup.documentOf(link);
+    return document.kind === "proven"
+      ? [{ link, document: { fileKey: document.fileKey, fileName: document.fileName } }]
+      : [];
+  });
+  const states = await Promise.all(
+    proven.map(({ link, document }) => lookup.grantStatus(link, document.fileKey, "none", signal)),
+  );
+  signal.throwIfAborted();
+  const granted = new Map<FigmaFileKey, GrantedOpenDocument>();
+  proven.forEach((entry, index) => {
+    if (states[index] === "granted" && !granted.has(entry.document.fileKey))
+      granted.set(entry.document.fileKey, entry);
+  });
+  return granted;
 }
 
 export async function targetPluginCall(
   deps: CallTargetDeps,
-  fileKey: string | null,
+  fileKey: FigmaFileKey | null,
   options: CallTargetOptions,
 ): Promise<CallTarget> {
   await abortable(deps.documents.settled(deps.links()), options.signal);
@@ -85,19 +120,24 @@ export async function targetPluginCall(
 /** A call that named its file: prove a link is in it if none is yet, then ask only there. */
 async function targetNamed(
   deps: CallTargetDeps,
-  fileKey: string,
+  fileKey: FigmaFileKey,
   options: CallTargetOptions,
 ): Promise<CallTarget> {
-  const holders = () => deps.links().filter((link) => provenDocument(link)?.fileKey === fileKey);
+  const { documents } = deps;
+  const provenIn = (link: RelayConnection) => {
+    const document = documents.documentOf(link);
+    return document.kind === "proven" && document.fileKey === fileKey;
+  };
+  const holders = () => deps.links().filter(provenIn);
   if (!holders().length) {
     // Only links that might be in it: unclaimed ones, and ones claiming this very file.
-    const candidates = deps
-      .links()
-      .filter(
-        (link) =>
-          link.document.kind === "unclaimed" ||
-          (link.document.kind === "claimed" && link.document.fileKey === fileKey),
+    const candidates = deps.links().filter((link) => {
+      const document = documents.documentOf(link);
+      return (
+        document.kind === "unclaimed" ||
+        (document.kind === "claimed" && document.fileKey === fileKey)
       );
+    });
     if (candidates.length && !options.reader)
       return blocked({
         kind: "document-unprovable",
@@ -106,7 +146,7 @@ async function targetNamed(
       });
     if (candidates.length && options.reader) {
       const { problem } = await abortable(
-        deps.documents.prove(candidates, fileKey, options.reader),
+        documents.prove(candidates, fileKey, options.reader),
         options.signal,
       );
       if (!holders().length && problem !== null)
@@ -118,24 +158,29 @@ async function targetNamed(
     ask: () => holders().map((link) => ({ link, fileKey, prompt: "grant" })),
     onRound(answers) {
       const granted = answers.find((answer) => answer.state === "granted");
-      if (granted) return targeted(granted.link);
+      if (granted) return targeted(documents, granted.link);
       const denied = answers.find((answer) => answer.state === "denied");
       if (denied)
-        return blocked({ kind: "grant-denied", fileName: documentOf(denied.link).fileName });
+        return blocked({
+          kind: "grant-denied",
+          fileName: documentOf(documents, denied.link).fileName,
+        });
       if (answers.length && answers.every((answer) => answer.state === "absent"))
         return blocked({
           kind: "grant-unavailable",
-          fileName: documentOf(answers[0].link).fileName,
+          fileName: documentOf(documents, answers[0].link).fileName,
         });
       if (!answers.length && !holders().length)
         return blocked({ kind: "document-not-open", fileKey });
       return null;
     },
-    expired: () =>
-      blocked({
-        kind: "grant-expired",
-        fileName: holders()[0] ? documentOf(holders()[0]).fileName : null,
-      }),
+    expired: () => {
+      const holder = holders()[0];
+      return blocked({
+        kind: "grant-pending",
+        fileName: holder ? documentOf(documents, holder).fileName : null,
+      });
+    },
   });
 }
 
@@ -144,23 +189,24 @@ async function targetUnnamed(
   deps: CallTargetDeps,
   options: CallTargetOptions,
 ): Promise<CallTarget> {
-  const proven = deps.links().filter((link) => provenDocument(link) !== null);
-  const answers = await Promise.all(
-    proven.map(async (link) => ({
-      link,
-      state: await deps
-        .askGrant(link, documentOf(link).fileKey, "none", options.signal)
-        .catch(() => "absent" as const),
-    })),
+  const { documents } = deps;
+  // A claim no process-wide reader could prove at introduction is proven with the call's reader
+  // first, so a file that already holds a grant runs without a click.
+  if (options.reader)
+    await abortable(documents.proveClaims(deps.links(), options.reader), options.signal);
+  const granted = await grantedOpenDocuments(
+    deps.links(),
+    {
+      documentOf: (link) => documents.documentOf(link),
+      grantStatus: (link, fileKey, prompt, signal) =>
+        deps.askGrant(link, fileKey, prompt, signal).catch(() => "absent" as const),
+    },
+    options.signal,
   );
-  options.signal.throwIfAborted();
-  const granted = new Map<string, RelayConnection>();
-  for (const { link, state } of answers)
-    if (state === "granted" && !granted.has(documentOf(link).fileKey))
-      granted.set(documentOf(link).fileKey, link);
-  if (granted.size === 1) return targeted([...granted.values()][0]);
+  if (granted.size === 1) return targeted(documents, [...granted.values()][0].link);
 
-  if (!proven.length && !options.reader)
+  const anyProven = deps.links().some((link) => documents.documentOf(link).kind === "proven");
+  if (!anyProven && !options.reader)
     return blocked({
       kind: "document-unprovable",
       fileKey: null,
@@ -169,30 +215,37 @@ async function targetUnnamed(
   return waitForGrant(deps, options, {
     ask: () =>
       deps.links().map((link) => {
-        const document = provenDocument(link);
+        const document = documents.documentOf(link);
         // An unproven panel asks for its file's link; a link the human pasted is proven meanwhile.
-        if (
-          !document &&
-          link.document.kind === "claimed" &&
-          options.reader &&
-          !deps.documents.isBusy(link)
-        )
-          void deps.documents.prove([link], link.document.fileKey, options.reader);
-        return { link, fileKey: document?.fileKey ?? null, prompt: "select" };
+        if (document.kind === "claimed" && options.reader && !documents.isBusy(link))
+          void documents.prove([link], document.fileKey, options.reader);
+        return {
+          link,
+          fileKey: document.kind === "proven" ? document.fileKey : null,
+          prompt: "select",
+        };
       }),
     onRound(answers) {
       const picked = answers.find(
-        (answer) => answer.state === "granted" && provenDocument(answer.link),
+        (answer) =>
+          answer.state === "granted" && documents.documentOf(answer.link).kind === "proven",
       );
-      return picked ? targeted(picked.link) : null;
+      return picked ? targeted(documents, picked.link) : null;
     },
-    expired: () => blocked({ kind: "grant-expired", fileName: null }),
+    expired: () => blocked({ kind: "grant-pending", fileName: null }),
   });
+}
+
+/** The document of a link the caller knows is proven. */
+function documentOf(documents: LinkDocuments, link: RelayConnection): CallDocument {
+  const document = documents.documentOf(link);
+  if (document.kind !== "proven") throw new Error("Expected a proven plugin link");
+  return { fileKey: document.fileKey, fileName: document.fileName };
 }
 
 interface Ask {
   link: RelayConnection;
-  fileKey: string | null;
+  fileKey: FigmaFileKey | null;
   prompt: GrantPrompt;
 }
 
@@ -243,8 +296,8 @@ async function waitForGrant(
   }
 }
 
-function targeted(link: RelayConnection): CallTarget {
-  return { kind: "targeted", link, document: documentOf(link) };
+function targeted(documents: LinkDocuments, link: RelayConnection): CallTarget {
+  return { kind: "targeted", link, document: documentOf(documents, link) };
 }
 
 function blocked(block: CallTargetBlock): CallTarget {

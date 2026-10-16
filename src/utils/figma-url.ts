@@ -25,9 +25,15 @@ export const FIGMA_NODE_ID_FORMAT_MESSAGE =
   "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'";
 
 export function figmaFileKey(raw: string): FigmaFileKey {
-  if (!FIGMA_FILE_KEY_PATTERN.test(raw))
+  const fileKey = parseFigmaFileKey(raw);
+  if (fileKey === null)
     tagError(new Error(FIGMA_FILE_KEY_FORMAT_MESSAGE), { category: "invalid_input" });
-  return raw as FigmaFileKey;
+  return fileKey;
+}
+
+/** The same check for an edge that answers bad input with its own reply: null when it isn't a key. */
+export function parseFigmaFileKey(raw: string): FigmaFileKey | null {
+  return FIGMA_FILE_KEY_PATTERN.test(raw) ? (raw as FigmaFileKey) : null;
 }
 
 /** A URL's `node-id` is dashed (`1-2`); the API matches only the colon form (`1:2`). */

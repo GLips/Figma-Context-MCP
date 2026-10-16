@@ -14,6 +14,7 @@ import {
 import type { CallDocument, PluginBridge, PluginLink } from "~/commercial/plugin-bridge/bridge.js";
 import type { DocumentReader } from "~/commercial/plugin-bridge/link-documents.js";
 import { FigmaService } from "~/services/figma.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 import {
   LinkCredentialStore,
   linkProof,
@@ -155,7 +156,7 @@ export interface FakeFigmaFile extends CallDocument {
 }
 
 export function fakeFigmaFile(fileKey = "FAKEfile1", fileName = "Fake file"): FakeFigmaFile {
-  return { fileKey, fileName, proofs: new Set() };
+  return { fileKey: figmaFileKey(fileKey), fileName, proofs: new Set() };
 }
 
 /** A proof reader over `files`; a file not among them can't be read, as with a wrong key. */

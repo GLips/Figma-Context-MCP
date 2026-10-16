@@ -79,7 +79,7 @@ export function callTargetGuidance(
         `can't let this project edit the file, and nothing was submitted. ${REPORT_TO_PERSON} ` +
         `someone signs in to Figma and reopens the plugin.`
       );
-    case "grant-expired": {
+    case "grant-pending": {
       const file = block.fileName === null ? "a Figma file" : `"${block.fileName}"`;
       const action =
         block.fileName === null

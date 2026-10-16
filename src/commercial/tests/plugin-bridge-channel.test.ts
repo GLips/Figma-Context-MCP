@@ -8,6 +8,7 @@ import { createWarningRegistry } from "../../../plugin/src/preamble/warnings.js"
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import type { FigmaService } from "~/services/figma.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 
 const bridges: PluginBridge[] = [];
@@ -533,7 +534,7 @@ it("hands each channel request the credentials of the request that started its r
         {
           runContext: {
             figma,
-            fileKey: "FAKEfile1",
+            fileKey: figmaFileKey("FAKEfile1"),
             uploadHandles: new Set(),
             readLocalImage: null,
           },

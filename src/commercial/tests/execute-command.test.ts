@@ -36,7 +36,7 @@ let file: string;
 let stdout: string;
 let sockets: WebSocket[];
 // The Figma file the test plugins are open in: they claim it, and REST shows their proofs in it.
-const FIGMA_FILE = { fileKey: "CLIfile1", name: "CLI file" };
+const FIGMA_FILE = { fileKey: "CLIfile1", fileName: "CLI file" };
 let proofs: Set<string>;
 let figmaCalls: Array<{ url: string; token: string | null }>;
 const COMMENT = {
@@ -72,7 +72,7 @@ beforeEach(async () => {
       );
       return Promise.resolve(
         Response.json({
-          name: FIGMA_FILE.name,
+          name: FIGMA_FILE.fileName,
           document: { sharedPluginData: { [DOCUMENT_DATA_NAMESPACE]: marks } },
         }),
       );

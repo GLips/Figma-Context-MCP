@@ -353,7 +353,7 @@ await pairByPanel(squatBridge, squatted);
 const squatBinding = await target(squatBridge, contractFile.key, 300);
 assert.deepEqual(
   squatBinding,
-  { kind: "blocked", block: { kind: "grant-expired", fileName: contractFile.name } },
+  { kind: "blocked", block: { kind: "grant-pending", fileName: contractFile.name } },
   "a same-project server on another installation holds no grant",
 );
 console.log("✅ A same-project server paired under another state dir is asked to Allow anew");

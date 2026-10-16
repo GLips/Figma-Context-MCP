@@ -20,7 +20,7 @@ import type {
   HostOutbound,
   PanelControl,
   PanelRender,
-  PanelSession,
+  PanelGrantRow,
 } from "@framelink/plugin/panel";
 import { documentProofNonces } from "@framelink/plugin/protocol";
 import type { DocumentReader } from "~/commercial/plugin-bridge/link-documents.js";
@@ -102,7 +102,7 @@ export interface LoopbackPlugin {
   /** The file this plugin is open in. */
   file: LoopbackFile;
   /** The panel's rows now. */
-  sessions(): PanelSession[];
+  grantRows(): PanelGrantRow[];
   /** Whether a row is asking the human for a decision now. */
   isPrompting(): boolean;
   /**
@@ -266,13 +266,13 @@ export function startLoopbackPlugin(
 
   // What the panel's buttons post (ui.ts): a "panel" envelope, which only the relay itself builds.
   const click = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
-  const sessions = () => lastRender?.sessions ?? [];
+  const grantRows = () => lastRender?.grantRows ?? [];
   const asking = () =>
-    sessions().find(
+    grantRows().find(
       (s) => s.key !== null && s.grant !== null && s.prompt !== null && !s.denied && !s.allowing,
     );
   const granted = (project?: string) =>
-    sessions().find((s) => s.granted && (project === undefined || s.project === project));
+    grantRows().find((s) => s.granted && (project === undefined || s.project === project));
   const shownCode = () => lastRender?.pairings.find((pairing) => pairing.code)?.code ?? null;
   return {
     async opened() {
@@ -284,7 +284,7 @@ export function startLoopbackPlugin(
     },
     showsPairingCode: () => shownCode() !== null,
     file,
-    sessions,
+    grantRows,
     isPrompting: () => asking() !== undefined,
     async allow() {
       while (!asking()) await tick();

@@ -3,40 +3,58 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { describe, it, expect, vi } from "vitest";
-import type { LinkResolution, PluginLink } from "~/commercial/plugin-bridge/bridge.js";
+import type {
+  LinkDocument,
+  LinkResolution,
+  PluginLink,
+} from "~/commercial/plugin-bridge/bridge.js";
 import {
-  referenceSessionGuidance,
+  referenceGrantNote,
   type ReferenceLinkLookup,
-} from "~/commercial/plugin-bridge/session-guidance.js";
+} from "~/commercial/plugin-bridge/reference-grant-guidance.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 
+const documents = new Map<PluginLink, LinkDocument>();
+function linkIn(document: LinkDocument): PluginLink {
+  const link = {} as PluginLink;
+  documents.set(link, document);
+  return link;
+}
 const provenIn = (fileKey: string, fileName: string) =>
-  ({ document: { kind: "proven", fileKey, fileName } }) as PluginLink;
-const unproven = { document: { kind: "unclaimed" } } as PluginLink;
+  linkIn({ kind: "proven", fileKey: figmaFileKey(fileKey), fileName });
+const unproven = linkIn({ kind: "unclaimed" });
 
 function lookupOf(
   resolution: LinkResolution,
   grantStatus: ReferenceLinkLookup["grantStatus"] = vi.fn(),
 ): ReferenceLinkLookup {
-  return { resolveLink: async () => resolution, grantStatus };
+  return {
+    resolveLink: async () => resolution,
+    documentOf: (link) => documents.get(link) ?? { kind: "unknown" },
+    grantStatus,
+  };
 }
 
 describe("link-aware reference guidance", () => {
-  it("one granted file needs no note; several name the files; none says executing will ask", async () => {
+  it("one granted file needs no note, even open twice; several name the files; none says executing will ask", async () => {
     const granted = vi.fn(async () => "granted" as const);
     const one = provenIn("A", "Alpha");
+    const sameFile = provenIn("A", "Alpha");
     expect(
-      await referenceSessionGuidance(lookupOf({ kind: "linked", links: [one, unproven] }, granted)),
+      await referenceGrantNote(
+        lookupOf({ kind: "linked", links: [one, sameFile, unproven] }, granted),
+      ),
     ).toBeUndefined();
-    expect(granted).toHaveBeenCalledTimes(1);
+    expect(granted).toHaveBeenCalledTimes(2);
     expect(granted).toHaveBeenCalledWith(one, "A", "none", expect.any(AbortSignal));
 
-    const several = await referenceSessionGuidance(
+    const several = await referenceGrantNote(
       lookupOf({ kind: "linked", links: [one, provenIn("B", "Beta")] }, granted),
     );
     expect(several).toContain('"Alpha", "Beta"');
     expect(several).toContain("fileKey");
 
-    const none = await referenceSessionGuidance(
+    const none = await referenceGrantNote(
       lookupOf({ kind: "linked", links: [one] }, async () => "absent" as const),
     );
     expect(none).toContain("isn't allowed to edit any open Figma file");
@@ -45,13 +63,13 @@ describe("link-aware reference guidance", () => {
   it("an unlinked plugin keeps docs available without grant traffic or starting pairing", async () => {
     const status = vi.fn();
     expect(
-      await referenceSessionGuidance(lookupOf({ kind: "disconnected", elapsedMs: null }, status)),
+      await referenceGrantNote(lookupOf({ kind: "disconnected", elapsedMs: null }, status)),
     ).toContain("Open the Framelink plugin");
-    expect(await referenceSessionGuidance(lookupOf({ kind: "unpaired" }, status))).toContain(
+    expect(await referenceGrantNote(lookupOf({ kind: "unpaired" }, status))).toContain(
       "call pair_figma_plugin",
     );
     expect(
-      await referenceSessionGuidance(
+      await referenceGrantNote(
         lookupOf({ kind: "incompatible", refusal: "Re-import this plugin" }, status),
       ),
     ).toBe("Re-import this plugin");
@@ -60,7 +78,7 @@ describe("link-aware reference guidance", () => {
 
   it("failed or unresponsive lookups return guidance within the bound", async () => {
     expect(
-      await referenceSessionGuidance(
+      await referenceGrantNote(
         lookupOf({ kind: "linked", links: [provenIn("A", "Alpha")] }, async () => {
           throw Error("gone");
         }),
@@ -68,12 +86,13 @@ describe("link-aware reference guidance", () => {
     ).toContain("could not be checked");
     let signal: AbortSignal | undefined;
     expect(
-      await referenceSessionGuidance(
+      await referenceGrantNote(
         {
           resolveLink: (s) => {
             signal = s;
             return new Promise(() => {});
           },
+          documentOf: () => ({ kind: "unknown" }),
           grantStatus: vi.fn(),
         },
         5,

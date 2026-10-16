@@ -10,6 +10,7 @@ import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 import type {
   CallDocument,
   CallTarget,
@@ -24,7 +25,10 @@ export const TEST_PLUGIN_OWNER: PluginOwner = {
 };
 
 /** The document fake bridges bind every call to. */
-export const TEST_DOCUMENT: CallDocument = { fileKey: "TESTfile1", fileName: "Test file" };
+export const TEST_DOCUMENT: CallDocument = {
+  fileKey: figmaFileKey("TESTfile1"),
+  fileName: "Test file",
+};
 
 /** A stand-in authenticated link, for fake bridges that never touch a socket. */
 export const TEST_PLUGIN_LINK = { owner: TEST_PLUGIN_OWNER } as unknown as PluginLink;

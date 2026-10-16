@@ -3,7 +3,6 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { readCommentThreads } from "~/services/figma-comments.js";
-import { figmaFileKey } from "~/utils/figma-url.js";
 import type { CapabilityHandler } from "./bridge.js";
 
 /** One unresolved thread's pin, in the anchor's own frame — the preamble hit-tests it on live geometry. */
@@ -33,7 +32,7 @@ export function createCommentPinsCapability(): CapabilityHandler {
         code: "FIGMA_AUTH_UNAVAILABLE",
         message: "This run has no Figma credentials to read comments with.",
       };
-    const { comments } = await run.figma.withSignal(signal).getComments(figmaFileKey(fileKey));
+    const { comments } = await run.figma.withSignal(signal).getComments(fileKey);
     const pins: CommentPinRecord[] = [];
     for (const thread of readCommentThreads(comments)) {
       if (thread.resolvedAt === null && thread.pin?.nodeId)

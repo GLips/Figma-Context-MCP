@@ -16,15 +16,15 @@ import type { PluginFrame, WriteAccessNotice } from "./protocol.js";
 
 /**
  * One socket generation: the relay numbers every socket it opens, from 1, and never reuses a number,
- * so replies, sessions, cancellation and server calls all name the connection they belong to.
+ * so replies, grant rows, cancellation and server calls all name the connection they belong to.
  */
 export type ConnKey = number;
 
 /**
- * One row of the session list: a connected server, or a project granted this file whose server isn't
+ * One row of the grant list: a connected server, or a project granted this file whose server isn't
  * connected (`key` null). Revoking a row's grant affects every agent of that project.
  */
-export interface PanelSession {
+export interface PanelGrantRow {
   key: ConnKey | null;
   project: string;
   label: string;
@@ -63,7 +63,7 @@ export interface PanelRender {
   pairings: PanelPairing[];
   // Null while no server has authenticated: nothing has asked about this file yet.
   document: PanelDocument | null;
-  sessions: PanelSession[];
+  grantRows: PanelGrantRow[];
   expanded: boolean;
   showOrientation: boolean;
   grantStorageError: string | null;

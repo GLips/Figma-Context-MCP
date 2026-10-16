@@ -2,13 +2,13 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The plugin's only human surface: an always-visible status strip that expands into the session list.
+// The plugin's only human surface: an always-visible status strip that expands into the grant list.
 // It paints what link authentication says about unpaired sockets, what document identity says about
 // this file, and what the grant gate says about each server, plus what is the panel's own to know:
 // whether it is expanded, who holds the driving baton, and each row's write-access card.
 import type { GrantRow } from "./grant-gate.js";
 import { toServer } from "./outbound.js";
-import type { ConnKey, PanelDocument, PanelPairing, PanelRender, PanelSession } from "./panel.js";
+import type { ConnKey, PanelDocument, PanelPairing, PanelRender, PanelGrantRow } from "./panel.js";
 import type { WriteAccessNotice } from "./protocol.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
@@ -24,7 +24,7 @@ const UI_MAX_HEIGHT = 560;
 const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 
 /** What the panel reads from the grant gate, link authentication and document identity. */
-export interface SessionPanelSource {
+export interface GrantPanelSource {
   rows(now: number): GrantRow[];
   nextPromptLapse(now: number): number | null;
   document(now: number): PanelDocument | null;
@@ -40,8 +40,8 @@ export interface SessionPanelSource {
  * The short, glanceable name for a server: the last segment of its project path. The expanded row
  * still shows the FULL path, which is what the human actually grants.
  */
-function sessionLabel(project: string | null): string {
-  if (project === null) return "A session";
+function projectLabel(project: string | null): string {
+  if (project === null) return "A project";
   const segments = project.split(/[\\/]/).filter((segment) => segment.length > 0);
   return segments.length > 0 ? segments[segments.length - 1] : project;
 }
@@ -53,10 +53,10 @@ function httpOriginOf(url: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
-export function createSessionPanel(source: SessionPanelSource) {
+export function createGrantPanel(source: GrantPanelSource) {
   // It starts VISIBLE and is never hidden. A running plugin's only summonable surface is its own
   // iframe — a menu command re-RUNS the plugin, tearing down the relay and every live connection —
-  // so a hidden window would leave the human no way to check a session or reach Revoke. The iframe
+  // so a hidden window would leave the human no way to check a grant or reach Revoke. The iframe
   // is also the network transport (the only context with WS access).
   figma.showUI(__html__, { visible: true, width: UI_WIDTH, height: UI_MIN_HEIGHT, themeColors: true, title: "Framelink" });
 
@@ -89,10 +89,10 @@ export function createSessionPanel(source: SessionPanelSource) {
     if (lapse !== null) expiryRender = setTimeout(() => render(), lapse - now);
   }
 
-  function sessions(now: number): PanelSession[] {
+  function grantRows(now: number): PanelGrantRow[] {
     return source.rows(now).map((row) => ({
       ...row,
-      label: sessionLabel(row.project),
+      label: projectLabel(row.project),
       active: row.key !== null && row.key === activeKey,
       writeAccess: row.key !== null ? (writeAccess.get(row.key) ?? null) : null,
     }));
@@ -107,7 +107,7 @@ export function createSessionPanel(source: SessionPanelSource) {
     const update: PanelRender = {
       pairings: source.pairings(),
       document: source.document(now),
-      sessions: sessions(now),
+      grantRows: grantRows(now),
       expanded,
       showOrientation,
       grantStorageError: source.storageError,
@@ -168,7 +168,7 @@ export function createSessionPanel(source: SessionPanelSource) {
       const displaced = activeKey !== null && source.isConnected(activeKey);
       activeKey = key;
       if (displaced && source.isConnected(key))
-        figma.notify(`${sessionLabel(source.projectOf(key))} is now driving this file.`, { timeout: 4000 });
+        figma.notify(`${projectLabel(source.projectOf(key))} is now driving this file.`, { timeout: 4000 });
       render();
     },
 

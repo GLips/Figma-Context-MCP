@@ -4,6 +4,7 @@
  */
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
+import { figmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import { targetPluginCall, type CallTarget, type CallTargetOptions } from "./call-target.js";
@@ -20,6 +21,7 @@ import {
   DEFAULT_PROOF_TIMING,
   LinkDocuments,
   type DocumentReader,
+  type LinkDocument,
   type ProofTiming,
 } from "./link-documents.js";
 import { canonicalProjectPath } from "./project.js";
@@ -49,9 +51,9 @@ import {
 
 export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
 export type { CapabilityHandler } from "./channel-server.js";
-export type { LinkDocument, LinkStage } from "./relay-connection.js";
+export type { LinkStage } from "./relay-connection.js";
 export type { CallDocument, CallTarget, CallTargetBlock } from "./call-target.js";
-export type { DocumentReader } from "./link-documents.js";
+export type { DocumentReader, LinkDocument } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
 
 /** One plugin link: a socket from one plugin incarnation, in whatever stage of setup it reached. */
@@ -133,7 +135,8 @@ export class PluginBridge {
           }).catch(() => {});
       this.events.onGrantChanged?.(link, event.granted);
     },
-    DOCUMENT_CLAIMED: (link, event) => this.documents.claimed(link, event.fileKey),
+    // The plugin's word, already admitted as a wire file key by the protocol's parser.
+    DOCUMENT_CLAIMED: (link, event) => this.documents.claimed(link, figmaFileKey(event.fileKey)),
     WRITE_ACCESS_SIGN_IN: (link) => this.events.onWriteAccessSignIn?.(link),
     CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
     RUN_STATE: (link, event) => this.ledger.runState(link, event),
@@ -353,7 +356,7 @@ export class PluginBridge {
    * null lets the human pick. Prompts in the plugin; submits nothing.
    */
   targetCall(
-    fileKey: string | null,
+    fileKey: FigmaFileKey | null,
     options: Omit<CallTargetOptions, "reader"> & { reader?: DocumentReader | null },
   ): Promise<CallTarget> {
     return targetPluginCall(
@@ -368,6 +371,11 @@ export class PluginBridge {
       fileKey,
       { ...options, reader: options.reader ?? this.documentReader },
     );
+  }
+
+  /** Which file `link` is in, as far as this server knows. */
+  documentOf(link: PluginLink): LinkDocument {
+    return this.documents.documentOf(link);
   }
 
   /** Ask a link's plugin whether this project holds a grant on `fileKey`, prompting as `prompt` says. */

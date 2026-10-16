@@ -302,8 +302,8 @@ export type ServerRequest =
 export type ServerRequestType = ServerRequest["type"];
 
 /**
- * The only requests a link is sent before it authenticates (bridge.ts), and the only ones a
- * mismatched build is sent at all is the first. Deny-by-default: adding a type here asserts it is
+ * The only requests a link is sent before it authenticates (bridge.ts), and the only ones the plugin
+ * answers on one (code.ts). A mismatched build is sent only the first. Deny-by-default: adding a type here asserts it is
  * safe to send to a page posing as the plugin, which is anyone who can open a socket with `Origin: null`.
  */
 export const LINK_SETUP_REQUEST_TYPES = [

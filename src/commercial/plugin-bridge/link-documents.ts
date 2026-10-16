@@ -6,12 +6,29 @@
 // no figma.fileKey, and a file's name proves nothing), so this server proves it: the link writes a
 // fresh nonce into its file root's shared plugin data, and the server reads that file over REST.
 // The nonce turning up in file F is the proof the link is in F.
-import { documentProofNonces, type ProofOutcome, type ReplyFor } from "@framelink/plugin/protocol";
+import {
+  documentProofNonces,
+  type ProofOutcome,
+  type ReplyFor,
+  type ServerRequest,
+} from "@framelink/plugin/protocol";
 import type { FigmaService } from "~/services/figma.js";
-import { figmaFileKey } from "~/utils/figma-url.js";
+import { figmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { mintLinkNonce } from "./link-credential.js";
 import type { RelayConnection } from "./relay-connection.js";
+
+/**
+ * Which file an authenticated link is in, as far as this server knows. `claimed` is the plugin's
+ * word, from an earlier proof or a pasted link (with why it couldn't be proven, if it couldn't);
+ * only `proven` is this server's own finding, read back from the file over REST. A proof holds for
+ * the plugin incarnation, which is the link's socket.
+ */
+export type LinkDocument =
+  | { kind: "unknown" }
+  | { kind: "unclaimed" }
+  | { kind: "claimed"; fileKey: FigmaFileKey; problem: string | null }
+  | { kind: "proven"; fileKey: FigmaFileKey; fileName: string };
 
 /** A file's name and the proof nonces its root holds, as Figma's REST API reports them. */
 export interface FileProofRead {
@@ -20,13 +37,13 @@ export interface FileProofRead {
 }
 
 /** Read a file's proofs over REST. Rejects when the file can't be read with this token. */
-export type DocumentReader = (fileKey: string, signal: AbortSignal) => Promise<FileProofRead>;
+export type DocumentReader = (fileKey: FigmaFileKey, signal: AbortSignal) => Promise<FileProofRead>;
 
 export function documentReaderFor(figma: FigmaService): DocumentReader {
   return async (fileKey, signal) => {
     const { name, sharedPluginData } = await figma
       .withSignal(signal)
-      .getFileRootSharedPluginData(figmaFileKey(fileKey));
+      .getFileRootSharedPluginData(fileKey);
     return { name, proofs: documentProofNonces(sharedPluginData) };
   };
 }
@@ -42,10 +59,10 @@ export interface ProofTiming {
 
 export const DEFAULT_PROOF_TIMING: ProofTiming = { pollMs: 1_000, deadlineMs: 15_000 };
 
-type DocumentRequest =
-  | { type: "INTRODUCE"; project: string; framelinkOrigin: string }
-  | { type: "PROVE_DOCUMENT"; nonce: string }
-  | { type: "PROOF_SETTLED"; nonce: string; outcome: ProofOutcome };
+type DocumentRequest = Extract<
+  ServerRequest,
+  { type: "INTRODUCE" | "PROVE_DOCUMENT" | "PROOF_SETTLED" }
+>;
 
 export interface LinkDocumentsOptions {
   send: <T extends DocumentRequest>(
@@ -64,11 +81,26 @@ export interface ProofReport {
   problem: string | null;
 }
 
+interface ProofRead {
+  name: string | null;
+  found: Set<string>;
+  problem: string | null;
+}
+
+const UNKNOWN_DOCUMENT: LinkDocument = { kind: "unknown" };
+
 export class LinkDocuments {
+  // The only record of which file each link is in. Weak: a dropped link takes its entry with it.
+  private readonly documents = new WeakMap<RelayConnection, LinkDocument>();
   // Each link's introduction or proof still in flight. A call waits these out rather than guess.
   private readonly busy = new Map<RelayConnection, Promise<unknown>>();
 
   constructor(private readonly options: LinkDocumentsOptions) {}
+
+  /** Which file `link` is in, as far as this server knows. */
+  documentOf(link: RelayConnection): LinkDocument {
+    return this.documents.get(link) ?? UNKNOWN_DOCUMENT;
+  }
 
   /**
    * Tell a just-authenticated link who this server is, and learn which file it claims to be in. A
@@ -82,13 +114,13 @@ export class LinkDocuments {
    * The plugin claims a file: a link the human pasted, or the file another server just proved it
    * in. A claim, proven when a reader allows.
    */
-  claimed(link: RelayConnection, fileKey: string, reader = this.options.reader): void {
-    if (link.document.kind === "proven") return;
-    link.document = { kind: "claimed", fileKey, problem: null };
+  claimed(link: RelayConnection, fileKey: FigmaFileKey, reader = this.options.reader): void {
+    if (this.documentOf(link).kind === "proven") return;
+    this.documents.set(link, { kind: "claimed", fileKey, problem: null });
     // After whatever is in flight on it, which would otherwise swallow this proof.
     if (reader)
       void this.settled([link]).then(() => {
-        if (claims(link, fileKey)) return this.prove([link], fileKey, reader);
+        if (this.claims(link, fileKey)) return this.prove([link], fileKey, reader);
       });
   }
 
@@ -108,22 +140,43 @@ export class LinkDocuments {
 
   /**
    * Prove which of `links` are in `fileKey`. A link already being proven is waited out, never
-   * challenged twice. Never rejects; each link's `document` says where it landed.
+   * challenged twice. Never rejects; `documentOf` says where each link landed.
    */
   async prove(
     links: readonly RelayConnection[],
-    fileKey: string,
+    fileKey: FigmaFileKey,
     reader: DocumentReader,
   ): Promise<ProofReport> {
     const waiting = links.flatMap((link) => this.busy.get(link) ?? []);
     const fresh = links.filter(
-      (link) => link.isOpen && link.document.kind !== "proven" && !this.busy.has(link),
+      (link) => link.isOpen && this.documentOf(link).kind !== "proven" && !this.busy.has(link),
     );
     const proof = fresh.length
       ? this.track(fresh, this.runProof(fresh, fileKey, reader))
       : Promise.resolve({ problem: null });
     await Promise.allSettled(waiting);
     return proof;
+  }
+
+  /**
+   * Prove every link that claims a file and isn't being proven already, each against its own claim.
+   * Resolves once every such proof has settled.
+   */
+  async proveClaims(links: readonly RelayConnection[], reader: DocumentReader): Promise<void> {
+    const byClaim = new Map<FigmaFileKey, RelayConnection[]>();
+    for (const link of links) {
+      const document = this.documentOf(link);
+      if (document.kind !== "claimed" || this.busy.has(link)) continue;
+      byClaim.set(document.fileKey, [...(byClaim.get(document.fileKey) ?? []), link]);
+    }
+    await Promise.all(
+      [...byClaim].map(([fileKey, claiming]) => this.prove(claiming, fileKey, reader)),
+    );
+  }
+
+  private claims(link: RelayConnection, fileKey: FigmaFileKey): boolean {
+    const document = this.documentOf(link);
+    return document.kind === "claimed" && document.fileKey === fileKey;
   }
 
   private track<T>(links: readonly RelayConnection[], work: Promise<T>): Promise<T> {
@@ -141,16 +194,19 @@ export class LinkDocuments {
       .send(link, { type: "INTRODUCE", project, framelinkOrigin })
       .catch(() => null);
     if (!reply || !link.isOpen) return;
-    link.document = reply.claim
-      ? { kind: "claimed", fileKey: reply.claim, problem: null }
-      : { kind: "unclaimed" };
+    // The plugin's word, already admitted as a wire file key by the protocol's parser.
+    const claim = reply.claim === null ? null : figmaFileKey(reply.claim);
+    this.documents.set(
+      link,
+      claim ? { kind: "claimed", fileKey: claim, problem: null } : { kind: "unclaimed" },
+    );
     // Proven here, not tracked again: this introduction is still the link's busy entry.
-    if (reply.claim && reader) await this.runProof([link], reply.claim, reader);
+    if (claim && reader) await this.runProof([link], claim, reader);
   }
 
   private async runProof(
     links: readonly RelayConnection[],
-    fileKey: string,
+    fileKey: FigmaFileKey,
     reader: DocumentReader,
   ): Promise<ProofReport> {
     const nonces = new Map<RelayConnection, string>();
@@ -162,8 +218,12 @@ export class LinkDocuments {
           nonces.set(link, nonce);
         } catch (error) {
           // A view-only file can't be marked, so it can't be proven — and couldn't be edited anyway.
-          if (claims(link, fileKey))
-            link.document = { kind: "claimed", fileKey, problem: (error as Error).message };
+          if (this.claims(link, fileKey))
+            this.documents.set(link, {
+              kind: "claimed",
+              fileKey,
+              problem: (error as Error).message,
+            });
         }
       }),
     );
@@ -175,10 +235,10 @@ export class LinkDocuments {
 
   /** Read the file until every nonce shows, the deadline passes, or the read fails. */
   private async readUntilFound(
-    fileKey: string,
+    fileKey: FigmaFileKey,
     nonces: ReadonlySet<string>,
     reader: DocumentReader,
-  ): Promise<{ name: string | null; found: Set<string>; problem: string | null }> {
+  ): Promise<ProofRead> {
     const { pollMs, deadlineMs } = this.options.timing;
     const deadline = Date.now() + deadlineMs;
     const found = new Set<string>();
@@ -191,9 +251,15 @@ export class LinkDocuments {
         name = read.name;
         for (const nonce of read.proofs) if (nonces.has(nonce)) found.add(nonce);
       } catch (error) {
-        // A deadline cut short a slow read: what was found stands. Any other failure (no access,
-        // no such file) won't mend by asking again.
-        if (controller.signal.aborted) return { name, found, problem: null };
+        // A deadline cut short a slow read: what an earlier read found stands. With no read ever
+        // finished, nothing was looked at, so nothing is refuted. Any other failure (no access, no
+        // such file) won't mend by asking again.
+        if (controller.signal.aborted)
+          return {
+            name,
+            found,
+            problem: name === null ? `timed out reading Figma file ${fileKey}` : null,
+          };
         Logger.log(
           `Couldn't read Figma file ${fileKey} to prove a plugin link: ${(error as Error).message}`,
         );
@@ -210,28 +276,25 @@ export class LinkDocuments {
   private async settle(
     link: RelayConnection,
     nonce: string,
-    fileKey: string,
-    { name, found, problem }: { name: string | null; found: Set<string>; problem: string | null },
+    fileKey: FigmaFileKey,
+    { name, found, problem }: ProofRead,
   ): Promise<void> {
     let outcome: ProofOutcome;
     if (found.has(nonce) && name !== null) {
       outcome = { kind: "proven", fileKey, fileName: name };
-      link.document = { kind: "proven", fileKey, fileName: name };
+      this.documents.set(link, { kind: "proven", fileKey, fileName: name });
     } else if (problem !== null) {
       outcome = { kind: "abandoned" };
-      if (claims(link, fileKey)) link.document = { kind: "claimed", fileKey, problem };
-    } else if (claims(link, fileKey)) {
+      if (this.claims(link, fileKey))
+        this.documents.set(link, { kind: "claimed", fileKey, problem });
+    } else if (this.claims(link, fileKey)) {
       // The file was read and the nonce isn't in it: the claim was wrong — a duplicate, most often.
       outcome = { kind: "refuted", fileKey };
-      link.document = { kind: "unclaimed" };
+      this.documents.set(link, { kind: "unclaimed" });
     } else {
       outcome = { kind: "abandoned" };
     }
     if (!link.isOpen) return;
     await this.options.send(link, { type: "PROOF_SETTLED", nonce, outcome }).catch(() => {});
   }
-}
-
-function claims(link: RelayConnection, fileKey: string): boolean {
-  return link.document.kind === "claimed" && link.document.fileKey === fileKey;
 }

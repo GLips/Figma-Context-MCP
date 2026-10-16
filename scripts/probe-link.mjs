@@ -11,6 +11,7 @@ import { targetForPluginCall } from "../src/commercial/plugin-bridge/plugin-call
 import { documentReaderFor } from "../src/commercial/plugin-bridge/link-documents.ts";
 import { terminalPairingCodeAsker } from "../src/commercial/commands/terminal-pairing.ts";
 import { FigmaService, staticCredentialSource } from "../src/services/figma.ts";
+import { figmaFileKey } from "../src/utils/figma-url.ts";
 
 // A person may be finding the plugin window: long enough not to rush them.
 const PROBE_GRANT_WAIT_MS = 10 * 60_000;
@@ -27,8 +28,8 @@ export async function targetForProbe(bridge, log) {
   let targeted;
   try {
     targeted = await targetForPluginCall(bridge, {
-      fileKey: process.env.FIGMA_FILE_KEY ?? null,
-      askPairingCode: terminalPairingCodeAsker(lines),
+      fileKey: process.env.FIGMA_FILE_KEY ? figmaFileKey(process.env.FIGMA_FILE_KEY) : null,
+      pairing: { kind: "offer", ask: terminalPairingCodeAsker(lines) },
       signal: new AbortController().signal,
       surface: "cli",
       reader,

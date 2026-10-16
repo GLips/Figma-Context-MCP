@@ -25,12 +25,11 @@ import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
   GRANT_WAITING_TEXT,
-  callTargetGuidance,
-  linkGuidance,
   notGrantedText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
-import { FIGMA_FILE_KEY_PATTERN } from "~/utils/figma-url.js";
+import { targetForPluginCall } from "~/commercial/plugin-bridge/plugin-call-link.js";
+import { parseFigmaFileKey } from "~/utils/figma-url.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
 import { withoutTokenMarks } from "~/commercial/tools/token-tree.js";
 import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
@@ -176,7 +175,8 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   };
   const inputError = screenshotInputError(target);
   if (inputError) throw new UsageError(inputError);
-  if (flags.fileKey !== undefined && !FIGMA_FILE_KEY_PATTERN.test(flags.fileKey))
+  const fileKey = flags.fileKey === undefined ? null : parseFigmaFileKey(flags.fileKey);
+  if (flags.fileKey !== undefined && fileKey === null)
     throw new UsageError("--file-key must be the alphanumeric key from a Figma file URL.");
   if (!flags.screenshot && Object.values(target).some((value) => value !== undefined)) {
     throw new UsageError(
@@ -228,21 +228,21 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       controller.signal,
       "the script was not submitted",
     );
-    const resolution = await runtime.bridge.resolveLink(controller.signal);
-    // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
-    // may be a pipe or an agent's shell can't count on.
-    if (resolution.kind !== "linked") throw new Error(linkGuidance(resolution, "cli"));
-    console.error("Figma connected.");
-    const bound = await runtime.bridge.targetCall(flags.fileKey ?? null, {
+    const bound = await targetForPluginCall(runtime.bridge, {
+      fileKey,
+      // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
+      // may be a pipe or an agent's shell can't count on.
+      pairing: { kind: "refuse" },
+      signal: controller.signal,
+      surface: "cli",
       reader: figma && documentReaderFor(figma),
       waitMs,
-      signal: controller.signal,
       onWaiting: () => {
         console.error(GRANT_WAITING_TEXT);
         return async () => {};
       },
     });
-    if (bound.kind === "blocked") throw new Error(callTargetGuidance(bound.block, "cli", waitMs));
+    if (bound.kind === "blocked") throw new Error(bound.text);
     const { document } = bound;
     console.error(`Running in "${document.fileName}" (${document.fileKey}).`);
     const outcome = await executePluginCode(runtime, bound, code, {
@@ -254,7 +254,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       throw new Error(notGrantedText(outcome.reason, document.fileName));
     try {
       const reply = {
-        file: { fileKey: document.fileKey, name: document.fileName },
+        file: document,
         ...withoutTokenMarks(outcome.reply),
       };
       const json = JSON.stringify(reply, null, 2) + "\n";

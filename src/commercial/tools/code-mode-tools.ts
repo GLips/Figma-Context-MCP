@@ -35,13 +35,13 @@ import {
   type PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
 import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
-import { FIGMA_FILE_KEY_PATTERN } from "~/utils/figma-url.js";
+import { parseFigmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
 import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
 import { retryableToolReply } from "~/mcp/fail-loud-params.js";
 import type { ToolEventProperties } from "~/telemetry/index.js";
-import { referenceSessionGuidance } from "~/commercial/plugin-bridge/session-guidance.js";
+import { referenceGrantNote } from "~/commercial/plugin-bridge/reference-grant-guidance.js";
 import { advertisePluginReadRoute, describePluginReadRecovery } from "./plugin-read-route.js";
 import {
   buildQuickStart,
@@ -231,11 +231,11 @@ function registerCodeModeTools(
     call: FramelinkToolCall<CodeModeFacts>,
     facts: CodeModeFacts,
     extra: ToolExtra,
-    fileKey: string | null,
+    fileKey: FigmaFileKey | null,
   ): Promise<PluginCallTarget | { reply: CallToolResult }> {
     const targeted = await targetForPluginCall(bridge, {
       fileKey,
-      askPairingCode: pairingCodeAsker(extra),
+      pairing: { kind: "offer", ask: pairingCodeAsker(extra) },
       signal: extra.signal,
       surface: "mcp",
       reader: documentReaderFor(figmaService),
@@ -312,7 +312,8 @@ function registerCodeModeTools(
           }
           call.record({ ...source, outcome: "not_run" });
           if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
-          if (fileKey !== undefined && !FIGMA_FILE_KEY_PATTERN.test(fileKey)) return fileKeyReply();
+          const targetFileKey = fileKeyParam(fileKey);
+          if (targetFileKey === "invalid") return fileKeyReply();
           let script: string;
           if (code !== undefined) script = code;
           else if (scriptPath !== undefined) {
@@ -337,7 +338,7 @@ function registerCodeModeTools(
             }
           } else return scriptSourceReply("neither");
           return answeringExpectedFailures(call, extra, source, async () => {
-            const target = await pluginCallTarget(runtime, call, source, extra, fileKey ?? null);
+            const target = await pluginCallTarget(runtime, call, source, extra, targetFileKey);
             if ("reply" in target) return target.reply;
             const { link } = target;
             const outcome = await executePluginCode(runtime, target, script, {
@@ -410,7 +411,7 @@ function registerCodeModeTools(
           // Docs still serve on a stale or unpaired plugin — but lead with what blocks a write, so the
           // agent learns the fix here, before its first refused write. The link is the operator's: a
           // caller without the plugin grant learns nothing of it.
-          const note = runtime && (await referenceSessionGuidance(runtime.bridge));
+          const note = runtime && (await referenceGrantNote(runtime.bridge));
           return {
             content: [
               ...(note ? [{ type: "text" as const, text: note }] : []),
@@ -481,7 +482,8 @@ Returns a PNG image.`,
           call.record({ outcome: "not_run" });
           // Known params are type-checked by the SDK; their value-level misuse is checked here, in
           // the same retryable shape as an unknown param, so the agent fixes the call and retries.
-          if (fileKey !== undefined && !FIGMA_FILE_KEY_PATTERN.test(fileKey)) return fileKeyReply();
+          const targetFileKey = fileKeyParam(fileKey);
+          if (targetFileKey === "invalid") return fileKeyReply();
           const inputError = screenshotInputError(target);
           if (inputError) {
             call.reject({ field: "(root)", rule: "screenshot_target" });
@@ -490,7 +492,7 @@ Returns a PNG image.`,
             );
           }
           return answeringExpectedFailures(call, extra, {}, async () => {
-            const located = await pluginCallTarget(runtime, call, {}, extra, fileKey ?? null);
+            const located = await pluginCallTarget(runtime, call, {}, extra, targetFileKey);
             if ("reply" in located) return located.reply;
             const { link } = located;
             const outcome = await capturePluginScreenshot(
@@ -622,6 +624,12 @@ const FILE_KEY_PARAM = z
   .describe(
     "The Figma file to work in: the key from its URL (figma.com/design/<fileKey>/…). Runs there only, and the user is asked in that file to allow this project if they haven't. Omit to use the one open file this project may edit; with several, or none yet, the user picks one in Figma.",
   );
+
+/** The fileKey param, branded once here at the edge: null when omitted. */
+function fileKeyParam(fileKey: string | undefined): FigmaFileKey | null | "invalid" {
+  if (fileKey === undefined) return null;
+  return parseFigmaFileKey(fileKey) ?? "invalid";
+}
 
 function fileKeyReply(): CallToolResult {
   return retryableToolReply(

@@ -15,6 +15,7 @@ import { startPluginBridge, type PluginBridgeRuntime } from "~/commercial/plugin
 import {
   PluginBridge,
   type CallTarget,
+  type DocumentReader,
   type PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
 import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
@@ -28,6 +29,7 @@ import {
   type LoopbackPlugin,
 } from "./fixtures/loopback-plugin.js";
 import { createTestWriteAccess } from "./fixtures/write-access.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 
 const ports = vi.hoisted(() => [] as number[]);
 vi.mock("@framelink/plugin/protocol", async (actual) => ({
@@ -82,11 +84,16 @@ function startPlugin(...args: Parameters<typeof startLoopbackPlugin>): LoopbackP
  * A bare relay for a project, reading the loopback files to prove links, with proofs quick enough
  * that a refuted one doesn't hold a test for the production deadline.
  */
-function startBridge(stateDir: string, port: number, project = "/loopback/project"): PluginBridge {
+function startBridge(
+  stateDir: string,
+  port: number,
+  project = "/loopback/project",
+  documentReader: DocumentReader | null = figma.reader,
+): PluginBridge {
   const bridge = new PluginBridge({
     linkCredentials: new LinkCredentialStore(stateDir),
     project,
-    documentReader: figma.reader,
+    documentReader,
     proofTiming: { pollMs: 20, deadlineMs: 400 },
   });
   bridge.start([port]);
@@ -105,7 +112,7 @@ async function target(
   waitMs = 5_000,
 ): Promise<{ target: CallTarget; prompted: boolean }> {
   let prompted = false;
-  const target = await bridge.targetCall(fileKey, {
+  const target = await bridge.targetCall(fileKey === null ? null : figmaFileKey(fileKey), {
     reader: figma.reader,
     signal: new AbortController().signal,
     waitMs,
@@ -247,7 +254,9 @@ it("servers in one project share one grant from one click; a server in another p
   expect(await run(first, granted.target, "return 'first';")).toMatchObject({ kind: "executed" });
 
   // The plugin offers the file it was just proven in to the other servers, which prove it too.
-  await expect.poll(() => sibling.authenticatedLinks()[0]?.document.kind).toBe("proven");
+  await expect
+    .poll(() => sibling.authenticatedLinks().map((link) => sibling.documentOf(link).kind))
+    .toEqual(["proven"]);
   const shared = await target(sibling, null);
   expect(shared.prompted).toBe(false);
   expect(await run(sibling, shared.target, "return 'sibling';")).toMatchObject({
@@ -257,7 +266,7 @@ it("servers in one project share one grant from one click; a server in another p
 
   const other = await target(elsewhere, null, undefined, 300);
   expect(other.prompted).toBe(true);
-  expect(other.target).toMatchObject({ kind: "blocked", block: { kind: "grant-expired" } });
+  expect(other.target).toMatchObject({ kind: "blocked", block: { kind: "grant-pending" } });
 });
 
 it("a call without a file runs in the one granted file, and asks once two granted files are open", async () => {
@@ -315,7 +324,7 @@ it("one file in two plugin instances is one document, and a revoke in either sto
   expect(unnamed.target.kind).toBe("targeted");
 
   one.revoke();
-  const document = { fileKey: "FILEkeyA", fileName: "Checkout" };
+  const document = { fileKey: figmaFileKey("FILEkeyA"), fileName: "Checkout" };
   for (const link of bridge.authenticatedLinks())
     await expect
       .poll(() => run(bridge, { kind: "targeted", link, document }, "return 1;"), {
@@ -349,4 +358,37 @@ it("a granted file is recognized after the plugin restarts, and a duplicate of i
   const own = await target(bridge, "FILEkeyCopy", () => duplicate.allow());
   expect(own.prompted).toBe(true);
   expect(own.target).toMatchObject({ kind: "targeted", document: { fileKey: "FILEkeyCopy" } });
+});
+
+it("a server with no reader of its own proves a reopened file's claim with the call's, and runs there without a prompt", async () => {
+  const bridge = startBridge(dir, ports[0], undefined, null);
+  const storage = new Map<string, unknown>();
+  const file = figma.file("FILEkeyA", "Checkout");
+  const first = startPlugin(ports[0], { storage, file });
+  await pairByPanel(bridge, first);
+  await target(bridge, "FILEkeyA", () => first.allow());
+  first.close();
+  await expect.poll(() => bridge.authenticatedLinks().length).toBe(0);
+
+  startPlugin(ports[0], { storage, file });
+  await settlesTo(bridge, "linked");
+  const recognized = await target(bridge, null);
+  expect(recognized.prompted).toBe(false);
+  expect(recognized.target).toMatchObject({ kind: "targeted", document: { fileKey: "FILEkeyA" } });
+});
+
+it("a proof that never finishes reading the file keeps the file's claim", async () => {
+  const file = figma.file("FILEkeyA", "Checkout");
+  file.shared.set("framelink/fileKey", "FILEkeyA");
+  const neverAnswers: DocumentReader = (_fileKey, signal) =>
+    new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+  const bridge = startBridge(dir, ports[0], undefined, neverAnswers);
+  await pairByPanel(bridge, startPlugin(ports[0], { file }));
+
+  await expect
+    .poll(() => bridge.authenticatedLinks().map((link) => bridge.documentOf(link)))
+    .toEqual([
+      { kind: "claimed", fileKey: "FILEkeyA", problem: expect.stringContaining("timed out") },
+    ]);
+  expect(file.shared.get("framelink/fileKey")).toBe("FILEkeyA");
 });

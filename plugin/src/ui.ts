@@ -4,7 +4,7 @@
  */
 // The plugin's ONLY network context (the host, code.ts, has no WS access), so this iframe relays
 // server↔host traffic without reading it. It is ALSO the plugin's only human surface: an always-
-// visible status strip that expands into the session list. The host drives it with one render
+// visible status strip that expands into the grant list. The host drives it with one render
 // envelope and owns every decision; this file only reports clicks and its own measured height.
 // Messages both ways are typed in panel.ts. build.mjs inlines the bundle into dist/ui.html.
 import { WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
@@ -15,7 +15,7 @@ import type {
   PanelControl,
   PanelPairing,
   PanelRender,
-  PanelSession,
+  PanelGrantRow,
 } from "./panel.js";
 
 // Discovery is keyed by port; host traffic by socket generation, which never reuses a port's number.
@@ -25,8 +25,7 @@ let nextConnectionKey = 0;
 
 // Reconnect cadence, per port. A port that has NEVER opened is almost certainly empty, so its retries
 // back off 1s → 15s. This is purely to tame console noise: every doomed connect emits a browser-level
-// "WebSocket connection to … failed" line that JS cannot catch or mute. A port that has opened (a
-// real session) stays on the fast cadence so a dropped/restarted server reappears promptly.
+// "WebSocket connection to … failed" line that JS cannot catch or mute. A port that has opened (a// real server) stays on the fast cadence so a dropped/restarted server reappears promptly.
 const BASE_RECONNECT_MS = 1000;
 const MAX_RECONNECT_MS = 15000;
 const reconnectDelays = new Map<number, number>();
@@ -50,7 +49,7 @@ function toSandbox(control: PanelControl): void {
 }
 
 // ONE persistent connection per block port: each server binds one, so the scan discovers every live
-// session, and onclose is the disconnect signal. `localhost`, never 127.0.0.1: Figma's manifest
+// server, and onclose is the disconnect signal. `localhost`, never 127.0.0.1: Figma's manifest
 // validator rejects IP literals, and the allowlist host must match the host dialed. A refused `::1`
 // connect returns instantly, so Chromium falls back to the server's IPv4 loopback unnoticed.
 //
@@ -113,7 +112,7 @@ function decide(approve: boolean, connKey: ConnKey): void {
 
 byId("strip").onclick = () => toSandbox({ type: "UI_TOGGLE" });
 
-// The whole surface from one render: the always-on strip, plus — when expanded — the session list.
+// The whole surface from one render: the always-on strip, plus — when expanded — the grant list.
 // Built with textContent, never innerHTML, so a project path can't inject markup.
 function render(state: PanelRender): void {
   renderStrip(state);
@@ -124,21 +123,21 @@ function render(state: PanelRender): void {
     if (state.showOrientation) detail.appendChild(orientationBanner());
     if (state.grantStorageError) detail.appendChild(el("div", "orientation", state.grantStorageError));
     if (state.document) detail.appendChild(documentCard(state.document));
-    if (!state.sessions.length && !state.pairings.length) detail.appendChild(emptyState());
+    if (!state.grantRows.length && !state.pairings.length) detail.appendChild(emptyState());
     for (const pairing of state.pairings) detail.appendChild(pairingCard(pairing));
-    for (const session of state.sessions) detail.appendChild(sessionCard(session));
+    for (const row of state.grantRows) detail.appendChild(grantRowCard(row));
   }
   reportHeight();
 }
 
 // One glanceable line, in priority order: a code to confirm > a decision you owe > a file to
 // identify > spent writes > who is driving > who is ready.
-function renderStrip({ pairings, sessions, document: doc, expanded }: PanelRender): void {
+function renderStrip({ pairings, grantRows, document: doc, expanded }: PanelRender): void {
   let wants = 0;
   let granted = 0;
-  let active: PanelSession | null = null;
+  let active: PanelGrantRow | null = null;
   let writesSpent = false;
-  for (const s of sessions) {
+  for (const s of grantRows) {
     if (s.granted) granted++;
     if (s.prompt !== null && !s.denied) wants++;
     if (s.active) active = s;
@@ -165,13 +164,13 @@ function renderStrip({ pairings, sessions, document: doc, expanded }: PanelRende
     text = active.label + " — driving";
     tone = "live";
   } else if (granted === 1) {
-    text = (sessions.find((s) => s.granted)?.label ?? "A project") + " — ready";
+    text = (grantRows.find((s) => s.granted)?.label ?? "A project") + " — ready";
     tone = "ready";
   } else if (granted) {
     text = granted + " projects ready";
     tone = "ready";
   } else {
-    text = "Waiting for a session…";
+    text = "Waiting for a Framelink server…";
     tone = "";
   }
 
@@ -200,15 +199,15 @@ function orientationBanner(): HTMLElement {
 // Which file this is, as a server proved it. Until one has, a server asking for a file can't pick
 // this one, so the human may paste its link: a claim the servers then prove, never an identity.
 function documentCard(doc: NonNullable<PanelRender["document"]>): HTMLElement {
-  const card = el("div", doc.kind === "unproven" && doc.asking ? "session waiting" : "session");
-  const lines = el("div", "session-lines");
+  const card = el("div", doc.kind === "unproven" && doc.asking ? "card waiting" : "card");
+  const lines = el("div", "card-lines");
   card.appendChild(lines);
   if (doc.kind === "proven") {
-    lines.appendChild(el("div", "session-id", doc.fileName));
+    lines.appendChild(el("div", "card-title", doc.fileName));
     lines.appendChild(el("div", "status-line", "This file is identified to your Framelink servers."));
     return card;
   }
-  lines.appendChild(el("div", "session-id", "This file isn't identified yet"));
+  lines.appendChild(el("div", "card-title", "This file isn't identified yet"));
   lines.appendChild(
     el(
       "div",
@@ -246,7 +245,7 @@ function documentCard(doc: NonNullable<PanelRender["document"]>): HTMLElement {
 function emptyState(): HTMLElement {
   const wrap = el("div", "empty");
   wrap.appendChild(
-    el("div", null, "No sessions yet. Start the Framelink MCP server in your project and it'll appear here."),
+    el("div", null, "No servers yet. Start the Framelink MCP server in your project and it'll appear here."),
   );
   const link = el("a", "empty-link", "What is Framelink?") as HTMLAnchorElement;
   link.href = "https://framelink.ai";
@@ -259,10 +258,10 @@ function emptyState(): HTMLElement {
 // A server this installation isn't paired with. Confirmation happens with the agent, never here: a
 // button would let anything that can open a socket ask the human to click it.
 function pairingCard(p: PanelPairing): HTMLElement {
-  const card = el("div", p.code ? "session waiting" : "session");
-  const lines = el("div", "session-lines");
+  const card = el("div", p.code ? "card waiting" : "card");
+  const lines = el("div", "card-lines");
   if (p.code) {
-    lines.appendChild(el("div", "session-id", "Pairing code"));
+    lines.appendChild(el("div", "card-title", "Pairing code"));
     lines.appendChild(el("div", "pairing-code", p.code));
     lines.appendChild(
       el(
@@ -272,7 +271,7 @@ function pairingCard(p: PanelPairing): HTMLElement {
       ),
     );
   } else {
-    lines.appendChild(el("div", "session-id", "A Framelink server isn't paired with this plugin yet"));
+    lines.appendChild(el("div", "card-title", "A Framelink server isn't paired with this plugin yet"));
     lines.appendChild(el("div", "status-line", "It will show a pairing code here when your agent first needs Figma."));
   }
   card.appendChild(lines);
@@ -280,10 +279,10 @@ function pairingCard(p: PanelPairing): HTMLElement {
 }
 
 // A row per connected server, and per project granted this file whose servers are all gone.
-function sessionCard(s: PanelSession): HTMLElement {
-  const card = el("div", s.prompt && !s.denied ? "session waiting" : "session");
-  const lines = el("div", "session-lines");
-  lines.appendChild(el("div", "session-id", s.project || "(unknown project)"));
+function grantRowCard(s: PanelGrantRow): HTMLElement {
+  const card = el("div", s.prompt && !s.denied ? "card waiting" : "card");
+  const lines = el("div", "card-lines");
+  lines.appendChild(el("div", "card-title", s.project || "(unknown project)"));
   card.appendChild(lines);
 
   const actions = el("div", "actions");
@@ -342,7 +341,7 @@ function sessionCard(s: PanelSession): HTMLElement {
   return card;
 }
 
-// The server's latest word on this session's write access. Every action is a message to the host,
+// The server's latest word on this row's write access. Every action is a message to the host,
 // which owns both the sign-in request and opening the browser.
 function writeAccessCard(connKey: ConnKey, notice: WriteAccessNotice): HTMLElement {
   const box = el("div", "write-access");
@@ -404,7 +403,7 @@ function byId(id: string): HTMLElement {
 
 // The window is sized from what this document measures, reported on EVERY render, never deduped:
 // this document can't observe whether a resize was honored (Figma drops some — see resize in
-// session-panel.ts), and a "we already asked for 220" cache strands the window at whatever size it really has.
+// grant-panel.ts), and a "we already asked for 220" cache strands the window at whatever size it really has.
 // Measured inside rAF, after layout, and on #root: the body is stretched to the window by Figma's
 // injected styles, so it can never report a height smaller than the window.
 function reportHeight(): void {

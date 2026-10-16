@@ -12,10 +12,11 @@ import {
   createImagesRequestHandler,
   MAX_IMAGES_PER_REQUEST,
 } from "~/commercial/plugin-bridge/image-requests.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 
 const RUN = {
   figma: null,
-  fileKey: "FAKEfile1",
+  fileKey: figmaFileKey("FAKEfile1"),
   uploadHandles: new Set<string>(),
   readLocalImage: null,
 };

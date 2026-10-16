@@ -120,7 +120,7 @@
       }
       /* Two gaps, not one: the text lines are a group (4px) and the actions row is separate (8px).
          A single uniform gap makes the row read as four unrelated lines. */
-      .session {
+      .card {
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -129,15 +129,15 @@
         padding: 12px;
       }
       /* A call waiting on the human reads as live. */
-      .session.waiting {
+      .card.waiting {
         border-color: var(--figma-color-border-brand, #0d99ff);
       }
-      .session-lines {
+      .card-lines {
         display: flex;
         flex-direction: column;
         gap: 4px;
       }
-      .session-id {
+      .card-title {
         font-weight: 500;
         word-break: break-all;
       }
@@ -183,7 +183,7 @@
         background: var(--figma-color-bg-secondary, #f0f0f0);
         color: var(--figma-color-text, #333);
       }
-      /* Write access (free allowance, Framelink sign-in) — inside the session card it concerns, set
+      /* Write access (free allowance, Framelink sign-in) — inside the grant row it concerns, set
          apart like the orientation block because it is information first and a control second. */
       .write-access {
         display: flex;
@@ -227,7 +227,7 @@
     <div id="root">
       <button id="strip" type="button" aria-expanded="false">
         <span id="dot"></span>
-        <span id="status">Waiting for a session…</span>
+        <span id="status">Waiting for a Framelink server…</span>
         <span id="chevron">▾</span>
       </button>
       <div id="detail" style="display: none"></div>

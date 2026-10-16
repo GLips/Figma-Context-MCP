@@ -97,9 +97,12 @@ export function createDocumentIdentity({
     },
 
     proofSettled(to: ReplyTo, nonce: string, outcome: ProofOutcome): void {
-      if (nonces.delete(nonce)) clearNonce(nonce);
-      settle(outcome);
       reply(to, { type: "PROOF_SETTLED_ACK" });
+      // Only the server this plugin wrote the nonce for may settle it; any other nonce is acked and ignored.
+      if (nonces.get(nonce) !== to.connKey) return;
+      nonces.delete(nonce);
+      clearNonce(nonce);
+      settle(outcome);
       show();
     },
 

@@ -13,7 +13,7 @@ import type { DocumentIdentity, ProvenDocument } from "./document-identity.js";
 import type { DocumentGrant, GrantScope, GrantStore } from "./grant-store.js";
 import { currentPluginOwner } from "./link-auth.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
-import type { ConnKey, PanelSession } from "./panel.js";
+import type { ConnKey } from "./panel.js";
 import {
   GRANT_PROMPT_GRACE_MS,
   type GrantPrompt,
@@ -32,7 +32,20 @@ interface GrantConnection {
   allowing: boolean;
 }
 
-export type GrantRow = Omit<PanelSession, "label" | "active" | "writeAccess">;
+/**
+ * What the gate knows about one project on this file: a connected server, or a project granted this
+ * file whose server isn't connected (`key` null). The panel adds its own presentation to it.
+ */
+export interface GrantRow {
+  key: ConnKey | null;
+  project: string;
+  grant: DocumentGrant | null;
+  granted: boolean;
+  connected: boolean;
+  prompt: Exclude<GrantPrompt, "none"> | null;
+  denied: boolean;
+  allowing: boolean;
+}
 
 export function createGrantGate({
   store,
@@ -95,11 +108,15 @@ export function createGrantGate({
     show();
   }
 
-  /** Paint each connection's grant once storage has answered for it. */
-  function primeGrants(): void {
-    for (const key of connections.keys()) {
+  /**
+   * Re-read each connection's grant from storage, then repaint. A revoke made in another instance
+   * while no server was connected reached nobody, so a cached answer may be stale; while the read
+   * is in flight the store answers "unknown" and the gate stays shut.
+   */
+  function refreshConnectionGrants(keys: Iterable<ConnKey>): void {
+    for (const key of keys) {
       const scope = provenScopeOf(key);
-      if (scope) void store.settledAnswer(scope).then(() => show());
+      if (scope) void store.refresh(scope).then(() => show());
     }
   }
 
@@ -178,14 +195,15 @@ export function createGrantGate({
         conn.project = msg.project;
         conn.framelinkOrigin = msg.framelinkOrigin;
       }
+      // Before the reply: the server's first question must find the fresh read already in flight.
+      refreshConnectionGrants([to.connKey]);
       reply(to, { type: "INTRODUCED", claim: identity.claim() });
-      primeGrants();
       show();
     },
 
     /** This run's document was proven: what's granted on it can be shown. */
     documentProven(_document: ProvenDocument): void {
-      primeGrants();
+      refreshConnectionGrants(connections.keys());
       void refreshDocumentGrants();
     },
 

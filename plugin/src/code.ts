@@ -5,15 +5,20 @@
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never touches the network —
 // it talks to the relay iframe (ui.ts) via postMessage — and it only routes: link authentication
 // (link-auth.ts), document identity (document-identity.ts), the grant gate (grant-gate.ts), the
-// runner (run-executor.ts) and the panel (session-panel.ts) do the work.
+// runner (run-executor.ts) and the panel (grant-panel.ts) do the work.
 import { createDocumentIdentity } from "./document-identity.js";
 import { createGrantGate } from "./grant-gate.js";
 import { createGrantStore } from "./grant-store.js";
 import { createLinkAuth } from "./link-auth.js";
 import { createRunExecutor } from "./run-executor.js";
-import { createSessionPanel } from "./session-panel.js";
+import { createGrantPanel } from "./grant-panel.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
-import { PROTOCOL_VERSION, parseServerFrame } from "./protocol.js";
+import {
+  LINK_SETUP_REQUEST_TYPES,
+  PROTOCOL_VERSION,
+  parseServerFrame,
+  type ServerRequestType,
+} from "./protocol.js";
 import type { ConnKey, HostInbound, PanelControl } from "./panel.js";
 
 // The plugin release, answered beside PROTOCOL_VERSION to the server's HELLO and shown to the human
@@ -72,7 +77,7 @@ const gate = createGrantGate({
   },
   takeBaton: (key) => panel.takeBaton(key),
 });
-const panel = createSessionPanel({
+const panel = createGrantPanel({
   rows: gate.rows,
   nextPromptLapse: gate.nextPromptLapse,
   document: (now) => {
@@ -154,6 +159,10 @@ function handlePanelControl(msg: PanelControl): void {
   }
 }
 
+function isLinkSetupRequest(type: ServerRequestType): boolean {
+  return (LINK_SETUP_REQUEST_TYPES as readonly ServerRequestType[]).includes(type);
+}
+
 /**
  * A frame one server sent over its socket (`key` names the socket generation). Server REQUESTS all
  * carry ids and each gets exactly one reply — including one this plugin can't admit, which is
@@ -185,6 +194,12 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     return;
   }
   const to: ReplyTo = { id: msg.id, connKey: key };
+  if (!isLinkSetupRequest(msg.type) && linkAuth.credentialOf(key) === null) {
+    // An unauthenticated socket may be anything on a port in the block: it learns no claim, marks
+    // no file, settles no proof and sees no grant.
+    reply(to, { type: "ERROR", error: "This plugin link hasn't authenticated, so the plugin refused that request." });
+    return;
+  }
   switch (msg.type) {
     case "HELLO":
       // Human channel of a version mismatch: the plugin words the toast from the number, so a peer

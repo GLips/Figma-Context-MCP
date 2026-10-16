@@ -385,6 +385,40 @@ test("an unidentified file asks for its link when a server wants a file picked, 
   assert.equal((await h.ask(1, { type: "GRANT_STATUS", fileKey: "PASTEDkey1", prompt: "none" })).state, "unproven");
 });
 
+test("an unauthenticated socket learns no claim and marks nothing, and only the socket a nonce was written for settles it", async () => {
+  const shared = new Map<string, string>([["framelink/fileKey", FILE_KEY]]);
+  const h = host({}, pairedStorage(), shared);
+  h.sendControl({ type: "WS_CONNECTED", connKey: 9 });
+  for (const request of [
+    { type: "INTRODUCE", project: "/proj", framelinkOrigin: "https://app.framelink.ai" },
+    { type: "PROVE_DOCUMENT", nonce: "forged-proof-0000" },
+    { type: "PROOF_SETTLED", nonce: "forged-proof-0000", outcome: { kind: "proven", fileKey: "FORGEDkey1", fileName: "Forged" } },
+  ])
+    assert.equal((await h.ask(9, request)).type, "ERROR");
+  assert.equal(shared.has("framelink/proof:forged-proof-0000"), false);
+
+  // An authenticated server can't settle a nonce this plugin never wrote for it.
+  await h.introduce(1);
+  await h.introduce(2);
+  assert.equal((await h.ask(1, { type: "PROVE_DOCUMENT", nonce: "real-proof-0000" })).type, "PROOF_WRITTEN");
+  await h.ask(2, { type: "PROOF_SETTLED", nonce: "real-proof-0000", outcome: { kind: "proven", fileKey: "FORGEDkey1", fileName: "Forged" } });
+  assert.equal(shared.get("framelink/fileKey"), FILE_KEY);
+  await h.ask(1, { type: "PROOF_SETTLED", nonce: "real-proof-0000", outcome: { kind: "proven", fileKey: FILE_KEY, fileName: "Test file" } });
+  await h.render((r) => r.document?.kind === "proven" && r.document.fileName === "Test file", "the proven file");
+});
+
+test("a grant revoked in another instance while no server was connected is read afresh when a server returns", async () => {
+  const h = host();
+  await h.connect(1);
+  h.sendControl({ type: "WS_CLOSED", connKey: 1 });
+  // Another instance of the plugin revoked it, and no connected server relayed the change.
+  for (const key of [...h.storage.keys()]) if (key.startsWith("code-mode:grant:")) h.storage.delete(key);
+  await h.introduce(2);
+  assert.equal((await h.ask(2, { type: "GRANT_STATUS", fileKey: FILE_KEY, prompt: "none" })).state, "absent");
+  h.sendFrame(2, { type: "EXECUTE_CODE", id: "stale", preamble: echoPreamble, code: "return 'ran';" });
+  assert.equal((await h.frame((f) => f.id === "stale", "the refusal")).type, "NOT_GRANTED");
+});
+
 /**
  * The real relay (ui.ts) in a vm, dialing fake sockets. `opened(port)` is the socket the relay last
  * dialed on that port; `reconnect` runs the relay's pending redials, which a real timer would.
@@ -457,6 +491,7 @@ test("a server frame can never act as the human's panel input", async () => {
   socket.onopen();
   const fromServer = (frame: Record<string, unknown>) => socket.onmessage({ data: JSON.stringify(frame) });
   fromServer({ type: "AUTHENTICATE", id: "auth", credentialId: CREDENTIAL.id, nonce: "nonce-rogue-000" });
+  await h.frame((f) => f.id === "auth", "the link proof");
   fromServer({ type: "INTRODUCE", id: "intro", project: "/rogue", framelinkOrigin: "https://evil.example" });
   fromServer({ type: "PROVE_DOCUMENT", id: "prove", nonce: "proof-rogue-000" });
   fromServer({ type: "PROOF_SETTLED", id: "settle", nonce: "proof-rogue-000", outcome: { kind: "proven", fileKey: FILE_KEY, fileName: "x" } });
@@ -475,7 +510,11 @@ test("a server frame can never act as the human's panel input", async () => {
   await h.allow(2);
   fromServer({ type: "GRANT_STATUS", id: "status", fileKey: FILE_KEY, prompt: "none" });
   assert.equal((await h.frame((f) => f.id === "status", "the status")).state, "absent");
-  assert(!h.sent.some(({ frame: f }) => f.type === "WRITE_ACCESS_SIGN_IN" || f.type === "DOCUMENT_CLAIMED"));
+  assert(
+    !h.sent.some(
+      ({ frame: f }) => f.type === "WRITE_ACCESS_SIGN_IN" || (f.type === "DOCUMENT_CLAIMED" && f.fileKey === "ROGUEkey1"),
+    ),
+  );
 });
 
 test("the browser opens a sign-in page only on the Framelink origin the server announced", async () => {

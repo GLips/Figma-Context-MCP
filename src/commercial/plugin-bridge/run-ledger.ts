@@ -19,6 +19,7 @@ import {
   type ServerRequestType,
 } from "@framelink/plugin/protocol";
 import type { FigmaService } from "~/services/figma.js";
+import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { LocalImageReader } from "./images.js";
 
 /**
@@ -30,7 +31,7 @@ import type { LocalImageReader } from "./images.js";
 export interface ChannelRunContext {
   figma: FigmaService | null;
   /** The document the run was admitted for. Null for a request that is no run. */
-  fileKey: string | null;
+  fileKey: FigmaFileKey | null;
   /** Upload handles the submitted code names literally — the only ones this run may redeem. */
   uploadHandles: ReadonlySet<string>;
   /** flcm.image's read of the operator's asset root. Null: this run may read no local file. */

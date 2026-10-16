@@ -5,7 +5,7 @@
 // The one driver for how a call that needs the plugin gets where it runs: its links, pairing first
 // when the plugin isn't paired yet, then its one document and a grant on it. The MCP tools, the CLI
 // commands and the live probes all go through here, each with its own way of asking the person
-// whether the panel shows a code.
+// whether the panel shows a code, or none at all.
 import type {
   CallTargetBlock,
   DocumentReader,
@@ -14,6 +14,7 @@ import type {
   PluginLink,
   UnlinkedResolution,
 } from "./bridge.js";
+import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { CallTargetOptions } from "./call-target.js";
 import type { PluginCallTarget } from "./execution.js";
 import {
@@ -75,10 +76,18 @@ export type PluginPairing =
   | { kind: "already-paired" }
   | PluginCallBlocked;
 
+/**
+ * What an unpaired plugin gets: a pairing attempt confirmed through `ask` (agent guidance when it is
+ * null), or a refusal pointing at the `pair` command, for a caller that can't count on a person.
+ */
+export type PluginCallPairing =
+  | { kind: "offer"; ask: PairingCodeAsker | null }
+  | { kind: "refuse" };
+
 export interface PluginCallTargetOptions {
   /** The file the call names, or null to run in the one granted file or let the human pick. */
-  fileKey: string | null;
-  askPairingCode: PairingCodeAsker | null;
+  fileKey: FigmaFileKey | null;
+  pairing: PluginCallPairing;
   signal: AbortSignal;
   surface: PairingSurface;
   /** The call's own file reader, for proofs; the bridge's process-wide one when absent. */
@@ -94,20 +103,11 @@ export interface PluginCallTargetOptions {
  */
 export async function targetForPluginCall(
   bridge: PluginBridge,
-  {
-    fileKey,
-    askPairingCode,
-    signal,
-    surface,
-    reader,
-    waitMs,
-    pollMs,
-    onWaiting,
-  }: PluginCallTargetOptions,
+  { fileKey, pairing, signal, surface, reader, waitMs, pollMs, onWaiting }: PluginCallTargetOptions,
 ): Promise<PluginCallTargeting> {
   let resolution = await bridge.resolveLink(signal);
-  if (resolution.kind === "unpaired") {
-    const paired = await confirmShownCode(bridge, askPairingCode, signal, surface);
+  if (resolution.kind === "unpaired" && pairing.kind === "offer") {
+    const paired = await confirmShownCode(bridge, pairing.ask, signal, surface);
     if (paired.kind === "blocked") return paired;
     resolution = await bridge.resolveLink(signal);
   }
@@ -118,7 +118,7 @@ export async function targetForPluginCall(
     BLOCK_FOR_TARGET[target.block.kind],
     callTargetGuidance(target.block, surface, waitMs),
     // Waiting on a person is not a failure; everything else is.
-    target.block.kind !== "grant-expired",
+    target.block.kind !== "grant-pending",
   );
 }
 
@@ -127,7 +127,7 @@ const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
   "document-unprovable": "document_unprovable",
   "grant-denied": "grant_denied",
   "grant-unavailable": "grant_unavailable",
-  "grant-expired": "grant_pending",
+  "grant-pending": "grant_pending",
 };
 
 /** Pair this server with the plugin unless it already is. Nothing is submitted here. */
