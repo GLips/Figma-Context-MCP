@@ -18,6 +18,7 @@ import { WebSocket } from "ws";
 import type {
   HostInbound,
   HostOutbound,
+  PanelActivity,
   PanelControl,
   PanelPrompt,
   PanelRender,
@@ -96,6 +97,8 @@ export interface LoopbackPlugin {
   prompts(): PanelPrompt[];
   /** Whether any call is asking the human now. */
   isPrompting(): boolean;
+  /** The panel's activity feed now, newest first. */
+  activity(): PanelActivity[];
   /**
    * Click Allow on the first Allow prompt (for `executionId`, when given), waiting for one; resolves
    * once the grant is saved and announced.
@@ -292,6 +295,7 @@ export function startLoopbackPlugin(
     grantRows,
     prompts,
     isPrompting: () => prompts().some((prompt) => !prompt.allowing),
+    activity: () => lastRender?.activity ?? [],
     async allow(executionId) {
       while (!asking("allow", executionId)) await tick();
       const { key, documentId: shown, executionId: call } = asking("allow", executionId)!;

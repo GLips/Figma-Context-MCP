@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 // Every call names the plugin's document, so it binds there rather than asking the agent to choose.
-const execute = { code: "return 1", document: TEST_DOCUMENT.documentId };
+const execute = { intent: "Test run", code: "return 1", document: TEST_DOCUMENT.documentId };
 
 /** An unpaired plugin open in TEST_DOCUMENT that, once paired, holds a grant there and runs whatever it is sent. */
 async function setup(answerPrompt?: (message: string) => ElicitResult | Promise<ElicitResult>) {

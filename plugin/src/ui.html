@@ -199,6 +199,27 @@
         font-weight: 600;
         color: var(--figma-color-text, #1e1e1e);
       }
+      /* What a call says it is for: the agent's words, so set apart from the panel's own. */
+      .intent {
+        font-style: italic;
+        word-break: break-word;
+      }
+      .activity {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .activity-title {
+        font-weight: 600;
+      }
+      .activity-entry {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .activity-entry .intent {
+        font-style: normal;
+      }
       .write-access-code,
       .pairing-code {
         font-size: 16px;

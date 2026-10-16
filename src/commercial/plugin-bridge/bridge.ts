@@ -12,10 +12,10 @@ import {
   type CallTarget,
   type CallTargetOptions,
   type CallTargetRequest,
+  type GrantStatusRequest,
   type OpenDocumentLookup,
   type OpenDocumentSnapshot,
 } from "./call-target.js";
-import type { DocumentId } from "./document-id.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
 import { LinkCredentialStore } from "./link-credential.js";
 import {
@@ -44,7 +44,6 @@ import {
   PLUGIN_REDIAL_MAX_MS,
   parseExecuteCodeResult,
   parsePluginEvent,
-  type GrantPrompt,
   type GrantState,
   type LINK_SETUP_REQUEST_TYPES,
   type PluginEvent,
@@ -416,7 +415,7 @@ export class PluginBridge {
    */
   async grantStatus(
     link: PluginLink,
-    ask: { executionId: ExecutionId; documentId: DocumentId; prompt: GrantPrompt },
+    ask: GrantStatusRequest,
     signal?: AbortSignal,
   ): Promise<GrantState> {
     const reply = await this.request(link, { type: "GRANT_STATUS", ...ask }, { signal });

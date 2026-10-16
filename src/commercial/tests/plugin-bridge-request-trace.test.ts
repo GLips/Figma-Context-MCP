@@ -38,6 +38,7 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
       link,
       {
         type: "EXECUTE_CODE",
+        intent: "Test run",
         session: TEST_SESSION_REQUEST,
         documentId: TEST_DOCUMENT.documentId,
         code: "private code",
@@ -82,6 +83,7 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
       link,
       {
         type: "EXECUTE_CODE",
+        intent: "Test run",
         session: TEST_SESSION_REQUEST,
         documentId: TEST_DOCUMENT.documentId,
         code: "",
@@ -141,6 +143,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
         link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "",
@@ -194,6 +197,7 @@ test("execution error result is traced as error without changing successful enve
     link,
     {
       type: "EXECUTE_CODE",
+      intent: "Test run",
       session: TEST_SESSION_REQUEST,
       documentId: TEST_DOCUMENT.documentId,
       code: "",

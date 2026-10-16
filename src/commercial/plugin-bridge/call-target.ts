@@ -19,6 +19,7 @@
 // same file key) or a copy; when nothing tells them apart, the human picks in those panels.
 import { GRANT_POLL_MS, type GrantPrompt, type GrantState } from "@framelink/plugin/protocol";
 import type { ExecutionId } from "~/commercial/execution-id.js";
+import type { CallIntent } from "./call-intent.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentId } from "./document-id.js";
 import type { LinkDocument, OpenFile } from "./link-documents.js";
@@ -36,6 +37,8 @@ export interface CallDocument {
 export interface CallTargetRequest {
   /** Minted before targeting: the call's prompts are keyed by it. */
   executionId: ExecutionId;
+  /** Shown in any prompt the call raises. It never decides where the call runs. */
+  intent: CallIntent;
   session: SessionHandle | null;
   document: DocumentId | null;
   fileKey: FigmaFileKey | null;
@@ -108,13 +111,19 @@ export interface CallTargetOptions {
   onWaiting?: () => () => Promise<void>;
 }
 
+/** One GRANT_STATUS question: a prompting one shows the intent of the call it asks for. */
+export type GrantStatusRequest = { executionId: ExecutionId; documentId: DocumentId } & (
+  | { prompt: "none" }
+  | { prompt: Exclude<GrantPrompt, "none">; intent: CallIntent }
+);
+
 /** What a snapshot reads: each link's document, and its plugin's grant on it. */
 export interface OpenDocumentLookup {
   documentOf(link: RelayConnection): LinkDocument;
   /** Rejects when the plugin couldn't be asked. */
   grantStatus(
     link: RelayConnection,
-    request: { executionId: ExecutionId; documentId: DocumentId; prompt: GrantPrompt },
+    request: GrantStatusRequest,
     signal: AbortSignal,
   ): Promise<GrantState>;
 }
@@ -483,6 +492,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
                 executionId: request.executionId,
                 documentId: file.documentId,
                 prompt: round.prompt,
+                intent: request.intent,
               },
               signal,
             )

@@ -6,6 +6,7 @@
 // it talks to the relay iframe (ui.ts) via postMessage — and it only routes: link authentication
 // (link-auth.ts), the file's stamp (document-identity.ts), the grant gate (grant-gate.ts), the
 // runner (run-executor.ts) and the panel (grant-panel.ts) do the work.
+import { createActivityFeed } from "./activity-feed.js";
 import { createDocumentIdentity } from "./document-identity.js";
 import { createGrantGate } from "./grant-gate.js";
 import { createGrantStore } from "./grant-store.js";
@@ -54,6 +55,7 @@ const grants = createGrantStore(
     figma.notify(grantStorageError, { error: true, timeout: 15000 });
   },
 );
+const activity = createActivityFeed(() => panel.show());
 const linkAuth = createLinkAuth({ show: (expandTo) => panel.show(expandTo) });
 const identity = createDocumentIdentity({
   // Queued runs need nothing here: each re-reads the stamp at dequeue and is refused under the old one.
@@ -69,6 +71,7 @@ const identity = createDocumentIdentity({
 const gate = createGrantGate({
   store: grants,
   identity,
+  activity,
   credentialOf: linkAuth.credentialOf,
   authenticatedConnections: linkAuth.authenticatedConnections,
   show: (expandTo) => panel.show(expandTo),
@@ -81,6 +84,7 @@ const gate = createGrantGate({
 const panel = createGrantPanel({
   rows: gate.rows,
   prompts: gate.prompts,
+  activity: (now) => activity.entries((executionId) => gate.promptLive(executionId, now)),
   nextPromptLapse: gate.nextPromptLapse,
   document: () => {
     if (!linkAuth.authenticatedConnections().length) return null;
@@ -104,6 +108,7 @@ const executor = createRunExecutor({
   isConnected: gate.isConnected,
   refusalAtDequeue: gate.refusalAtDequeue,
   sessions,
+  activity,
 });
 identity.start();
 panel.render();
@@ -241,12 +246,14 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     }
     case "EXECUTE_CODE": {
       // The grant gate refuses here and again at dequeue; the session is checked here only, and
-      // pinned until the run settles. A request missing its std-lib, document or session never got
-      // this far: the parser refused it.
+      // pinned until the run settles. A request missing its std-lib, document, session or intent
+      // never got this far: the parser refused it.
+      activity.arrived(msg.id, msg.intent, gate.projectOf(key));
       const scope = gate.admit(to, msg.documentId);
       if (!scope) return;
       const admission = sessions.admit(scope, msg.session);
       if (admission.kind !== "admitted") {
+        activity.update(msg.id, "refused");
         reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
         return;
       }
@@ -254,6 +261,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       return;
     }
     case "SCREENSHOT":
+      activity.arrived(msg.id, msg.intent, gate.projectOf(key));
       if (gate.admit(to, msg.documentId)) {
         const { nodeId, key: nodeKey, scale, context, margin } = msg;
         executor.runScreenshot(to, msg.documentId, { nodeId, key: nodeKey }, { scale, context, margin });

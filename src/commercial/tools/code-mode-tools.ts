@@ -2,7 +2,11 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
+import {
+  MAX_INTENT_LENGTH,
+  MAX_SCREENSHOT_SCALE,
+  type IntentProblem,
+} from "@framelink/plugin/protocol";
 import {
   screenshotInputError,
   type ScreenshotOptions,
@@ -37,6 +41,11 @@ import {
   type PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
 import { parseDocumentId, type DocumentId } from "~/commercial/plugin-bridge/document-id.js";
+import {
+  intentProblemText,
+  parseCallIntent,
+  type CallIntent,
+} from "~/commercial/plugin-bridge/call-intent.js";
 import { parseFigmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import {
   parseSessionHandle,
@@ -238,12 +247,19 @@ function registerCodeModeTools(
     facts: CodeModeFacts,
     extra: ToolExtra,
     {
+      intent,
       document,
       fileKey,
       session,
-    }: { document: DocumentId | null; fileKey: FigmaFileKey | null; session: SessionHandle | null },
+    }: {
+      intent: CallIntent;
+      document: DocumentId | null;
+      fileKey: FigmaFileKey | null;
+      session: SessionHandle | null;
+    },
   ): Promise<PluginCallTarget | { reply: CallToolResult }> {
     const targeted = await targetForPluginCall(bridge, {
+      intent,
       document,
       fileKey,
       session,
@@ -301,6 +317,7 @@ function registerCodeModeTools(
             .describe(
               "JavaScript to run in the Figma sandbox. Runs in an async body; use await freely; return a value. Pass code or scriptPath, not both.",
             ),
+          intent: INTENT_PARAM,
           document: DOCUMENT_PARAM,
           fileKey: FILE_KEY_PARAM,
           session: z
@@ -314,19 +331,21 @@ function registerCodeModeTools(
             .optional()
             .describe(
               "Path to a .js file holding the same kind of script, read when the call arrives. Must be inside the server's asset root (the --asset-root directory, default the server's working directory); a relative path resolves against that root, so prefer an absolute path. Use it for long scripts: after an error, edit the file and resend only the path. " +
-                `For a file outside the root, send it as code, or from a shell run \`npx ${CLI_NAME} execute <file>\`.`,
+                `For a file outside the root, send it as code, or from a shell run \`npx ${CLI_NAME} execute <file> --intent <why>\`.`,
             ),
         },
         handler: async (
           {
             code,
             scriptPath,
+            intent,
             document,
             fileKey,
             session,
           }: {
             code?: string;
             scriptPath?: string;
+            intent?: string;
             document?: string;
             fileKey?: string;
             session?: string;
@@ -342,6 +361,9 @@ function registerCodeModeTools(
           }
           call.record({ ...source, outcome: "not_run" });
           if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
+          const callIntent = parseCallIntent(intent);
+          if (callIntent.kind === "invalid")
+            return intentReply(call, "figma_execute_code", callIntent);
           const targetDocument = documentParam(document);
           if (targetDocument === "invalid") return documentReply();
           const targetFileKey = fileKeyParam(fileKey);
@@ -361,7 +383,7 @@ function registerCodeModeTools(
               const remedy =
                 cause instanceof OutsideAssetRootError
                   ? `send the script inline as code, or, with shell access, run ` +
-                    `\`npx ${CLI_NAME} execute ${shellQuotedPath(resolvePath(cause.assetRoot, scriptPath))}\`, ` +
+                    `\`npx ${CLI_NAME} execute ${shellQuoted(resolvePath(cause.assetRoot, scriptPath))} --intent ${shellQuoted(callIntent.intent)}\`, ` +
                     `which reads the file on your side with your own permissions (a human allows ` +
                     `this project in the Figma plugin)`
                   : "correct scriptPath, or send the script inline as code";
@@ -373,6 +395,7 @@ function registerCodeModeTools(
           } else return scriptSourceReply("neither");
           return answeringExpectedFailures(call, extra, source, async () => {
             const target = await pluginCallTarget(runtime, call, source, extra, {
+              intent: callIntent.intent,
               document: targetDocument,
               fileKey: targetFileKey,
               session: targetSession,
@@ -517,15 +540,17 @@ Returns a PNG image.`,
             .describe(
               `Export resolution multiplier, greater than 0 and at most ${MAX_SCREENSHOT_SCALE} (default 1). Raise it to inspect fine detail.`,
             ),
+          intent: INTENT_PARAM,
           document: DOCUMENT_PARAM,
           fileKey: FILE_KEY_PARAM,
         },
         handler: async (
           {
+            intent,
             document,
             fileKey,
             ...target
-          }: ScreenshotOptions & { document?: string; fileKey?: string },
+          }: ScreenshotOptions & { intent?: string; document?: string; fileKey?: string },
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
@@ -536,6 +561,8 @@ Returns a PNG image.`,
           call.record({ outcome: "not_run" });
           // Known params are type-checked by the SDK; their value-level misuse is checked here, in
           // the same retryable shape as an unknown param, so the agent fixes the call and retries.
+          const callIntent = parseCallIntent(intent);
+          if (callIntent.kind === "invalid") return intentReply(call, "get_screenshot", callIntent);
           const targetDocument = documentParam(document);
           if (targetDocument === "invalid") return documentReply();
           const targetFileKey = fileKeyParam(fileKey);
@@ -549,6 +576,7 @@ Returns a PNG image.`,
           }
           return answeringExpectedFailures(call, extra, {}, async () => {
             const located = await pluginCallTarget(runtime, call, {}, extra, {
+              intent: callIntent.intent,
               document: targetDocument,
               fileKey: targetFileKey,
               session: null,
@@ -678,6 +706,27 @@ function blockedCallReply(
   return blocked.isError ? { isError: true, content } : { content };
 }
 
+// Optional at the wire, like code, so a missing one reaches intentReply's guidance rather than the
+// SDK's fixed validation error.
+const INTENT_PARAM = z
+  .string()
+  .optional()
+  .describe(
+    `Required. One line of plain text, at most ${MAX_INTENT_LENGTH} characters, saying what this call is for, e.g. "Rebuild the pricing card with the new tokens". The user sees it in the Framelink plugin panel, in its activity list and on any Allow prompt this call raises. It never chooses the file.`,
+  );
+
+/** A missing or malformed intent: nothing was sent, and the agent adds one and retries. */
+function intentReply(
+  call: FramelinkToolCall<CodeModeFacts>,
+  tool: string,
+  { problem }: { problem: IntentProblem },
+): CallToolResult {
+  call.reject({ field: "intent", rule: `intent_${problem.replace(/-/g, "_")}` });
+  return retryableToolReply(
+    `${tool}: ${intentProblemText(problem, "intent")} This call did not run. This is NOT a failure: fix intent and retry.`,
+  );
+}
+
 const DOCUMENT_PARAM = z
   .string()
   .optional()
@@ -748,7 +797,7 @@ function localWritesRefusal(): CallToolResult {
   return { isError: true, content: [{ type: "text", text: LOCAL_WRITES_NEED_LOOPBACK }] };
 }
 
-/** Leaves an ordinary path bare so the suggested command reads cleanly; quotes anything a shell would split. */
-function shellQuotedPath(path: string): string {
-  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
+/** Leaves an ordinary word bare so the suggested command reads cleanly; quotes anything a shell would split. */
+function shellQuoted(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }

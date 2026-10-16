@@ -114,7 +114,10 @@ describe("a loopback bind", () => {
     const client = await connect("127.0.0.1", {});
 
     const result = await client.request(
-      { method: "tools/call", params: { name: "get_screenshot", arguments: {} } },
+      {
+        method: "tools/call",
+        params: { name: "get_screenshot", arguments: { intent: "Test run" } },
+      },
       CallToolResultSchema,
     );
     expect(result.isError).toBeUndefined();

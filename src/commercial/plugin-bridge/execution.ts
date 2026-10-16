@@ -15,6 +15,7 @@ import {
   type PluginLink,
 } from "./bridge.js";
 import type { ExecutionId } from "~/commercial/execution-id.js";
+import type { CallIntent } from "./call-intent.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { mintSessionHandle, type SessionHandle } from "./session-handle.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
@@ -27,10 +28,12 @@ import { writeRefusalText, type WriteRefusal } from "../entitlement/write-author
 
 /**
  * Where a call runs: the document it was bound to, the link that is in it, the session the call
- * named (null: the run gets a fresh one), and the execution id it was targeted and will run under.
+ * named (null: the run gets a fresh one), the execution id it was targeted and will run under, and
+ * the intent the plugin panel shows for it.
  */
 export interface PluginCallTarget {
   executionId: ExecutionId;
+  intent: CallIntent;
   link: PluginLink;
   document: CallDocument;
   session: SessionHandle | null;
@@ -82,7 +85,7 @@ export async function executePluginCode(
     writeMeter,
     readLocalImage,
   }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
-  { executionId, link, document, session: namedSession }: PluginCallTarget,
+  { executionId, intent, link, document, session: namedSession }: PluginCallTarget,
   code: string,
   { figma, signal }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } = { figma: null },
 ): Promise<ExecutionOutcome> {
@@ -115,6 +118,7 @@ export async function executePluginCode(
         {
           type: "EXECUTE_CODE",
           code,
+          intent,
           documentId: document.documentId,
           session,
           preamble: flcmSandboxPreamble(),
@@ -161,7 +165,7 @@ function mayHaveRun(error: unknown): boolean {
 
 export async function capturePluginScreenshot(
   bridge: PluginBridgeRuntime["bridge"],
-  { executionId, link, document }: PluginCallTarget,
+  { executionId, intent, link, document }: PluginCallTarget,
   target: { nodeId?: string; key?: string; scale?: number; context?: boolean; margin?: number },
   signal?: AbortSignal,
 ): Promise<
@@ -169,7 +173,7 @@ export async function capturePluginScreenshot(
 > {
   const reply = await bridge.submitRun(
     link,
-    { type: "SCREENSHOT", documentId: document.documentId, ...target },
+    { type: "SCREENSHOT", intent, documentId: document.documentId, ...target },
     executionId,
     { signal },
   );

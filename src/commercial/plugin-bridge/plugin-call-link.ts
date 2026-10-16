@@ -16,6 +16,7 @@ import type {
 } from "./bridge.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentId } from "./document-id.js";
+import type { CallIntent } from "./call-intent.js";
 import type { SessionHandle } from "./session-handle.js";
 import type { CallTargetOptions } from "./call-target.js";
 import type { PluginCallTarget } from "./execution.js";
@@ -93,6 +94,8 @@ export type PluginCallPairing =
   | { kind: "refuse" };
 
 export interface PluginCallTargetOptions {
+  /** What the call is for, shown in the plugin panel; it never decides where the call runs. */
+  intent: CallIntent;
   /** The document the call names, or null to run in the one granted open document. */
   document: DocumentId | null;
   /** A file key naming the document, matched exactly against what plugins reported; null: none. */
@@ -114,6 +117,7 @@ export interface PluginCallTargetOptions {
 export async function targetForPluginCall(
   bridge: PluginBridge,
   {
+    intent,
     document,
     fileKey,
     session,
@@ -136,10 +140,10 @@ export async function targetForPluginCall(
   // call then runs under.
   const executionId = mintExecutionId();
   const target = await bridge.targetCall(
-    { executionId, session, document, fileKey },
+    { executionId, intent, session, document, fileKey },
     { signal, waitMs, pollMs, onWaiting },
   );
-  if (target.kind === "targeted") return { ...target, executionId, session };
+  if (target.kind === "targeted") return { ...target, executionId, intent, session };
   return blocked(
     BLOCK_FOR_TARGET[target.block.kind],
     callTargetGuidance(target.block, surface, waitMs),

@@ -9,9 +9,11 @@
 // Messages both ways are typed in panel.ts. build.mjs inlines the bundle into dist/ui.html.
 import { PLUGIN_REDIAL_MAX_MS, WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
 import type {
+  ActivityOutcome,
   ConnKey,
   HostInbound,
   HostOutbound,
+  PanelActivity,
   PanelControl,
   PanelPairing,
   PanelPrompt,
@@ -127,13 +129,14 @@ function render(state: PanelRender): void {
     for (const pairing of state.pairings) detail.appendChild(pairingCard(pairing));
     for (const prompt of state.prompts) detail.appendChild(promptCard(prompt));
     for (const row of state.grantRows) detail.appendChild(grantRowCard(row));
+    if (state.activity.length) detail.appendChild(activityFeed(state.activity));
   }
   reportHeight();
 }
 
 // One glanceable line, in priority order: a code to confirm > a decision you owe > a file agents
-// can't use > spent writes > who is driving > who is ready.
-function renderStrip({ pairings, prompts, grantRows, document: doc, expanded }: PanelRender): void {
+// can't use > spent writes > what is running > who is driving > who is ready.
+function renderStrip({ pairings, prompts, activity, grantRows, document: doc, expanded }: PanelRender): void {
   let granted = 0;
   let active: PanelGrantRow | null = null;
   let writesSpent = false;
@@ -143,6 +146,7 @@ function renderStrip({ pairings, prompts, grantRows, document: doc, expanded }: 
     if (s.writeAccess?.kind === "allowance-exhausted") writesSpent = true;
   }
   const wants = prompts.filter((prompt) => !prompt.allowing).length;
+  const running = activity.find((entry) => entry.outcome === "running");
 
   const offered = pairings.filter((p) => p.code !== null);
   let text: string;
@@ -160,6 +164,9 @@ function renderStrip({ pairings, prompts, grantRows, document: doc, expanded }: 
     // Writes are being refused until the human acts, so it outranks who is driving.
     text = "Free writes used up — sign in to keep writing";
     tone = "wants";
+  } else if (running) {
+    text = running.intent;
+    tone = "live";
   } else if (active) {
     text = active.label + " — driving";
     tone = "live";
@@ -217,6 +224,8 @@ function promptCard(p: PanelPrompt): HTMLElement {
   const card = el("div", "card waiting");
   const lines = el("div", "card-lines");
   lines.appendChild(el("div", "card-title", p.project));
+  // The agent's own words for this call, so the human knows what they are answering.
+  lines.appendChild(el("div", "intent", "“" + p.intent + "”"));
   card.appendChild(lines);
   const actions = el("div", "actions");
   const button = (className: string, label: string, onClick: () => void): void => {
@@ -245,6 +254,36 @@ function promptCard(p: PanelPrompt): HTMLElement {
   }
   card.appendChild(actions);
   return card;
+}
+
+const OUTCOME_TEXT: Record<ActivityOutcome, string> = {
+  waiting: "Waiting for you",
+  "not-run": "Didn't run here",
+  allowed: "Allowed — starting",
+  picked: "Picked — starting",
+  denied: "Denied",
+  refused: "Refused — nothing ran",
+  queued: "Queued",
+  running: "Running",
+  done: "Done",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
+// What each agent call did in this file lately, newest first: its intent, its outcome, and the
+// session it ran in, which is how one agent's calls are told from another's.
+function activityFeed(activity: PanelActivity[]): HTMLElement {
+  const feed = el("div", "activity");
+  feed.appendChild(el("div", "activity-title", "Recent activity"));
+  for (const entry of activity) {
+    const row = el("div", "activity-entry");
+    row.appendChild(el("div", "intent", entry.intent));
+    const parts = [OUTCOME_TEXT[entry.outcome], entry.label];
+    if (entry.session) parts.push(entry.session);
+    row.appendChild(el("div", "status-line", parts.join(" · ")));
+    feed.appendChild(row);
+  }
+  return feed;
 }
 
 // Someone can land here having never heard of Framelink, so the empty state carries the one link

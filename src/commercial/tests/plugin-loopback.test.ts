@@ -22,6 +22,7 @@ import {
   type SessionHandle,
 } from "~/commercial/plugin-bridge/session-handle.js";
 import { parseDocumentId } from "~/commercial/plugin-bridge/document-id.js";
+import type { CallIntent } from "~/commercial/plugin-bridge/call-intent.js";
 import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
 import {
   executePluginCode,
@@ -106,13 +107,20 @@ function documentOf(plugin: LoopbackPlugin): string {
   return id;
 }
 
-/** What a call names: a document id, a session (and maybe a document or file key), or nothing. */
-type Named = string | null | { session?: string; document?: string; fileKey?: string };
+/**
+ * What a call names: a document id, a session (and maybe a document or file key), or nothing; and
+ * the intent it states, which the panel shows.
+ */
+type Named =
+  | string
+  | null
+  | { session?: string; document?: string; fileKey?: string; intent?: string };
 
 interface Targeted {
   target: CallTarget;
   prompted: boolean;
   executionId: ExecutionId;
+  intent: CallIntent;
 }
 
 /**
@@ -130,11 +138,14 @@ async function target(
     session = null,
     document = null,
     fileKey = null,
+    intent: stated = "Loopback call",
   } = typeof named === "object" && named !== null ? named : { document: named };
   const executionId = mintExecutionId();
+  const intent = stated as CallIntent;
   const target = await bridge.targetCall(
     {
       executionId,
+      intent,
       session: session === null ? null : parseSessionHandle(session),
       document: document === null ? null : parseDocumentId(document),
       fileKey: fileKey === null ? null : figmaFileKey(fileKey),
@@ -150,13 +161,13 @@ async function target(
       },
     },
   );
-  return { target, prompted, executionId };
+  return { target, prompted, executionId, intent };
 }
 
 /** Run code on a bound call, in the session it named (null: a fresh one), metered offline. */
 function run(
   bridge: PluginBridge,
-  { target: bound, executionId }: Targeted,
+  { target: bound, executionId, intent }: Targeted,
   code: string,
   session: SessionHandle | null = null,
 ): Promise<ExecutionOutcome> {
@@ -164,7 +175,7 @@ function run(
   const { writeMeter } = createTestWriteAccess();
   return executePluginCode(
     { bridge, writeMeter, readLocalImage: () => Promise.reject(new Error("no images")) },
-    { ...bound, executionId, session },
+    { ...bound, executionId, intent, session },
     code,
   );
 }
@@ -243,7 +254,7 @@ it("without a token: pairs, refuses an unnamed call with the open file, asks All
       prompted: bound.prompted,
       outcome: await executePluginCode(
         runtime,
-        { ...bound.target, executionId: bound.executionId, session: null },
+        { ...bound.target, executionId: bound.executionId, intent: bound.intent, session: null },
         code,
       ),
     };
@@ -420,26 +431,48 @@ it("two agents write to two files in parallel", async () => {
   ]);
 });
 
-it("two calls prompting in one panel each keep their own outcome", async () => {
+it("two calls prompting in one panel each show their own intent and keep their own outcome, and the feed records both", async () => {
   const bridge = startBridge(dir, ports[0]);
   const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   await pairByPanel(bridge, plugin);
   await linksReported(bridge, 1);
   const checkout = documentOf(plugin);
 
-  const denied = target(bridge, checkout);
-  const allowed = target(bridge, checkout);
+  const hero = "Delete the old hero";
+  const card = "Rebuild the pricing card";
+  const denied = target(bridge, { document: checkout, intent: hero });
+  const allowed = target(bridge, { document: checkout, intent: card });
   await expect.poll(() => plugin.prompts().length).toBe(2);
-  const [first, second] = plugin.prompts();
-  await plugin.deny(first.executionId);
-  await plugin.allow(second.executionId);
+  const promptFor = (intent: string) => plugin.prompts().find((p) => p.intent === intent)!;
+  const heroCall = promptFor(hero).executionId;
+  const cardCall = promptFor(card).executionId;
+  expect(plugin.activity()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ executionId: heroCall, intent: hero, outcome: "waiting" }),
+      expect.objectContaining({ executionId: cardCall, intent: card, outcome: "waiting" }),
+    ]),
+  );
+  await plugin.deny(heroCall);
+  await plugin.allow(cardCall);
   const outcomes = await Promise.all([denied, allowed]);
-  const byCall = new Map(outcomes.map((outcome) => [outcome.executionId, outcome.target]));
-  expect(byCall.get(first.executionId as ExecutionId)).toMatchObject({
+  const byCall = new Map(outcomes.map((outcome) => [outcome.executionId, outcome]));
+  expect(byCall.get(heroCall as ExecutionId)?.target).toMatchObject({
     kind: "blocked",
     block: { kind: "grant-denied" },
   });
-  expect(byCall.get(second.executionId as ExecutionId)).toMatchObject({ kind: "targeted" });
+  const ran = await run(bridge, byCall.get(cardCall as ExecutionId)!, "return 'card';");
+  if (ran.kind !== "executed") throw new Error(JSON.stringify(ran));
+
+  await expect
+    .poll(() =>
+      plugin.activity().map(({ intent, outcome, session }) => ({ intent, outcome, session })),
+    )
+    .toEqual(
+      expect.arrayContaining([
+        { intent: hero, outcome: "denied", session: null },
+        { intent: card, outcome: "done", session: ran.session },
+      ]),
+    );
 });
 
 it("a viewer's plugin that can't stamp its file is listed as unusable, and the granted file still defaults", async () => {
@@ -526,6 +559,7 @@ it("one file in two plugin instances is one document, and a revoke in either sto
               target: { kind: "targeted", link, document },
               prompted: false,
               executionId: mintExecutionId(),
+              intent: "Run after the revoke" as CallIntent,
             },
             "return 1;",
           ),

@@ -33,9 +33,9 @@ return session.card.id;
 
 \`\`\`
 // get_screenshot
-{ "nodeId": "12:345" }             // the id you just returned
-{ "key": "card" }                  // or a key you authored, resolved on the current page
-{ "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
+{ "intent": "Check the card", "nodeId": "12:345" }             // the id you just returned
+{ "intent": "Check the card", "key": "card" }                  // or a key you authored, resolved on the current page
+{ "intent": "Check the borders", "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 \`\`\``,
   commentsHowTo: "the `get_figma_comments` tool reads them, given the node's id in `scope`",
   sessionHowTo:
@@ -50,13 +50,13 @@ export const CLI_DOCS_CHANNEL: DocsChannel = {
 
 \`\`\`sh
 # build and look in one run
-${CLI_NAME} execute card.js --screenshot out/card.png --key card
+${CLI_NAME} execute card.js --intent "Build the pricing card" --screenshot out/card.png --key card
 
 # look again, closer: every run executes its script, so use one that changes nothing
 echo 'return' > look.js
-${CLI_NAME} execute look.js --screenshot out/card@3x.png --node-id 12:345 --scale 3
+${CLI_NAME} execute look.js --intent "Look at the card's borders" --screenshot out/card@3x.png --node-id 12:345 --scale 3
 \`\`\``,
   commentsHowTo: `\`${CLI_NAME} comments --file-key <fileKey> --node-id <id>\` reads them`,
   savedScriptHowTo: null,
-  sessionHowTo: `passing that handle to the next run as \`${CLI_NAME} execute <file> --session <handle>\` gives it the same \`session\`, with its \`last\`.`,
+  sessionHowTo: `passing that handle to the next run as \`${CLI_NAME} execute <file> --intent <why> --session <handle>\` gives it the same \`session\`, with its \`last\`.`,
 };

@@ -195,7 +195,10 @@ async function connectTools(writeMeter: WriteMeter) {
   const execute = (documentChanged: boolean) => {
     bridge.documentChanged.push(documentChanged);
     return client.request(
-      { method: "tools/call", params: { name: "figma_execute_code", arguments: { code: "x" } } },
+      {
+        method: "tools/call",
+        params: { name: "figma_execute_code", arguments: { code: "x", intent: "Test run" } },
+      },
       CallToolResultSchema,
     );
   };

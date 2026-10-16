@@ -4,12 +4,20 @@
  */
 // The plugin's only human surface: an always-visible status strip that expands into the grant list.
 // It paints what link authentication says about unpaired sockets, what document identity says about
-// this file, and what the grant gate says about each server and each waiting call, plus what is the
-// panel's own to know:
-// whether it is expanded, who holds the driving baton, and each row's write-access card.
+// this file, what the grant gate says about each server and each waiting call, and what the activity
+// feed says each call did, plus what is the panel's own to know: whether it is expanded, who holds
+// the driving baton, and each row's write-access card.
+import type { ActivityEntry } from "./activity-feed.js";
 import type { GrantRow } from "./grant-gate.js";
 import { toServer } from "./outbound.js";
-import type { ConnKey, PanelDocument, PanelPairing, PanelPrompt, PanelRender, PanelGrantRow } from "./panel.js";
+import type {
+  ConnKey,
+  PanelDocument,
+  PanelPairing,
+  PanelPrompt,
+  PanelRender,
+  PanelGrantRow,
+} from "./panel.js";
 import type { WriteAccessNotice } from "./protocol.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
@@ -28,6 +36,7 @@ const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 export interface GrantPanelSource {
   rows(): GrantRow[];
   prompts(now: number): PanelPrompt[];
+  activity(now: number): ActivityEntry[];
   nextPromptLapse(now: number): number | null;
   document(): PanelDocument | null;
   pairings(): PanelPairing[];
@@ -110,6 +119,7 @@ export function createGrantPanel(source: GrantPanelSource) {
       pairings: source.pairings(),
       document: source.document(),
       prompts: source.prompts(now),
+      activity: source.activity(now).map(({ project, ...entry }) => ({ ...entry, label: projectLabel(project) })),
       grantRows: grantRows(),
       expanded,
       showOrientation,

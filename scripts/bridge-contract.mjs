@@ -65,6 +65,7 @@ const execute = (bridge, link, fields = {}) =>
     link,
     {
       type: "EXECUTE_CODE",
+      intent: "Contract run",
       documentId: contractDocument,
       // Fresh each run: a real plugin refuses a created handle it already holds.
       session: { handle: mintSessionHandle(), create: true },
@@ -83,7 +84,7 @@ const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
  */
 const target = (bridge, document, waitMs = 5_000) =>
   bridge.targetCall(
-    { executionId: mintExecutionId(), session: null, document, fileKey: null },
+    { executionId: mintExecutionId(), intent: "Contract call", session: null, document, fileKey: null },
     { signal: new AbortController().signal, waitMs, pollMs: 20 },
   );
 

@@ -115,6 +115,7 @@ try {
         link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "unused",

@@ -13,6 +13,7 @@ import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import {
   createTestWriteAccess,
   TEST_DOCUMENT,
+  TEST_INTENT,
   TEST_PLUGIN_LINK,
   TEST_PLUGIN_OWNER,
 } from "./fixtures/write-access.js";
@@ -121,7 +122,13 @@ it("a late event for a run from another plugin link is ignored and charges nothi
   };
   const outcome = await executePluginCode(
     { bridge, writeMeter, readLocalImage: () => Promise.reject(new Error("no images")) },
-    { executionId: mintExecutionId(), link: ran.link, document: TEST_DOCUMENT, session: null },
+    {
+      executionId: mintExecutionId(),
+      intent: TEST_INTENT,
+      link: ran.link,
+      document: TEST_DOCUMENT,
+      session: null,
+    },
     "return 1;",
   );
   expect(outcome.kind).toBe("executed");

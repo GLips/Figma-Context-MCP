@@ -10,7 +10,9 @@
 // call: keyed by the call's execution id and the socket generation that asked, so two calls waiting
 // in one panel never share a prompt, a click or a dismissal. "allow" asks to grant the project this
 // document; "pick" asks whether this copy is the one the call means, for that call only. Grants are
-// shared by every plugin instance through storage; GRANT_CHANGED tells the others.
+// shared by every plugin instance through storage; GRANT_CHANGED tells the others. Each prompt shows
+// the intent of the call that raised it, and its course goes to the activity feed.
+import type { ActivityFeed } from "./activity-feed.js";
 import type { DocumentIdentity } from "./document-identity.js";
 import type { DocumentGrant, GrantScope, GrantStore } from "./grant-store.js";
 import { currentPluginOwner } from "./link-auth.js";
@@ -19,6 +21,7 @@ import type { ConnKey, PanelPrompt } from "./panel.js";
 import {
   GRANT_PROMPT_GRACE_MS,
   type GrantPrompt,
+  type GrantStatusAsk,
   type GrantState,
   type NotGrantedReason,
   type ServerFrame,
@@ -36,6 +39,7 @@ interface CallPrompt {
   kind: Exclude<GrantPrompt, "none">;
   // The document the prompt was raised for and shows; an Allow grants this one, never a newer stamp.
   documentId: string;
+  intent: string;
   askedAt: number;
   // `allowing`: the grant is being saved. `denied` and `picked` wait for the next poll to carry them.
   state: "open" | "allowing" | "denied" | "picked";
@@ -60,6 +64,7 @@ function promptKey(key: ConnKey, executionId: string): string {
 export function createGrantGate({
   store,
   identity,
+  activity,
   credentialOf,
   authenticatedConnections,
   show,
@@ -68,6 +73,7 @@ export function createGrantGate({
 }: {
   store: GrantStore;
   identity: DocumentIdentity;
+  activity: ActivityFeed;
   credentialOf: (key: ConnKey) => string | null;
   authenticatedConnections: () => ConnKey[];
   /** Repaint the panel, optionally moving the list to `expandTo`. */
@@ -101,7 +107,11 @@ export function createGrantGate({
   }
 
   /** Keep a call's prompt open for another poll; a lapsed one starts over, so no stale click carries. */
-  function ask(key: ConnKey, executionId: string, kind: CallPrompt["kind"], documentId: string): void {
+  function ask(
+    key: ConnKey,
+    project: string,
+    { executionId, prompt: kind, documentId, intent }: Extract<GrantStatusAsk, { intent: string }>,
+  ): void {
     const now = Date.now();
     const id = promptKey(key, executionId);
     const held = prompts.get(id);
@@ -109,12 +119,22 @@ export function createGrantGate({
       held.askedAt = now;
       return;
     }
-    prompts.set(id, { key, executionId, kind, documentId, askedAt: now, state: "open" });
+    prompts.set(id, { key, executionId, kind, documentId, intent, askedAt: now, state: "open" });
+    activity.waiting(executionId, intent, project);
     show(true);
   }
 
+  function dropPrompt(id: string, prompt: CallPrompt): void {
+    prompts.delete(id);
+    activity.promptEnded(prompt.executionId);
+  }
+
   function closePromptOf(key: ConnKey, executionId: string): void {
-    if (prompts.delete(promptKey(key, executionId))) show();
+    const id = promptKey(key, executionId);
+    const prompt = prompts.get(id);
+    if (!prompt) return;
+    dropPrompt(id, prompt);
+    show();
   }
 
   async function refreshDocumentGrants(): Promise<void> {
@@ -192,7 +212,7 @@ export function createGrantGate({
 
     closed(key: ConnKey): void {
       connections.delete(key);
-      for (const [id, prompt] of prompts) if (prompt.key === key) prompts.delete(id);
+      for (const [id, prompt] of prompts) if (prompt.key === key) dropPrompt(id, prompt);
       show();
     },
 
@@ -211,37 +231,39 @@ export function createGrantGate({
 
     /** The file's stamp is new: grants and prompts on the old one no longer apply here. */
     documentChanged(): void {
-      for (const [id, prompt] of prompts) if (prompt.documentId !== identity.documentId) prompts.delete(id);
+      for (const [id, prompt] of prompts) if (prompt.documentId !== identity.documentId) dropPrompt(id, prompt);
       refreshConnectionGrants(connections.keys());
       void refreshDocumentGrants();
     },
 
     /** Answer a GRANT_STATUS poll for one call, opening or keeping the prompt it asks for. */
-    async answerStatus(
-      to: ReplyTo,
-      { executionId, documentId, prompt }: Extract<ServerFrame, { type: "GRANT_STATUS" }>,
-    ): Promise<void> {
+    async answerStatus(to: ReplyTo, request: Extract<ServerFrame, { type: "GRANT_STATUS" }>): Promise<void> {
+      const { executionId, documentId, prompt } = request;
       const answer = (state: GrantState) => reply(to, { type: "GRANT", state });
       const conn = connections.get(to.connKey);
       if (!conn || conn.project === null) return answer("absent");
+      const { project } = conn;
       if (identity.rereadDocumentId() !== documentId) {
         closePromptOf(to.connKey, executionId);
         return answer("other-document");
       }
       const scope = scopeOf(to.connKey, documentId);
       if (!scope) return answer("absent");
-      if (prompt === "none") return answer((await store.settledAnswer(scope)) === "granted" ? "granted" : "absent");
+      if (request.prompt === "none") return answer((await store.settledAnswer(scope)) === "granted" ? "granted" : "absent");
       const held = prompts.get(promptKey(to.connKey, executionId));
       const decided = held?.kind === prompt && held.documentId === documentId ? held.state : "open";
       if (decided === "picked" || decided === "denied") {
+        activity.update(executionId, decided);
         closePromptOf(to.connKey, executionId);
         return answer(decided);
       }
       if (prompt === "allow" && (await store.settledAnswer(scope)) === "granted") {
+        // Only a call that was asked here has a feed entry to move on; one already granted has none yet.
+        if (held) activity.update(executionId, "allowed");
         closePromptOf(to.connKey, executionId);
         return answer("granted");
       }
-      ask(to.connKey, executionId, prompt, documentId);
+      ask(to.connKey, project, request);
       return answer("pending");
     },
 
@@ -332,6 +354,7 @@ export function createGrantGate({
     admit(to: ReplyTo, documentId: string): GrantScope | null {
       const answer = admission(to.connKey, documentId);
       if (answer !== "granted" && answer !== "unknown") {
+        activity.update(to.id, "refused");
         reply(to, { type: "NOT_GRANTED", reason: answer });
         return null;
       }
@@ -363,10 +386,17 @@ export function createGrantGate({
         const project = connections.get(prompt.key)?.project ?? null;
         if (project === null || !isLive(prompt, now) || (prompt.state !== "open" && prompt.state !== "allowing"))
           continue;
-        const { key, executionId, kind, documentId } = prompt;
-        result.push({ key, executionId, kind, project, documentId, allowing: prompt.state === "allowing" });
+        const { key, executionId, kind, documentId, intent } = prompt;
+        result.push({ key, executionId, kind, project, documentId, intent, allowing: prompt.state === "allowing" });
       }
       return result;
+    },
+
+    /** Whether a prompt for the call `executionId` still shows here, in any connection. */
+    promptLive(executionId: string, now: number): boolean {
+      for (const prompt of prompts.values())
+        if (prompt.executionId === executionId && isLive(prompt, now)) return true;
+      return false;
     },
 
     /** When the soonest live prompt lapses, or null when none is live. */

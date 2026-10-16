@@ -63,6 +63,7 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
     inputs: {
       code: "<script>",
       scriptPath: "<script>",
+      intent: "--intent",
       document: "--document",
       fileKey: "--file-key",
       session: "--session",
@@ -72,6 +73,7 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
   get_screenshot: {
     command: "execute",
     inputs: {
+      intent: "--intent",
       document: "--document",
       fileKey: "--file-key",
       nodeId: "--node-id",

@@ -65,7 +65,7 @@ const textOf = (result: { content: unknown[] }) =>
 describe("unknown MCP tool params fail loud", () => {
   it("names the bad key, suggests the real one, and does not run the call", async () => {
     const { call, request, close } = connectedServer();
-    const result = await call("get_screenshot", { node_id: "1:2" });
+    const result = await call("get_screenshot", { intent: "Test run", node_id: "1:2" });
 
     // Retryable, NOT terminal: an isError reply is what made the agent abandon node-targeting.
     expect(result.isError).toBeFalsy();
@@ -77,11 +77,17 @@ describe("unknown MCP tool params fail loud", () => {
 
   it("still runs a call whose params are all known", async () => {
     const { call, request, close } = connectedServer();
-    const result = await call("get_screenshot", { nodeId: "1:2", scale: 2 });
+    const result = await call("get_screenshot", { intent: "  Test run ", nodeId: "1:2", scale: 2 });
 
     expect(request).toHaveBeenCalledWith(
       TEST_PLUGIN_LINK,
-      { type: "SCREENSHOT", documentId: TEST_DOCUMENT.documentId, nodeId: "1:2", scale: 2 },
+      {
+        type: "SCREENSHOT",
+        intent: "Test run",
+        documentId: TEST_DOCUMENT.documentId,
+        nodeId: "1:2",
+        scale: 2,
+      },
       expect.any(String),
       { signal: expect.any(AbortSignal) },
     );
@@ -102,6 +108,24 @@ describe("unknown MCP tool params fail loud", () => {
   });
 });
 
+describe("intent", () => {
+  it.each([
+    ["figma_execute_code", { code: "return 1" }, "intent is required"],
+    ["figma_execute_code", { code: "return 1", intent: "   " }, "intent is blank"],
+    ["get_screenshot", { intent: "Build the card\nthen delete the page" }, "line break"],
+    ["get_screenshot", { intent: "x".repeat(81) }, "longer than 80 characters"],
+  ])("%s refuses %j before sending anything, with how to fix it", async (tool, args, why) => {
+    const { call, request, close } = connectedServer();
+    const result = await call(tool, args);
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain(why);
+    expect(textOf(result)).toContain("This call did not run");
+    expect(request).not.toHaveBeenCalled();
+    await close();
+  });
+});
+
 describe("get_flcm_reference section ids", () => {
   it("answers a wrong section id with the valid list instead of an SDK validation error", async () => {
     const { call, close } = connectedServer();
@@ -117,7 +141,7 @@ describe("get_flcm_reference section ids", () => {
 describe("get_screenshot target and scale checks", () => {
   it("rejects two targets at once rather than picking one", async () => {
     const { call, request, close } = connectedServer();
-    const result = await call("get_screenshot", { nodeId: "1:2", key: "card" });
+    const result = await call("get_screenshot", { intent: "Test run", nodeId: "1:2", key: "card" });
 
     expect(result.isError).toBeFalsy();
     expect(textOf(result)).toMatch(/ambiguous/i);
@@ -127,7 +151,7 @@ describe("get_screenshot target and scale checks", () => {
 
   it("rejects an out-of-range scale", async () => {
     const { call, request, close } = connectedServer();
-    const result = await call("get_screenshot", { scale: 40 });
+    const result = await call("get_screenshot", { intent: "Test run", scale: 40 });
 
     expect(result.isError).toBeFalsy();
     expect(textOf(result)).toContain("40");

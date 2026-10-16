@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -65,6 +65,8 @@ export const PROTOCOL_VERSION = 15;
  *     DOCUMENT_REPORTED. PROVE_DOCUMENT, PROOF_SETTLED and DOCUMENT_CLAIMED are gone. Runs, grants and
  *     grant prompts name the document id; prompts are per call, keyed by execution id, and a "pick"
  *     prompt lets the human choose between two open copies of one document.
+ * v16: intent. EXECUTE_CODE, SCREENSHOT and every prompting GRANT_STATUS carry the call's intent, one
+ *     line the panel shows in the call's prompt and in its activity feed.
  */
 
 // ---- Transport ----
@@ -272,6 +274,47 @@ export type GrantPrompt = (typeof GRANT_PROMPTS)[number];
 export const GRANT_STATES = ["granted", "absent", "pending", "denied", "picked", "other-document"] as const;
 export type GrantState = (typeof GRANT_STATES)[number];
 
+// ---- Intent ----
+
+/** The longest intent, in characters, once trimmed. */
+export const MAX_INTENT_LENGTH = 80;
+
+/** Why an intent was refused. */
+export type IntentProblem = "missing" | "empty" | "not-one-line" | "too-long";
+
+// Line breaks, every other control character, and the Unicode line and paragraph separators: an
+// intent is one line of plain text wherever it is shown.
+const NOT_ONE_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/**
+ * A call's intent: one short line saying what the call is for, shown to the human in the panel.
+ * Display text only — it never selects a target or grants anything. Checked the same way by the
+ * MCP tools, the CLI and both ends of the wire.
+ */
+export function parseIntent(raw: unknown): { kind: "intent"; intent: string } | { kind: "invalid"; problem: IntentProblem } {
+  if (typeof raw !== "string") return { kind: "invalid", problem: "missing" };
+  const intent = raw.trim();
+  if (!intent) return { kind: "invalid", problem: "empty" };
+  if (NOT_ONE_LINE.test(intent)) return { kind: "invalid", problem: "not-one-line" };
+  // Code points, so an emoji counts once.
+  if ([...intent].length > MAX_INTENT_LENGTH) return { kind: "invalid", problem: "too-long" };
+  return { kind: "intent", intent };
+}
+
+function wireIntent(raw: unknown): string | null {
+  const parsed = parseIntent(raw);
+  return parsed.kind === "intent" ? parsed.intent : null;
+}
+
+/**
+ * One GRANT_STATUS question. A prompting one carries the intent of the call it asks for, which the
+ * prompt shows; a prompt-free one (a status read for the open-document list) belongs to no call.
+ */
+export type GrantStatusAsk = { executionId: string; documentId: string } & (
+  | { prompt: "none" }
+  | { prompt: Exclude<GrantPrompt, "none">; intent: string }
+);
+
 /** Why a run was refused before anything executed: no grant, or not the document it names. */
 export const NOT_GRANTED_REASONS = ["no-grant", "other-document"] as const;
 export type NotGrantedReason = (typeof NOT_GRANTED_REASONS)[number];
@@ -343,7 +386,7 @@ export type ServerRequest =
   | { type: "INTRODUCE"; project: string; framelinkOrigin: string }
   // Is this project granted `documentId`, for the call `executionId`, prompting as `prompt` says? A
   // prompt is the call's own: polls keep it open, and GRANT_PROMPT_CLOSED or silence ends it.
-  | { type: "GRANT_STATUS"; executionId: string; documentId: string; prompt: GrantPrompt }
+  | ({ type: "GRANT_STATUS" } & GrantStatusAsk)
   // The call `executionId` is over: stop showing its prompt here.
   | { type: "GRANT_PROMPT_CLOSED"; executionId: string }
   // Another plugin instance changed this grant: re-read it. A hint; storage is the record.
@@ -354,6 +397,8 @@ export type ServerRequest =
       type: "EXECUTE_CODE";
       code: string;
       preamble: string;
+      // What the call is for, as the panel shows it (parseIntent).
+      intent: string;
       // The document this run is for. The plugin runs it only while its file carries this stamp,
       // and only under a grant.
       documentId: string;
@@ -367,6 +412,7 @@ export type ServerRequest =
   | { type: "WRITE_ACCESS"; notice: WriteAccessNotice }
   | {
       type: "SCREENSHOT";
+      intent: string;
       documentId: string;
       nodeId?: string;
       key?: string;
@@ -439,10 +485,13 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       return isProject(f.project) && typeof f.framelinkOrigin === "string"
         ? { type: "INTRODUCE", id, project: f.project, framelinkOrigin: f.framelinkOrigin }
         : null;
-    case "GRANT_STATUS":
-      return isExecutionId(f.executionId) && isDocumentId(f.documentId) && isOneOf(GRANT_PROMPTS, f.prompt)
-        ? { type: "GRANT_STATUS", id, executionId: f.executionId, documentId: f.documentId, prompt: f.prompt }
-        : null;
+    case "GRANT_STATUS": {
+      if (!isExecutionId(f.executionId) || !isDocumentId(f.documentId) || !isOneOf(GRANT_PROMPTS, f.prompt)) return null;
+      const ask = { type: "GRANT_STATUS" as const, id, executionId: f.executionId, documentId: f.documentId };
+      if (f.prompt === "none") return { ...ask, prompt: "none" };
+      const intent = wireIntent(f.intent);
+      return intent === null ? null : { ...ask, prompt: f.prompt, intent };
+    }
     case "GRANT_PROMPT_CLOSED":
       return isExecutionId(f.executionId) ? { type: f.type, id, executionId: f.executionId } : null;
     case "GRANT_CHANGED_ELSEWHERE":
@@ -452,18 +501,20 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
     case "SESSION_LOOKUP":
       return isSessionHandle(f.handle) ? { type: "SESSION_LOOKUP", id, handle: f.handle } : null;
     case "EXECUTE_CODE": {
-      // No std-lib, window, document or session means a server that predates this plugin: refused,
-      // never defaulted.
+      // No std-lib, window, document, session or intent means a server that predates this plugin:
+      // refused, never defaulted.
       if (typeof f.preamble !== "string" || !f.preamble) return null;
       if (typeof f.lateChangeWindowMs !== "number" || !(f.lateChangeWindowMs >= 0)) return null;
       if (!isDocumentId(f.documentId)) return null;
       const session = parseSessionRequest(f.session);
-      if (!session) return null;
+      const intent = wireIntent(f.intent);
+      if (!session || intent === null) return null;
       return {
         type: "EXECUTE_CODE",
         id,
         code: typeof f.code === "string" ? f.code : "",
         preamble: f.preamble,
+        intent,
         documentId: f.documentId,
         session,
         lateChangeWindowMs: f.lateChangeWindowMs,
@@ -473,11 +524,13 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       const notice = parseWriteAccessNotice(f.notice);
       return notice ? { type: "WRITE_ACCESS", id, notice } : null;
     }
-    case "SCREENSHOT":
-      if (!isDocumentId(f.documentId)) return null;
+    case "SCREENSHOT": {
+      const intent = wireIntent(f.intent);
+      if (!isDocumentId(f.documentId) || intent === null) return null;
       return {
         type: "SCREENSHOT",
         id,
+        intent,
         documentId: f.documentId,
         nodeId: typeof f.nodeId === "string" ? f.nodeId : undefined,
         key: typeof f.key === "string" ? f.key : undefined,
@@ -485,6 +538,7 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
         context: f.context === true,
         margin: typeof f.margin === "number" ? f.margin : undefined,
       };
+    }
     default:
       return null;
   }

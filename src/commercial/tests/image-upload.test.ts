@@ -34,6 +34,7 @@ import {
   createTestWriteAccess,
   targetedTestCall,
   TEST_DOCUMENT,
+  TEST_INTENT,
   TEST_PLUGIN_LINK,
 } from "./fixtures/write-access.js";
 
@@ -128,6 +129,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
     },
     {
       executionId: mintExecutionId(),
+      intent: TEST_INTENT,
       link: TEST_PLUGIN_LINK,
       document: TEST_DOCUMENT,
       session: null,

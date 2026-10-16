@@ -24,6 +24,7 @@ import type {
   WriteAccessNotice,
 } from "@framelink/plugin/protocol";
 import type { DocumentId } from "~/commercial/plugin-bridge/document-id.js";
+import type { CallIntent } from "~/commercial/plugin-bridge/call-intent.js";
 
 export const TEST_PLUGIN_OWNER: PluginOwner = {
   figmaUserId: "figma-user-1",
@@ -36,6 +37,9 @@ export const TEST_DOCUMENT: CallDocument = {
   fileKey: figmaFileKey("TESTfile1"),
   fileName: "Test file",
 };
+
+/** The intent every test call states. */
+export const TEST_INTENT = "Test run" as CallIntent;
 
 /** What a fake plugin open in TEST_DOCUMENT reports when introduced. */
 export const TEST_DOCUMENT_REPORT: DocumentReport = {

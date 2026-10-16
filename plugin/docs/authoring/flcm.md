@@ -914,9 +914,9 @@ return session.card.id;
 
 ```
 // get_screenshot
-{ "nodeId": "12:345" }             // the id you just returned
-{ "key": "card" }                  // or a key you authored, resolved on the current page
-{ "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
+{ "intent": "Check the card", "nodeId": "12:345" }             // the id you just returned
+{ "intent": "Check the card", "key": "card" }                  // or a key you authored, resolved on the current page
+{ "intent": "Check the borders", "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 ```
 
 - **A node id** — any handle's `.id`, or an id from a read verb.

@@ -162,12 +162,15 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
           ? {
               lateChangeWindowMs: 60_000,
               documentId: DOCUMENT_ID,
+              intent: `Run ${String(frame.id)}`,
               session: { handle: sharedSessionOf(projectOf.get(connKey) ?? "/proj"), create: false },
               ...frame,
             }
           : frame.type === "SCREENSHOT"
-            ? { documentId: DOCUMENT_ID, ...frame }
-            : frame,
+            ? { documentId: DOCUMENT_ID, intent: `Screenshot ${String(frame.id)}`, ...frame }
+            : frame.type === "GRANT_STATUS" && frame.prompt !== "none"
+              ? { intent: `Call ${String(frame.executionId)}`, ...frame }
+              : frame,
     });
   const sendControl = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   /** A server request, answered: resolves with the reply frame. */
@@ -563,7 +566,7 @@ test("a server frame can never act as the human's panel input", async () => {
   fromServer({ type: "AUTHENTICATE", id: "auth", credentialId: CREDENTIAL.id, nonce: "nonce-rogue-000" });
   await h.frame((f) => f.id === "auth", "the link proof");
   fromServer({ type: "INTRODUCE", id: "intro", project: "/rogue", framelinkOrigin: "https://evil.example" });
-  fromServer({ type: "GRANT_STATUS", id: "ask", executionId: "rogue-call", documentId: DOCUMENT_ID, prompt: "allow" });
+  fromServer({ type: "GRANT_STATUS", id: "ask", executionId: "rogue-call", documentId: DOCUMENT_ID, prompt: "allow", intent: "Rogue call" });
   await h.frame((f) => f.id === "ask", "the rogue call's prompt");
   // Everything a panel click would say, spoken by the server instead — in every envelope spelling.
   const decision = { approve: true, connKey: 1, executionId: "rogue-call", documentId: DOCUMENT_ID };

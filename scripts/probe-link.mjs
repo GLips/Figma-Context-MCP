@@ -18,6 +18,9 @@ import { mintExecutionId } from "../src/commercial/execution-id.ts";
 // A person may be finding the plugin window: long enough not to rush them.
 const PROBE_GRANT_WAIT_MS = 10 * 60_000;
 
+// What every probe run says it is for, in the plugin panel.
+const PROBE_INTENT = "Live probe of the plugin link";
+
 /** Pair if needed and wait for Allow, or throw why there is no target. */
 export async function targetForProbe(bridge, log) {
   const { FIGMA_DOCUMENT, FIGMA_FILE_KEY } = process.env;
@@ -28,6 +31,7 @@ export async function targetForProbe(bridge, log) {
   let targeted;
   try {
     targeted = await targetForPluginCall(bridge, {
+      intent: PROBE_INTENT,
       document,
       fileKey: FIGMA_FILE_KEY ? figmaFileKey(FIGMA_FILE_KEY) : null,
       session: null,
@@ -62,6 +66,7 @@ export async function executeOnProbeTarget(bridge, { link, document }, fields) {
     link,
     {
       type: "EXECUTE_CODE",
+      intent: PROBE_INTENT,
       documentId: document.documentId,
       session: { handle: mintSessionHandle(), create: true },
       ...fields,

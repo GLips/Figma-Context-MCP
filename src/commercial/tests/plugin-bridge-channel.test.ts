@@ -42,6 +42,7 @@ async function running(
       socket.link,
       {
         type: "EXECUTE_CODE",
+        intent: "Test run",
         session: TEST_SESSION_REQUEST,
         documentId: TEST_DOCUMENT.documentId,
         code: "x",
@@ -355,7 +356,14 @@ it.each([false, true])(
     // The plugin stamped its file on start; the call's Allow prompt binds to that stamp.
     const documentId = [...pluginData.values()][0];
     const executionId = mintExecutionId();
-    await ask({ type: "GRANT_STATUS", id: "status", executionId, documentId, prompt: "allow" });
+    await ask({
+      type: "GRANT_STATUS",
+      id: "status",
+      executionId,
+      documentId,
+      prompt: "allow",
+      intent: "Test run",
+    });
     const granted = awaitFrame((frame) => frame.type === "GRANT_CHANGED");
     panel({ type: "UI_DECISION", approve: true, executionId, documentId });
     await granted;
@@ -363,6 +371,7 @@ it.each([false, true])(
       socket.link,
       {
         type: "EXECUTE_CODE",
+        intent: "Test run",
         session: TEST_SESSION_REQUEST,
         documentId,
         lateChangeWindowMs: 60_000,
@@ -525,6 +534,7 @@ it("hands each channel request the credentials of the request that started its r
         socket.link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "x",

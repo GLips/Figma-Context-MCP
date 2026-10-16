@@ -102,6 +102,7 @@ function run(flags: Parameters<typeof runExecute>[0] = {}) {
       env: join(dir, ".env"),
       wait: 2,
       figmaApiKey: "figd_cli_test",
+      intent: "Test run",
       document: FIGMA_FILE.documentId,
       ...flags,
     },
@@ -444,6 +445,12 @@ describe("saved-script CLI using production plugin services", () => {
     expect(figmaCalls).toEqual([]);
   });
 
+  it("rejects a missing or multi-line intent before connecting or running a script", async () => {
+    await expect(run({ intent: undefined })).rejects.toThrow("--intent is required");
+    await expect(run({ intent: "Build\nthe card" })).rejects.toThrow("line break");
+    expect(stdout).toBe("");
+  });
+
   it("rejects invalid screenshot options before connecting or running a script", async () => {
     await expect(
       run({ screenshot: join(dir, "bad.png"), key: "card", nodeId: "1:2" }),
@@ -468,6 +475,7 @@ describe("one-shot bridge lifecycle", () => {
                 resolution.links[0],
                 {
                   type: "EXECUTE_CODE",
+                  intent: "Test run",
                   session: TEST_SESSION_REQUEST,
                   documentId: TEST_DOCUMENT.documentId,
                   code: "return 1",

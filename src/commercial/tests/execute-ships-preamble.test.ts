@@ -71,7 +71,7 @@ describe("figma_execute_code ships the flcm std-lib", () => {
   it("attaches the real preamble to the outgoing EXECUTE_CODE request", async () => {
     const { call, request, close } = connectedServer();
     try {
-      await call("figma_execute_code", { code: "return 1" });
+      await call("figma_execute_code", { intent: "Test run", code: "return 1" });
 
       expect(request.mock.calls.filter(([, p]) => p.type === "EXECUTE_CODE")).toHaveLength(1);
       // Named against the real union member, not a hand-written shape: drop `preamble` from

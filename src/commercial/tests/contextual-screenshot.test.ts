@@ -56,7 +56,12 @@ describe("contextual screenshot boundary", () => {
   it("forwards opt-in context and margin to the plugin", async () => {
     const { call, request, close } = connectedServer();
     try {
-      const result = await call("get_screenshot", { nodeId: "1:2", context: true, margin: 0 });
+      const result = await call("get_screenshot", {
+        intent: "Test run",
+        nodeId: "1:2",
+        context: true,
+        margin: 0,
+      });
       expect(request.mock.calls.find(([, p]) => p.type === "SCREENSHOT")?.[1]).toMatchObject({
         context: true,
         margin: 0,
@@ -69,9 +74,14 @@ describe("contextual screenshot boundary", () => {
   it("rejects invalid context arguments before touching the bridge", async () => {
     const { call, request, close } = connectedServer();
     try {
-      await call("get_screenshot", { context: true });
-      await call("get_screenshot", { nodeId: "1:2", margin: 8 });
-      await call("get_screenshot", { nodeId: "1:2", context: true, margin: -1 });
+      await call("get_screenshot", { intent: "Test run", context: true });
+      await call("get_screenshot", { intent: "Test run", nodeId: "1:2", margin: 8 });
+      await call("get_screenshot", {
+        intent: "Test run",
+        nodeId: "1:2",
+        context: true,
+        margin: -1,
+      });
       expect(request).not.toHaveBeenCalled();
     } finally {
       await close();

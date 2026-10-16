@@ -70,7 +70,7 @@ afterEach(() => vi.mocked(telemetry.captureToolCall).mockClear());
 describe("code-mode tool telemetry", () => {
   it("attributes an executed run to its Plugin Owner, without the code or its result", async () => {
     const { call, close } = await connectedServer();
-    await call("figma_execute_code", { code: "return 'secret authored code'" });
+    await call("figma_execute_code", { intent: "Test run", code: "return 'secret authored code'" });
     await close();
 
     const [event] = reported();
@@ -88,8 +88,8 @@ describe("code-mode tool telemetry", () => {
 
   it("reports schema and unknown-param rejects as codes", async () => {
     const { call, close } = await connectedServer();
-    await call("get_screenshot", { node_id: "1:2" });
-    await call("get_screenshot", { scale: "big" });
+    await call("get_screenshot", { intent: "Test run", node_id: "1:2" });
+    await call("get_screenshot", { intent: "Test run", scale: "big" });
     await close();
 
     expect(reported().map(({ tool, rejection }) => ({ tool, rejection }))).toEqual([

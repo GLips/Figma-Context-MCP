@@ -4,7 +4,9 @@
  */
 // Runs what a granted server submits — agent code and screenshots — one at a time, against the
 // live document, and owns everything a run carries: its phase and cancellation, its mid-run server
-// calls, the late-change watch, and the agents' session stores.
+// calls, the late-change watch, and the agents' session stores. Each run's course goes to the
+// activity feed.
+import type { ActivityFeed } from "./activity-feed.js";
 import type { AgentSession, AgentSessions } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 import { safeSerialize, guardReturnValue } from "./serialize.js";
@@ -46,12 +48,14 @@ export function createRunExecutor({
   isConnected,
   refusalAtDequeue,
   sessions,
+  activity,
 }: {
   isConnected: (key: ConnKey) => boolean;
   /** The grant gate, asked again at dequeue: null admits. */
   refusalAtDequeue: (key: ConnKey, documentId: string) => Promise<NotGrantedReason | null>;
   /** Where each run's pinned session is released when it settles, ran or not. */
   sessions: AgentSessions;
+  activity: ActivityFeed;
 }) {
   const serverCalls = createServerCallTable(isConnected);
   // The policy, the run phase it reads, and the key semantics live on run-cancellation.ts.
@@ -90,9 +94,10 @@ export function createRunExecutor({
    * beginRun only: the server's copy drives its deadlines, ours answers its CANCELs, and a run whose
    * two copies disagree is exactly how a caller gets told the wrong thing.
    */
-  function acceptRun(to: ReplyTo): void {
+  function acceptRun(to: ReplyTo, session: string | null): void {
     cancelledRuns.enqueue(to);
     runState(to, "queued");
+    activity.queued(to.id, session);
   }
 
   /**
@@ -103,6 +108,7 @@ export function createRunExecutor({
     lateChangeWatch?.stop();
     lateChangeWatch = null;
     cancelledRuns.markRunning(to);
+    activity.update(to.id, "running");
     return runState(to, "running");
   }
 
@@ -122,11 +128,13 @@ export function createRunExecutor({
     const cancelled = cancelledRuns.cancellation(to);
     if (cancelled) {
       cancelledRuns.settle(to);
+      activity.update(to.id, "cancelled");
       refuseQueued(CANCELLED_WHILE_QUEUED[cancelled]);
       return false;
     }
     if (refusal) {
       cancelledRuns.settle(to);
+      activity.update(to.id, "refused");
       reply(to, { type: "NOT_GRANTED", reason: refusal });
       return false;
     }
@@ -200,6 +208,7 @@ export function createRunExecutor({
     let landedAfterReturn = 0;
     let documentChanged = false;
     let documentChanges: DocumentChangeObserver | undefined;
+    let cancelledMidRun = false;
     try {
       // Watching starts before anything of the agent's can run, and ends after the drain below.
       documentChanges = observeDocumentChanges();
@@ -282,6 +291,8 @@ export function createRunExecutor({
       console.warn = originalConsole.warn;
       console.error = originalConsole.error;
       settled = true;
+      // Read before settle(), which forgets the run's cancellation.
+      cancelledMidRun = cancelledRuns.cancellation(to) !== null;
       cancelledRuns.settle(to);
     }
     if (landedAfterReturn > 0) {
@@ -297,6 +308,7 @@ export function createRunExecutor({
     const sessionNotice = sessions.release(agentSession);
     if (sessionNotice) consoleLog.push(`[warn] ${sessionNotice}`);
 
+    activity.update(to.id, cancelledMidRun ? "cancelled" : errorMessage === null ? "done" : "failed");
     reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
   }
 
@@ -322,8 +334,10 @@ export function createRunExecutor({
     try {
       const node = await resolveScreenshotTarget(target);
       const bytes = await captureScreenshot(node, options, () => cancelledRuns.cancellation(to) !== null);
+      activity.update(to.id, "done");
       reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
     } catch (err) {
+      activity.update(to.id, cancelledRuns.cancellation(to) !== null ? "cancelled" : "failed");
       reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
     } finally {
       cancelledRuns.settle(to);
@@ -343,12 +357,12 @@ export function createRunExecutor({
       preamble: string,
       lateChangeWindowMs: number,
     ): void {
-      acceptRun(to);
+      acceptRun(to, session.handle);
       enqueueWrite(() => executeCode(to, documentId, session, code, preamble, lateChangeWindowMs));
     },
 
     runScreenshot(to: ReplyTo, documentId: string, target: ScreenshotTarget, options: CaptureOptions): void {
-      acceptRun(to);
+      acceptRun(to, null);
       enqueueWrite(() => screenshot(to, documentId, target, options));
     },
 

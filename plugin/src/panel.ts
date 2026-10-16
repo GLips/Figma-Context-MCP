@@ -47,8 +47,41 @@ export interface PanelPrompt {
   kind: "allow" | "pick";
   project: string;
   documentId: string;
+  // What the call says it is for: display text only, rendered as plain text.
+  intent: string;
   // An Allow is being saved.
   allowing: boolean;
+}
+
+/**
+ * Where one call in this file stands, as the activity feed shows it:
+ *   • waiting — its prompt is showing here. A prompt that lapsed or closed unanswered is not-run.
+ *   • allowed / picked — the human answered its prompt here, and the call is on its way.
+ *   • denied — the human denied it here; refused — the plugin refused it before anything ran.
+ *   • queued, running — then done or failed by what its run reported, or cancelled.
+ */
+export type ActivityOutcome =
+  | "waiting"
+  | "not-run"
+  | "allowed"
+  | "picked"
+  | "denied"
+  | "refused"
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+/** One call in this file's activity feed, keyed by its execution id. */
+export interface PanelActivity {
+  executionId: string;
+  intent: string;
+  // The calling project's short name, as its grant row is labelled.
+  label: string;
+  // The agent session the run used: absent for screenshots and for calls refused before running.
+  session: string | null;
+  outcome: ActivityOutcome;
 }
 
 /** What the panel knows about the file this plugin is in. */
@@ -71,6 +104,8 @@ export interface PanelRender {
   // Null while no server has authenticated: nothing has asked about this file yet.
   document: PanelDocument | null;
   prompts: PanelPrompt[];
+  // Newest first, and capped.
+  activity: PanelActivity[];
   grantRows: PanelGrantRow[];
   expanded: boolean;
   showOrientation: boolean;

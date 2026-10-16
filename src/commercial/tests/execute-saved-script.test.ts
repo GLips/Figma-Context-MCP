@@ -68,7 +68,10 @@ function connectedServer() {
   const call = async (args: Record<string, unknown>) => {
     await ready;
     const result = await client.request(
-      { method: "tools/call", params: { name: "figma_execute_code", arguments: args } },
+      {
+        method: "tools/call",
+        params: { name: "figma_execute_code", arguments: { intent: "Test run", ...args } },
+      },
       CallToolResultSchema,
     );
     return { ...result, text: (result.content[0] as { text: string }).text };
@@ -114,7 +117,7 @@ describe("figma_execute_code with scriptPath", () => {
       expect(escaped.text).toContain("send the script inline as code");
       // The CLI resolves against the shell's cwd, not the root, so the suggestion names the file absolutely.
       expect(escaped.text).toContain(
-        `\`npx figma-developer-mcp execute ${join(outer, "outside.js")}\``,
+        `\`npx figma-developer-mcp execute ${join(outer, "outside.js")} --intent 'Test run'\``,
       );
 
       const spaced = join(outer, "my scripts", "outside.js");

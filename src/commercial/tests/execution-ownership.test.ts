@@ -55,6 +55,7 @@ describe("link-owned execution", () => {
         socket.link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
@@ -85,6 +86,7 @@ describe("link-owned execution", () => {
         socket.link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
@@ -117,6 +119,7 @@ describe("link-owned execution", () => {
         socket.link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
@@ -149,6 +152,7 @@ describe("link-owned execution", () => {
         socket.link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
@@ -206,6 +210,7 @@ describe("link-owned execution", () => {
         old.link,
         {
           type: "EXECUTE_CODE",
+          intent: "Test run",
           session: TEST_SESSION_REQUEST,
           documentId: TEST_DOCUMENT.documentId,
           code: "old",

@@ -21,7 +21,7 @@ import {
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
 import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
-import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
+import { MAX_INTENT_LENGTH, MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
   GRANT_WAITING_TEXT,
@@ -31,6 +31,7 @@ import {
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { parseSessionHandle } from "~/commercial/plugin-bridge/session-handle.js";
 import { parseDocumentId } from "~/commercial/plugin-bridge/document-id.js";
+import { intentProblemText, parseCallIntent } from "~/commercial/plugin-bridge/call-intent.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
 import { targetForPluginCall } from "~/commercial/plugin-bridge/plugin-call-link.js";
 import { parseFigmaFileKey } from "~/utils/figma-url.js";
@@ -53,7 +54,9 @@ export const executeCommand: Command = command(
       name: "execute",
       summary: "Run an flcm script in the Figma file the Framelink plugin has open",
       details: `The script is the body of an async function: use await and return directly, with no imports or
-exports. Open the Framelink plugin in the target file first. The plugin must be paired once (run
+exports. --intent says in one line what the run is for; the plugin panel shows it to the person in
+Figma, with the run's outcome and on any Allow prompt the run raises. Open the Framelink plugin in
+the target file first. The plugin must be paired once (run
 \`pair\`). --document runs only in that file, and the first run from a project there waits for you
 to click Allow in the plugin. Without it, the run goes to the one open file this project may edit;
 otherwise it is refused with the open files and their document ids (\`reference --files\` lists
@@ -68,17 +71,22 @@ stdout gets the reply as JSON, { file, session, result, console, errors }; progr
 stderr. Exits 0 when errors is null, 1 on a script, connection or grant failure, 130 on Ctrl-C. A
 run is never resubmitted automatically.`,
       exampleArgs: [
-        "card.js",
-        "card.js --document 7k2m9q4r8t1v3x5z",
-        "tweak.js --session maple-orbit-velvet-quarry",
-        "card.js --output out/reply.json --screenshot out/card.png --key card --scale 2",
-        "card.js --screenshot out/card.png --key card --context --margin 120",
+        `card.js --intent "Build the pricing card"`,
+        `card.js --intent "Build the pricing card" --document 7k2m9q4r8t1v3x5z`,
+        `tweak.js --intent "Tighten the card's padding" --session maple-orbit-velvet-quarry`,
+        `card.js --intent "Build the pricing card" --output out/reply.json --screenshot out/card.png --key card --scale 2`,
+        `card.js --intent "Check the card among its neighbours" --screenshot out/card.png --key card --context --margin 120`,
       ],
       // After the flags because it is what the script file needs; its FULL DOCS line is the next
       // disclosure step, into `reference`.
       appendix: [{ title: "Writing the script:", body: buildQuickStart(CLI_DOCS_CHANNEL) }],
     }),
     flags: {
+      intent: {
+        type: String,
+        placeholder: "<text>",
+        description: `Required: what this run is for, one line of at most ${MAX_INTENT_LENGTH} characters, shown in the plugin panel`,
+      },
       document: {
         type: String,
         placeholder: "<id>",
@@ -166,6 +174,7 @@ run is never resubmitted automatically.`,
 );
 
 interface ExecuteFlags {
+  intent?: string;
   document?: string;
   fileKey?: string;
   session?: string;
@@ -199,6 +208,9 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   };
   const inputError = screenshotInputError(target);
   if (inputError) throw new UsageError(inputError);
+  const intent = parseCallIntent(flags.intent);
+  if (intent.kind === "invalid")
+    throw new UsageError(intentProblemText(intent.problem, "--intent"));
   const document = flags.document === undefined ? null : parseDocumentId(flags.document);
   if (flags.document !== undefined && document === null)
     throw new UsageError("--document must be a document id exactly as Framelink listed it.");
@@ -259,6 +271,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       "the script was not submitted",
     );
     const bound = await targetForPluginCall(runtime.bridge, {
+      intent: intent.intent,
       document,
       fileKey,
       session,
@@ -297,7 +310,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       if (reply.errors !== null) console.error(reply.errors);
 
       if (flags.screenshot) {
-        // Its own execution: the script's id is spent on the run it named.
+        // Its own execution: the script's id is spent on the run it named. It shows the run's intent.
         const captured = await capturePluginScreenshot(
           runtime.bridge,
           { ...bound, executionId: mintExecutionId() },
