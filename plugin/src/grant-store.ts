@@ -3,7 +3,8 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // The plugin's grants: "project P may edit document D", for one installation credential and one
-// Figma user. The plugin is their only store; a server asks, never keeps a copy.
+// Figma user. D is the file's stamped document id (document-identity.ts). The plugin is their only
+// store; a server asks, never keeps a copy.
 //
 // One clientStorage record per grant, never a shared snapshot: several instances of this plugin (one
 // per open file) write at once, and clientStorage has no transactions, so a read-modify-write of one
@@ -16,7 +17,7 @@ export interface GrantScope {
   credentialId: string;
   ownerId: string;
   project: string;
-  fileKey: string;
+  documentId: string;
 }
 
 export type GrantAnswer = "granted" | "absent" | "unknown";
@@ -34,7 +35,9 @@ export interface GrantStorage {
   keys(): Promise<string[]>;
 }
 
-const GRANT_KEY_PREFIX = "code-mode:grant:";
+// Versioned: grants keyed on a Figma file key under an earlier prefix are never read, so they are
+// invalidated rather than migrated. Not a prefix of the earlier one, so no listing matches both.
+const GRANT_KEY_PREFIX = "code-mode:document-grant:";
 
 interface GrantRecord {
   project: string;
@@ -55,12 +58,12 @@ function projectDigest(project: string): string {
   return hmacSha256Hex("framelink-grant-project", project).slice(0, 32);
 }
 
-function documentPrefix(ownerId: string, fileKey: string): string {
-  return `:${ownerId}:${fileKey}:`;
+function documentPrefix(ownerId: string, documentId: string): string {
+  return `:${ownerId}:${documentId}:`;
 }
 
-export function grantKey({ credentialId, ownerId, project, fileKey }: GrantScope): string {
-  return `${GRANT_KEY_PREFIX}${credentialId}${documentPrefix(ownerId, fileKey)}${projectDigest(project)}`;
+export function grantKey({ credentialId, ownerId, project, documentId }: GrantScope): string {
+  return `${GRANT_KEY_PREFIX}${credentialId}${documentPrefix(ownerId, documentId)}${projectDigest(project)}`;
 }
 
 export function createGrantStore(storage: GrantStorage, report: (error: unknown) => void) {
@@ -149,9 +152,9 @@ export function createGrantStore(storage: GrantStorage, report: (error: unknown)
       return load(grantKey(scope));
     },
 
-    /** Every grant this plugin's owner holds on `fileKey`, under any credential. */
-    async grantsOnDocument(ownerId: string, fileKey: string): Promise<DocumentGrant[]> {
-      const infix = documentPrefix(ownerId, fileKey);
+    /** Every grant this plugin's owner holds on `documentId`, under any credential. */
+    async grantsOnDocument(ownerId: string, documentId: string): Promise<DocumentGrant[]> {
+      const infix = documentPrefix(ownerId, documentId);
       const grants: DocumentGrant[] = [];
       for (const key of await storage.keys()) {
         if (!key.startsWith(GRANT_KEY_PREFIX)) continue;

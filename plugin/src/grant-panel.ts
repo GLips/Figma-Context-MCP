@@ -4,9 +4,10 @@
  */
 // The plugin's only human surface: an always-visible status strip that expands into the grant list.
 // It paints what link authentication says about unpaired sockets, what document identity says about
-// this file, and what the grant gate says about each server, plus what is the panel's own to know:
+// this file, and what the grant gate says about each server and each waiting call, plus what is the
+// panel's own to know:
 // whether it is expanded, who holds the driving baton, and each row's write-access card.
-import type { GrantRow } from "./grant-gate.js";
+import type { GrantPromptRow, GrantRow } from "./grant-gate.js";
 import { toServer } from "./outbound.js";
 import type { ConnKey, PanelDocument, PanelPairing, PanelRender, PanelGrantRow } from "./panel.js";
 import type { WriteAccessNotice } from "./protocol.js";
@@ -25,9 +26,10 @@ const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 
 /** What the panel reads from the grant gate, link authentication and document identity. */
 export interface GrantPanelSource {
-  rows(now: number): GrantRow[];
+  rows(): GrantRow[];
+  prompts(now: number): GrantPromptRow[];
   nextPromptLapse(now: number): number | null;
-  document(now: number): PanelDocument | null;
+  document(): PanelDocument | null;
   pairings(): PanelPairing[];
   readonly storageError: string | null;
   isConnected(key: ConnKey): boolean;
@@ -89,8 +91,8 @@ export function createGrantPanel(source: GrantPanelSource) {
     if (lapse !== null) expiryRender = setTimeout(() => render(), lapse - now);
   }
 
-  function grantRows(now: number): PanelGrantRow[] {
-    return source.rows(now).map((row) => ({
+  function grantRows(): PanelGrantRow[] {
+    return source.rows().map((row) => ({
       ...row,
       label: projectLabel(row.project),
       active: row.key !== null && row.key === activeKey,
@@ -106,8 +108,9 @@ export function createGrantPanel(source: GrantPanelSource) {
     const now = Date.now();
     const update: PanelRender = {
       pairings: source.pairings(),
-      document: source.document(now),
-      grantRows: grantRows(now),
+      document: source.document(),
+      prompts: source.prompts(now).map((prompt) => ({ ...prompt, label: projectLabel(prompt.project) })),
+      grantRows: grantRows(),
       expanded,
       showOrientation,
       grantStorageError: source.storageError,

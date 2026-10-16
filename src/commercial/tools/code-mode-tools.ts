@@ -35,19 +35,18 @@ import {
   type CallDocument,
   type PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
-import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
+import { parseDocumentId, type DocumentId } from "~/commercial/plugin-bridge/document-id.js";
 import { parseFigmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import {
   parseSessionHandle,
   type SessionHandle,
 } from "~/commercial/plugin-bridge/session-handle.js";
-import type { CallTargetRequest } from "~/commercial/plugin-bridge/call-target.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
 import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
 import { retryableToolReply } from "~/mcp/fail-loud-params.js";
 import type { ToolEventProperties } from "~/telemetry/index.js";
-import { referenceGrantNote } from "~/commercial/plugin-bridge/reference-grant-guidance.js";
+import { referenceDocumentsNote } from "~/commercial/plugin-bridge/reference-documents-note.js";
 import { advertisePluginReadRoute, describePluginReadRecovery } from "./plugin-read-route.js";
 import {
   buildQuickStart,
@@ -237,15 +236,19 @@ function registerCodeModeTools(
     call: FramelinkToolCall<CodeModeFacts>,
     facts: CodeModeFacts,
     extra: ToolExtra,
-    { fileKey, session }: CallTargetRequest,
+    {
+      document,
+      fileKey,
+      session,
+    }: { document: DocumentId | null; fileKey: FigmaFileKey | null; session: SessionHandle | null },
   ): Promise<PluginCallTarget | { reply: CallToolResult }> {
     const targeted = await targetForPluginCall(bridge, {
+      document,
       fileKey,
       session,
       pairing: { kind: "offer", ask: pairingCodeAsker(extra) },
       signal: extra.signal,
       surface: "mcp",
-      reader: documentReaderFor(figmaService),
       waitMs: GRANT_WAIT_MS,
       onWaiting: () => startProgressHeartbeat(extra, () => GRANT_WAITING_TEXT, 3000),
     });
@@ -260,7 +263,7 @@ function registerCodeModeTools(
     );
   }
 
-  /** The plugin refused a bound call on arrival: its grant was revoked, or it left the file. */
+  /** The plugin refused a bound call on arrival: its grant was revoked, or its file was re-stamped. */
   function notGrantedReply(
     call: FramelinkToolCall<CodeModeFacts>,
     facts: CodeModeFacts,
@@ -297,12 +300,13 @@ function registerCodeModeTools(
             .describe(
               "JavaScript to run in the Figma sandbox. Runs in an async body; use await freely; return a value. Pass code or scriptPath, not both.",
             ),
+          document: DOCUMENT_PARAM,
           fileKey: FILE_KEY_PARAM,
           session: z
             .string()
             .optional()
             .describe(
-              "The session handle a previous figma_execute_code reply named (four words, e.g. maple-orbit-velvet-quarry), to keep that call's `session` values and session.last. The call runs in the file that session is in. Omit to start a fresh session; every reply names the handle of the session it used.",
+              "The session handle a previous figma_execute_code reply named (four words, e.g. maple-orbit-velvet-quarry), to keep that call's `session` values and session.last. The call runs in the document that session is in. Omit to start a fresh session; every reply names the handle of the session it used.",
             ),
           scriptPath: z
             .string()
@@ -316,9 +320,16 @@ function registerCodeModeTools(
           {
             code,
             scriptPath,
+            document,
             fileKey,
             session,
-          }: { code?: string; scriptPath?: string; fileKey?: string; session?: string },
+          }: {
+            code?: string;
+            scriptPath?: string;
+            document?: string;
+            fileKey?: string;
+            session?: string;
+          },
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
@@ -330,6 +341,8 @@ function registerCodeModeTools(
           }
           call.record({ ...source, outcome: "not_run" });
           if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
+          const targetDocument = documentParam(document);
+          if (targetDocument === "invalid") return documentReply();
           const targetFileKey = fileKeyParam(fileKey);
           if (targetFileKey === "invalid") return fileKeyReply();
           const targetSession = sessionParam(session);
@@ -359,6 +372,7 @@ function registerCodeModeTools(
           } else return scriptSourceReply("neither");
           return answeringExpectedFailures(call, extra, source, async () => {
             const target = await pluginCallTarget(runtime, call, source, extra, {
+              document: targetDocument,
               fileKey: targetFileKey,
               session: targetSession,
             });
@@ -442,10 +456,10 @@ function registerCodeModeTools(
           call: FramelinkToolCall<CodeModeFacts>,
         ) => {
           call.record({ section_count: sections?.length ?? 0 });
-          // Docs still serve on a stale or unpaired plugin — but lead with what blocks a write, so the
-          // agent learns the fix here, before its first refused write. The link is the operator's: a
+          // Docs still serve on a stale or unpaired plugin — but lead with the open files and what
+          // blocks a write, so the agent can name its file before its first refused write. The link is the operator's: a
           // caller without the plugin grant learns nothing of it.
-          const note = runtime && (await referenceGrantNote(runtime.bridge));
+          const note = runtime && (await referenceDocumentsNote(runtime.bridge, "reference"));
           return {
             content: [
               ...(note ? [{ type: "text" as const, text: note }] : []),
@@ -502,10 +516,15 @@ Returns a PNG image.`,
             .describe(
               `Export resolution multiplier, greater than 0 and at most ${MAX_SCREENSHOT_SCALE} (default 1). Raise it to inspect fine detail.`,
             ),
+          document: DOCUMENT_PARAM,
           fileKey: FILE_KEY_PARAM,
         },
         handler: async (
-          { fileKey, ...target }: ScreenshotOptions & { fileKey?: string },
+          {
+            document,
+            fileKey,
+            ...target
+          }: ScreenshotOptions & { document?: string; fileKey?: string },
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
@@ -516,6 +535,8 @@ Returns a PNG image.`,
           call.record({ outcome: "not_run" });
           // Known params are type-checked by the SDK; their value-level misuse is checked here, in
           // the same retryable shape as an unknown param, so the agent fixes the call and retries.
+          const targetDocument = documentParam(document);
+          if (targetDocument === "invalid") return documentReply();
           const targetFileKey = fileKeyParam(fileKey);
           if (targetFileKey === "invalid") return fileKeyReply();
           const inputError = screenshotInputError(target);
@@ -527,6 +548,7 @@ Returns a PNG image.`,
           }
           return answeringExpectedFailures(call, extra, {}, async () => {
             const located = await pluginCallTarget(runtime, call, {}, extra, {
+              document: targetDocument,
               fileKey: targetFileKey,
               session: null,
             });
@@ -655,12 +677,31 @@ function blockedCallReply(
   return blocked.isError ? { isError: true, content } : { content };
 }
 
+const DOCUMENT_PARAM = z
+  .string()
+  .optional()
+  .describe(
+    "The Figma file to work in: its document id, as a refusal or get_flcm_reference lists the open files (16 characters, e.g. 7k2m9q4r8t1v3x5z). Runs there only, and if this project isn't allowed there yet the user is asked to Allow it in that file. Omit to use the one open file this project may edit; otherwise the call is refused with the open files to choose from by name.",
+  );
+
 const FILE_KEY_PARAM = z
   .string()
   .optional()
   .describe(
-    "The Figma file to work in: the key from its URL (figma.com/design/<fileKey>/…). Runs there only, and the user is asked in that file to allow this project if they haven't. Omit to use the one open file this project may edit; with several, or none yet, the user picks one in Figma.",
+    "Another way to name the file: the key from its URL (figma.com/design/<fileKey>/…). Matches only plugins that report a file key, so prefer document; a file the plugin reports no key for is never found by fileKey.",
   );
+
+/** The document param, branded once here at the edge: null when omitted. */
+function documentParam(document: string | undefined): DocumentId | null | "invalid" {
+  if (document === undefined) return null;
+  return parseDocumentId(document) ?? "invalid";
+}
+
+function documentReply(): CallToolResult {
+  return retryableToolReply(
+    "document must be a document id exactly as a refusal or get_flcm_reference listed it (16 characters), so this call did not run. This is NOT a failure: copy the id, or omit document, and retry.",
+  );
+}
 
 /** The fileKey param, branded once here at the edge: null when omitted. */
 function fileKeyParam(fileKey: string | undefined): FigmaFileKey | null | "invalid" {
@@ -692,8 +733,8 @@ function usedSession(session: SessionHandle): string {
 }
 
 /** Every reply names the document it ran against, so a wrong file is noticed on the first call. */
-function ranIn({ fileName, fileKey }: CallDocument): string {
-  return `Figma file: "${fileName}" (fileKey ${fileKey})`;
+function ranIn({ fileName, documentId, fileKey }: CallDocument): string {
+  return `Figma file: "${fileName}" (document ${documentId}${fileKey ? `, fileKey ${fileKey}` : ""})`;
 }
 
 // How long a client's pairing prompt may stay open before the call falls back to agent guidance.

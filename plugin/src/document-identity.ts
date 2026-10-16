@@ -2,135 +2,150 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Which file this plugin run is in. The plugin never decides that itself — the Community build has
-// no figma.fileKey, and a file's name proves nothing. A server proves it: the plugin writes the
-// server's nonce into the file root's shared plugin data, and the server finds it there over REST.
-// A proven key is kept in the root as a claim, so the next plugin run has something to prove; a
-// duplicated file carries the claim too, fails the proof, and loses it.
-import { reply, type ReplyTo } from "./outbound.js";
-import type { ConnKey } from "./panel.js";
-import {
-  DOCUMENT_CLAIM_KEY,
-  DOCUMENT_DATA_NAMESPACE,
-  DOCUMENT_PROOF_KEY_PREFIX,
-  isWireFileKey,
-  type ProofOutcome,
-} from "./protocol.js";
+// Which file this plugin run is in: a document id this plugin stamps into the file root's private
+// plugin data the first time it needs one. The stamp persists with the file, so every later run and
+// every collaborator's plugin reads the same id, and a duplicate carries it too. It tells open files
+// apart and keys grants; it proves nothing, and never says whether this user may edit the file.
+//
+// The stamp is written only when absent, and re-read before every admission and dequeue: two first
+// opens can race, and a copy given its own identity in another instance changes it under this one.
+import type { DocumentReport } from "./protocol.js";
 
-/** The document a server proved this plugin run to be in. */
-export interface ProvenDocument {
-  fileKey: string;
-  fileName: string;
+/** Where the stamp lives: the root's private plugin data, readable only by this plugin. */
+const DOCUMENT_ID_KEY = "framelink-document-id";
+// Lowercase Crockford base32, matching protocol.ts DOCUMENT_ID_PATTERN.
+const DOCUMENT_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+const DOCUMENT_ID_LENGTH = 16;
+// How often names and the stamp are re-read for reporting. Figma has no event for a rename without
+// loading every page, and a read of the root's names is cheap.
+const DOCUMENT_REPORT_POLL_MS = 2_000;
+
+// Math.random, because QuickJS has no crypto. The id only tells open files apart, so it needs to be
+// unlikely to collide, not unguessable.
+function mintDocumentId(): string {
+  let id = "";
+  for (let i = 0; i < DOCUMENT_ID_LENGTH; i++)
+    id += DOCUMENT_ID_ALPHABET[Math.floor(Math.random() * DOCUMENT_ID_ALPHABET.length)];
+  return id;
 }
 
-/** A file key off a pasted Figma link, or null when it isn't one. Hand-rolled: there is no URL class. */
-export function fileKeyFromFigmaLink(text: string): string | null {
-  const match = /^\s*(?:https?:\/\/)?(?:[\w-]+\.)?figma\.com\/(?:file|design|proto)\/([A-Za-z0-9]+)/i.exec(text);
-  return match && isWireFileKey(match[1]) ? match[1] : null;
+function readStamp(): string {
+  return figma.root.getPluginData(DOCUMENT_ID_KEY);
 }
 
-/** Where a pasted link stands: waiting for a server's proof, or refuted by one. */
-export type PastedLink = { fileKey: string; refuted: boolean } | null;
+/** `figma.fileKey`, which only private and development builds get. */
+function buildFileKey(): string | undefined {
+  const fileKey = (figma as { fileKey?: unknown }).fileKey;
+  return typeof fileKey === "string" && fileKey.length > 0 ? fileKey : undefined;
+}
 
 export function createDocumentIdentity({
-  show,
-  onProven,
+  onChanged,
+  onReport,
 }: {
-  show: () => void;
-  /** The document is proven: grants on it can be read now. */
-  onProven: (document: ProvenDocument) => void;
+  /**
+   * The stamp is no longer `previous` (null: there was none). Fires before the new report goes out,
+   * so whatever was admitted under the old id is stopped first.
+   */
+  onChanged: (previous: string | null) => void;
+  /** The report changed: send it to every server. */
+  onReport: (report: DocumentReport) => void;
 }) {
-  let proven: ProvenDocument | null = null;
-  let pasted: PastedLink = null;
-  // Nonces still out, and the connection that asked for each, so a closed connection's are cleared.
-  const nonces = new Map<string, ConnKey>();
+  let documentId: string | null = null;
+  let problem: string | null = null;
+  // Set while "Give this copy its own identity" waits for running executions: nothing is admitted.
+  let restamping = false;
+  let lastReport = "";
 
-  function readClaim(): string | null {
-    const claim = figma.root.getSharedPluginData(DOCUMENT_DATA_NAMESPACE, DOCUMENT_CLAIM_KEY);
-    return isWireFileKey(claim) ? claim : null;
-  }
-
-  function writeNonce(nonce: string, written: boolean): void {
-    figma.root.setSharedPluginData(DOCUMENT_DATA_NAMESPACE, DOCUMENT_PROOF_KEY_PREFIX + nonce, written ? "1" : "");
-  }
-
-  function settle(outcome: ProofOutcome): void {
-    if (outcome.kind === "proven") {
-      // One run is in one file. A second, different answer is a confused server, not a move.
-      if (proven && proven.fileKey !== outcome.fileKey) return;
-      proven = { fileKey: outcome.fileKey, fileName: outcome.fileName };
-      if (pasted?.fileKey === outcome.fileKey) pasted = null;
-      if (readClaim() !== outcome.fileKey)
-        figma.root.setSharedPluginData(DOCUMENT_DATA_NAMESPACE, DOCUMENT_CLAIM_KEY, outcome.fileKey);
-      onProven(proven);
-      return;
+  /** Write a stamp when there is none, then read back what the file holds: a racing write may win. */
+  function settleStamp(): void {
+    let stamp = readStamp();
+    problem = null;
+    if (!stamp) {
+      try {
+        figma.root.setPluginData(DOCUMENT_ID_KEY, mintDocumentId());
+        stamp = readStamp();
+      } catch (error) {
+        problem = `Figma refused to mark this file for Framelink (${String(error)}), so agents can't use it.`;
+      }
     }
-    if (outcome.kind !== "refuted" || proven) return;
-    if (readClaim() === outcome.fileKey)
-      figma.root.setSharedPluginData(DOCUMENT_DATA_NAMESPACE, DOCUMENT_CLAIM_KEY, "");
-    if (pasted?.fileKey === outcome.fileKey) pasted = { fileKey: outcome.fileKey, refuted: true };
+    const next = stamp || null;
+    if (next === documentId) return;
+    const previous = documentId;
+    documentId = next;
+    if (previous !== null) onChanged(previous);
+  }
+
+  function report(): DocumentReport {
+    if (documentId === null)
+      return { kind: "unidentified", problem: problem ?? "This file hasn't been marked for Framelink yet." };
+    const fileKey = buildFileKey();
+    return {
+      kind: "identified",
+      documentId,
+      fileName: figma.root.name,
+      pageNames: figma.root.children.map((page) => page.name),
+      ...(fileKey ? { fileKey } : {}),
+    };
+  }
+
+  function reportIfChanged(): void {
+    const now = report();
+    const serialized = JSON.stringify(now);
+    if (serialized === lastReport) return;
+    lastReport = serialized;
+    onReport(now);
+  }
+
+  function poll(): void {
+    if (!restamping) settleStamp();
+    reportIfChanged();
+    setTimeout(poll, DOCUMENT_REPORT_POLL_MS);
   }
 
   return {
-    get document(): ProvenDocument | null {
-      return proven;
+    /** Read or write the stamp, and start watching for changes worth reporting. */
+    start(): void {
+      settleStamp();
+      lastReport = JSON.stringify(report());
+      setTimeout(poll, DOCUMENT_REPORT_POLL_MS);
     },
 
-    get pastedLink(): PastedLink {
-      return pasted;
+    /** The file's stamp now, re-read; null while unidentified or being given a new identity. */
+    current(): string | null {
+      if (restamping) return null;
+      settleStamp();
+      reportIfChanged();
+      return documentId;
     },
 
-    /** The file key a past proof left in this file's root, while this run hasn't been proven. */
-    claim(): string | null {
-      return proven ? proven.fileKey : (pasted?.refuted === false ? pasted.fileKey : readClaim());
+    /** The stamp as last read, for display and grant rows: never re-reads. */
+    get documentId(): string | null {
+      return restamping ? null : documentId;
     },
 
-    writeProof(to: ReplyTo, nonce: string): void {
+    report,
+
+    /**
+     * Give this file its own identity: a fresh stamp, once `idle` says nothing admitted under the old
+     * one is still running. Grants stay with the old id; this copy needs its own.
+     */
+    async restamp(idle: () => Promise<void>): Promise<void> {
+      if (restamping || documentId === null) return;
+      restamping = true;
       try {
-        writeNonce(nonce, true);
-        nonces.set(nonce, to.connKey);
-        reply(to, { type: "PROOF_WRITTEN" });
+        await idle();
+        figma.root.setPluginData(DOCUMENT_ID_KEY, mintDocumentId());
       } catch (error) {
-        // A viewer can't write to the file, so it can't be proven — and couldn't be edited anyway.
-        reply(to, { type: "ERROR", error: `This plugin couldn't mark the file to prove which one it is: ${String(error)}` });
+        figma.notify(`Framelink couldn't give this file its own identity: ${String(error)}`, { error: true });
+      } finally {
+        restamping = false;
       }
-    },
-
-    proofSettled(to: ReplyTo, nonce: string, outcome: ProofOutcome): void {
-      reply(to, { type: "PROOF_SETTLED_ACK" });
-      // Only the server this plugin wrote the nonce for may settle it; any other nonce is acked and ignored.
-      if (nonces.get(nonce) !== to.connKey) return;
-      nonces.delete(nonce);
-      clearNonce(nonce);
-      settle(outcome);
-      show();
-    },
-
-    /** The human pasted a link: it is a claim until a server proves it. */
-    paste(text: string): string | null {
-      const fileKey = fileKeyFromFigmaLink(text);
-      if (fileKey === null || proven) return null;
-      pasted = { fileKey, refuted: false };
-      show();
-      return fileKey;
-    },
-
-    closed(key: ConnKey): void {
-      for (const [nonce, owner] of nonces)
-        if (owner === key) {
-          nonces.delete(nonce);
-          clearNonce(nonce);
-        }
+      // A fresh stamp fires onChanged here; a refused write leaves the old identity in force.
+      settleStamp();
+      reportIfChanged();
     },
   };
-
-  function clearNonce(nonce: string): void {
-    try {
-      writeNonce(nonce, false);
-    } catch {
-      // Clearing a spent nonce is housekeeping: a viewer that couldn't write one can't clear one.
-    }
-  }
 }
 
 export type DocumentIdentity = ReturnType<typeof createDocumentIdentity>;

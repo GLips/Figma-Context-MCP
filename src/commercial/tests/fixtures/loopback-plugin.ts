@@ -5,9 +5,9 @@
 // The real plugin, both halves, against a real server socket: the relay iframe (ui.ts) and the host
 // (code.ts) are bundled from source and run in their own vm contexts, joined the way Figma joins them
 // (an async postMessage each way). Only Figma itself is a stand-in: one page, a user, storage, and
-// the file the plugin is open in — whose shared plugin data `LoopbackFigma` serves back the way
-// Figma's REST API does, so a server proves which file a plugin is in exactly as it does live.
-// Shared by the loopback test and scripts/bridge-contract.mjs.
+// the file the plugin is open in, whose root plugin data holds the stamp the plugin writes — so a
+// duplicated file carries its original's stamp, as in Figma. Shared by the loopback test and
+// scripts/bridge-contract.mjs.
 //
 // The relay dials the production port block in order; the first ports it dials are routed to
 // `serverPorts`, one each, and every other port is a socket that never opens — an empty block port,
@@ -19,52 +19,40 @@ import type {
   HostInbound,
   HostOutbound,
   PanelControl,
+  PanelPrompt,
   PanelRender,
   PanelGrantRow,
 } from "@framelink/plugin/panel";
-import { documentProofNonces } from "@framelink/plugin/protocol";
-import type { DocumentReader } from "~/commercial/plugin-bridge/link-documents.js";
 
-/** One Figma file: its key, its name, and its root's shared plugin data. */
+/** One Figma file: its name, its root's private plugin data, and its key where the build exposes one. */
 export interface LoopbackFile {
-  key: string;
   name: string;
-  /** Keyed `${namespace}/${key}`. */
-  shared: Map<string, string>;
+  /** `figma.fileKey`: only private and development builds get one. */
+  key: string | null;
+  pluginData: Map<string, string>;
+  /** A file the user may only view: Figma refuses every plugin data write. */
+  readOnly: boolean;
 }
 
-/** The Figma files plugins can be open in, and the REST read a server proves them with. */
+/** The Figma files plugins can be open in. */
 export class LoopbackFigma {
-  readonly files = new Map<string, LoopbackFile>();
-  /** REST reads served, per file key. */
-  readonly reads = new Map<string, number>();
-
-  file(key: string, name = `File ${key}`): LoopbackFile {
-    const file = { key, name, shared: new Map<string, string>() };
-    this.files.set(key, file);
-    return file;
+  file(
+    name: string,
+    { key = null, readOnly = false }: { key?: string | null; readOnly?: boolean } = {},
+  ): LoopbackFile {
+    return { name, key, pluginData: new Map(), readOnly };
   }
 
-  /** Figma's Duplicate: a new key, and a copy of everything in the root. */
-  duplicate(original: LoopbackFile, key: string): LoopbackFile {
-    const copy = this.file(key, `${original.name} (Copy)`);
-    for (const [entry, value] of original.shared) copy.shared.set(entry, value);
+  /** Figma's Duplicate: a new file (and key), carrying everything in the root — the stamp too. */
+  duplicate(original: LoopbackFile, key: string | null = null): LoopbackFile {
+    const copy = this.file(`${original.name} (Copy)`, { key });
+    for (const [entry, value] of original.pluginData) copy.pluginData.set(entry, value);
     return copy;
   }
-
-  /** `GET /v1/files/:key?plugin_data=shared&depth=1`, as the proof reads it. */
-  readonly reader: DocumentReader = async (fileKey) => {
-    this.reads.set(fileKey, (this.reads.get(fileKey) ?? 0) + 1);
-    const file = this.files.get(fileKey);
-    if (!file) throw new Error(`Figma API 404: no file ${fileKey}`);
-    const sharedPluginData: Record<string, Record<string, string>> = {};
-    for (const [entry, value] of file.shared) {
-      const [namespace, key] = entry.split("/", 2) as [string, string];
-      (sharedPluginData[namespace] ??= {})[key] = value;
-    }
-    return { name: file.name, proofs: documentProofNonces(sharedPluginData) };
-  };
 }
+
+// The plugin's stamp key (document-identity.ts). Read here only to tell a test which id it got.
+const DOCUMENT_ID_KEY = "framelink-document-id";
 
 const bundle = (entry: string) =>
   buildSync({
@@ -101,19 +89,25 @@ export interface LoopbackPlugin {
   showsPairingCode(): boolean;
   /** The file this plugin is open in. */
   file: LoopbackFile;
+  /** The stamp in this plugin's file now, or null before the plugin wrote one. */
+  documentId(): string | null;
   /** The panel's rows now. */
   grantRows(): PanelGrantRow[];
-  /** Whether a row is asking the human for a decision now. */
+  /** The calls asking the human now. */
+  prompts(): PanelPrompt[];
+  /** Whether any call is asking the human now. */
   isPrompting(): boolean;
   /**
-   * Click Allow (or Use this file) on the first row asking for one, waiting for a row to ask;
-   * resolves once the grant is saved and announced.
+   * Click Allow on the first Allow prompt (for `executionId`, when given), waiting for one; resolves
+   * once the grant is saved and announced.
    */
-  allow(): Promise<void>;
-  /** Click Deny on the first row asking. */
-  deny(): Promise<void>;
-  /** Paste a link into the panel, as the human does when a server asks for this file's link. */
-  pasteLink(text: string): void;
+  allow(executionId?: string): Promise<void>;
+  /** Click Deny on the first Allow prompt (for `executionId`, when given), waiting for one. */
+  deny(executionId?: string): Promise<void>;
+  /** Click "Use this one" on the first pick prompt, waiting for one. */
+  pick(): Promise<void>;
+  /** Click "Give this copy its own identity"; resolves once the file holds a new stamp. */
+  restamp(): Promise<void>;
   /** Click the panel's sign-in button on the granted session. */
   signIn(): void;
   /** Click Revoke on the grant of `project` (the first granted row by default). */
@@ -133,7 +127,7 @@ export function startLoopbackPlugin(
   {
     storage = new Map(),
     holdHelloMs = 0,
-    file = new LoopbackFigma().file("LOOPBACKfile", "Loopback file"),
+    file = new LoopbackFigma().file("Loopback file"),
     user = { id: "loopback-user", name: "Loopback Human" },
   }: LoopbackPluginOptions = {},
 ): LoopbackPlugin {
@@ -219,13 +213,19 @@ export function startLoopbackPlugin(
     notify: (message: string) => toasts.push(message),
     currentUser: user,
     currentPage: page,
+    get fileKey() {
+      return file.key ?? undefined;
+    },
     root: {
+      get name() {
+        return file.name;
+      },
       children: [page],
-      getSharedPluginData: (namespace: string, key: string) =>
-        file.shared.get(`${namespace}/${key}`) ?? "",
-      setSharedPluginData: (namespace: string, key: string, value: string) => {
-        if (value) file.shared.set(`${namespace}/${key}`, value);
-        else file.shared.delete(`${namespace}/${key}`);
+      getPluginData: (key: string) => file.pluginData.get(key) ?? "",
+      setPluginData: (key: string, value: string) => {
+        if (file.readOnly) throw new Error("Cannot write to a read-only file");
+        if (value) file.pluginData.set(key, value);
+        else file.pluginData.delete(key);
       },
     },
     on() {},
@@ -267,10 +267,15 @@ export function startLoopbackPlugin(
   // What the panel's buttons post (ui.ts): a "panel" envelope, which only the relay itself builds.
   const click = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   const grantRows = () => lastRender?.grantRows ?? [];
-  const asking = () =>
-    grantRows().find(
-      (s) => s.key !== null && s.grant !== null && s.prompt !== null && !s.denied && !s.allowing,
+  const prompts = () => lastRender?.prompts ?? [];
+  const asking = (kind: PanelPrompt["kind"], executionId?: string) =>
+    prompts().find(
+      (prompt) =>
+        prompt.kind === kind &&
+        !prompt.allowing &&
+        (executionId === undefined || prompt.executionId === executionId),
     );
+  const documentId = () => file.pluginData.get(DOCUMENT_ID_KEY) ?? null;
   const granted = (project?: string) =>
     grantRows().find((s) => s.granted && (project === undefined || s.project === project));
   const shownCode = () => lastRender?.pairings.find((pairing) => pairing.code)?.code ?? null;
@@ -284,20 +289,43 @@ export function startLoopbackPlugin(
     },
     showsPairingCode: () => shownCode() !== null,
     file,
+    documentId,
     grantRows,
-    isPrompting: () => asking() !== undefined,
-    async allow() {
-      while (!asking()) await tick();
+    prompts,
+    isPrompting: () => prompts().some((prompt) => !prompt.allowing),
+    async allow(executionId) {
+      while (!asking("allow", executionId)) await tick();
+      const { key, documentId: shown, executionId: call } = asking("allow", executionId)!;
       const before = grantsAnnounced;
-      click({ type: "UI_DECISION", approve: true, connKey: asking()!.key! });
+      click({
+        type: "UI_DECISION",
+        approve: true,
+        connKey: key,
+        executionId: call,
+        documentId: shown,
+      });
       while (grantsAnnounced === before) await tick();
     },
-    async deny() {
-      while (!asking()) await tick();
-      click({ type: "UI_DECISION", approve: false, connKey: asking()!.key! });
+    async deny(executionId) {
+      while (!asking("allow", executionId)) await tick();
+      const { key, documentId: shown, executionId: call } = asking("allow", executionId)!;
+      click({
+        type: "UI_DECISION",
+        approve: false,
+        connKey: key,
+        executionId: call,
+        documentId: shown,
+      });
     },
-    pasteLink(text) {
-      click({ type: "UI_PASTE_LINK", text });
+    async pick() {
+      while (!asking("pick")) await tick();
+      const { key, documentId: shown, executionId } = asking("pick")!;
+      click({ type: "UI_PICK", connKey: key, executionId, documentId: shown });
+    },
+    async restamp() {
+      const before = documentId();
+      click({ type: "UI_RESTAMP" });
+      while (documentId() === before) await tick();
     },
     signIn() {
       click({ type: "UI_SIGN_IN", connKey: granted()!.key! });

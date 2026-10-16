@@ -10,7 +10,7 @@ import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bri
 import type { FigmaService } from "~/services/figma.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
-import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
 
 const bridges: PluginBridge[] = [];
@@ -43,7 +43,7 @@ async function running(
       {
         type: "EXECUTE_CODE",
         session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
+        documentId: TEST_DOCUMENT.documentId,
         code: "x",
         preamble: "x",
         lateChangeWindowMs: 60_000,
@@ -266,13 +266,13 @@ it.each([false, true])(
     const socket = await connectFakePlugin(bridge);
     // The page and change-event registration the host meters every run by (document-changes.ts).
     const page = { id: "0:1", name: "test", on() {}, off() {} };
-    // The plugin is driven through pairing, proof and Allow directly: its replies settle these
+    // The plugin is driven through pairing, its stamp and Allow directly: its replies settle these
     // waiters, never a count of event-loop turns, since the host stores and replies asynchronously.
     const credential = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
     const storage = new Map<string, unknown>([
       ["code-mode:link-credential:" + credential.id, credential.secret],
     ]);
-    const shared = new Map<string, string>();
+    const pluginData = new Map<string, string>();
     const waiters: Array<(frame: Record<string, unknown>) => boolean> = [];
     const awaitFrame = (match: (frame: Record<string, unknown>) => boolean) =>
       new Promise<void>((resolve) =>
@@ -285,10 +285,10 @@ it.each([false, true])(
       currentUser: { id: "figma-user-1", name: "Test" },
       currentPage: page,
       root: {
+        name: "Fake file",
         children: [page],
-        getSharedPluginData: (ns: string, key: string) => shared.get(`${ns}/${key}`) ?? "",
-        setSharedPluginData: (ns: string, key: string, value: string) =>
-          void shared.set(`${ns}/${key}`, value),
+        getPluginData: (key: string) => pluginData.get(key) ?? "",
+        setPluginData: (key: string, value: string) => void pluginData.set(key, value),
       },
       on() {},
       off() {},
@@ -307,14 +307,7 @@ it.each([false, true])(
           for (const waiter of [...waiters])
             if (waiter(frame)) waiters.splice(waiters.indexOf(waiter), 1);
           // Only run traffic reaches the bridge: the bridge already authenticated this fake socket.
-          const setup = [
-            "LINK_PROOF",
-            "INTRODUCED",
-            "PROOF_WRITTEN",
-            "PROOF_SETTLED_ACK",
-            "DOCUMENT_CLAIMED",
-            "GRANT_CHANGED",
-          ];
+          const setup = ["LINK_PROOF", "INTRODUCED", "DOCUMENT_REPORTED", "GRANT", "GRANT_CHANGED"];
           if (!setup.includes(String(frame.type))) socket.receive(frame);
         },
       },
@@ -359,28 +352,25 @@ it.each([false, true])(
       project: "/proj",
       framelinkOrigin: "https://app.framelink.ai",
     });
-    await ask({ type: "PROVE_DOCUMENT", id: "prove", nonce: "proof-1-0000" });
-    await ask({
-      type: "PROOF_SETTLED",
-      id: "settle",
-      nonce: "proof-1-0000",
-      outcome: { kind: "proven", fileKey: "FAKEfile1", fileName: "Fake file" },
-    });
+    // The plugin stamped its file on start; the call's Allow prompt binds to that stamp.
+    const documentId = [...pluginData.values()][0];
+    const executionId = mintExecutionId();
+    await ask({ type: "GRANT_STATUS", id: "status", executionId, documentId, prompt: "allow" });
     const granted = awaitFrame((frame) => frame.type === "GRANT_CHANGED");
-    panel({ type: "UI_DECISION", approve: true });
+    panel({ type: "UI_DECISION", approve: true, executionId, documentId });
     await granted;
     const result = (await bridge.submitRun(
       socket.link,
       {
         type: "EXECUTE_CODE",
         session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
+        documentId,
         lateChangeWindowMs: 60_000,
         // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
         preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })`,
         code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
       },
-      mintExecutionId(),
+      executionId,
     )) as { result: string; errors: string | null };
     expect(result.errors).toBeNull();
     expect(handler.mock.calls[0]?.[0]).toEqual(request);
@@ -536,7 +526,7 @@ it("hands each channel request the credentials of the request that started its r
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
           lateChangeWindowMs: 60_000,

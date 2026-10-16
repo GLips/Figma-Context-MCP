@@ -4,7 +4,7 @@
  */
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never touches the network —
 // it talks to the relay iframe (ui.ts) via postMessage — and it only routes: link authentication
-// (link-auth.ts), document identity (document-identity.ts), the grant gate (grant-gate.ts), the
+// (link-auth.ts), the file's stamp (document-identity.ts), the grant gate (grant-gate.ts), the
 // runner (run-executor.ts) and the panel (grant-panel.ts) do the work.
 import { createDocumentIdentity } from "./document-identity.js";
 import { createGrantGate } from "./grant-gate.js";
@@ -56,16 +56,16 @@ const grants = createGrantStore(
 );
 const linkAuth = createLinkAuth({ show: (expandTo) => panel.show(expandTo) });
 const identity = createDocumentIdentity({
-  show: () => panel.show(),
-  onProven: (document) => {
-    gate.documentProven(document);
-    // Every other server proves it for itself; this saves each of them waiting for a call to ask.
-    offerClaim(document.fileKey);
+  // Queued runs need nothing here: each re-reads the stamp at dequeue and is refused under the old one.
+  onChanged: () => {
+    sessions.clear();
+    gate.documentChanged();
+  },
+  onReport: (document) => {
+    for (const key of linkAuth.authenticatedConnections()) toServer(key, { type: "DOCUMENT_REPORTED", document });
+    panel.show();
   },
 });
-function offerClaim(fileKey: string): void {
-  for (const key of linkAuth.authenticatedConnections()) toServer(key, { type: "DOCUMENT_CLAIMED", fileKey });
-}
 const gate = createGrantGate({
   store: grants,
   identity,
@@ -80,11 +80,14 @@ const gate = createGrantGate({
 });
 const panel = createGrantPanel({
   rows: gate.rows,
+  prompts: gate.prompts,
   nextPromptLapse: gate.nextPromptLapse,
-  document: (now) => {
-    if (identity.document) return { kind: "proven", fileName: identity.document.fileName };
+  document: () => {
     if (!linkAuth.authenticatedConnections().length) return null;
-    return { kind: "unproven", asking: gate.isAsking(now), pasted: identity.pastedLink };
+    const report = identity.report();
+    return report.kind === "identified"
+      ? { kind: "identified", fileName: report.fileName, documentId: report.documentId }
+      : report;
   },
   pairings: () => linkAuth.pairingRows(),
   get storageError() {
@@ -102,6 +105,7 @@ const executor = createRunExecutor({
   refusalAtDequeue: gate.refusalAtDequeue,
   sessions,
 });
+identity.start();
 panel.render();
 
 figma.ui.onmessage = (inbound: HostInbound) => {
@@ -134,26 +138,21 @@ function handlePanelControl(msg: PanelControl): void {
       executor.cancelConnection(msg.connKey, "disconnected");
       panel.forget(msg.connKey);
       linkAuth.closed(msg.connKey);
-      identity.closed(msg.connKey);
       gate.closed(msg.connKey);
       return;
     case "UI_DECISION":
-      if (msg.approve) gate.allow(msg.connKey);
-      else gate.deny(msg.connKey);
+      if (msg.approve) gate.allow(msg.connKey, msg.executionId, msg.documentId);
+      else gate.deny(msg.connKey, msg.executionId);
+      return;
+    case "UI_PICK":
+      gate.pick(msg.connKey, msg.executionId, msg.documentId);
+      return;
+    case "UI_RESTAMP":
+      void identity.restamp(executor.idle);
       return;
     case "UI_REVOKE":
       gate.revoke({ credentialId: msg.credentialId, project: msg.project });
       return;
-    case "UI_PASTE_LINK": {
-      // A claim for every server to prove, never an identity: a pasted link proves nothing itself.
-      const fileKey = identity.paste(msg.text);
-      if (fileKey === null) {
-        figma.notify("Framelink: that isn't a link to a Figma design file.", { error: true });
-        return;
-      }
-      offerClaim(fileKey);
-      return;
-    }
     case "UI_SIGN_IN":
       panel.requestSignIn(msg.connKey);
       return;
@@ -199,8 +198,8 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
   }
   const to: ReplyTo = { id: msg.id, connKey: key };
   if (!isLinkSetupRequest(msg.type) && linkAuth.credentialOf(key) === null) {
-    // An unauthenticated socket may be anything on a port in the block: it learns no claim, marks
-    // no file, settles no proof and sees no grant.
+    // An unauthenticated socket may be anything on a port in the block: it learns nothing about this
+    // file and sees no grant.
     reply(to, { type: "ERROR", error: "This plugin link hasn't authenticated, so the plugin refused that request." });
     return;
   }
@@ -226,23 +225,18 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     case "INTRODUCE":
       gate.introduce(to, msg);
       return;
-    case "PROVE_DOCUMENT":
-      identity.writeProof(to, msg.nonce);
-      return;
-    case "PROOF_SETTLED":
-      identity.proofSettled(to, msg.nonce, msg.outcome);
-      return;
     case "GRANT_STATUS":
-      void gate.answerStatus(to, msg.fileKey, msg.prompt);
+      void gate.answerStatus(to, msg);
       return;
     case "GRANT_PROMPT_CLOSED":
-      gate.closePrompt(to);
+      gate.closePrompt(to, msg.executionId);
       return;
     case "GRANT_CHANGED_ELSEWHERE":
-      void gate.changedElsewhere(to, msg.project, msg.fileKey);
+      void gate.changedElsewhere(to, msg.project, msg.documentId);
       return;
     case "SESSION_LOOKUP": {
-      const scope = gate.provenScopeOf(key);
+      identity.current();
+      const scope = gate.currentScopeOf(key);
       reply(to, { type: "SESSION_LOOKUP_RESULT", held: scope !== null && sessions.holds(scope, msg.handle) });
       return;
     }
@@ -250,20 +244,20 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       // The grant gate refuses here and again at dequeue; the session is checked here only, and
       // pinned until the run settles. A request missing its std-lib, document or session never got
       // this far: the parser refused it.
-      const scope = gate.admit(to, msg.fileKey);
+      const scope = gate.admit(to, msg.documentId);
       if (!scope) return;
       const admission = sessions.admit(scope, msg.session);
       if (admission.kind !== "admitted") {
         reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
         return;
       }
-      executor.runCode(to, msg.fileKey, admission.session, msg.code, msg.preamble, msg.lateChangeWindowMs);
+      executor.runCode(to, msg.documentId, admission.session, msg.code, msg.preamble, msg.lateChangeWindowMs);
       return;
     }
     case "SCREENSHOT":
-      if (gate.admit(to, msg.fileKey)) {
+      if (gate.admit(to, msg.documentId)) {
         const { nodeId, key: nodeKey, scale, context, margin } = msg;
-        executor.runScreenshot(to, msg.fileKey, { nodeId, key: nodeKey }, { scale, context, margin });
+        executor.runScreenshot(to, msg.documentId, { nodeId, key: nodeKey }, { scale, context, margin });
       }
       return;
     case "WRITE_ACCESS":

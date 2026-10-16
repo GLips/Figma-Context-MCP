@@ -7,7 +7,7 @@ import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { RequestTrace, type TraceEvent } from "~/commercial/plugin-bridge/request-trace.js";
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
-import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
 
 afterEach(() => {
@@ -39,7 +39,7 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
       {
         type: "EXECUTE_CODE",
         session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
+        documentId: TEST_DOCUMENT.documentId,
         code: "private code",
         preamble: "private preamble",
         lateChangeWindowMs: 60_000,
@@ -83,7 +83,7 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
       {
         type: "EXECUTE_CODE",
         session: TEST_SESSION_REQUEST,
-        fileKey: "FAKEfile1",
+        documentId: TEST_DOCUMENT.documentId,
         code: "",
         preamble: "",
         lateChangeWindowMs: 60_000,
@@ -142,7 +142,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "",
           preamble: "",
           lateChangeWindowMs: 60_000,
@@ -195,7 +195,7 @@ test("execution error result is traced as error without changing successful enve
     {
       type: "EXECUTE_CODE",
       session: TEST_SESSION_REQUEST,
-      fileKey: "FAKEfile1",
+      documentId: TEST_DOCUMENT.documentId,
       code: "",
       preamble: "",
       lateChangeWindowMs: 60_000,

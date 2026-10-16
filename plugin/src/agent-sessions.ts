@@ -47,13 +47,21 @@ export function createAgentSessions({
   }
 
   function evict(session: AgentSession): void {
-    sessions.delete(session.handle);
+    if (sessions.get(session.handle) === session) sessions.delete(session.handle);
   }
 
   return {
     /** Whether `handle` names a session under `scope`. A session under another scope is not held. */
     holds(scope: GrantScope, handle: string): boolean {
       return sessions.get(handle)?.scope === grantKey(scope);
+    },
+
+    /**
+     * Drop every session: the file's stamp changed, so the document they were bound to isn't this
+     * one any more. A run still holding one finishes with it; its handle resumes nothing after.
+     */
+    clear(): void {
+      sessions.clear();
     },
 
     /** Pin the session a run arriving under `grantScope` names, creating it if the server minted it. */

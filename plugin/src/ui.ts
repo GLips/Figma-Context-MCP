@@ -14,6 +14,7 @@ import type {
   HostOutbound,
   PanelControl,
   PanelPairing,
+  PanelPrompt,
   PanelRender,
   PanelGrantRow,
 } from "./panel.js";
@@ -103,10 +104,10 @@ window.onmessage = (event: MessageEvent<{ pluginMessage?: HostOutbound }>) => {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(outbound.frame));
 };
 
-// Allow / Deny → the host (sole arbiter), tagged with the row's connection. The button carries NO
-// grant logic: it reports the human's choice; the host records the grant.
-function decide(approve: boolean, connKey: ConnKey): void {
-  toSandbox({ type: "UI_DECISION", approve, connKey });
+// Allow / Deny → the host (sole arbiter), tagged with the call and the document the prompt showed.
+// The button carries NO grant logic: it reports the human's choice; the host records the grant.
+function decide(approve: boolean, { key, executionId, documentId }: PanelPrompt): void {
+  toSandbox({ type: "UI_DECISION", approve, connKey: key, executionId, documentId });
 }
 
 byId("strip").onclick = () => toSandbox({ type: "UI_TOGGLE" });
@@ -124,24 +125,24 @@ function render(state: PanelRender): void {
     if (state.document) detail.appendChild(documentCard(state.document));
     if (!state.grantRows.length && !state.pairings.length) detail.appendChild(emptyState());
     for (const pairing of state.pairings) detail.appendChild(pairingCard(pairing));
+    for (const prompt of state.prompts) detail.appendChild(promptCard(prompt));
     for (const row of state.grantRows) detail.appendChild(grantRowCard(row));
   }
   reportHeight();
 }
 
-// One glanceable line, in priority order: a code to confirm > a decision you owe > a file to
-// identify > spent writes > who is driving > who is ready.
-function renderStrip({ pairings, grantRows, document: doc, expanded }: PanelRender): void {
-  let wants = 0;
+// One glanceable line, in priority order: a code to confirm > a decision you owe > a file agents
+// can't use > spent writes > who is driving > who is ready.
+function renderStrip({ pairings, prompts, grantRows, document: doc, expanded }: PanelRender): void {
   let granted = 0;
   let active: PanelGrantRow | null = null;
   let writesSpent = false;
   for (const s of grantRows) {
     if (s.granted) granted++;
-    if (s.prompt !== null && !s.denied) wants++;
     if (s.active) active = s;
     if (s.writeAccess?.kind === "allowance-exhausted") writesSpent = true;
   }
+  const wants = prompts.filter((prompt) => !prompt.allowing).length;
 
   const offered = pairings.filter((p) => p.code !== null);
   let text: string;
@@ -150,10 +151,10 @@ function renderStrip({ pairings, grantRows, document: doc, expanded }: PanelRend
     text = offered.length === 1 ? "Pairing code " + offered[0].code : offered.length + " pairing codes to check";
     tone = "wants";
   } else if (wants) {
-    text = wants === 1 ? "An agent wants to edit this file" : wants + " agents want to edit this file";
+    text = wants === 1 ? "An agent is waiting on you" : wants + " agents are waiting on you";
     tone = "wants";
-  } else if (doc?.kind === "unproven" && doc.asking) {
-    text = "Paste this file's link to use it";
+  } else if (doc?.kind === "unidentified") {
+    text = "Agents can't use this file";
     tone = "wants";
   } else if (writesSpent) {
     // Writes are being refused until the human acts, so it outranks who is driving.
@@ -195,46 +196,54 @@ function orientationBanner(): HTMLElement {
   return intro;
 }
 
-// Which file this is, as a server proved it. Until one has, a server asking for a file can't pick
-// this one, so the human may paste its link: a claim the servers then prove, never an identity.
+// Which file this is, by the stamp this plugin keeps in it. The id is what agents name the file by.
 function documentCard(doc: NonNullable<PanelRender["document"]>): HTMLElement {
-  const card = el("div", doc.kind === "unproven" && doc.asking ? "card waiting" : "card");
+  const card = el("div", doc.kind === "unidentified" ? "card waiting" : "card");
   const lines = el("div", "card-lines");
   card.appendChild(lines);
-  if (doc.kind === "proven") {
+  if (doc.kind === "identified") {
     lines.appendChild(el("div", "card-title", doc.fileName));
-    lines.appendChild(el("div", "status-line", "This file is identified to your Framelink servers."));
+    lines.appendChild(el("div", "status-line", "Agents name this file as document " + doc.documentId + "."));
     return card;
   }
-  lines.appendChild(el("div", "card-title", "This file isn't identified yet"));
-  lines.appendChild(
-    el(
-      "div",
-      "status-line",
-      doc.pasted?.refuted
-        ? "That link isn't this file — it may be a copy. Paste this file's own link (Share → Copy link)."
-        : doc.pasted
-          ? "Checking the link you pasted…"
-          : doc.asking
-            ? "An agent wants a file to edit. To offer this one, paste its link (Share → Copy link)."
-            : "Paste this file's link (Share → Copy link) to let agents edit it.",
-    ),
-  );
-  if (doc.pasted && !doc.pasted.refuted) return card;
-  const row = el("div", "actions");
-  const input = el("input", "link-input") as HTMLInputElement;
-  input.placeholder = "https://www.figma.com/design/…";
-  const submit = el("button", "allow", "Use link");
-  const paste = (): void => {
-    if (input.value.trim()) toSandbox({ type: "UI_PASTE_LINK", text: input.value });
+  lines.appendChild(el("div", "card-title", "Agents can't use this file"));
+  lines.appendChild(el("div", "status-line", doc.problem));
+  return card;
+}
+
+// One call waiting on the human. Several can wait at once, each with its own buttons, so a click
+// always answers the call it was drawn for.
+function promptCard(p: PanelPrompt): HTMLElement {
+  const card = el("div", "card waiting");
+  const lines = el("div", "card-lines");
+  lines.appendChild(el("div", "card-title", p.project));
+  card.appendChild(lines);
+  const actions = el("div", "actions");
+  const button = (className: string, label: string, onClick: () => void): void => {
+    const node = el("button", className, label);
+    node.onclick = onClick;
+    actions.appendChild(node);
   };
-  submit.onclick = paste;
-  input.onkeydown = (event) => {
-    if (event.key === "Enter") paste();
-  };
-  row.appendChild(input);
-  row.appendChild(submit);
-  card.appendChild(row);
+  if (p.kind === "pick") {
+    // Two open files carry this document's id: a duplicate, most often. The agent can't tell them
+    // apart, so the human says which one this call means.
+    lines.appendChild(
+      el("div", "status-line", "This file is open twice, or has a copy open. Is this the one the agent should edit?"),
+    );
+    button("allow", "Use this one", () =>
+      toSandbox({ type: "UI_PICK", connKey: p.key, executionId: p.executionId, documentId: p.documentId }),
+    );
+    button("deny", "Give this copy its own identity", () => toSandbox({ type: "UI_RESTAMP" }));
+  } else if (p.allowing) {
+    lines.appendChild(el("div", "status-line", "Saving…"));
+  } else {
+    lines.appendChild(
+      el("div", "status-line", "Wants to edit this file. Allow lets every agent in this project edit it."),
+    );
+    button("allow", "Allow", () => decide(true, p));
+    button("deny", "Deny", () => decide(false, p));
+  }
+  card.appendChild(actions);
   return card;
 }
 
@@ -279,7 +288,7 @@ function pairingCard(p: PanelPairing): HTMLElement {
 
 // A row per connected server, and per project granted this file whose servers are all gone.
 function grantRowCard(s: PanelGrantRow): HTMLElement {
-  const card = el("div", s.prompt && !s.denied ? "card waiting" : "card");
+  const card = el("div", "card");
   const lines = el("div", "card-lines");
   lines.appendChild(el("div", "card-title", s.project || "(unknown project)"));
   card.appendChild(lines);
@@ -297,13 +306,7 @@ function grantRowCard(s: PanelGrantRow): HTMLElement {
     // on this file, so every agent in it is stopped and its next write asks again.
     button("deny", "Revoke", () => toSandbox({ type: "UI_REVOKE", ...grant }));
   };
-  if (s.granted && s.prompt === "select" && s.key !== null) {
-    // Several granted files are open and the agent named none: the human picks which.
-    const key = s.key;
-    lines.appendChild(el("div", "status-line", "An agent wants a file to edit. Use this one?"));
-    button("allow", "Use this file", () => decide(true, key));
-    revoke();
-  } else if (s.granted) {
+  if (s.granted) {
     lines.appendChild(
       el(
         "div",
@@ -313,25 +316,6 @@ function grantRowCard(s: PanelGrantRow): HTMLElement {
     );
     lines.appendChild(el("div", "status-line", "Revoking stops every agent in this project."));
     revoke();
-  } else if (s.allowing) {
-    lines.appendChild(el("div", "status-line", "Saving…"));
-  } else if (s.key !== null && s.grant !== null && (s.prompt || s.denied)) {
-    const key = s.key;
-    lines.appendChild(
-      el(
-        "div",
-        "status-line",
-        s.denied
-          ? "Denied — its calls are refused. Allow lets every agent in this project edit this file."
-          : s.prompt === "select"
-            ? "An agent wants a file to edit. Allow picks this one, for every agent in this project."
-            : "Wants to edit this file. Allow lets every agent in this project edit it.",
-      ),
-    );
-    button("allow", "Allow", () => decide(true, key));
-    if (!s.denied) button("deny", "Deny", () => decide(false, key));
-  } else if (s.prompt) {
-    lines.appendChild(el("div", "status-line", "Wants to edit a file. Identify this one above to offer it."));
   } else {
     lines.appendChild(el("div", "status-line", "Connected — not allowed to edit this file"));
   }

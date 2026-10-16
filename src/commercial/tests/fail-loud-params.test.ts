@@ -14,6 +14,7 @@ import {
   createTestWriteAccess,
   targetedTestCall,
   linkedTestResolution,
+  TEST_DOCUMENT,
   TEST_PLUGIN_LINK,
 } from "./fixtures/write-access.js";
 
@@ -80,7 +81,7 @@ describe("unknown MCP tool params fail loud", () => {
 
     expect(request).toHaveBeenCalledWith(
       TEST_PLUGIN_LINK,
-      { type: "SCREENSHOT", fileKey: "TESTfile1", nodeId: "1:2", scale: 2 },
+      { type: "SCREENSHOT", documentId: TEST_DOCUMENT.documentId, nodeId: "1:2", scale: 2 },
       expect.any(String),
       { signal: expect.any(AbortSignal) },
     );

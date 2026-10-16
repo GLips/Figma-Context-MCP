@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGrantStore, type GrantStorage } from "./grant-store.js";
 
-const scope = { credentialId: "cred-1", ownerId: "user-1", project: "/proj", fileKey: "FILE1" };
+const scope = { credentialId: "cred-1", ownerId: "user-1", project: "/proj", documentId: "0123456789abcdef" };
 
 function memoryStorage(): GrantStorage & { records: Map<string, unknown> } {
   const records = new Map<string, unknown>();
@@ -26,9 +26,9 @@ test("two plugin instances share grants through storage, one record per grant", 
   await here.grant(scope);
   await here.grant({ ...scope, project: "/other" });
   assert.equal(await there.settledAnswer(scope), "granted");
-  assert.equal(await there.settledAnswer({ ...scope, fileKey: "FILE2" }), "absent");
+  assert.equal(await there.settledAnswer({ ...scope, documentId: "fedcba9876543210" }), "absent");
   assert.deepEqual(
-    (await there.grantsOnDocument("user-1", "FILE1")).map((grant) => grant.project).sort(),
+    (await there.grantsOnDocument("user-1", "0123456789abcdef")).map((grant) => grant.project).sort(),
     ["/other", "/proj"],
   );
   // The other instance's revoke reaches this one when it is told to read again.

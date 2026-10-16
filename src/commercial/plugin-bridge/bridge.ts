@@ -4,15 +4,17 @@
  */
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
-import { figmaFileKey } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import {
+  openDocumentSnapshot,
   targetPluginCall,
   type CallTarget,
   type CallTargetOptions,
   type CallTargetRequest,
+  type OpenDocumentSnapshot,
 } from "./call-target.js";
+import type { DocumentId } from "./document-id.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
 import { LinkCredentialStore } from "./link-credential.js";
 import {
@@ -22,13 +24,7 @@ import {
   type PairingConfirmation,
   type PairingOffer,
 } from "./link-setup.js";
-import {
-  DEFAULT_PROOF_TIMING,
-  LinkDocuments,
-  type DocumentReader,
-  type LinkDocument,
-  type ProofTiming,
-} from "./link-documents.js";
+import { LinkDocuments, type LinkDocument } from "./link-documents.js";
 import { canonicalProjectPath } from "./project.js";
 import { RelayConnection, isSettlingLinkStage } from "./relay-connection.js";
 import { MAX_CHANNEL_BYTES, RelayListener } from "./relay-listener.js";
@@ -65,8 +61,10 @@ export type {
   CallTarget,
   CallTargetBlock,
   CallTargetRequest,
+  OpenDocument,
+  OpenDocumentSnapshot,
 } from "./call-target.js";
-export type { DocumentReader, LinkDocument } from "./link-documents.js";
+export type { LinkDocument, OpenFile } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
 
 // How long after this server starts, or loses a link, a plugin that is still open may take to be back
@@ -142,7 +140,6 @@ export class PluginBridge {
   private readonly channel: ChannelServer;
   private readonly setup: LinkSetup;
   private readonly documents: LinkDocuments;
-  private readonly documentReader: DocumentReader | null;
   private readonly events: PluginBridgeEvents;
 
   private readonly routes: EventRoutes = {
@@ -155,12 +152,12 @@ export class PluginBridge {
           this.request(other, {
             type: "GRANT_CHANGED_ELSEWHERE",
             project: event.project,
-            fileKey: event.fileKey,
+            documentId: event.documentId,
           }).catch(() => {});
       this.events.onGrantChanged?.(link, event.granted);
     },
-    // The plugin's word, already admitted as a wire file key by the protocol's parser.
-    DOCUMENT_CLAIMED: (link, event) => this.documents.claimed(link, figmaFileKey(event.fileKey)),
+    // A new stamp or new names: a call waiting on this link sees it on its next poll.
+    DOCUMENT_REPORTED: (link, event) => this.documents.reported(link, event.document),
     WRITE_ACCESS_SIGN_IN: (link) => this.events.onWriteAccessSignIn?.(link),
     CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
     RUN_STATE: (link, event) => this.ledger.runState(link, event),
@@ -175,16 +172,13 @@ export class PluginBridge {
   };
 
   // Everything injectable for the tests and the contract harness: `linkCredentials` isolates
-  // persistence to a temp dir; `project` stands in for the cwd; `documentReader` for Figma's REST
-  // API; the clocks let them pin timeout behaviour without waiting out the real deadlines; `trace`
+  // persistence to a temp dir; `project` stands in for the cwd; the clocks let them pin timeout behaviour without waiting out the real deadlines; `trace`
   // lets a test read what the trace kept. Production takes the defaults, and index.ts registers the
-  // production capability allowlist and the reader.
+  // production capability allowlist.
   constructor({
     linkCredentials = new LinkCredentialStore(),
     project = canonicalProjectPath(),
     framelinkOrigin = new URL(DEFAULT_FRAMELINK_API_URL).origin,
-    documentReader = null,
-    proofTiming = DEFAULT_PROOF_TIMING,
     requestTimeoutMs = DEFAULT_TIMEOUT_MS,
     runCeilingMs = DEFAULT_RUN_CEILING_MS,
     unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
@@ -196,9 +190,6 @@ export class PluginBridge {
     linkCredentials?: LinkCredentialStore;
     project?: string;
     framelinkOrigin?: string;
-    /** Reads files to prove links no call asked about yet. Null: only a call's reader proves. */
-    documentReader?: DocumentReader | null;
-    proofTiming?: ProofTiming;
     requestTimeoutMs?: number;
     runCeilingMs?: number;
     unauthenticatedLinkMs?: number;
@@ -208,7 +199,6 @@ export class PluginBridge {
     trace?: RequestTrace;
   } = {}) {
     this.events = events;
-    this.documentReader = documentReader;
     this.linkSettleMs = linkSettleMs;
     this.ledger = new RunLedger({
       requestTimeoutMs,
@@ -230,8 +220,6 @@ export class PluginBridge {
     });
     this.documents = new LinkDocuments({
       send: (link, payload) => this.request(link, payload),
-      reader: documentReader,
-      timing: proofTiming,
       project,
       framelinkOrigin,
     });
@@ -380,27 +368,46 @@ export class PluginBridge {
   }
 
   /**
-   * The one document a call runs against, and the link to run it on — see call-target.ts. Naming
-   * neither a session nor a file lets the human pick. Prompts in the plugin; submits nothing.
+   * The one document a call runs against, and the link to run it on — see call-target.ts. Prompts
+   * in the plugin only for a call that named its document; submits nothing.
    */
-  targetCall(
-    request: CallTargetRequest,
-    options: Omit<CallTargetOptions, "reader"> & { reader?: DocumentReader | null },
-  ): Promise<CallTarget> {
+  targetCall(request: CallTargetRequest, options: CallTargetOptions): Promise<CallTarget> {
     return targetPluginCall(
       {
         links: () => this.authenticatedLinks(),
         linksSettleAt: () => this.linksUnsettledSince + this.linkSettleMs,
         documents: this.documents,
-        askGrant: (link, key, prompt, signal) => this.grantStatus(link, key, prompt, signal),
-        closePrompt: (link) => {
-          this.request(link, { type: "GRANT_PROMPT_CLOSED" }).catch(() => {});
+        documentOf: (link) => this.documentOf(link),
+        grantStatus: (link, ask, signal) => this.grantStatus(link, ask, signal),
+        closePrompt: (link, executionId) => {
+          this.request(link, { type: "GRANT_PROMPT_CLOSED", executionId }).catch(() => {});
         },
         lookupSession: async (link, handle, signal) =>
           (await this.request(link, { type: "SESSION_LOOKUP", handle }, { signal })).held,
       },
       request,
-      { ...options, reader: options.reader ?? this.documentReader },
+      options,
+    );
+  }
+
+  /**
+   * Every open plugin's document and this project's grant on it, asked without prompting, once each
+   * link's introduction has answered. What a refusal and the reference show an agent to choose from.
+   */
+  async openDocuments(
+    executionId: ExecutionId,
+    signal: AbortSignal,
+  ): Promise<OpenDocumentSnapshot> {
+    const links = this.authenticatedLinks();
+    await this.documents.settled(links);
+    return openDocumentSnapshot(
+      links,
+      {
+        documentOf: (link) => this.documentOf(link),
+        grantStatus: (link, ask, askSignal) => this.grantStatus(link, ask, askSignal),
+      },
+      executionId,
+      signal,
     );
   }
 
@@ -409,14 +416,16 @@ export class PluginBridge {
     return this.documents.documentOf(link);
   }
 
-  /** Ask a link's plugin whether this project holds a grant on `fileKey`, prompting as `prompt` says. */
+  /**
+   * Ask a link's plugin whether this project holds a grant on `documentId`, for the call
+   * `executionId`, prompting as `prompt` says.
+   */
   async grantStatus(
     link: PluginLink,
-    fileKey: string | null,
-    prompt: GrantPrompt,
+    ask: { executionId: ExecutionId; documentId: DocumentId; prompt: GrantPrompt },
     signal?: AbortSignal,
   ): Promise<GrantState> {
-    const reply = await this.request(link, { type: "GRANT_STATUS", fileKey, prompt }, { signal });
+    const reply = await this.request(link, { type: "GRANT_STATUS", ...ask }, { signal });
     return reply.state;
   }
 

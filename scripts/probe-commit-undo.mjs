@@ -27,7 +27,7 @@
 // Runbook (no plugin rebuild needed — the probe speaks raw figma.*):
 //   1. Open the Framelink plugin in a SCRATCH Figma file (the probe drives real undo history).
 //   2. pnpm probe:commit-undo
-//   3. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
+//   3. When the plugin asks, click Allow (FIGMA_DOCUMENT names the file; a run without it lists them).
 //
 // Run it in a SCRATCH file, really: the probe triggers at most 15 undos (1 in scenario 1; 1 + a
 // capped walk of 3 in 1b; the counting loops in 2/3 walk up to 5 each), every one after a

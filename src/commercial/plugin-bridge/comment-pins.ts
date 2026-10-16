@@ -20,13 +20,17 @@ export interface CommentPinRecord {
  * must not outlive that request. Canvas-point threads are dropped here; they land on no node.
  *
  * The file is the run's own document, never one the payload names: the sandbox may only read the
- * comments of the file it was admitted to.
+ * comments of the file it was admitted to. That needs the file key the plugin reported; a build that
+ * reports none has no comments to read here, and the preamble takes the refusal as no counts.
  */
 export function createCommentPinsCapability(): CapabilityHandler {
   return async (_payload, { signal, run }) => {
     const { fileKey } = run;
     if (fileKey === null)
-      throw { code: "INVALID_INPUT", message: "comments.pins is only for a run on a document." };
+      throw {
+        code: "FILE_KEY_UNAVAILABLE",
+        message: "This run's plugin reported no file key, so its file's comments can't be read.",
+      };
     if (!run.figma)
       throw {
         code: "FIGMA_AUTH_UNAVAILABLE",

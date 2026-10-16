@@ -2,10 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { FigmaService, staticCredentialSource, type FigmaCredential } from "~/services/figma.js";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge, type PluginLink } from "./bridge.js";
-import { documentReaderFor } from "./link-documents.js";
 import { pluginSeenRecently, recordPluginSighting } from "./plugin-sighting.js";
 import { createLocalImageReader, type LocalImageReader } from "./images.js";
 import { ImageUploadStore } from "./image-intake.js";
@@ -93,16 +91,10 @@ export function bindPluginAdvertisement(
 export function startPluginBridge({
   assetRoot,
   framelinkApiUrl,
-  figmaCredential,
   acceptUploads = false,
 }: {
   assetRoot: string;
   framelinkApiUrl: string;
-  /**
-   * The operator's Figma credential, read when a plugin link must be proven to be in a file before
-   * any call asks. Absent (an HTTP server with no global token): each call's own token proves.
-   */
-  figmaCredential: FigmaCredential | undefined;
   /**
    * Open the image upload endpoint. Only a long-lived server wants it: an upload outlives the command
    * that made it, so a CLI run's own short-lived runtime has nothing to hold handles for.
@@ -149,9 +141,6 @@ export function startPluginBridge({
   };
   const bridge: PluginBridge = new PluginBridge({
     framelinkOrigin,
-    documentReader: figmaCredential
-      ? documentReaderFor(new FigmaService(staticCredentialSource(figmaCredential)))
-      : null,
     events: {
       onLinkAuthenticated: (link) => {
         recordPluginSighting();

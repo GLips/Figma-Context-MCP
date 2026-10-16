@@ -13,7 +13,7 @@ import { WebSocket } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
 import { mintExecutionId } from "../../execution-id.js";
 import { answerLinkSetup } from "./plugin-link-peer.js";
-import { TEST_SESSION_REQUEST } from "./write-access.js";
+import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./write-access.js";
 
 const mode = process.argv[2];
 const directory = await mkdtemp(join(tmpdir(), "fig70-socket-"));
@@ -116,7 +116,7 @@ try {
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "unused",
           preamble: "unused",
           lateChangeWindowMs: 60_000,
@@ -142,7 +142,8 @@ try {
   const { ws: replacement, link } = await peer();
   const status = await bridge.request(link, {
     type: "GRANT_STATUS",
-    fileKey: null,
+    executionId: mintExecutionId(),
+    documentId: TEST_DOCUMENT.documentId,
     prompt: "none",
   });
   assert.equal(status.type, "GRANT");

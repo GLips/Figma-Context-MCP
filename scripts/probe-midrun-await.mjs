@@ -20,7 +20,7 @@
 //          the probe needs the build you just made, not whatever Figma has cached)
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:midrun-await               (this script)
-//   5. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
+//   5. When the plugin asks, click Allow (FIGMA_DOCUMENT names the file; a run without it lists them).
 // The probe renders one small frame with two image fills, verifies the suspension, deletes the
 // frame again, and prints PASS/FAIL. Safe to re-run.
 //

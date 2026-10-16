@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -60,6 +60,11 @@ export const PROTOCOL_VERSION = 14;
  *     FlcmHost.getSession keeps the run's session rather than one store per plugin run.
  * v14: one execution id. A run's request id is its execution id, minted by the server once per call
  *     and never resubmitted once admitted; every run-scoped frame names it as `executionId`.
+ * v15: stamped documents. The plugin stamps each file with a document id and reports it, with the
+ *     file's name, page names and (where the build has one) file key, in INTRODUCED and
+ *     DOCUMENT_REPORTED. PROVE_DOCUMENT, PROOF_SETTLED and DOCUMENT_CLAIMED are gone. Runs, grants and
+ *     grant prompts name the document id; prompts are per call, keyed by execution id, and a "pick"
+ *     prompt lets the human choose between two open copies of one document.
  */
 
 // ---- Transport ----
@@ -179,59 +184,75 @@ export const PAIRING_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4
 
 // ---- Documents and grants ----
 
-/** Figma file keys are alphanumeric. Bounded here because the plugin puts one in storage keys. */
+/** Figma file keys are alphanumeric. Bounded here because the plugin reports one. */
 const WIRE_FILE_KEY = /^[A-Za-z0-9]{1,128}$/;
 
 export function isWireFileKey(value: unknown): value is string {
   return typeof value === "string" && WIRE_FILE_KEY.test(value);
 }
 
-// The longest project path either side accepts. A project is a directory path, never free text.
-const MAX_PROJECT_LENGTH = 4096;
-
 /**
- * Where a document proof lives: the file root's shared plugin data, which the server reads back over
- * REST (`plugin_data=shared`). Each nonce is its own key (`DOCUMENT_PROOF_KEY_PREFIX` + nonce), so
- * two plugin instances in one file proving at once never overwrite each other's. `DOCUMENT_CLAIM_KEY`
- * holds the file key a proof established, offered again by later plugin runs. A duplicated file
- * carries the claim too, which is why a claim is only ever a claim.
+ * A document id: the stamp the plugin writes into a file's root the first time it needs one, 16
+ * lowercase Crockford base32 characters. It tells open files apart and keys grants; it proves nothing,
+ * and a duplicated file carries its original's.
  */
-export const DOCUMENT_DATA_NAMESPACE = "framelink";
-export const DOCUMENT_PROOF_KEY_PREFIX = "proof:";
-export const DOCUMENT_CLAIM_KEY = "fileKey";
+export const DOCUMENT_ID_PATTERN = /^[0-9a-hjkmnp-tv-z]{16}$/;
 
-/** The proof nonces a file root's shared plugin data holds. Off a REST read, so untrusted. */
-export function documentProofNonces(sharedPluginData: unknown): string[] {
-  if (!isRecord(sharedPluginData)) return [];
-  const ours = sharedPluginData[DOCUMENT_DATA_NAMESPACE];
-  if (!isRecord(ours)) return [];
-  return Object.keys(ours)
-    .filter((key) => key.startsWith(DOCUMENT_PROOF_KEY_PREFIX) && ours[key])
-    .map((key) => key.slice(DOCUMENT_PROOF_KEY_PREFIX.length))
-    .filter(isLinkToken);
+export function isDocumentId(value: unknown): value is string {
+  return typeof value === "string" && DOCUMENT_ID_PATTERN.test(value);
 }
 
-/** How a document proof ended, as the server tells the link it challenged. */
-export type ProofOutcome =
-  | { kind: "proven"; fileKey: string; fileName: string }
-  // The link claimed `fileKey` (or its human pasted it), and the nonce never showed up there.
-  | { kind: "refuted"; fileKey: string }
-  // Nothing learned: the link wasn't in the file a call named, or the file couldn't be read.
-  | { kind: "abandoned" };
+// The longest project path either side accepts. A project is a directory path, never free text.
+const MAX_PROJECT_LENGTH = 4096;
+// Names are display text an agent chooses by. Bounded so a huge file can't flood a reply.
+const MAX_NAME_LENGTH = 512;
+export const MAX_REPORTED_PAGES = 200;
 
-/** What a GRANT_STATUS poll asks the panel to show while the answer isn't `granted`. */
-export const GRANT_PROMPTS = ["none", "grant", "select"] as const;
+/**
+ * What a plugin says about the file it is in. `identified`: the file's stamp, with the names an agent
+ * or human chooses by, and `fileKey` only where the build exposes `figma.fileKey`. `unidentified`:
+ * the stamp couldn't be written (a viewer, say), so the link executes nothing.
+ */
+export type DocumentReport =
+  | { kind: "identified"; documentId: string; fileName: string; pageNames: string[]; fileKey?: string }
+  | { kind: "unidentified"; problem: string };
+
+function parseDocumentReport(value: unknown): DocumentReport | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === "unidentified")
+    return { kind: "unidentified", problem: typeof value.problem === "string" ? value.problem.slice(0, MAX_NAME_LENGTH) : "" };
+  if (value.kind !== "identified" || !isDocumentId(value.documentId) || typeof value.fileName !== "string") return null;
+  if (!Array.isArray(value.pageNames) || !value.pageNames.every((name) => typeof name === "string")) return null;
+  const report: DocumentReport = {
+    kind: "identified",
+    documentId: value.documentId,
+    fileName: value.fileName.slice(0, MAX_NAME_LENGTH),
+    pageNames: (value.pageNames as string[]).slice(0, MAX_REPORTED_PAGES).map((name) => name.slice(0, MAX_NAME_LENGTH)),
+  };
+  if (value.fileKey !== undefined) {
+    if (!isWireFileKey(value.fileKey)) return null;
+    report.fileKey = value.fileKey;
+  }
+  return report;
+}
+
+/**
+ * What a GRANT_STATUS poll asks the panel to show while the answer isn't final: nothing, the Allow
+ * prompt for this call, or the pick between copies of one document for this call.
+ */
+export const GRANT_PROMPTS = ["none", "allow", "pick"] as const;
 export type GrantPrompt = (typeof GRANT_PROMPTS)[number];
 
 /**
  * A plugin's answer to GRANT_STATUS:
- *   • granted — this project may edit the named document; for `select`, the human also picked it.
- *   • absent — no grant, and nothing was asked (`none`).
- *   • pending — the prompt is showing.
- *   • denied — the human said no to this server.
- *   • unproven — the link isn't proven to be in the named document, or none was named.
+ *   • granted — this project may edit the named document.
+ *   • absent — no grant, and nothing was asked (`none`), or no Figma user is signed in to grant one.
+ *   • pending — the call's prompt is showing.
+ *   • denied — the human said no to this call.
+ *   • picked — the human chose this panel's copy for this call (`pick`); grants are untouched.
+ *   • other-document — the file this plugin is in isn't stamped with the named document id (now).
  */
-export const GRANT_STATES = ["granted", "absent", "pending", "denied", "unproven"] as const;
+export const GRANT_STATES = ["granted", "absent", "pending", "denied", "picked", "other-document"] as const;
 export type GrantState = (typeof GRANT_STATES)[number];
 
 /** Why a run was refused before anything executed: no grant, or not the document it names. */
@@ -300,25 +321,25 @@ export type ServerRequest =
   // The human confirmed `code`: store this installation credential. Sent only to the link showing it.
   | { type: "PAIR_CONFIRMED"; code: string; credentialId: string; secret: string }
   // Who this server is: the project grants key on (its canonical working directory), and the origin
-  // of FRAMELINK_API_URL, the only origin the plugin opens sign-in pages on. Answered with the claim.
+  // of FRAMELINK_API_URL, the only origin the plugin opens sign-in pages on. Answered with the
+  // document this plugin is in; later changes arrive as DOCUMENT_REPORTED.
   | { type: "INTRODUCE"; project: string; framelinkOrigin: string }
-  // Write `nonce` into the file root's proofs, for the server to find over REST.
-  | { type: "PROVE_DOCUMENT"; nonce: string }
-  | { type: "PROOF_SETTLED"; nonce: string; outcome: ProofOutcome }
-  // `fileKey` is the document the server proved this link to be in, or null when it proved none.
-  | { type: "GRANT_STATUS"; fileKey: string | null; prompt: GrantPrompt }
-  // The call this connection's prompt served is over: stop showing it.
-  | { type: "GRANT_PROMPT_CLOSED" }
+  // Is this project granted `documentId`, for the call `executionId`, prompting as `prompt` says? A
+  // prompt is the call's own: polls keep it open, and GRANT_PROMPT_CLOSED or silence ends it.
+  | { type: "GRANT_STATUS"; executionId: string; documentId: string; prompt: GrantPrompt }
+  // The call `executionId` is over: stop showing its prompt here.
+  | { type: "GRANT_PROMPT_CLOSED"; executionId: string }
   // Another plugin instance changed this grant: re-read it. A hint; storage is the record.
-  | { type: "GRANT_CHANGED_ELSEWHERE"; project: string; fileKey: string }
-  // Does this plugin hold session `handle` for this server's project, in its proven document?
+  | { type: "GRANT_CHANGED_ELSEWHERE"; project: string; documentId: string }
+  // Does this plugin hold session `handle` for this server's project, in the document it is in?
   | { type: "SESSION_LOOKUP"; handle: string }
   | {
       type: "EXECUTE_CODE";
       code: string;
       preamble: string;
-      // The document this run is for. The plugin runs it only there, and only under a grant.
-      fileKey: string;
+      // The document this run is for. The plugin runs it only while its file carries this stamp,
+      // and only under a grant.
+      documentId: string;
       // The agent session the run's `session` binding is, scoped to the grant it runs under.
       session: SessionRequest;
       // How long past a "no change" reply the plugin keeps watching for a change it would charge to
@@ -329,7 +350,7 @@ export type ServerRequest =
   | { type: "WRITE_ACCESS"; notice: WriteAccessNotice }
   | {
       type: "SCREENSHOT";
-      fileKey: string;
+      documentId: string;
       nodeId?: string;
       key?: string;
       scale?: number;
@@ -401,21 +422,15 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       return isProject(f.project) && typeof f.framelinkOrigin === "string"
         ? { type: "INTRODUCE", id, project: f.project, framelinkOrigin: f.framelinkOrigin }
         : null;
-    case "PROVE_DOCUMENT":
-      return isLinkToken(f.nonce) ? { type: "PROVE_DOCUMENT", id, nonce: f.nonce } : null;
-    case "PROOF_SETTLED": {
-      const outcome = parseProofOutcome(f.outcome);
-      return isLinkToken(f.nonce) && outcome ? { type: "PROOF_SETTLED", id, nonce: f.nonce, outcome } : null;
-    }
     case "GRANT_STATUS":
-      return (f.fileKey === null || isWireFileKey(f.fileKey)) && isOneOf(GRANT_PROMPTS, f.prompt)
-        ? { type: "GRANT_STATUS", id, fileKey: f.fileKey, prompt: f.prompt }
+      return isExecutionId(f.executionId) && isDocumentId(f.documentId) && isOneOf(GRANT_PROMPTS, f.prompt)
+        ? { type: "GRANT_STATUS", id, executionId: f.executionId, documentId: f.documentId, prompt: f.prompt }
         : null;
     case "GRANT_PROMPT_CLOSED":
-      return { type: f.type, id };
+      return isExecutionId(f.executionId) ? { type: f.type, id, executionId: f.executionId } : null;
     case "GRANT_CHANGED_ELSEWHERE":
-      return isProject(f.project) && isWireFileKey(f.fileKey)
-        ? { type: "GRANT_CHANGED_ELSEWHERE", id, project: f.project, fileKey: f.fileKey }
+      return isProject(f.project) && isDocumentId(f.documentId)
+        ? { type: "GRANT_CHANGED_ELSEWHERE", id, project: f.project, documentId: f.documentId }
         : null;
     case "SESSION_LOOKUP":
       return isSessionHandle(f.handle) ? { type: "SESSION_LOOKUP", id, handle: f.handle } : null;
@@ -424,7 +439,7 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       // never defaulted.
       if (typeof f.preamble !== "string" || !f.preamble) return null;
       if (typeof f.lateChangeWindowMs !== "number" || !(f.lateChangeWindowMs >= 0)) return null;
-      if (!isWireFileKey(f.fileKey)) return null;
+      if (!isDocumentId(f.documentId)) return null;
       const session = parseSessionRequest(f.session);
       if (!session) return null;
       return {
@@ -432,7 +447,7 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
         id,
         code: typeof f.code === "string" ? f.code : "",
         preamble: f.preamble,
-        fileKey: f.fileKey,
+        documentId: f.documentId,
         session,
         lateChangeWindowMs: f.lateChangeWindowMs,
       };
@@ -442,11 +457,11 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       return notice ? { type: "WRITE_ACCESS", id, notice } : null;
     }
     case "SCREENSHOT":
-      if (!isWireFileKey(f.fileKey)) return null;
+      if (!isDocumentId(f.documentId)) return null;
       return {
         type: "SCREENSHOT",
         id,
-        fileKey: f.fileKey,
+        documentId: f.documentId,
         nodeId: typeof f.nodeId === "string" ? f.nodeId : undefined,
         key: typeof f.key === "string" ? f.key : undefined,
         scale: typeof f.scale === "number" ? f.scale : undefined,
@@ -501,10 +516,7 @@ export interface ReplyByRequest {
   PAIRING_OFFER: { type: "PAIRING_OFFER_ACK" };
   PAIRING_CLOSED: { type: "PAIRING_CLOSED_ACK" };
   PAIR_CONFIRMED: { type: "CREDENTIAL_STORED" };
-  // `claim` is the file key this file's root says a past proof established, or null.
-  INTRODUCE: { type: "INTRODUCED"; claim: string | null };
-  PROVE_DOCUMENT: { type: "PROOF_WRITTEN" };
-  PROOF_SETTLED: { type: "PROOF_SETTLED_ACK" };
+  INTRODUCE: { type: "INTRODUCED"; document: DocumentReport };
   GRANT_STATUS: { type: "GRANT"; state: GrantState };
   GRANT_PROMPT_CLOSED: { type: "GRANT_PROMPT_CLOSED_ACK" };
   GRANT_CHANGED_ELSEWHERE: { type: "GRANT_CHANGED_ELSEWHERE_ACK" };
@@ -556,14 +568,10 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
       return f.type === "PAIRING_CLOSED_ACK" ? { type: "PAIRING_CLOSED_ACK" } : null;
     case "PAIR_CONFIRMED":
       return f.type === "CREDENTIAL_STORED" ? { type: "CREDENTIAL_STORED" } : null;
-    case "INTRODUCE":
-      return f.type === "INTRODUCED" && (f.claim === null || isWireFileKey(f.claim))
-        ? { type: "INTRODUCED", claim: f.claim }
-        : null;
-    case "PROVE_DOCUMENT":
-      return f.type === "PROOF_WRITTEN" ? { type: "PROOF_WRITTEN" } : null;
-    case "PROOF_SETTLED":
-      return f.type === "PROOF_SETTLED_ACK" ? { type: "PROOF_SETTLED_ACK" } : null;
+    case "INTRODUCE": {
+      const document = f.type === "INTRODUCED" ? parseDocumentReport(f.document) : null;
+      return document ? { type: "INTRODUCED", document } : null;
+    }
     case "GRANT_STATUS":
       return f.type === "GRANT" && isOneOf(GRANT_STATES, f.state) ? { type: "GRANT", state: f.state } : null;
     case "GRANT_PROMPT_CLOSED":
@@ -610,12 +618,11 @@ export function parseExecuteCodeResult(value: unknown): ExecuteCodeResult | null
 
 /** Frames the plugin sends unprompted. None is a reply; CHANNEL_REQUEST carries the plugin's own id. */
 export type PluginEvent =
-  // This plugin instance granted or revoked `project` on `fileKey`. The server passes it on to its
+  // This plugin instance granted or revoked `project` on `documentId`. The server passes it on to its
   // other links, so instances of the plugin with that document open re-read the grant.
-  | { type: "GRANT_CHANGED"; project: string; fileKey: string; granted: boolean }
-  // A file this plugin may be in, for the server to prove — never proof itself: a link the human
-  // pasted, or the file another server just proved.
-  | { type: "DOCUMENT_CLAIMED"; fileKey: string }
+  | { type: "GRANT_CHANGED"; project: string; documentId: string; granted: boolean }
+  // The file's stamp, name or page names changed since INTRODUCED: this is the report now.
+  | { type: "DOCUMENT_REPORTED"; document: DocumentReport }
   // The human clicked the panel's sign-in button.
   | { type: "WRITE_ACCESS_SIGN_IN" }
   // A mid-run call to a server capability, tagged with the run it serves.
@@ -640,11 +647,13 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
   const f = value;
   switch (f.type) {
     case "GRANT_CHANGED":
-      return isProject(f.project) && isWireFileKey(f.fileKey) && typeof f.granted === "boolean"
-        ? { type: "GRANT_CHANGED", project: f.project, fileKey: f.fileKey, granted: f.granted }
+      return isProject(f.project) && isDocumentId(f.documentId) && typeof f.granted === "boolean"
+        ? { type: "GRANT_CHANGED", project: f.project, documentId: f.documentId, granted: f.granted }
         : null;
-    case "DOCUMENT_CLAIMED":
-      return isWireFileKey(f.fileKey) ? { type: "DOCUMENT_CLAIMED", fileKey: f.fileKey } : null;
+    case "DOCUMENT_REPORTED": {
+      const document = parseDocumentReport(f.document);
+      return document ? { type: "DOCUMENT_REPORTED", document } : null;
+    }
     case "WRITE_ACCESS_SIGN_IN":
       return { type: f.type };
     case "CHANNEL_REQUEST":
@@ -700,14 +709,9 @@ function isProject(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_PROJECT_LENGTH;
 }
 
-function parseProofOutcome(value: unknown): ProofOutcome | null {
-  if (!isRecord(value)) return null;
-  if (value.kind === "abandoned") return { kind: "abandoned" };
-  if (!isWireFileKey(value.fileKey)) return null;
-  if (value.kind === "refuted") return { kind: "refuted", fileKey: value.fileKey };
-  return value.kind === "proven" && typeof value.fileName === "string"
-    ? { kind: "proven", fileKey: value.fileKey, fileName: value.fileName }
-    : null;
+// Execution ids are server-minted UUIDs; bounded because the plugin keys prompts on them.
+function isExecutionId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128;
 }
 
 function parseSessionRequest(value: unknown): SessionRequest | null {

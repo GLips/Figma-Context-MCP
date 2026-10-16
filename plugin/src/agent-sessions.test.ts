@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgentSessions } from "./agent-sessions.js";
 
-const SCOPE = { credentialId: "credential", ownerId: "owner", project: "/project", fileKey: "FILEkey123" };
+const SCOPE = { credentialId: "credential", ownerId: "owner", project: "/project", documentId: "0123456789abcdef" };
 const open = (sessions: ReturnType<typeof createAgentSessions>, handle: string) => {
   const admission = sessions.admit(SCOPE, { handle, create: true });
   assert.equal(admission.kind, "admitted");

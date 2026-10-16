@@ -49,7 +49,7 @@ export function createRunExecutor({
 }: {
   isConnected: (key: ConnKey) => boolean;
   /** The grant gate, asked again at dequeue: null admits. */
-  refusalAtDequeue: (key: ConnKey, fileKey: string) => Promise<NotGrantedReason | null>;
+  refusalAtDequeue: (key: ConnKey, documentId: string) => Promise<NotGrantedReason | null>;
   /** Where each run's pinned session is released when it settles, ran or not. */
   sessions: AgentSessions;
 }) {
@@ -115,10 +115,10 @@ export function createRunExecutor({
    */
   async function admitAtDequeue(
     to: ReplyTo,
-    fileKey: string,
+    documentId: string,
     refuseQueued: (reason: string) => void,
   ): Promise<boolean> {
-    const refusal = await refusalAtDequeue(to.connKey, fileKey);
+    const refusal = await refusalAtDequeue(to.connKey, documentId);
     const cancelled = cancelledRuns.cancellation(to);
     if (cancelled) {
       cancelledRuns.settle(to);
@@ -143,13 +143,13 @@ export function createRunExecutor({
    */
   async function executeCode(
     to: ReplyTo,
-    fileKey: string,
+    documentId: string,
     agentSession: AgentSession,
     code: string,
     preamble: string,
     lateChangeWindowMs: number,
   ): Promise<void> {
-    const admitted = await admitAtDequeue(to, fileKey, (reason) =>
+    const admitted = await admitAtDequeue(to, documentId, (reason) =>
       reply(to, {
         type: "EXECUTE_CODE_RESULT",
         result: null,
@@ -310,11 +310,11 @@ export function createRunExecutor({
    */
   async function screenshot(
     to: ReplyTo,
-    fileKey: string,
+    documentId: string,
     target: ScreenshotTarget,
     options: CaptureOptions,
   ): Promise<void> {
-    const admitted = await admitAtDequeue(to, fileKey, (reason) =>
+    const admitted = await admitAtDequeue(to, documentId, (reason) =>
       reply(to, { type: "SCREENSHOT_RESULT", errors: `flcm: ${reason} — no screenshot was taken.` }),
     );
     if (!admitted) return;
@@ -332,25 +332,28 @@ export function createRunExecutor({
 
   return {
     /**
-     * Queue an admitted EXECUTE_CODE for `fileKey`, the document it was admitted for, in its pinned
+     * Queue an admitted EXECUTE_CODE for `documentId`, the document it was admitted for, in its pinned
      * session. Queued, not awaited, so another server's write can't interleave.
      */
     runCode(
       to: ReplyTo,
-      fileKey: string,
+      documentId: string,
       session: AgentSession,
       code: string,
       preamble: string,
       lateChangeWindowMs: number,
     ): void {
       acceptRun(to);
-      enqueueWrite(() => executeCode(to, fileKey, session, code, preamble, lateChangeWindowMs));
+      enqueueWrite(() => executeCode(to, documentId, session, code, preamble, lateChangeWindowMs));
     },
 
-    runScreenshot(to: ReplyTo, fileKey: string, target: ScreenshotTarget, options: CaptureOptions): void {
+    runScreenshot(to: ReplyTo, documentId: string, target: ScreenshotTarget, options: CaptureOptions): void {
       acceptRun(to);
-      enqueueWrite(() => screenshot(to, fileKey, target, options));
+      enqueueWrite(() => screenshot(to, documentId, target, options));
     },
+
+    /** Resolves once every run queued so far has settled, ran or refused. */
+    idle: (): Promise<void> => writeChain,
 
     /**
      * The server gave up on a run. Answer FIRST, from what is already known: the server is holding

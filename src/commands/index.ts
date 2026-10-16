@@ -63,6 +63,7 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
     inputs: {
       code: "<script>",
       scriptPath: "<script>",
+      document: "--document",
       fileKey: "--file-key",
       session: "--session",
     },
@@ -71,6 +72,7 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
   get_screenshot: {
     command: "execute",
     inputs: {
+      document: "--document",
       fileKey: "--file-key",
       nodeId: "--node-id",
       key: "--key",

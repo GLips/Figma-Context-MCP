@@ -3,7 +3,8 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Live VECTOR authoring probe. Run `pnpm probe:vector`, open Framelink in a scratch Figma file,
-// then confirm the pairing code and Allow; FIGMA_API_KEY must be set, to prove the file. Import
+// then confirm the pairing code and Allow; set FIGMA_DOCUMENT to the file's document id (a run
+// without it lists the open files) unless the file is the one already allowed. Import
 // plugin/manifest.json after `pnpm build:plugin` if needed.
 // The preamble is built from this checkout, so preamble changes need no plugin re-import.
 // Set FRAMELINK_STATE_DIR to a writable, isolated directory to keep pairing state

@@ -17,7 +17,13 @@ import type {
   LinkResolution,
   PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
-import type { PluginOwner, SessionRequest, WriteAccessNotice } from "@framelink/plugin/protocol";
+import type {
+  DocumentReport,
+  PluginOwner,
+  SessionRequest,
+  WriteAccessNotice,
+} from "@framelink/plugin/protocol";
+import type { DocumentId } from "~/commercial/plugin-bridge/document-id.js";
 
 export const TEST_PLUGIN_OWNER: PluginOwner = {
   figmaUserId: "figma-user-1",
@@ -26,8 +32,18 @@ export const TEST_PLUGIN_OWNER: PluginOwner = {
 
 /** The document fake bridges bind every call to. */
 export const TEST_DOCUMENT: CallDocument = {
+  documentId: "7e57d0c000000001" as DocumentId,
   fileKey: figmaFileKey("TESTfile1"),
   fileName: "Test file",
+};
+
+/** What a fake plugin open in TEST_DOCUMENT reports when introduced. */
+export const TEST_DOCUMENT_REPORT: DocumentReport = {
+  kind: "identified",
+  documentId: TEST_DOCUMENT.documentId,
+  fileName: TEST_DOCUMENT.fileName,
+  pageNames: ["Page 1"],
+  fileKey: "TESTfile1",
 };
 
 /** A stand-in authenticated link, for fake bridges that never touch a socket. */

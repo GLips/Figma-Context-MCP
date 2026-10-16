@@ -29,7 +29,8 @@ import {
   sessionNotFoundText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { parseSessionHandle } from "~/commercial/plugin-bridge/session-handle.js";
-import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
+import { parseDocumentId } from "~/commercial/plugin-bridge/document-id.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 import { targetForPluginCall } from "~/commercial/plugin-bridge/plugin-call-link.js";
 import { parseFigmaFileKey } from "~/utils/figma-url.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
@@ -52,11 +53,11 @@ export const executeCommand: Command = command(
       summary: "Run an flcm script in the Figma file the Framelink plugin has open",
       details: `The script is the body of an async function: use await and return directly, with no imports or
 exports. Open the Framelink plugin in the target file first. The plugin must be paired once (run
-\`pair\`), and the first run from a project waits for you to click Allow in the plugin, which lets
-this project edit that file. --file-key runs only in that file; without it, the run goes to the one
-open file this project may edit, or you pick one in the plugin. A Figma API token tells the server
-which file the plugin is in (it reads the file to check), and lets the script read the file's
-comment pins, as it can through the MCP server.
+\`pair\`). --document runs only in that file, and the first run from a project there waits for you
+to click Allow in the plugin. Without it, the run goes to the one open file this project may edit;
+otherwise it is refused with the open files and their document ids (\`reference --files\` lists
+them too). No Figma API token is needed; one lets the script read the file's comment pins, where
+the plugin reports the file's key.
 
 Each run gets a fresh \`session\` unless --session names the one an earlier run's reply did: that
 run continues it, with its session values and session.last, in the file the session is in. A
@@ -67,7 +68,7 @@ stderr. Exits 0 when errors is null, 1 on a script, connection or grant failure,
 run is never resubmitted automatically.`,
       exampleArgs: [
         "card.js",
-        "card.js --file-key aBcD1234efGH",
+        "card.js --document 7k2m9q4r8t1v3x5z",
         "tweak.js --session maple-orbit-velvet-quarry",
         "card.js --output out/reply.json --screenshot out/card.png --key card --scale 2",
         "card.js --screenshot out/card.png --key card --context --margin 120",
@@ -77,10 +78,17 @@ run is never resubmitted automatically.`,
       appendix: [{ title: "Writing the script:", body: buildQuickStart(CLI_DOCS_CHANNEL) }],
     }),
     flags: {
+      document: {
+        type: String,
+        placeholder: "<id>",
+        description:
+          "Run only in this Figma file: its document id, as a refusal or `reference --files` lists it",
+      },
       fileKey: {
         type: String,
         placeholder: "<key>",
-        description: "Run only in this Figma file: the key from its URL (figma.com/design/<key>/…)",
+        description:
+          "Run only in the file with this key from its URL; matches only plugins that report a key",
       },
       session: {
         type: String,
@@ -157,6 +165,7 @@ run is never resubmitted automatically.`,
 );
 
 interface ExecuteFlags {
+  document?: string;
   fileKey?: string;
   session?: string;
   output?: string;
@@ -189,6 +198,9 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   };
   const inputError = screenshotInputError(target);
   if (inputError) throw new UsageError(inputError);
+  const document = flags.document === undefined ? null : parseDocumentId(flags.document);
+  if (flags.document !== undefined && document === null)
+    throw new UsageError("--document must be a document id exactly as Framelink listed it.");
   const fileKey = flags.fileKey === undefined ? null : parseFigmaFileKey(flags.fileKey);
   if (flags.fileKey !== undefined && fileKey === null)
     throw new UsageError("--file-key must be the alphanumeric key from a Figma file URL.");
@@ -212,8 +224,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   const code = await readFile(file, "utf8");
   for (const path of destinations) await mkdir(dirname(path), { recursive: true });
   loadEnvFile(flags.env);
-  // Optional, unlike the REST commands: it proves which file the plugin is in, and pays for a run's
-  // mid-run Figma reads (comment pins). Without one, a plugin no earlier run proved can't be used.
+  // Optional, unlike the REST commands: it pays only for a run's mid-run Figma reads (comment pins).
   const credential = resolveCredential(flags);
   if (credential) installFigmaProxyDispatcher(resolveProxy(flags).value);
   const figma = credential ? new FigmaService(staticCredentialSource(credential)) : null;
@@ -222,7 +233,6 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   const runtime = startPluginBridge({
     assetRoot: config.assetRoot.value,
     framelinkApiUrl: config.framelinkApiUrl.value,
-    figmaCredential: credential,
   });
   const controller = new AbortController();
   let awaitingSettlement = false;
@@ -248,6 +258,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       "the script was not submitted",
     );
     const bound = await targetForPluginCall(runtime.bridge, {
+      document,
       fileKey,
       session,
       // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
@@ -255,7 +266,6 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       pairing: { kind: "refuse" },
       signal: controller.signal,
       surface: "cli",
-      reader: figma && documentReaderFor(figma),
       waitMs,
       onWaiting: () => {
         console.error(GRANT_WAITING_TEXT);
@@ -263,20 +273,20 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       },
     });
     if (bound.kind === "blocked") throw new Error(bound.text);
-    const { document } = bound;
-    console.error(`Running in "${document.fileName}" (${document.fileKey}).`);
+    const { document: ran } = bound;
+    console.error(`Running in "${ran.fileName}" (document ${ran.documentId}).`);
     const outcome = await executePluginCode(runtime, bound, code, {
       figma,
       signal: controller.signal,
     });
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "not-granted")
-      throw new Error(notGrantedText(outcome.reason, document.fileName));
+      throw new Error(notGrantedText(outcome.reason, ran.fileName));
     if (outcome.kind === "session-not-found")
       throw new Error(sessionNotFoundText(outcome.session, "cli"));
     try {
       const reply = {
-        file: document,
+        file: ran,
         session: outcome.session,
         ...withoutTokenMarks(outcome.reply),
       };
@@ -286,16 +296,17 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       if (reply.errors !== null) console.error(reply.errors);
 
       if (flags.screenshot) {
+        // Its own execution: the script's id is spent on the run it named.
         const captured = await capturePluginScreenshot(
           runtime.bridge,
-          bound,
+          { ...bound, executionId: mintExecutionId() },
           target,
           controller.signal,
         );
         if (captured.kind === "not-granted")
           throw new Error(
             "The script ran (its reply is above), but the plugin refused the screenshot (the grant " +
-              "was revoked or the plugin left the file), so no PNG was saved. Re-running would " +
+              "was revoked or the file got a new identity), so no PNG was saved. Re-running would " +
               "repeat the script's writes; report this to the user or coordinating agent instead.",
           );
         const screenshot = captured.reply;

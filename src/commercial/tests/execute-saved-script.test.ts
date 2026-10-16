@@ -90,7 +90,7 @@ describe("figma_execute_code with scriptPath", () => {
       expect(reply.isError).toBeFalsy();
       // Compact, with no pretty-printing indentation.
       expect(reply.text).toMatch(
-        /^Figma file: "Test file" \(fileKey TESTfile1\)\nSession: [a-z]+(-[a-z]+){3} .*\n\{"result":"ran","console":\[\],"errors":null\}$/,
+        /^Figma file: "Test file" \(document 7e57d0c000000001, fileKey TESTfile1\)\nSession: [a-z]+(-[a-z]+){3} .*\n\{"result":"ran","console":\[\],"errors":null\}$/,
       );
       expect(submitted()).toEqual([
         expect.objectContaining({ type: "EXECUTE_CODE", code: "return 'from file';\n" }),

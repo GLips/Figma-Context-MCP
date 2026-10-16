@@ -28,6 +28,7 @@ import { runUpload } from "~/commercial/commands/upload.js";
 import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { ChannelRunContext, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
+import { mintExecutionId } from "~/commercial/execution-id.js";
 import { createImageSourceFetcher } from "~/commercial/plugin-bridge/image-requests.js";
 import {
   createTestWriteAccess,
@@ -125,7 +126,12 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       writeMeter: createTestWriteAccess().writeMeter,
       readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
     },
-    { link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT, session: null },
+    {
+      executionId: mintExecutionId(),
+      link: TEST_PLUGIN_LINK,
+      document: TEST_DOCUMENT,
+      session: null,
+    },
     code,
   );
   return fetched!;

@@ -13,6 +13,7 @@ import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
+import { TEST_DOCUMENT, TEST_DOCUMENT_REPORT } from "./fixtures/write-access.js";
 
 const bridges: PluginBridge[] = [];
 function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
@@ -35,8 +36,13 @@ it("an unpaired link is sent only the setup envelope, and nothing it sends is he
   });
   const socket = await connectFakePlugin(bridge, { paired: false });
 
-  socket.receive({ type: "DOCUMENT_CLAIMED", fileKey: "SQUATfile1" });
-  socket.receive({ type: "GRANT_CHANGED", project: "/p", fileKey: "SQUATfile1", granted: true });
+  socket.receive({ type: "DOCUMENT_REPORTED", document: TEST_DOCUMENT_REPORT });
+  socket.receive({
+    type: "GRANT_CHANGED",
+    project: "/p",
+    documentId: TEST_DOCUMENT.documentId,
+    granted: true,
+  });
   socket.receive({ type: "RUN_CHANGED", executionId: "r" });
   socket.receive({
     type: "CHANNEL_REQUEST",

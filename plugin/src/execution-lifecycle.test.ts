@@ -23,9 +23,12 @@ type Sent = { connKey: ConnKey; frame: Frame };
 // reply path crosses real timers (document-changes.ts settles one task), so "N turns later" is a race.
 // The deadline only turns a missing frame into a readable failure instead of a hung run.
 const FRAME_DEADLINE_MS = 5_000;
-// The installation every test plugin is paired with, and the file every test plugin is proven in.
+// The installation every test plugin is paired with, and the stamp of the file every test plugin is in.
 const CREDENTIAL = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
-const FILE_KEY = "FILEkey123";
+const DOCUMENT_ID = "0123456789abcdef";
+const OTHER_DOCUMENT_ID = "fedcba9876543210";
+const STAMP_KEY = "framelink-document-id";
+const stampedFile = (): Map<string, string> => new Map([[STAMP_KEY, DOCUMENT_ID]]);
 type Storage = Map<string, unknown>;
 const pairedStorage = (): Storage => new Map([["code-mode:link-credential:" + CREDENTIAL.id, CREDENTIAL.secret]]);
 const clientStorageOver = (storage: Storage) => ({
@@ -34,7 +37,11 @@ const clientStorageOver = (storage: Storage) => ({
   deleteAsync: async (key: string) => void storage.delete(key),
   keysAsync: async () => [...storage.keys()],
 });
-function host(native: Record<string, unknown> = {}, storage: Storage = pairedStorage(), shared = new Map<string, string>()) {
+/**
+ * The real host in a vm. `pluginData` is the file root's private plugin data, where the stamp lives:
+ * share one Map between hosts to model the same file reopened, copy it to model a duplicate.
+ */
+function host(native: Record<string, unknown> = {}, storage: Storage = pairedStorage(), pluginData = stampedFile()) {
   // Kept as the host's two envelopes: server frames with their routing key, and panel renders.
   const sent: Sent[] = [];
   const renders: PanelRender[] = [];
@@ -95,7 +102,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     showUI() {},
     notify() {},
     currentPage: page,
-    root: { children: [page] },
+    root: { name: "Test file", children: [page] },
     on() {},
     off() {},
     createRectangle() {
@@ -115,18 +122,26 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       resize() {},
     },
   };
-  // The file root's shared plugin data, where document proofs and the claim live — on any root.
-  Object.assign(figma.root, {
-    getSharedPluginData: (namespace: string, key: string) => shared.get(`${namespace}/${key}`) ?? "",
-    setSharedPluginData: (namespace: string, key: string, value: string) => void shared.set(`${namespace}/${key}`, value),
-  });
+  // The file root's private plugin data, where the stamp lives — on any root a test swaps in, unless
+  // that root brings its own.
+  const root = figma.root as Record<string, unknown>;
+  root.getPluginData ??= (key: string) => pluginData.get(key) ?? "";
+  root.setPluginData ??= (key: string, value: string) => void pluginData.set(key, value);
+  // A root of its own (the figma mock's) is stamped with this file's id too, so runs find it.
+  const stamp = pluginData.get(STAMP_KEY);
+  if (stamp && root.getPluginData !== undefined && !(root.getPluginData as (key: string) => string)(STAMP_KEY))
+    try {
+      (root.setPluginData as (key: string, value: string) => void)(STAMP_KEY, stamp);
+    } catch {
+      // A view-only root refuses; the test is about exactly that.
+    }
   // Unref'd so a run's minute-long late-change watch can't hold the test process open after it ends.
   const hostSetTimeout = (callback: () => void, ms?: number) => setTimeout(callback, ms).unref();
   const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout });
   vm.runInContext(code, context);
   // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
   // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window,
-  // and every run names this file unless the test says otherwise. Unless a test names a session,
+  // and every run names this file's document unless the test says otherwise. Unless a test names a session,
   // every run resumes its project's one shared session, which connect() opens — as an agent passing
   // its handle back would.
   const projectOf = new Map<ConnKey, string>();
@@ -147,12 +162,12 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
         frame.type === "EXECUTE_CODE"
           ? {
               lateChangeWindowMs: 60_000,
-              fileKey: FILE_KEY,
+              documentId: DOCUMENT_ID,
               session: { handle: sharedSessionOf(projectOf.get(connKey) ?? "/proj"), create: false },
               ...frame,
             }
           : frame.type === "SCREENSHOT"
-            ? { fileKey: FILE_KEY, ...frame }
+            ? { documentId: DOCUMENT_ID, ...frame }
             : frame,
     });
   const sendControl = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
@@ -170,31 +185,30 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     assert.equal((await ask(key, { type: "AUTHENTICATE", credentialId: CREDENTIAL.id, nonce: `nonce-${key}-0000` })).type, "LINK_PROOF");
     return ask(key, { type: "INTRODUCE", project, framelinkOrigin });
   };
-  /** The server proves this plugin run is in `fileKey`, the way the relay does over REST. */
-  const prove = async (key: ConnKey, fileKey = FILE_KEY) => {
-    const nonce = `proof-${key}-${++nextId}-0000`;
-    assert.equal((await ask(key, { type: "PROVE_DOCUMENT", nonce })).type, "PROOF_WRITTEN");
-    assert.equal(shared.get(`framelink/proof:${nonce}`), "1");
-    await ask(key, { type: "PROOF_SETTLED", nonce, outcome: { kind: "proven", fileKey, fileName: "Test file" } });
-  };
-  /** The human's Allow on a row, resolved once the grant is saved and announced. */
-  const allow = async (key: ConnKey) => {
+  /** A call's GRANT_STATUS poll, for `documentId` (this file's by default). */
+  const grantStatus = async (key: ConnKey, executionId: string, prompt: string, documentId = DOCUMENT_ID) =>
+    (await ask(key, { type: "GRANT_STATUS", executionId, documentId, prompt })).state;
+  /**
+   * A call asks for Allow and the human clicks it on that call's prompt; resolved once the grant is
+   * saved and announced. A project already granted is asked nothing.
+   */
+  const allow = async (key: ConnKey, executionId = `allow-${key}-${++nextId}`, documentId = DOCUMENT_ID) => {
+    if ((await grantStatus(key, executionId, "allow", documentId)) === "granted") return;
     const before = sent.length;
-    sendControl({ type: "UI_DECISION", approve: true, connKey: key });
+    sendControl({ type: "UI_DECISION", approve: true, connKey: key, executionId, documentId });
     await waitFor(
       () => sent.slice(before).find((s) => s.connKey === key && s.frame.type === "GRANT_CHANGED" && s.frame.granted === true),
       `the grant for ${key}`,
     );
   };
   /**
-   * A granted, proven server, with its project's shared session open. The opening run's preamble
+   * A granted server, with its project's shared session open. The opening run's preamble
    * never builds the session's store, so the first run that does gets the store its own preamble
    * makes.
    */
   const openedProjects = new Set<string>();
   const connect = async (key: ConnKey, project = "/proj") => {
     await introduce(key, project);
-    await prove(key);
     await allow(key);
     if (openedProjects.has(project)) return;
     openedProjects.add(project);
@@ -216,7 +230,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     ) as Promise<any>;
   const running = (id: string, key: ConnKey) =>
     frame((f, connKey) => f.type === "RUN_STATE" && f.executionId === id && connKey === key && f.phase === "running", `${id} running`);
-  return { sent, context, storage, shared, sendFrame, sendControl, ask, introduce, prove, allow, connect, frame, render, result, running, deliverChanges };
+  return { sent, renders, context, storage, pluginData, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
 }
 
 test("queued cancellation never executes, old settlement cannot cancel or erase replacement run", async () => {
@@ -285,22 +299,41 @@ test("a cancel is answered at once from the phase the run had reached", async ()
 
 const echoPreamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
 
-test("a run is refused before it executes without a grant, or for a document this plugin isn't in", async () => {
+test("a run is refused before it executes without a grant, or for a document this file isn't stamped with", async () => {
   const h = host();
   await h.introduce(1);
-  await h.prove(1);
   h.context.writes = [];
   // A fresh session, so the refusal is the grant's: no shared session was opened without one.
   const session = { handle: "fresh-store-never-granted", create: true };
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "ungranted", preamble: echoPreamble, code: "writes.push('bad');", session });
   assert.equal((await h.frame((f) => f.id === "ungranted", "the refusal")).reason, "no-grant");
-  // Denied, its grant prompt answers "denied" from then on, without asking again.
-  h.sendControl({ type: "UI_DECISION", approve: false, connKey: 1 });
-  assert.equal((await h.ask(1, { type: "GRANT_STATUS", fileKey: FILE_KEY, prompt: "grant" })).state, "denied");
   await h.allow(1);
-  h.sendFrame(1, { type: "EXECUTE_CODE", id: "elsewhere", fileKey: "OTHERfile9", preamble: echoPreamble, code: "writes.push('bad');" });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "elsewhere", documentId: OTHER_DOCUMENT_ID, preamble: echoPreamble, code: "writes.push('bad');" });
   assert.equal((await h.frame((f) => f.id === "elsewhere", "the refusal")).reason, "other-document");
+  assert.equal(await h.grantStatus(1, "elsewhere-call", "allow", OTHER_DOCUMENT_ID), "other-document");
   assert.equal(h.context.writes.length, 0);
+});
+
+test("two calls waiting in one panel each keep their own prompt, click and outcome", async () => {
+  const h = host();
+  await h.introduce(1);
+  assert.equal(await h.grantStatus(1, "call-one", "allow"), "pending");
+  assert.equal(await h.grantStatus(1, "call-two", "allow"), "pending");
+  const both = await h.render((r) => r.prompts.length === 2, "both calls' prompts");
+  assert.deepEqual(JSON.parse(JSON.stringify(both.prompts.map((p) => p.executionId).sort())), ["call-one", "call-two"]);
+  // Denying one call leaves the other waiting; its own Allow then grants.
+  h.sendControl({ type: "UI_DECISION", approve: false, connKey: 1, executionId: "call-one", documentId: DOCUMENT_ID });
+  assert.equal(await h.grantStatus(1, "call-one", "allow"), "denied");
+  assert.equal(await h.grantStatus(1, "call-two", "allow"), "pending");
+  // A pick is one call's too, and grants nothing.
+  assert.equal(await h.grantStatus(1, "call-three", "pick"), "pending");
+  h.sendControl({ type: "UI_PICK", connKey: 1, executionId: "call-three", documentId: DOCUMENT_ID });
+  assert.equal(await h.grantStatus(1, "call-three", "pick"), "picked");
+  assert.equal(await h.grantStatus(1, "call-two", "none"), "absent");
+  await h.allow(1, "call-two");
+  assert.equal(await h.grantStatus(1, "call-two", "allow"), "granted");
+  // The denial was the first call's alone: the next call is asked afresh.
+  assert.equal(await h.grantStatus(1, "call-one-retried", "none"), "granted");
 });
 
 test("a grant covers every server of its project on this file, and its revoke stops all of them", async () => {
@@ -309,8 +342,8 @@ test("a grant covers every server of its project on this file, and its revoke st
   // A second server in the same project is granted with no click; one in another project is not.
   await h.introduce(2, "/proj");
   await h.introduce(3, "/other");
-  assert.equal((await h.ask(2, { type: "GRANT_STATUS", fileKey: FILE_KEY, prompt: "none" })).state, "granted");
-  assert.equal((await h.ask(3, { type: "GRANT_STATUS", fileKey: FILE_KEY, prompt: "none" })).state, "absent");
+  assert.equal(await h.grantStatus(2, "sibling", "none"), "granted");
+  assert.equal(await h.grantStatus(3, "elsewhere", "none"), "absent");
   h.sendFrame(2, { type: "EXECUTE_CODE", id: "shared", preamble: echoPreamble, code: "return 'ran';" });
   assert.equal((await h.result("shared", 2)).result, "ran");
 
@@ -320,7 +353,7 @@ test("a grant covers every server of its project on this file, and its revoke st
   h.sendFrame(2, { type: "EXECUTE_CODE", id: "after", preamble: echoPreamble, code: "return 'ran';" });
   assert.equal((await h.frame((f) => f.id === "after", "the refusal")).type, "NOT_GRANTED");
   // The grant is one record per project and document, and the revoke removed it.
-  assert(![...h.storage.keys()].some((key) => key.startsWith("code-mode:grant:")));
+  assert(![...h.storage.keys()].some((key) => key.startsWith("code-mode:document-grant:")));
 });
 
 test("a granted server's write waits out another server's Allow being saved instead of re-prompting", async () => {
@@ -336,33 +369,57 @@ test("a granted server's write waits out another server's Allow being saved inst
     await saving;
     return setAsync(key, value);
   };
-  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2 });
+  assert.equal(await h.grantStatus(2, "other-call", "allow"), "pending");
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2, executionId: "other-call", documentId: DOCUMENT_ID });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "run", preamble: echoPreamble, code: "return 'ran';" });
   landed();
   assert.equal((await h.result("run", 1)).result, "ran");
   assert(!h.sent.some(({ frame: f, connKey }) => connKey === 1 && f.type === "NOT_GRANTED"));
 });
 
-test("a proven document is kept as the file's claim for the next plugin run, and a refuted one is cleared", async () => {
+test("a file is stamped once and keeps its stamp and grant across plugin runs; a copy shares both until given its own", async () => {
   const storage = pairedStorage();
-  const shared = new Map<string, string>();
-  const first = host({}, storage, shared);
-  assert.equal((await first.introduce(1)).claim, null);
-  await first.prove(1);
-  await first.allow(1);
-  // The next plugin run in this file offers the claim to be proven again; the grant is still there.
-  const next = host({}, storage, shared);
-  assert.equal((await next.introduce(1)).claim, FILE_KEY);
-  await next.prove(1);
-  assert.equal((await next.ask(1, { type: "GRANT_STATUS", fileKey: FILE_KEY, prompt: "none" })).state, "granted");
-  // A duplicate of the file carries the same claim, and the server refutes it: the claim goes.
-  const duplicate = host({}, storage, new Map(shared));
-  assert.equal((await duplicate.introduce(1)).claim, FILE_KEY);
-  await duplicate.ask(1, { type: "PROVE_DOCUMENT", nonce: "dup-proof-0000" });
-  await duplicate.ask(1, { type: "PROOF_SETTLED", nonce: "dup-proof-0000", outcome: { kind: "refuted", fileKey: FILE_KEY } });
-  assert.equal((await duplicate.ask(1, { type: "INTRODUCE", project: "/proj", framelinkOrigin: "https://app.framelink.ai" })).claim, null);
-  duplicate.sendFrame(1, { type: "EXECUTE_CODE", id: "dup", preamble: echoPreamble, code: "return 'ran';" });
-  assert.equal((await duplicate.frame((f) => f.id === "dup", "the refusal")).reason, "other-document");
+  const pluginData = new Map<string, string>();
+  const first = host({}, storage, pluginData);
+  const introduced = (await first.introduce(1)).document as { kind: string; documentId: string; fileName: string };
+  assert.equal(introduced.kind, "identified");
+  assert.match(introduced.documentId, /^[0-9a-hjkmnp-tv-z]{16}$/);
+  assert.equal(introduced.fileName, "Test file");
+  const documentId = introduced.documentId;
+  await first.allow(1, "first-allow", documentId);
+  // The next plugin run in this file reads the same stamp, and the grant is still there.
+  const next = host({}, storage, pluginData);
+  assert.equal(((await next.introduce(1)).document as { documentId: string }).documentId, documentId);
+  assert.equal(await next.grantStatus(1, "after-restart", "none", documentId), "granted");
+  // A duplicate carries the stamp, so it shares the grant until the human gives it its own identity.
+  const duplicate = host({}, storage, new Map(pluginData));
+  await duplicate.introduce(1);
+  assert.equal(await duplicate.grantStatus(1, "copy", "none", documentId), "granted");
+  duplicate.sendControl({ type: "UI_RESTAMP" });
+  const reported = await duplicate.frame((f) => f.type === "DOCUMENT_REPORTED", "the copy's new identity");
+  const restamped = (reported.document as { documentId: string }).documentId;
+  assert.notEqual(restamped, documentId);
+  assert.equal(await duplicate.grantStatus(1, "copy-after", "none", restamped), "absent");
+  duplicate.sendFrame(1, { type: "EXECUTE_CODE", id: "old-id", documentId, preamble: echoPreamble, code: "return 'ran';" });
+  assert.equal((await duplicate.frame((f) => f.id === "old-id", "the refusal")).reason, "other-document");
+  // The original keeps its own.
+  assert.equal(pluginData.get(STAMP_KEY), documentId);
+});
+
+test("a file the plugin can't stamp is reported unidentified and runs nothing", async () => {
+  const viewOnly = {
+    name: "Shared with me",
+    children: [],
+    getPluginData: () => "",
+    setPluginData: () => {
+      throw new Error("Cannot write to a file you can only view");
+    },
+  };
+  const h = host({ root: viewOnly }, pairedStorage(), new Map());
+  const introduced = (await h.introduce(1)).document as { kind: string; problem: string };
+  assert.equal(introduced.kind, "unidentified");
+  assert.match(introduced.problem, /can only view/);
+  assert.equal(await h.grantStatus(1, "call", "allow"), "other-document");
 });
 
 test("HELLO tells any peer the plugin's versions and nothing else, and a peer can't author the skew toast", async () => {
@@ -409,40 +466,16 @@ test("a confirmed pairing is stored only by the socket showing its code, and its
   assert.deepEqual({ ...(proof.owner as object) }, { figmaUserId: "figma-user-7", name: "Ada" });
 });
 
-test("an unidentified file asks for its link when a server wants a file picked, and the link goes to every server", async () => {
+test("an unauthenticated socket learns nothing about the file and can't open a prompt", async () => {
   const h = host();
-  await h.introduce(1);
-  await h.introduce(2, "/other");
-  assert.equal((await h.ask(1, { type: "GRANT_STATUS", fileKey: null, prompt: "select" })).state, "unproven");
-  await h.render((r) => r.document?.kind === "unproven" && r.document.asking, "a request for this file's link");
-  h.sendControl({ type: "UI_PASTE_LINK", text: "https://www.figma.com/design/PASTEDkey1/Some-file?node-id=1-2" });
-  for (const key of [1, 2])
-    await h.frame((f, connKey) => connKey === key && f.type === "DOCUMENT_CLAIMED" && f.fileKey === "PASTEDkey1", `the link to ${key}`);
-  // A pasted link is a claim, not an identity: nothing is granted or runnable until a proof.
-  assert.equal((await h.ask(1, { type: "INTRODUCE", project: "/proj", framelinkOrigin: "https://app.framelink.ai" })).claim, "PASTEDkey1");
-  assert.equal((await h.ask(1, { type: "GRANT_STATUS", fileKey: "PASTEDkey1", prompt: "none" })).state, "unproven");
-});
-
-test("an unauthenticated socket learns no claim and marks nothing, and only the socket a nonce was written for settles it", async () => {
-  const shared = new Map<string, string>([["framelink/fileKey", FILE_KEY]]);
-  const h = host({}, pairedStorage(), shared);
   h.sendControl({ type: "WS_CONNECTED", connKey: 9 });
   for (const request of [
     { type: "INTRODUCE", project: "/proj", framelinkOrigin: "https://app.framelink.ai" },
-    { type: "PROVE_DOCUMENT", nonce: "forged-proof-0000" },
-    { type: "PROOF_SETTLED", nonce: "forged-proof-0000", outcome: { kind: "proven", fileKey: "FORGEDkey1", fileName: "Forged" } },
+    { type: "GRANT_STATUS", executionId: "forged", documentId: DOCUMENT_ID, prompt: "allow" },
   ])
     assert.equal((await h.ask(9, request)).type, "ERROR");
-  assert.equal(shared.has("framelink/proof:forged-proof-0000"), false);
-
-  // An authenticated server can't settle a nonce this plugin never wrote for it.
-  await h.introduce(1);
-  await h.introduce(2);
-  assert.equal((await h.ask(1, { type: "PROVE_DOCUMENT", nonce: "real-proof-0000" })).type, "PROOF_WRITTEN");
-  await h.ask(2, { type: "PROOF_SETTLED", nonce: "real-proof-0000", outcome: { kind: "proven", fileKey: "FORGEDkey1", fileName: "Forged" } });
-  assert.equal(shared.get("framelink/fileKey"), FILE_KEY);
-  await h.ask(1, { type: "PROOF_SETTLED", nonce: "real-proof-0000", outcome: { kind: "proven", fileKey: FILE_KEY, fileName: "Test file" } });
-  await h.render((r) => r.document?.kind === "proven" && r.document.fileName === "Test file", "the proven file");
+  assert(!h.sent.some(({ connKey, frame: f }) => connKey === 9 && f.type === "DOCUMENT_REPORTED"));
+  assert(!h.renders.some((r) => r.prompts.length > 0));
 });
 
 test("a grant revoked in another instance while no server was connected is read afresh when a server returns", async () => {
@@ -450,9 +483,9 @@ test("a grant revoked in another instance while no server was connected is read 
   await h.connect(1);
   h.sendControl({ type: "WS_CLOSED", connKey: 1 });
   // Another instance of the plugin revoked it, and no connected server relayed the change.
-  for (const key of [...h.storage.keys()]) if (key.startsWith("code-mode:grant:")) h.storage.delete(key);
+  for (const key of [...h.storage.keys()]) if (key.startsWith("code-mode:document-grant:")) h.storage.delete(key);
   await h.introduce(2);
-  assert.equal((await h.ask(2, { type: "GRANT_STATUS", fileKey: FILE_KEY, prompt: "none" })).state, "absent");
+  assert.equal(await h.grantStatus(2, "stale-call", "none"), "absent");
   h.sendFrame(2, { type: "EXECUTE_CODE", id: "stale", preamble: echoPreamble, code: "return 'ran';" });
   assert.equal((await h.frame((f) => f.id === "stale", "the refusal")).type, "NOT_GRANTED");
 });
@@ -531,28 +564,26 @@ test("a server frame can never act as the human's panel input", async () => {
   fromServer({ type: "AUTHENTICATE", id: "auth", credentialId: CREDENTIAL.id, nonce: "nonce-rogue-000" });
   await h.frame((f) => f.id === "auth", "the link proof");
   fromServer({ type: "INTRODUCE", id: "intro", project: "/rogue", framelinkOrigin: "https://evil.example" });
-  fromServer({ type: "PROVE_DOCUMENT", id: "prove", nonce: "proof-rogue-000" });
-  fromServer({ type: "PROOF_SETTLED", id: "settle", nonce: "proof-rogue-000", outcome: { kind: "proven", fileKey: FILE_KEY, fileName: "x" } });
+  fromServer({ type: "GRANT_STATUS", id: "ask", executionId: "rogue-call", documentId: DOCUMENT_ID, prompt: "allow" });
+  await h.frame((f) => f.id === "ask", "the rogue call's prompt");
   // Everything a panel click would say, spoken by the server instead — in every envelope spelling.
-  fromServer({ type: "UI_DECISION", approve: true });
-  fromServer({ type: "UI_DECISION", approve: true, connKey: 1 });
-  fromServer({ from: "panel", control: { type: "UI_DECISION", approve: true, connKey: 1 } });
+  const decision = { approve: true, connKey: 1, executionId: "rogue-call", documentId: DOCUMENT_ID };
+  fromServer({ type: "UI_DECISION", ...decision });
+  fromServer({ from: "panel", control: { type: "UI_DECISION", ...decision } });
+  fromServer({ type: "UI_PICK", ...decision });
+  fromServer({ type: "UI_RESTAMP" });
   fromServer({ type: "UI_SIGN_IN" });
   fromServer({ type: "UI_OPEN_SIGN_IN" });
-  fromServer({ type: "UI_PASTE_LINK", text: "https://www.figma.com/design/ROGUEkey1/x" });
   // A barrier: a genuine Allow on a second server. Grant changes land in order, so once its grant is
   // announced, any Allow a forged frame had started would have landed before it.
   const second = ui.opened(9877);
   second.onopen();
   await h.introduce(2, "/real");
   await h.allow(2);
-  fromServer({ type: "GRANT_STATUS", id: "status", fileKey: FILE_KEY, prompt: "none" });
+  fromServer({ type: "GRANT_STATUS", id: "status", executionId: "rogue-call", documentId: DOCUMENT_ID, prompt: "none" });
   assert.equal((await h.frame((f) => f.id === "status", "the status")).state, "absent");
-  assert(
-    !h.sent.some(
-      ({ frame: f }) => f.type === "WRITE_ACCESS_SIGN_IN" || (f.type === "DOCUMENT_CLAIMED" && f.fileKey === "ROGUEkey1"),
-    ),
-  );
+  assert(!h.sent.some(({ frame: f }) => f.type === "WRITE_ACCESS_SIGN_IN" || f.type === "DOCUMENT_REPORTED"));
+  assert.equal(h.pluginData.get(STAMP_KEY), DOCUMENT_ID);
 });
 
 test("the browser opens a sign-in page only on the Framelink origin the server announced", async () => {

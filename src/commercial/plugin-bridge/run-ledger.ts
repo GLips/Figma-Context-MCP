@@ -30,7 +30,10 @@ import type { LocalImageReader } from "./images.js";
  */
 export interface ChannelRunContext {
   figma: FigmaService | null;
-  /** The document the run was admitted for. Null for a request that is no run. */
+  /**
+   * The file key the run's plugin reported for its document. Null for a request that is no run, or a
+   * plugin build that reports none: comments.pins then has nothing to read.
+   */
   fileKey: FigmaFileKey | null;
   /** Upload handles the submitted code names literally — the only ones this run may redeem. */
   uploadHandles: ReadonlySet<string>;
@@ -87,7 +90,7 @@ export const DEFAULT_RUN_CEILING_MS = 45_000;
 // CAN'T answer (socket dying, main thread wedged), which is precisely when the hedge is true.
 const CANCEL_ANSWER_MS = 1_000;
 
-// Only runs can have their cancellation answered. Everything else (handshake, grant polling, proofs)
+// Only runs can have their cancellation answered. Everything else (handshake, grant polling)
 // never reaches the document, so its cancellation rejects on the spot.
 const RUN_REQUESTS = new Set<ServerRequestType>(RUN_REQUEST_TYPES);
 

@@ -121,7 +121,7 @@ it("a late event for a run from another plugin link is ignored and charges nothi
   };
   const outcome = await executePluginCode(
     { bridge, writeMeter, readLocalImage: () => Promise.reject(new Error("no images")) },
-    { link: ran.link, document: TEST_DOCUMENT, session: null },
+    { executionId: mintExecutionId(), link: ran.link, document: TEST_DOCUMENT, session: null },
     "return 1;",
   );
   expect(outcome.kind).toBe("executed");

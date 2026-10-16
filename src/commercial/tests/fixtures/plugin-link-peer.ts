@@ -2,14 +2,18 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { PROTOCOL_VERSION, type PluginOwner } from "@framelink/plugin/protocol";
+import {
+  PROTOCOL_VERSION,
+  type DocumentReport,
+  type PluginOwner,
+} from "@framelink/plugin/protocol";
 import { LinkCredentialStore, linkProof } from "~/commercial/plugin-bridge/link-credential.js";
-import { TEST_PLUGIN_OWNER } from "./write-access.js";
+import { TEST_DOCUMENT_REPORT, TEST_PLUGIN_OWNER } from "./write-access.js";
 
 /**
  * Answer the link-setup envelope the way a plugin paired with the current state dir would (or, with
- * `paired: false`, one never paired), for tests that drive a real socket. The introduction claims no
- * file. Returns whether `frame` was a setup frame it answered.
+ * `paired: false`, one never paired), for tests that drive a real socket. The introduction reports
+ * `document`, TEST_DOCUMENT unless told otherwise. Returns whether `frame` was a setup frame it answered.
  */
 export function answerLinkSetup(
   send: (frame: Record<string, unknown>) => void,
@@ -18,7 +22,13 @@ export function answerLinkSetup(
     credentials = new LinkCredentialStore(),
     owner = TEST_PLUGIN_OWNER,
     paired = true,
-  }: { credentials?: LinkCredentialStore; owner?: PluginOwner | null; paired?: boolean } = {},
+    document = TEST_DOCUMENT_REPORT,
+  }: {
+    credentials?: LinkCredentialStore;
+    owner?: PluginOwner | null;
+    paired?: boolean;
+    document?: DocumentReport;
+  } = {},
 ): boolean {
   if (frame.type === "HELLO") {
     send({ type: "HELLO_RESULT", id: frame.id, protocolVersion: PROTOCOL_VERSION });
@@ -39,7 +49,7 @@ export function answerLinkSetup(
     return true;
   }
   if (frame.type === "INTRODUCE") {
-    send({ type: "INTRODUCED", id: frame.id, claim: null });
+    send({ type: "INTRODUCED", id: frame.id, document });
     return true;
   }
   return false;

@@ -22,7 +22,7 @@
 //          the probe needs the build you just made, not whatever Figma has cached)
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:queued-writes              (this script)
-//   5. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
+//   5. When the plugin asks, click Allow (FIGMA_DOCUMENT names the file; a run without it lists them).
 // The probe creates one small frame, reads it back, and deletes it again. Safe to re-run.
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";

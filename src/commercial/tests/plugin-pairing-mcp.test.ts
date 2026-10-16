@@ -16,13 +16,8 @@ import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import {
-  connectFakePlugin,
-  fakeFigmaFile,
-  serveFakeFigmaFiles,
-  type FakePluginSocket,
-} from "./fixtures/fake-plugin-socket.js";
-import { createTestWriteAccess } from "./fixtures/write-access.js";
+import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
+import { createTestWriteAccess, TEST_DOCUMENT } from "./fixtures/write-access.js";
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
@@ -31,16 +26,14 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-// Every call names this file, so the plugin is proven in it on the call rather than asked to pick.
-const file = fakeFigmaFile();
-const execute = { code: "return 1", fileKey: file.fileKey };
+// Every call names the plugin's document, so it binds there rather than asking the agent to choose.
+const execute = { code: "return 1", document: TEST_DOCUMENT.documentId };
 
-/** An unpaired plugin open in `file` that, once paired, holds a grant there and runs whatever it is sent. */
+/** An unpaired plugin open in TEST_DOCUMENT that, once paired, holds a grant there and runs whatever it is sent. */
 async function setup(answerPrompt?: (message: string) => ElicitResult | Promise<ElicitResult>) {
-  serveFakeFigmaFiles(file);
   const bridge = new PluginBridge();
   cleanups.push(() => bridge.stop());
-  const socket = await connectFakePlugin(bridge, { paired: false, file });
+  const socket = await connectFakePlugin(bridge, { paired: false });
   socket.onFrame = (frame) => {
     if (frame.type === "GRANT_STATUS")
       socket.receive({ type: "GRANT", id: frame.id, state: "granted" });

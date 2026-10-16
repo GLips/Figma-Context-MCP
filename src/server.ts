@@ -66,7 +66,6 @@ export async function startServer(config: ServerConfig): Promise<void> {
   const pluginBridge = startPluginBridge({
     assetRoot: config.assetRoot,
     framelinkApiUrl: config.framelinkApiUrl,
-    figmaCredential: credential,
     acceptUploads: true,
   });
 

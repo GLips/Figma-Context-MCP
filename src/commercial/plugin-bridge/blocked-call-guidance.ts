@@ -9,7 +9,7 @@
 // is true; nothing outside this module words them.
 import { CLI_NAME } from "~/utils/cli-help.js";
 import type { UnlinkedResolution } from "./bridge.js";
-import type { CallTargetBlock } from "./call-target.js";
+import type { CallTargetBlock, OpenDocument, OpenDocumentSnapshot } from "./call-target.js";
 
 /** How long a disconnection counts as a redial blip before the reply escalates to a person. */
 export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
@@ -42,9 +42,61 @@ export function linkGuidance(resolution: UnlinkedResolution, surface: GuidanceSu
   }
 }
 
-/** A call on a linked plugin, waiting for the human to allow this project in Figma. */
+/** A call on a linked plugin, waiting for the human to allow this project, or pick a file, in Figma. */
 export const GRANT_WAITING_TEXT =
-  "Waiting for the user to allow this project in the Framelink plugin in Figma. Code has not been submitted.";
+  "Waiting for the user to answer this call in the Framelink plugin in Figma. Code has not been submitted.";
+
+// A file's pages are there to tell files apart, not to list a document: a few is enough.
+const LISTED_PAGES = 5;
+
+function documentFlag(surface: GuidanceSurface): string {
+  return surface === "cli" ? "--document" : "document";
+}
+
+/** One open document, as a line an agent chooses from. */
+function openDocumentLine(document: OpenDocument): string {
+  const pages = document.pageNames.slice(0, LISTED_PAGES).map((name) => `"${name}"`);
+  const more = document.pageNames.length - pages.length;
+  const parts = [
+    `document ${document.documentId}`,
+    `pages ${pages.join(", ") || "(none)"}${more > 0 ? ` and ${more} more` : ""}`,
+    ...(document.fileKey ? [`fileKey ${document.fileKey}`] : []),
+    {
+      granted: "this project may edit it",
+      "not-granted": "this project isn't allowed yet (the user is asked to Allow)",
+      unknown: "this project's access couldn't be checked",
+    }[document.grant],
+    ...(document.copies > 1
+      ? [`open as ${document.copies} files that share this id (the user picks one in Figma)`]
+      : []),
+  ];
+  return `- "${document.fileName}": ${parts.join("; ")}`;
+}
+
+/**
+ * Every open plugin's document, for an agent to choose from by name: the same list a refusal, the
+ * reference and the CLI show. Ends with how to name one.
+ */
+export function openDocumentsText(open: OpenDocumentSnapshot, surface: GuidanceSurface): string {
+  const lines: string[] = [];
+  if (open.documents.length) {
+    lines.push("Figma files open with the Framelink plugin:");
+    lines.push(...open.documents.map(openDocumentLine));
+  } else lines.push("No open Framelink plugin is in a Figma file this server can use.");
+  for (const problem of open.unidentified)
+    lines.push(`A plugin can't be used because it couldn't mark its file: ${problem}`);
+  if (!open.complete)
+    lines.push(
+      "Not every open plugin has said which file it is in, or whether this project may edit it, so " +
+        "this list may be missing some.",
+    );
+  if (open.documents.length)
+    lines.push(
+      `Pick the file by its name and pages — read the project's own files, or ask the user if you ` +
+        `aren't sure — and pass its id as ${documentFlag(surface)}. Never guess between files.`,
+    );
+  return lines.join("\n");
+}
 
 /** Why a call got no document to run against, on `surface`. Nothing was submitted. */
 export function callTargetGuidance(
@@ -52,26 +104,27 @@ export function callTargetGuidance(
   surface: "mcp" | "cli",
   waitMs: number,
 ): string {
-  const retry = surface === "mcp" ? "retrying" : "re-running";
   switch (block.kind) {
     case "document-not-open":
       return (
-        `Blocked: the Framelink plugin isn't open in the Figma file ${block.fileKey}, so nothing was ` +
-        `submitted and no plugin panel was asked. Required before ${retry}: someone opens the ` +
-        `Framelink plugin in that file. ${REPORT_TO_PERSON} it is open. To work in a file that is ` +
-        `already open, call again without a file key and the user picks it in Figma.`
+        `Blocked: no open Framelink plugin is in ${namedDocument(block.document, block.fileKey)}, ` +
+        `so nothing was submitted and no plugin panel was asked. A file key matches only plugins ` +
+        `that reported one; a document id is what every plugin reports. To work in that file, ` +
+        `someone opens the Framelink plugin in it. ${REPORT_TO_PERSON} it is open.\n\n` +
+        openDocumentsText(block.open, surface)
       );
-    case "document-unprovable":
+    case "document-unchosen":
+      return `${unchosenLead(block.open)}\n\n${openDocumentsText(block.open, surface)}`;
+    case "document-changed":
       return (
-        `Blocked: this server couldn't confirm which Figma file the Framelink plugin is in ` +
-        `(${block.problem}), so nothing was submitted. It confirms that by reading the file with ` +
-        `the Figma token, so the token must be able to open the file. ${REPORT_TO_PERSON} that is fixed.`
+        `Blocked: "${block.fileName}" was given a new identity in the Framelink plugin while this ` +
+        `call waited (a copy of a file now has its own), so nothing was submitted. Choose the file ` +
+        `again from the list below.\n\n${openDocumentsText(block.open, surface)}`
       );
     case "grant-denied":
       return (
-        `Blocked: the user denied this project access to "${block.fileName}" in the Framelink ` +
-        `plugin, so nothing was submitted. Don't retry unless the user asks to; they can click ` +
-        `Allow on this project's row in the plugin.`
+        `Blocked: the user denied this call access to "${block.fileName}" in the Framelink ` +
+        `plugin, so nothing was submitted. Don't retry unless the user asks to.`
       );
     case "grant-unavailable":
       return (
@@ -79,22 +132,22 @@ export function callTargetGuidance(
         `can't let this project edit the file, and nothing was submitted. ${REPORT_TO_PERSON} ` +
         `someone signs in to Figma and reopens the plugin.`
       );
-    case "grant-pending": {
-      const file = block.fileName === null ? "a Figma file" : `"${block.fileName}"`;
-      const action =
-        block.fileName === null
-          ? `someone picks the file to edit in the Framelink plugin in Figma (Allow, or Use this file), ` +
-            `or pastes the file's link into the plugin if it asks for one`
-          : `someone clicks Allow for this project in the Framelink plugin in ${file}`;
-      return surface === "mcp"
-        ? `Blocked: this project isn't allowed to edit ${file} yet, so this call did not run. ` +
-            `Required before retrying: ${action}. ${REPORT_TO_PERSON} they confirm — each attempt ` +
-            `waits up to ${Math.round(waitMs / 1000)}s and cannot succeed without them. Allowing ` +
-            `later does not run this call; submit it again.`
-        : `Blocked: this project isn't allowed to edit ${file} yet, so the script did not run. ` +
-            `Required before re-running: ${action}. A grant is remembered for this project, so it is ` +
-            `needed once. This run waited ${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`;
-    }
+    case "grant-pending":
+      return waitingText(
+        `this project isn't allowed to edit "${block.fileName}" yet`,
+        `someone clicks Allow for this call in the Framelink plugin in "${block.fileName}"`,
+        surface,
+        waitMs,
+      );
+    case "pick-pending":
+      return waitingText(
+        `"${block.fileName}" is open as more than one file that share one identity (one is a ` +
+          `copy), and nothing tells this server which one this call means`,
+        `someone clicks "Use this one" in the Framelink plugin of the file to edit, or "Give this ` +
+          `copy its own identity" in the copy`,
+        surface,
+        waitMs,
+      );
     case "session-not-found":
       return sessionNotFoundText(block.session, surface);
     case "session-lookup-failed":
@@ -110,16 +163,56 @@ export function callTargetGuidance(
         `can't tell which one it names, and nothing was submitted. ${freshSession(surface)}.`
       );
     case "session-document-mismatch": {
-      const [fileFlag, sessionFlag] =
-        surface === "mcp" ? ["fileKey", "session"] : ["--file-key", "--session"];
+      const [documentArgs, sessionFlag] =
+        surface === "mcp"
+          ? ["document and fileKey", "session"]
+          : ["--document and --file-key", "--session"];
       return (
         `Blocked: the session ${block.session} is in "${block.sessionFileName}", but this call ` +
-        `named the Figma file ${block.fileKey}, so nothing was submitted. A session stays in the ` +
-        `file it started in: drop ${fileFlag} to keep working in "${block.sessionFileName}", or ` +
-        `drop ${sessionFlag} to start a fresh session in ${block.fileKey}.`
+        `named ${namedDocument(block.document, block.fileKey)}, so nothing was submitted. ` +
+        `A session stays in the file it started in: drop ${documentArgs} to keep ` +
+        `working in "${block.sessionFileName}", or drop ${sessionFlag} to start a fresh session.`
       );
     }
   }
+}
+
+function namedDocument(document: string | null, fileKey: string | null): string {
+  const names = [
+    ...(document ? [`document ${document}`] : []),
+    ...(fileKey ? [`fileKey ${fileKey}`] : []),
+  ];
+  return `the Figma file named by ${names.join(" and ")}`;
+}
+
+function unchosenLead(open: OpenDocumentSnapshot): string {
+  const granted = open.documents.filter((document) => document.grant === "granted").length;
+  const why = !open.documents.length
+    ? "there is no open Figma file to run in"
+    : !open.complete
+      ? "not every open file is known yet, so this server won't choose one for you"
+      : granted > 1
+        ? `this project may edit ${granted} open files, and this call named none`
+        : "this project isn't allowed to edit any open file yet, and this call named none";
+  return (
+    `Blocked: ${why}, so nothing was submitted and no plugin panel was asked. Name the file to ` +
+    `edit; if this project isn't allowed there yet, the user is asked to Allow it in that file only.`
+  );
+}
+
+function waitingText(
+  state: string,
+  action: string,
+  surface: "mcp" | "cli",
+  waitMs: number,
+): string {
+  const seconds = Math.round(waitMs / 1000);
+  return surface === "mcp"
+    ? `Blocked: ${state}, so this call did not run. Required before retrying: ${action}. ` +
+        `${REPORT_TO_PERSON} they confirm — each attempt waits up to ${seconds}s and cannot ` +
+        `succeed without them. Answering later does not run this call; submit it again.`
+    : `Blocked: ${state}, so the script did not run. Required before re-running: ${action}. ` +
+        `This run waited ${seconds}s; raise --wait if they need longer.`;
 }
 
 /**
@@ -143,33 +236,34 @@ function freshSession(surface: "mcp" | "cli"): string {
 }
 
 /**
- * The plugin refused a run after this server bound it: the grant was revoked, or the plugin isn't in
- * that file any more. The plugin refused it before it ran.
+ * The plugin refused a run after this server bound it: the grant was revoked, or the plugin's file
+ * no longer carries the document id the call was bound to. The plugin refused it before it ran.
  */
 export function notGrantedText(reason: "no-grant" | "other-document", fileName: string): string {
   return reason === "no-grant"
     ? `Blocked: the Framelink plugin refused the run because this project is no longer allowed to ` +
         `edit "${fileName}" (the user revoked it), so nothing ran. Don't retry unless the user asks to.`
-    : `Blocked: the Framelink plugin refused the run because it is no longer in "${fileName}", so ` +
-        `nothing ran. Retry once the plugin is open in that file again.`;
+    : `Blocked: the Framelink plugin refused the run because "${fileName}" no longer carries the ` +
+        `document id this call named (the file was given its own identity, or the plugin closed), ` +
+        `so nothing ran. Call again without a document to see the open files, and choose again.`;
 }
 
 /**
- * get_flcm_reference's note on where this project stands with the open files. It never prompts:
- * it reads grants, and says what an execute call will ask.
+ * The note the reference leads with: the open documents and how an execute call will bind. It never
+ * prompts and never submits; `null` is a lookup that failed.
  */
-export function referenceGrantGuidance(
-  granted: { fileNames: readonly string[]; complete: boolean } | null,
-): string | undefined {
-  if (granted === null)
-    return "The plugin's grants could not be checked. Check the Framelink plugin connection before executing code. The reference is available below; no code was submitted.";
-  const { fileNames, complete } = granted;
-  if (fileNames.length > 1)
-    return `This project may edit ${fileNames.length} open Figma files (${fileNames.map((name) => `"${name}"`).join(", ")}). Pass fileKey when executing code to name one; without it the user is asked to pick.`;
-  if (!complete)
-    return "Not every open Figma file's grant could be checked, so executing code without fileKey may ask the user to pick a file. Pass fileKey to name one. This reference request does not ask or submit code.";
-  if (fileNames.length === 1) return undefined;
-  return "This project isn't allowed to edit any open Figma file yet. Executing code asks the user to allow it in the Framelink plugin; pass fileKey to name the file. This reference request does not ask or submit code.";
+export function referenceDocumentsGuidance(
+  open: OpenDocumentSnapshot | null,
+  surface: "reference" | "cli",
+): string {
+  if (open === null)
+    return "The open Figma files could not be listed. Check the Framelink plugin connection before executing code. No code was submitted.";
+  const granted = open.documents.filter((document) => document.grant === "granted");
+  const binding =
+    open.complete && granted.length === 1
+      ? `Executing code without ${documentFlag(surface)} runs in "${granted[0].fileName}".`
+      : `Executing code without ${documentFlag(surface)} is refused until exactly one open file is allowed; name the file to edit.`;
+  return `${binding}\n${openDocumentsText(open, surface)}`;
 }
 
 function unpairedGuidance(surface: GuidanceSurface): string {

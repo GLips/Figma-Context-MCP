@@ -14,7 +14,7 @@ import {
   type ChannelRunContext,
   type PluginLink,
 } from "./bridge.js";
-import { mintExecutionId } from "~/commercial/execution-id.js";
+import type { ExecutionId } from "~/commercial/execution-id.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { mintSessionHandle, type SessionHandle } from "./session-handle.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
@@ -26,10 +26,11 @@ import { writeRefusalText, type WriteRefusal } from "../entitlement/write-author
 // read, so it never reaches the tool result.
 
 /**
- * Where a call runs: the document it was bound to, the link that is in it, and the session the call
- * named (null: the run gets a fresh one).
+ * Where a call runs: the document it was bound to, the link that is in it, the session the call
+ * named (null: the run gets a fresh one), and the execution id it was targeted and will run under.
  */
 export interface PluginCallTarget {
+  executionId: ExecutionId;
   link: PluginLink;
   document: CallDocument;
   session: SessionHandle | null;
@@ -81,11 +82,10 @@ export async function executePluginCode(
     writeMeter,
     readLocalImage,
   }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
-  { link, document, session: namedSession }: PluginCallTarget,
+  { executionId, link, document, session: namedSession }: PluginCallTarget,
   code: string,
   { figma, signal }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } = { figma: null },
 ): Promise<ExecutionOutcome> {
-  const executionId = mintExecutionId();
   // The upload grant comes from the code as submitted here, by the trusted caller — never from the
   // plugin, which executes the code and so could otherwise name any handle it has seen.
   const runContext: ChannelRunContext = {
@@ -115,7 +115,7 @@ export async function executePluginCode(
         {
           type: "EXECUTE_CODE",
           code,
-          fileKey: document.fileKey,
+          documentId: document.documentId,
           session,
           preamble: flcmSandboxPreamble(),
           lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
@@ -161,7 +161,7 @@ function mayHaveRun(error: unknown): boolean {
 
 export async function capturePluginScreenshot(
   bridge: PluginBridgeRuntime["bridge"],
-  { link, document }: PluginCallTarget,
+  { executionId, link, document }: PluginCallTarget,
   target: { nodeId?: string; key?: string; scale?: number; context?: boolean; margin?: number },
   signal?: AbortSignal,
 ): Promise<
@@ -169,8 +169,8 @@ export async function capturePluginScreenshot(
 > {
   const reply = await bridge.submitRun(
     link,
-    { type: "SCREENSHOT", fileKey: document.fileKey, ...target },
-    mintExecutionId(),
+    { type: "SCREENSHOT", documentId: document.documentId, ...target },
+    executionId,
     { signal },
   );
   return reply.type === "NOT_GRANTED"

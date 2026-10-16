@@ -14,8 +14,8 @@
 //   • Link setup gates everything: HELLO refuses another protocol outright, AUTHENTICATE proves the
 //     installation credential, and an unpaired link is sent nothing but setup frames.
 //   • Pairing: the panel shows the code the server offered, and only that code pairs that link.
-//   • The grant gate: the plugin refuses a run until a human allows this project on the proven
-//     document; the grant lives in the plugin alone, so a reconnect, a restart or a sibling server in
+//   • The grant gate: the plugin refuses a run until a human allows this project on the document
+//     its stamp names; the grant lives in the plugin alone, so a reconnect, a restart or a sibling server in
 //     the same project needs no second Allow, another installation is asked anew, and Revoke ends it.
 //   • Port-block discovery: first free port, a stopped bridge disowning its bind, and the manifest
 //     mirroring WS_PORT_BLOCK.
@@ -52,9 +52,12 @@ const until = async (condition, what, ms = 5_000) => {
   }
 };
 
-// The Figma files the real plugins are open in, and the REST read every bridge proves them with.
+// The Figma files the real plugins are open in. Each plugin stamps its file's root on start.
 const figmaFiles = new LoopbackFigma();
-const contractFile = figmaFiles.file("CONTRACTfile1", "Contract file");
+const contractFile = figmaFiles.file("Contract file");
+// A well-formed document id no open file carries.
+const ABSENT_DOCUMENT = "zzzzzzzzzzzzzzzz";
+let contractDocument = null;
 
 // The real plugin evals what it is sent, so it gets the real std-lib (ADR-0010).
 const PREAMBLE = await buildSandboxPreamble();
@@ -63,7 +66,7 @@ const execute = (bridge, link, fields = {}) =>
     link,
     {
       type: "EXECUTE_CODE",
-      fileKey: contractFile.key,
+      documentId: contractDocument,
       // Fresh each run: a real plugin refuses a created handle it already holds.
       session: { handle: mintSessionHandle(), create: true },
       code: "return 'ok';",
@@ -75,10 +78,13 @@ const execute = (bridge, link, fields = {}) =>
   );
 const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
-/** Bind a call to `fileKey` (null: let the human pick), waiting `waitMs` for the plugin's answer. */
-const target = (bridge, fileKey, waitMs = 5_000) =>
+/**
+ * Bind a call to `document` (null: the one granted open document), waiting `waitMs` for the plugin's
+ * answer.
+ */
+const target = (bridge, document, waitMs = 5_000) =>
   bridge.targetCall(
-    { fileKey, session: null },
+    { executionId: mintExecutionId(), session: null, document, fileKey: null },
     { signal: new AbortController().signal, waitMs, pollMs: 20 },
   );
 
@@ -89,8 +95,8 @@ const freshStateDir = () => mkdtempSync(join(tmpdir(), "flcm-contract-"));
 function bridgeOn(ports, { stateDir = freshStateDir(), onConnect, ...options } = {}) {
   const bridge = new PluginBridge({
     linkCredentials: new LinkCredentialStore(stateDir),
-    documentReader: figmaFiles.reader,
-    proofTiming: { pollMs: 20, deadlineMs: 1_000 },
+    // The real plugin redials a lost server within a second; an unnamed call waits this out.
+    linkSettleMs: 1_500,
     ...options,
   });
   bridge.start([ports].flat(), onConnect);
@@ -130,7 +136,7 @@ async function pairByPanel(bridge, plugin) {
 
 // A socket speaking the plugin's half of link setup by hand. `protocolVersion: null` predates HELLO
 // and ERRORs every request; `credentialDir` names the state dir whose credential it holds (none:
-// unpaired). It claims no document. `received` lists every request type it was sent; `onFrame` sees
+// unpaired). It reports a file it couldn't stamp, so it is never a call's target. `received` lists every request type it was sent; `onFrame` sees
 // the rest.
 function rawPeer(
   url,
@@ -169,7 +175,11 @@ function rawPeer(
       return;
     }
     if (msg.type === "INTRODUCE") {
-      send({ type: "INTRODUCED", id: msg.id, claim: null });
+      send({
+        type: "INTRODUCED",
+        id: msg.id,
+        document: { kind: "unidentified", problem: "a raw contract peer" },
+      });
       return;
     }
     onFrame(msg);
@@ -218,6 +228,8 @@ assert.equal(pairing.kind, "paired", "the shown code pairs the link showing it")
 let link = pairing.link;
 assert.deepEqual(link.owner, LOOPBACK_USER, "the link carries the Figma user the plugin runs as");
 assert.equal(plugin.showsPairingCode(), false, "the panel stops showing the code once paired");
+contractDocument = plugin.documentId();
+assert.ok(contractDocument, "the plugin stamped its file on start");
 console.log(
   "✅ The panel shows the offered code, and confirming exactly it pairs and authenticates",
 );
@@ -231,28 +243,28 @@ await assert.rejects(
   /can't read the server's "EXECUTE_CODE" request/,
   "an EXECUTE_CODE without its std-lib is refused, not gated",
 );
-// Until a human allows this project on the proven document, the plugin refuses the run outright.
+// Until a human allows this project on the stamped document, the plugin refuses the run outright.
 assert.equal((await execute(bridge, link)).type, "NOT_GRANTED", "a write before Allow is refused");
 console.log("✅ A write before any grant is refused NOT_GRANTED, unrun");
 
-// A call naming the file proves the link is in it (a nonce read back over REST), then waits on Allow.
-const binding = target(bridge, contractFile.key);
+// A call naming the document binds to the link that reported it, then waits on Allow there.
+const binding = target(bridge, contractDocument);
 await plugin.allow();
 const bound = await binding;
 assert.equal(bound.kind, "targeted", "Allow binds the call");
 assert.deepEqual(
   bound.document,
-  { fileKey: contractFile.key, fileName: contractFile.name },
-  "to the proven document, named as REST names it",
+  { documentId: contractDocument, fileName: contractFile.name, fileKey: null },
+  "to the stamped document, named as the plugin reports it",
 );
 assert.equal(grantChanges, 1, "the grant is announced to the server");
 assert.equal((await execute(bridge, bound.link)).result, "ok", "the granted write runs");
 assert.equal(
-  (await execute(bridge, bound.link, { fileKey: "OTHERfile1" })).type,
+  (await execute(bridge, bound.link, { documentId: ABSENT_DOCUMENT })).type,
   "NOT_GRANTED",
   "a run naming another document is refused, grant or no",
 );
-console.log("✅ After a proof and an Allow, the same write runs — only in the granted document");
+console.log("✅ After an Allow, the same write runs — only in the granted document");
 
 // --- Protocol 8: write-access notices and the panel's sign-in click ---
 const notice = { kind: "sign-in-failed", message: "contract" };
@@ -288,9 +300,14 @@ const stranger = rawPeer(URL, {
 await opened(stranger);
 await wait(100);
 stranger.send(
-  JSON.stringify({ type: "GRANT_CHANGED", project: "/p", fileKey: "PLANTEDfile1", granted: true }),
+  JSON.stringify({ type: "GRANT_CHANGED", project: "/p", documentId: ABSENT_DOCUMENT, granted: true }),
 );
-stranger.send(JSON.stringify({ type: "DOCUMENT_CLAIMED", fileKey: "PLANTEDfile1" }));
+stranger.send(
+  JSON.stringify({
+    type: "DOCUMENT_REPORTED",
+    document: { kind: "identified", documentId: ABSENT_DOCUMENT, fileName: "Planted", pageNames: [] },
+  }),
+);
 stranger.send(
   JSON.stringify({
     type: "CHANNEL_REQUEST",
@@ -334,7 +351,7 @@ console.log(
 
 // --- The grant holds across a reconnect, with no prompt ---
 // The redial above is a fresh link: it authenticated with no prompt (the plugin kept its pairing),
-// re-claimed the file it was proven in, and was proven again on introduction.
+// and reported the same stamp on introduction.
 assert.equal(plugin.showsPairingCode(), false, "a paired plugin's redial shows no pairing code");
 const rebound = await target(bridge, null);
 assert.equal(rebound.kind, "targeted", "a call naming no file runs in the one granted document");
@@ -366,7 +383,7 @@ const squatBridge = bridgeOn(PORT_SQUAT);
 await wait(150);
 const squatted = await realPlugin(PORT_SQUAT, { storage: pluginStorage, file: contractFile });
 await pairByPanel(squatBridge, squatted);
-const squatBinding = await target(squatBridge, contractFile.key, 300);
+const squatBinding = await target(squatBridge, contractDocument, 300);
 assert.deepEqual(
   squatBinding,
   { kind: "blocked", block: { kind: "grant-pending", fileName: contractFile.name } },
@@ -397,13 +414,14 @@ await wait(150);
 // Nothing about grants is on the server's disk, so any server of this installation and project —
 // restarted, or a sibling on another port — is granted by the one Allow the plugin stored.
 const sharedDir = freshStateDir();
-const restartFile = figmaFiles.file("RESTARTfile1", "Restart file");
+const restartFile = figmaFiles.file("Restart file");
 const restartStorage = new Map();
 const bridgeR1 = bridgeOn(19879, { stateDir: sharedDir });
 await wait(150);
 const r1 = await realPlugin(19879, { storage: restartStorage, file: restartFile });
 await pairByPanel(bridgeR1, r1);
-const r1Binding = target(bridgeR1, restartFile.key);
+const restartDocument = r1.documentId();
+const r1Binding = target(bridgeR1, restartDocument);
 await r1.allow();
 assert.equal((await r1Binding).kind, "targeted", "precondition: granted");
 r1.close();
@@ -423,14 +441,17 @@ for (const [server, what] of [
 ]) {
   const granted = await target(server, null);
   assert.equal(granted.kind, "targeted", `${what} is granted by the stored Allow`);
-  assert.equal((await execute(server, granted.link, { fileKey: restartFile.key })).result, "ok");
+  assert.equal(
+    (await execute(server, granted.link, { documentId: restartDocument })).result,
+    "ok",
+  );
 }
 assert.equal(r2.isPrompting(), false, "with no second Allow");
 console.log("✅ Pairing and the grant survive a restart, and a same-project sibling shares it");
 
 r2.revoke();
 await until(async () => {
-  const after = await target(bridgeSibling, restartFile.key, 0);
+  const after = await target(bridgeSibling, restartDocument, 0);
   return after.kind === "blocked";
 }, "the revoke");
 console.log("✅ Revoke in the plugin ends the grant for every server in the project");
@@ -773,7 +794,9 @@ const linkC = await linkOf(bridgeC);
 
 // A GRANT_STATUS is pending too; drawing on one would let a hostile link burn fetches against a
 // pending it was never granted a run for. The refusal must leave that pending intact.
-const statusP = bridgeC.grantStatus(linkC, null, "none").catch((e) => e);
+const statusP = bridgeC
+  .grantStatus(linkC, { executionId: mintExecutionId(), documentId: ABSENT_DOCUMENT, prompt: "none" })
+  .catch((e) => e);
 await wait(50);
 const infoId = framesC.find((f) => f.type === "GRANT_STATUS").id;
 const imageRequest = (id, executionId, payload) =>

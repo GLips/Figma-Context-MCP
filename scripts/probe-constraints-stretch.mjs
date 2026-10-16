@@ -23,7 +23,7 @@
 //      needs no re-import at all.
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:constraints-stretch        (this script)
-//   5. When the plugin asks, click Allow (FIGMA_API_KEY set, so the server can prove the file).
+//   5. When the plugin asks, click Allow (FIGMA_DOCUMENT names the file; a run without it lists them).
 // The probe renders four small frames, measures, deletes them again, and prints PASS/FAIL per case.
 // Safe to re-run.
 

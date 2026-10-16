@@ -6,12 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
-import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
+import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
 
 const bridges: PluginBridge[] = [];
 // A request with a trivial reply, for tests about the ledger rather than the payload.
-const introduce = () => ({ type: "GRANT_STATUS" as const, fileKey: null, prompt: "none" as const });
+const introduce = () => ({
+  type: "GRANT_STATUS" as const,
+  executionId: mintExecutionId(),
+  documentId: TEST_DOCUMENT.documentId,
+  prompt: "none" as const,
+});
 
 function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
   const bridge = new PluginBridge(options);
@@ -51,7 +56,7 @@ describe("link-owned execution", () => {
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
           lateChangeWindowMs: 60_000,
@@ -81,7 +86,7 @@ describe("link-owned execution", () => {
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
           lateChangeWindowMs: 60_000,
@@ -113,7 +118,7 @@ describe("link-owned execution", () => {
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
           lateChangeWindowMs: 60_000,
@@ -145,7 +150,7 @@ describe("link-owned execution", () => {
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
           lateChangeWindowMs: 60_000,
@@ -202,7 +207,7 @@ describe("link-owned execution", () => {
         {
           type: "EXECUTE_CODE",
           session: TEST_SESSION_REQUEST,
-          fileKey: "FAKEfile1",
+          documentId: TEST_DOCUMENT.documentId,
           code: "old",
           preamble: "x",
           lateChangeWindowMs: 60_000,

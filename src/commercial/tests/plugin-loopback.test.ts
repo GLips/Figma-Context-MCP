@@ -15,20 +15,20 @@ import { startPluginBridge, type PluginBridgeRuntime } from "~/commercial/plugin
 import {
   PluginBridge,
   type CallTarget,
-  type CallTargetRequest,
-  type DocumentReader,
   type PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
 import {
   parseSessionHandle,
   type SessionHandle,
 } from "~/commercial/plugin-bridge/session-handle.js";
+import { parseDocumentId } from "~/commercial/plugin-bridge/document-id.js";
 import { LinkCredentialStore } from "~/commercial/plugin-bridge/link-credential.js";
 import {
   executePluginCode,
   ExecutionReplyLostError,
   type ExecutionOutcome,
 } from "~/commercial/plugin-bridge/execution.js";
+import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import { runPair } from "~/commercial/commands/pair.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import { writesUsedThisMonth } from "~/commercial/entitlement/write-ledger.js";
@@ -73,12 +73,8 @@ afterEach(async () => {
 });
 
 function startRuntime(): PluginBridgeRuntime {
-  // Unroutable: write access works offline, from the free allowance.
-  const runtime = startPluginBridge({
-    assetRoot: dir,
-    framelinkApiUrl: "http://127.0.0.1:9",
-    figmaCredential: undefined,
-  });
+  // Unroutable: write access works offline, from the free allowance. No Figma token anywhere.
+  const runtime = startPluginBridge({ assetRoot: dir, framelinkApiUrl: "http://127.0.0.1:9" });
   cleanups.push(() => runtime.stop?.());
   return runtime;
 }
@@ -90,21 +86,13 @@ function startPlugin(...args: Parameters<typeof startLoopbackPlugin>): LoopbackP
 }
 
 /**
- * A bare relay for a project, reading the loopback files to prove links, with proofs quick enough
- * that a refuted one doesn't hold a test for the production deadline. Its links settle sooner too:
- * the loopback plugin redials a server it just lost within a second.
+ * A bare relay for a project. Its links settle sooner than production's: the loopback plugin
+ * redials a server it just lost within a second.
  */
-function startBridge(
-  stateDir: string,
-  port: number,
-  project = "/loopback/project",
-  documentReader: DocumentReader | null = figma.reader,
-): PluginBridge {
+function startBridge(stateDir: string, port: number, project = "/loopback/project"): PluginBridge {
   const bridge = new PluginBridge({
     linkCredentials: new LinkCredentialStore(stateDir),
     project,
-    documentReader,
-    proofTiming: { pollMs: 20, deadlineMs: 400 },
     linkSettleMs: 3_000,
   });
   bridge.start([port]);
@@ -112,44 +100,64 @@ function startBridge(
   return bridge;
 }
 
+/** The stamp a plugin wrote into its file. */
+function documentOf(plugin: LoopbackPlugin): string {
+  const id = plugin.documentId();
+  if (id === null) throw new Error("the plugin hasn't stamped its file");
+  return id;
+}
+
+/** What a call names: a document id, a session (and maybe a document or file key), or nothing. */
+type Named = string | null | { session?: string; document?: string; fileKey?: string };
+
+interface Targeted {
+  target: CallTarget;
+  prompted: boolean;
+  executionId: ExecutionId;
+}
+
 /**
- * Bind a call the way the tools do, short-waited: to a file key, a session (and maybe a file key),
- * or nothing. `whilePrompted` runs when the plugin prompts, so a test can click; `prompted` says
- * whether it did.
+ * Bind a call the way the tools do, short-waited. `whilePrompted` runs when the call starts waiting
+ * on a panel, so a test can click; `prompted` says whether it did.
  */
 async function target(
   bridge: PluginBridge,
-  named: string | null | { session: string; fileKey?: string },
+  named: Named,
   whilePrompted?: () => unknown,
   waitMs = 5_000,
-): Promise<{ target: CallTarget; prompted: boolean }> {
+): Promise<Targeted> {
   let prompted = false;
-  const { session = null, fileKey = null } =
-    typeof named === "object" && named !== null ? named : { fileKey: named };
-  const request: CallTargetRequest = {
-    fileKey: fileKey === null ? null : figmaFileKey(fileKey),
-    session: session === null ? null : parseSessionHandle(session),
-  };
-  const target = await bridge.targetCall(request, {
-    reader: figma.reader,
-    signal: new AbortController().signal,
-    waitMs,
-    pollMs: 20,
-    onWaiting: () => {
-      prompted = true;
-      void whilePrompted?.();
-      return async () => {};
+  const {
+    session = null,
+    document = null,
+    fileKey = null,
+  } = typeof named === "object" && named !== null ? named : { document: named };
+  const executionId = mintExecutionId();
+  const target = await bridge.targetCall(
+    {
+      executionId,
+      session: session === null ? null : parseSessionHandle(session),
+      document: document === null ? null : parseDocumentId(document),
+      fileKey: fileKey === null ? null : figmaFileKey(fileKey),
     },
-  });
-  return { target, prompted };
+    {
+      signal: new AbortController().signal,
+      waitMs,
+      pollMs: 20,
+      onWaiting: () => {
+        prompted = true;
+        void whilePrompted?.();
+        return async () => {};
+      },
+    },
+  );
+  return { target, prompted, executionId };
 }
-
-const NO_TARGET: CallTargetRequest = { fileKey: null, session: null };
 
 /** Run code on a bound call, in the session it named (null: a fresh one), metered offline. */
 function run(
   bridge: PluginBridge,
-  bound: CallTarget,
+  { target: bound, executionId }: Targeted,
   code: string,
   session: SessionHandle | null = null,
 ): Promise<ExecutionOutcome> {
@@ -157,7 +165,7 @@ function run(
   const { writeMeter } = createTestWriteAccess();
   return executePluginCode(
     { bridge, writeMeter, readLocalImage: () => Promise.reject(new Error("no images")) },
-    { ...bound, session },
+    { ...bound, executionId, session },
     code,
   );
 }
@@ -165,6 +173,18 @@ function run(
 /** Wait until `bridge` resolves a link of `kind` — a plugin redials and sets up on its own clock. */
 async function settlesTo(bridge: PluginBridge, kind: string) {
   await expect.poll(async () => (await bridge.resolveLink()).kind, { timeout: 5_000 }).toBe(kind);
+}
+
+/** Wait until `bridge` has `count` links, each with its file reported. */
+async function linksReported(bridge: PluginBridge, count: number) {
+  await expect
+    .poll(
+      () =>
+        bridge.authenticatedLinks().filter((link) => bridge.documentOf(link).kind !== "unknown")
+          .length,
+      { timeout: 5_000 },
+    )
+    .toBe(count);
 }
 
 /** Pair through the bridge the way an agent does: offer, read the panel, confirm what it shows. */
@@ -179,36 +199,70 @@ async function pairByPanel(bridge: PluginBridge, plugin: LoopbackPlugin): Promis
   return confirmed.link;
 }
 
-it("pairs by the code the panel shows, proves the file, waits for Allow, then settles a clean run uncharged and charges a late change", async () => {
+it("without a token: pairs, refuses an unnamed call with the open file, asks Allow there on retry, then writes with no clicks", async () => {
   const runtime = startRuntime();
-  const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
+  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
   const link = await pairByPanel(runtime.bridge, plugin);
   expect(link.owner).toEqual({ figmaUserId: "loopback-user", name: "Loopback Human" });
-  const execute = async (code: string) => {
-    // This server has no token of its own: the call's reader proves the file. Nothing proved it
-    // before, so the panel asks for the file's link, then for the pick.
-    const bound = await runtime.bridge.targetCall(NO_TARGET, {
-      reader: figma.reader,
-      signal: new AbortController().signal,
-      pollMs: 20,
-      onWaiting: () => {
-        plugin.pasteLink("https://www.figma.com/design/FILEkeyA/Checkout?node-id=0-1");
-        void plugin.allow();
-        return async () => {};
+  await linksReported(runtime.bridge, 1);
+  const checkout = documentOf(plugin);
+
+  const unnamed = await target(runtime.bridge, null);
+  expect(unnamed).toMatchObject({
+    prompted: false,
+    target: {
+      kind: "blocked",
+      block: {
+        kind: "document-unchosen",
+        open: {
+          documents: [
+            {
+              documentId: checkout,
+              fileName: "Checkout",
+              pageNames: ["Page 1"],
+              fileKey: null,
+              grant: "not-granted",
+              copies: 1,
+            },
+          ],
+          complete: true,
+        },
       },
+    },
+  });
+  expect(plugin.isPrompting()).toBe(false);
+
+  const execute = async (code: string, click?: () => unknown) => {
+    const bound = await target(runtime.bridge, checkout, click);
+    if (bound.target.kind !== "targeted") throw new Error(JSON.stringify(bound.target));
+    expect(bound.target.document).toEqual({
+      documentId: checkout,
+      fileName: "Checkout",
+      fileKey: null,
     });
-    if (bound.kind !== "targeted") throw new Error(JSON.stringify(bound));
-    expect(bound.document).toEqual({ fileKey: "FILEkeyA", fileName: "Checkout" });
-    return executePluginCode(runtime, { ...bound, session: null }, code);
+    return {
+      prompted: bound.prompted,
+      outcome: await executePluginCode(
+        runtime,
+        { ...bound.target, executionId: bound.executionId, session: null },
+        code,
+      ),
+    };
   };
 
-  const read = await execute("return 1 + 1;");
-  expect(read).toMatchObject({ kind: "executed", reply: { result: 2, console: [], errors: null } });
+  const read = await execute("return 1 + 1;", () => plugin.allow());
+  expect(read).toMatchObject({
+    prompted: true,
+    outcome: { kind: "executed", reply: { result: 2, console: [], errors: null } },
+  });
 
   // The next run closes the read's late-change watch clean (RUN_SETTLED, long before the ceiling),
   // and Figma reports the raw write's change only after its reply: RUN_CHANGED charges it then.
   const write = await execute("figma.createRectangle(); return 'drawn';");
-  expect(write).toMatchObject({ kind: "executed", reply: { result: "drawn" } });
+  expect(write).toMatchObject({
+    prompted: false,
+    outcome: { kind: "executed", reply: { result: "drawn" } },
+  });
   const drained = runtime.writeMeter.drain(new AbortController().signal);
   plugin.deliverChanges();
   await drained;
@@ -265,45 +319,49 @@ it("servers sharing a state dir need one confirmation; pairing another state dir
   await settlesTo(sibling, "linked");
 });
 
-it("servers in one project share one grant from one click; a server in another project is asked", async () => {
+it("servers in one project share one grant from one click; a server in another project must name the file", async () => {
   ports.push(await reservePort(), await reservePort());
   const first = startBridge(dir, ports[0], "/work/app");
   const sibling = startBridge(dir, ports[1], "/work/app");
   const elsewhere = startBridge(dir, ports[2], "/work/other");
-  const plugin = startPlugin(ports, { file: figma.file("FILEkeyA", "Checkout") });
+  const plugin = startPlugin(ports, { file: figma.file("Checkout") });
   await pairByPanel(first, plugin);
-  for (const bridge of [sibling, elsewhere]) await settlesTo(bridge, "linked");
+  for (const bridge of [sibling, elsewhere]) {
+    await settlesTo(bridge, "linked");
+    await linksReported(bridge, 1);
+  }
+  const checkout = documentOf(plugin);
 
-  const granted = await target(first, "FILEkeyA", () => plugin.allow());
+  const granted = await target(first, checkout, () => plugin.allow());
   expect(granted.prompted).toBe(true);
-  expect(await run(first, granted.target, "return 'first';")).toMatchObject({ kind: "executed" });
+  expect(await run(first, granted, "return 'first';")).toMatchObject({ kind: "executed" });
 
-  // The plugin offers the file it was just proven in to the other servers, which prove it too.
-  await expect
-    .poll(() => sibling.authenticatedLinks().map((link) => sibling.documentOf(link).kind))
-    .toEqual(["proven"]);
   const shared = await target(sibling, null);
   expect(shared.prompted).toBe(false);
-  expect(await run(sibling, shared.target, "return 'sibling';")).toMatchObject({
+  expect(await run(sibling, shared, "return 'sibling';")).toMatchObject({
     kind: "executed",
     reply: { result: "sibling" },
   });
 
-  const other = await target(elsewhere, null, undefined, 300);
-  expect(other.prompted).toBe(true);
-  expect(other.target).toMatchObject({ kind: "blocked", block: { kind: "grant-pending" } });
+  const unnamed = await target(elsewhere, null);
+  expect(unnamed).toMatchObject({
+    prompted: false,
+    target: { block: { kind: "document-unchosen" } },
+  });
+  const named = await target(elsewhere, checkout, undefined, 300);
+  expect(named).toMatchObject({ prompted: true, target: { block: { kind: "grant-pending" } } });
 });
 
-it("a call without a file runs in the one granted file, and asks once two granted files are open", async () => {
+it("several open files: an unnamed call runs in the one granted file; with two granted it is refused with both, and naming one needs no prompt", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("FILEkeyA", "Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
   await pairByPanel(bridge, checkout);
-  const settings = startPlugin(ports[0], { storage, file: figma.file("FILEkeyB", "Settings") });
-  await expect.poll(() => bridge.authenticatedLinks().length, { timeout: 5_000 }).toBe(2);
+  const settings = startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  await linksReported(bridge, 2);
 
   // Named: only that file's panel is asked.
-  const named = await target(bridge, "FILEkeyA", async () => {
+  const named = await target(bridge, documentOf(checkout), async () => {
     await expect.poll(() => checkout.isPrompting()).toBe(true);
     expect(settings.isPrompting()).toBe(false);
     await checkout.allow();
@@ -312,141 +370,230 @@ it("a call without a file runs in the one granted file, and asks once two grante
 
   const unnamed = await target(bridge, null);
   expect(unnamed.prompted).toBe(false);
-  expect(unnamed.target).toMatchObject({ kind: "targeted", document: { fileKey: "FILEkeyA" } });
+  expect(unnamed.target).toMatchObject({
+    kind: "targeted",
+    document: { documentId: documentOf(checkout), fileName: "Checkout" },
+  });
 
-  await target(bridge, "FILEkeyB", () => settings.allow());
-  const ambiguous = await target(bridge, null, undefined, 300);
-  expect(ambiguous.prompted).toBe(true);
-  expect(ambiguous.target.kind).toBe("blocked");
+  await target(bridge, documentOf(settings), () => settings.allow());
+  const ambiguous = await target(bridge, null);
+  expect(ambiguous.prompted).toBe(false);
+  if (ambiguous.target.kind !== "blocked" || ambiguous.target.block.kind !== "document-unchosen")
+    throw new Error(JSON.stringify(ambiguous.target));
+  expect(
+    ambiguous.target.block.open.documents.map(({ fileName, documentId, grant }) => ({
+      fileName,
+      documentId,
+      grant,
+    })),
+  ).toEqual(
+    expect.arrayContaining([
+      { fileName: "Checkout", documentId: documentOf(checkout), grant: "granted" },
+      { fileName: "Settings", documentId: documentOf(settings), grant: "granted" },
+    ]),
+  );
+  const retried = await target(bridge, documentOf(settings));
+  expect(retried.prompted).toBe(false);
+  expect(await run(bridge, retried, "return 'settings';")).toMatchObject({
+    kind: "executed",
+    reply: { result: "settings" },
+  });
 });
 
-it("a call without a file asks while another panel's file can't be read, and reads that file once per call", async () => {
+it("two agents write to two files in parallel", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("FILEkeyA", "Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
   await pairByPanel(bridge, checkout);
-  await target(bridge, "FILEkeyA", () => checkout.allow());
-  // A file this server's token can't read: its claim can never be proven here.
-  const unreadable = figma.file("FILEkeyG", "Elsewhere");
-  unreadable.shared.set("framelink/fileKey", "FILEkeyG");
-  figma.files.delete("FILEkeyG");
-  startPlugin(ports[0], { storage, file: unreadable });
-  await expect
-    .poll(() =>
-      bridge
-        .authenticatedLinks()
-        .map((link) => bridge.documentOf(link).kind)
-        .sort(),
-    )
-    .toEqual(["claimed", "proven"]);
+  const settings = startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  await linksReported(bridge, 2);
+  await target(bridge, documentOf(checkout), () => checkout.allow());
+  await target(bridge, documentOf(settings), () => settings.allow());
 
-  const readsBefore = figma.reads.get("FILEkeyG") ?? 0;
-  const unnamed = await target(bridge, null, undefined, 300);
-  expect(unnamed.prompted).toBe(true);
-  expect(unnamed.target).toMatchObject({ kind: "blocked", block: { kind: "grant-pending" } });
-  expect(figma.reads.get("FILEkeyG")).toBe(readsBefore + 1);
+  const slow = `await new Promise((resolve) => setTimeout(resolve, 300)); return figma.root.name;`;
+  const [one, two] = await Promise.all([
+    target(bridge, documentOf(checkout)).then((bound) => run(bridge, bound, slow)),
+    target(bridge, documentOf(settings)).then((bound) => run(bridge, bound, slow)),
+  ]);
+  expect([one, two]).toMatchObject([
+    { kind: "executed", reply: { result: "Checkout" } },
+    { kind: "executed", reply: { result: "Settings" } },
+  ]);
 });
 
-it("a call naming a file no plugin is in is refused without asking any panel", async () => {
+it("two calls prompting in one panel each keep their own outcome", async () => {
   const bridge = startBridge(dir, ports[0]);
-  const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
+  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
   await pairByPanel(bridge, plugin);
-  figma.file("FILEkeyZ", "Closed file");
+  await linksReported(bridge, 1);
+  const checkout = documentOf(plugin);
 
-  const refused = await target(bridge, "FILEkeyZ");
-  expect(refused).toEqual({
-    target: { kind: "blocked", block: { kind: "document-not-open", fileKey: "FILEkeyZ" } },
-    prompted: false,
+  const denied = target(bridge, checkout);
+  const allowed = target(bridge, checkout);
+  await expect.poll(() => plugin.prompts().length).toBe(2);
+  const [first, second] = plugin.prompts();
+  await plugin.deny(first.executionId);
+  await plugin.allow(second.executionId);
+  const outcomes = await Promise.all([denied, allowed]);
+  const byCall = new Map(outcomes.map((outcome) => [outcome.executionId, outcome.target]));
+  expect(byCall.get(first.executionId as ExecutionId)).toMatchObject({
+    kind: "blocked",
+    block: { kind: "grant-denied" },
   });
-  expect(plugin.isPrompting()).toBe(false);
+  expect(byCall.get(second.executionId as ExecutionId)).toMatchObject({ kind: "targeted" });
+});
+
+it("a viewer's plugin that can't stamp its file is listed as unusable, and the granted file still defaults", async () => {
+  const bridge = startBridge(dir, ports[0]);
+  const storage = new Map<string, unknown>();
+  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
+  await pairByPanel(bridge, checkout);
+  await linksReported(bridge, 1);
+  await target(bridge, documentOf(checkout), () => checkout.allow());
+  const viewer = startPlugin(ports[0], {
+    storage,
+    file: figma.file("Read only", { readOnly: true }),
+  });
+  await linksReported(bridge, 2);
+  expect(viewer.documentId()).toBeNull();
+
+  const unnamed = await target(bridge, null);
+  expect(unnamed.target).toMatchObject({ kind: "targeted", document: { fileName: "Checkout" } });
+  const snapshot = await bridge.openDocuments(mintExecutionId(), new AbortController().signal);
+  expect(snapshot.unidentified).toEqual([expect.stringContaining("refused to mark this file")]);
+  expect(snapshot.documents.map((document) => document.fileName)).toEqual(["Checkout"]);
+});
+
+it("a call naming a document no plugin is in is refused with the open files, without asking any panel; a file key matches only plugins that report one", async () => {
+  const bridge = startBridge(dir, ports[0]);
+  const storage = new Map<string, unknown>();
+  const keyed = startPlugin(ports[0], {
+    storage,
+    file: figma.file("Checkout", { key: "FILEkeyA" }),
+  });
+  await pairByPanel(bridge, keyed);
+  startPlugin(ports[0], { storage, file: figma.file("Settings", { key: null }) });
+  await linksReported(bridge, 2);
+
+  const closed = await target(bridge, "zzzzzzzzzzzzzzzz");
+  expect(closed).toMatchObject({
+    prompted: false,
+    target: {
+      kind: "blocked",
+      block: { kind: "document-not-open", document: "zzzzzzzzzzzzzzzz", open: { complete: true } },
+    },
+  });
+  expect(keyed.isPrompting()).toBe(false);
+
+  const byKey = await target(bridge, { fileKey: "FILEkeyA" }, () => keyed.allow());
+  expect(byKey.target).toMatchObject({
+    kind: "targeted",
+    document: { documentId: documentOf(keyed), fileName: "Checkout", fileKey: "FILEkeyA" },
+  });
+  const unreported = await target(bridge, { fileKey: "FILEkeyB" });
+  expect(unreported.target).toMatchObject({
+    block: { kind: "document-not-open", fileKey: "FILEkeyB" },
+  });
 });
 
 it("one file in two plugin instances is one document, and a revoke in either stops both", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const file = figma.file("FILEkeyA", "Checkout");
+  // Both report the same file key, so they are one file open twice, not a copy.
+  const file = figma.file("Checkout", { key: "FILEkeyA" });
   const one = startPlugin(ports[0], { storage, file });
   await pairByPanel(bridge, one);
   const two = startPlugin(ports[0], { storage, file });
-  await expect.poll(() => bridge.authenticatedLinks().length, { timeout: 5_000 }).toBe(2);
-  await target(bridge, "FILEkeyA", () => one.allow());
+  await linksReported(bridge, 2);
+  await target(bridge, documentOf(one), () => one.allow());
 
   const unnamed = await target(bridge, null);
   expect(unnamed.prompted).toBe(false);
   expect(unnamed.target.kind).toBe("targeted");
 
   one.revoke();
-  const document = { fileKey: figmaFileKey("FILEkeyA"), fileName: "Checkout" };
+  const document = {
+    documentId: parseDocumentId(documentOf(one))!,
+    fileName: "Checkout",
+    fileKey: figmaFileKey("FILEkeyA"),
+  };
   for (const link of bridge.authenticatedLinks())
     await expect
-      .poll(() => run(bridge, { kind: "targeted", link, document }, "return 1;"), {
-        timeout: 5_000,
-      })
+      .poll(
+        () =>
+          run(
+            bridge,
+            {
+              target: { kind: "targeted", link, document },
+              prompted: false,
+              executionId: mintExecutionId(),
+            },
+            "return 1;",
+          ),
+        { timeout: 5_000 },
+      )
       .toEqual({ kind: "not-granted", reason: "no-grant" });
   expect(two.isPrompting()).toBe(false);
 });
 
-it("a granted file is recognized after the plugin restarts, and a duplicate of it asks for its own grant", async () => {
+it("a plugin restart keeps the stamp and the grant; a duplicate asks for a pick in both panels, and once given its own identity needs its own grant", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const file = figma.file("FILEkeyA", "Checkout");
+  const file = figma.file("Checkout");
   const first = startPlugin(ports[0], { storage, file });
   await pairByPanel(bridge, first);
-  await target(bridge, "FILEkeyA", () => first.allow());
+  await linksReported(bridge, 1);
+  const checkout = documentOf(first);
+  await target(bridge, checkout, () => first.allow());
   first.close();
   await expect.poll(() => bridge.authenticatedLinks().length).toBe(0);
 
-  // Nothing tells the new plugin run which file it is in but the claim the proof left in the file.
   const reopened = startPlugin(ports[0], { storage, file });
-  await settlesTo(bridge, "linked");
+  await linksReported(bridge, 1);
+  expect(documentOf(reopened)).toBe(checkout);
   const recognized = await target(bridge, null);
   expect(recognized.prompted).toBe(false);
-  expect(recognized.target).toMatchObject({ kind: "targeted", document: { fileKey: "FILEkeyA" } });
-  reopened.close();
-  await expect.poll(() => bridge.authenticatedLinks().length).toBe(0);
+  expect(recognized.target).toMatchObject({ kind: "targeted", document: { documentId: checkout } });
 
-  const duplicate = startPlugin(ports[0], { storage, file: figma.duplicate(file, "FILEkeyCopy") });
-  await settlesTo(bridge, "linked");
-  const own = await target(bridge, "FILEkeyCopy", () => duplicate.allow());
-  expect(own.prompted).toBe(true);
-  expect(own.target).toMatchObject({ kind: "targeted", document: { fileKey: "FILEkeyCopy" } });
-});
+  // Figma's Duplicate copies the root, stamp and all: nothing tells the two files apart.
+  const copy = startPlugin(ports[0], { storage, file: figma.duplicate(file) });
+  await linksReported(bridge, 2);
+  expect(documentOf(copy)).toBe(checkout);
+  const picked = await target(bridge, checkout, async () => {
+    await expect.poll(() => reopened.prompts().map((prompt) => prompt.kind)).toEqual(["pick"]);
+    await expect.poll(() => copy.prompts().map((prompt) => prompt.kind)).toEqual(["pick"]);
+    await reopened.pick();
+  });
+  expect(picked.prompted).toBe(true);
+  expect(await run(bridge, picked, "return figma.root.name;")).toMatchObject({
+    reply: { result: "Checkout" },
+  });
 
-it("a server with no reader of its own proves a reopened file's claim with the call's, and runs there without a prompt", async () => {
-  const bridge = startBridge(dir, ports[0], undefined, null);
-  const storage = new Map<string, unknown>();
-  const file = figma.file("FILEkeyA", "Checkout");
-  const first = startPlugin(ports[0], { storage, file });
-  await pairByPanel(bridge, first);
-  await target(bridge, "FILEkeyA", () => first.allow());
-  first.close();
-  await expect.poll(() => bridge.authenticatedLinks().length).toBe(0);
-
-  startPlugin(ports[0], { storage, file });
-  await settlesTo(bridge, "linked");
-  const recognized = await target(bridge, null);
-  expect(recognized.prompted).toBe(false);
-  expect(recognized.target).toMatchObject({ kind: "targeted", document: { fileKey: "FILEkeyA" } });
-});
-
-it("a proof that never finishes reading the file keeps the file's claim", async () => {
-  const file = figma.file("FILEkeyA", "Checkout");
-  file.shared.set("framelink/fileKey", "FILEkeyA");
-  const neverAnswers: DocumentReader = (_fileKey, signal) =>
-    new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
-  const bridge = startBridge(dir, ports[0], undefined, neverAnswers);
-  await pairByPanel(bridge, startPlugin(ports[0], { file }));
-
+  // A call waiting on the pick when the copy is given its own identity is refused with the new list.
+  const waiting = await target(bridge, checkout, async () => {
+    await expect.poll(() => copy.prompts().length).toBe(1);
+    await copy.restamp();
+  });
+  if (waiting.target.kind !== "blocked" || waiting.target.block.kind !== "document-changed")
+    throw new Error(JSON.stringify(waiting.target));
+  const ownId = documentOf(copy);
+  expect(ownId).not.toBe(checkout);
   await expect
-    .poll(() => bridge.authenticatedLinks().map((link) => bridge.documentOf(link)))
-    .toEqual([
-      {
-        kind: "claimed",
-        fileKey: "FILEkeyA",
-        problem: { kind: "unverified", message: expect.stringContaining("timed out") },
-      },
-    ]);
-  expect(file.shared.get("framelink/fileKey")).toBe("FILEkeyA");
+    .poll(async () =>
+      (await bridge.openDocuments(mintExecutionId(), new AbortController().signal)).documents
+        .map((document) => [document.documentId, document.grant])
+        .sort(),
+    )
+    .toEqual(
+      [
+        [checkout, "granted"],
+        [ownId, "not-granted"],
+      ].sort(),
+    );
+
+  const own = await target(bridge, ownId, () => copy.allow());
+  expect(own.prompted).toBe(true);
+  expect(own.target).toMatchObject({ kind: "targeted", document: { documentId: ownId } });
 });
 
 /** Run code where `named` binds it, and expect it to execute. */
@@ -456,17 +603,20 @@ async function runIn(
   code: string,
 ): Promise<Extract<ExecutionOutcome, { kind: "executed" }>> {
   const session =
-    typeof named === "object" && named !== null ? parseSessionHandle(named.session) : null;
-  const outcome = await run(bridge, (await target(bridge, named)).target, code, session);
+    typeof named === "object" && named !== null && named.session
+      ? parseSessionHandle(named.session)
+      : null;
+  const outcome = await run(bridge, await target(bridge, named), code, session);
   if (outcome.kind !== "executed") throw new Error(`not executed: ${JSON.stringify(outcome)}`);
   return outcome;
 }
 
 it("two agents on one file each see only their own session.last, through the handle each reply names", async () => {
   const bridge = startBridge(dir, ports[0]);
-  const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
+  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
   await pairByPanel(bridge, plugin);
-  await target(bridge, "FILEkeyA", () => plugin.allow());
+  await linksReported(bridge, 1);
+  await target(bridge, documentOf(plugin), () => plugin.allow());
 
   const one = await runIn(bridge, null, `session.agent = "one"; return "one's result";`);
   const two = await runIn(bridge, null, `session.agent = "two"; return "two's result";`);
@@ -487,22 +637,24 @@ it("two agents on one file each see only their own session.last, through the han
 it("a handle from before the plugin restarted is refused without running, though the granted file is open", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const file = figma.file("FILEkeyA", "Checkout");
+  const file = figma.file("Checkout");
   const first = startPlugin(ports[0], { storage, file });
   await pairByPanel(bridge, first);
-  await target(bridge, "FILEkeyA", () => first.allow());
+  await linksReported(bridge, 1);
+  const checkout = documentOf(first);
+  await target(bridge, checkout, () => first.allow());
   const { session } = await runIn(bridge, null, "globalThis.runs = 1;");
   first.close();
   await expect.poll(() => bridge.authenticatedLinks().length).toBe(0);
 
   startPlugin(ports[0], { storage, file });
-  await settlesTo(bridge, "linked");
+  await linksReported(bridge, 1);
   expect((await target(bridge, null)).target.kind).toBe("targeted");
-  expect(await target(bridge, { session })).toEqual({
+  expect(await target(bridge, { session })).toMatchObject({
     target: { kind: "blocked", block: { kind: "session-not-found", session } },
     prompted: false,
   });
-  expect(await target(bridge, { session, fileKey: "FILEkeyA" })).toMatchObject({
+  expect(await target(bridge, { session, document: checkout })).toMatchObject({
     target: { kind: "blocked", block: { kind: "session-not-found" } },
   });
 });
@@ -513,14 +665,14 @@ it("after a server restart, a session's plugin that redials later than another p
   // Its handshake lags, so the restarted server hears from the other plugin first.
   const checkout = startPlugin(ports[0], {
     storage,
-    file: figma.file("FILEkeyA", "Checkout"),
+    file: figma.file("Checkout"),
     holdHelloMs: 700,
   });
   await pairByPanel(before, checkout);
-  startPlugin(ports[0], { storage, file: figma.file("FILEkeyB", "Settings") });
-  await expect.poll(() => before.authenticatedLinks().length, { timeout: 5_000 }).toBe(2);
-  await target(before, "FILEkeyA", () => checkout.allow());
-  const { session } = await runIn(before, "FILEkeyA", "session.kept = true;");
+  startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  await linksReported(before, 2);
+  await target(before, documentOf(checkout), () => checkout.allow());
+  const { session } = await runIn(before, documentOf(checkout), "session.kept = true;");
   before.stop();
 
   const after = startBridge(dir, ports[0]);
@@ -530,13 +682,14 @@ it("after a server restart, a session's plugin that redials later than another p
 
 it("a reconnect during a run leaves its outcome unknown, names its session, and never runs it a second time", async () => {
   const bridge = startBridge(dir, ports[0]);
-  const plugin = startPlugin(ports[0], { file: figma.file("FILEkeyA", "Checkout") });
+  const plugin = startPlugin(ports[0], { file: figma.file("Checkout") });
   await pairByPanel(bridge, plugin);
-  await target(bridge, "FILEkeyA", () => plugin.allow());
+  await linksReported(bridge, 1);
+  await target(bridge, documentOf(plugin), () => plugin.allow());
 
   const interrupted = run(
     bridge,
-    (await target(bridge, "FILEkeyA")).target,
+    await target(bridge, documentOf(plugin)),
     `globalThis.runs = (globalThis.runs ?? 0) + 1;
      figma.notify("run started");
      await new Promise((resolve) => setTimeout(resolve, 500));
@@ -558,25 +711,26 @@ it("a reconnect during a run leaves its outcome unknown, names its session, and 
   ]);
 });
 
-it("a handle passed with another file's key refuses without running, and without asking either panel", async () => {
+it("a handle passed with another document refuses without running, and without asking either panel", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
-  const checkout = startPlugin(ports[0], { storage, file: figma.file("FILEkeyA", "Checkout") });
+  const checkout = startPlugin(ports[0], { storage, file: figma.file("Checkout") });
   await pairByPanel(bridge, checkout);
-  const settings = startPlugin(ports[0], { storage, file: figma.file("FILEkeyB", "Settings") });
-  await expect.poll(() => bridge.authenticatedLinks().length, { timeout: 5_000 }).toBe(2);
-  await target(bridge, "FILEkeyA", () => checkout.allow());
-  await target(bridge, "FILEkeyB", () => settings.allow());
-  const { session } = await runIn(bridge, "FILEkeyA", "session.kept = true;");
+  const settings = startPlugin(ports[0], { storage, file: figma.file("Settings") });
+  await linksReported(bridge, 2);
+  await target(bridge, documentOf(checkout), () => checkout.allow());
+  await target(bridge, documentOf(settings), () => settings.allow());
+  const { session } = await runIn(bridge, documentOf(checkout), "session.kept = true;");
 
-  expect(await target(bridge, { session, fileKey: "FILEkeyB" })).toEqual({
+  expect(await target(bridge, { session, document: documentOf(settings) })).toMatchObject({
     target: {
       kind: "blocked",
       block: {
         kind: "session-document-mismatch",
         session,
         sessionFileName: "Checkout",
-        fileKey: "FILEkeyB",
+        document: documentOf(settings),
+        fileKey: null,
       },
     },
     prompted: false,

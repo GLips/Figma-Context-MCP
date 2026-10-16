@@ -28,26 +28,34 @@ export interface PanelGrantRow {
   key: ConnKey | null;
   project: string;
   label: string;
-  // The grant this row stands for, once the file is proven: what Revoke names.
+  // The grant this row stands for, once the file is identified: what Revoke names.
   grant: { credentialId: string; project: string } | null;
   granted: boolean;
   active: boolean;
   writeAccess: WriteAccessNotice | null;
   connected: boolean;
-  // What a call of this server is asking right now: to be granted this file, or for the human to
-  // pick a file. Null once answered, or when its polls stopped.
-  prompt: "grant" | "select" | null;
-  // The human said no to this server; its calls are refused until an Allow.
-  denied: boolean;
+}
+
+/**
+ * One call waiting on the human in this panel: `allow` to let its project edit this document, or
+ * `pick` to choose this copy where two open files carry one document id. Clicks name the call and the
+ * document shown, so they can't land on another call, or on a stamp the human never saw.
+ */
+export interface PanelPrompt {
+  key: ConnKey;
+  executionId: string;
+  kind: "allow" | "pick";
+  project: string;
+  label: string;
+  documentId: string;
   // An Allow is being saved.
   allowing: boolean;
 }
 
 /** What the panel knows about the file this plugin is in. */
 export type PanelDocument =
-  | { kind: "proven"; fileName: string }
-  // `asking`: a server wants a file picked and this one can't be until it is identified.
-  | { kind: "unproven"; asking: boolean; pasted: { fileKey: string; refuted: boolean } | null };
+  | { kind: "identified"; fileName: string; documentId: string }
+  | { kind: "unidentified"; problem: string };
 
 /**
  * A socket from a server this installation isn't paired with. `code` is the pairing attempt it is
@@ -63,6 +71,7 @@ export interface PanelRender {
   pairings: PanelPairing[];
   // Null while no server has authenticated: nothing has asked about this file yet.
   document: PanelDocument | null;
+  prompts: PanelPrompt[];
   grantRows: PanelGrantRow[];
   expanded: boolean;
   showOrientation: boolean;
@@ -77,13 +86,15 @@ export type PanelControl =
   // Only for a socket that actually opened, never for the empty block ports the relay also dials.
   | { type: "WS_CONNECTED"; connKey: ConnKey }
   | { type: "WS_CLOSED"; connKey: ConnKey }
-  // Allow grants the row's project this file (and, when it asked for a pick, picks it); Deny refuses.
-  | { type: "UI_DECISION"; connKey: ConnKey; approve: boolean }
+  // Allow grants the call's project the document the prompt showed; Deny refuses that call.
+  | { type: "UI_DECISION"; connKey: ConnKey; executionId: string; documentId: string; approve: boolean }
+  // This copy is the one the call means: for that call only.
+  | { type: "UI_PICK"; connKey: ConnKey; executionId: string; documentId: string }
+  // Give this file a fresh stamp, apart from the copy it shares one with.
+  | { type: "UI_RESTAMP" }
   | { type: "UI_SIGN_IN"; connKey: ConnKey }
   | { type: "UI_OPEN_SIGN_IN"; connKey: ConnKey }
-  | { type: "UI_REVOKE"; credentialId: string; project: string }
-  // What the human pasted as this file's link. Text, unparsed: the host reads it.
-  | { type: "UI_PASTE_LINK"; text: string };
+  | { type: "UI_REVOKE"; credentialId: string; project: string };
 
 /** Relay → host. The frame is untrusted JSON until the host admits it (protocol.ts parseServerFrame). */
 export type HostInbound =
