@@ -5,6 +5,9 @@
 // Which document a plugin call runs against, and on which link. Every call resolves to exactly one
 // proven document, under a grant the plugin holds for this project:
 //
+// - A call naming a session runs only in the plugin run holding it, in the document the session is
+//   bound to. If no open plugin holds it, or the call names another file, it is refused and never
+//   falls through to the rules below.
 // - A call naming a file runs only there. Its panels prompt for a grant; no other panel is asked,
 //   and if no link can be proven to be in that file, the call is refused.
 // - A call naming none runs in the one open document already granted to this project. Otherwise
@@ -16,11 +19,18 @@ import { GRANT_POLL_MS, type GrantPrompt, type GrantState } from "@framelink/plu
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentReader, LinkDocument, LinkDocuments } from "./link-documents.js";
 import type { RelayConnection } from "./relay-connection.js";
+import type { SessionHandle } from "./session-handle.js";
 
 /** The document a call was bound to: what it ran against, and what its reply names. */
 export interface CallDocument {
   fileKey: FigmaFileKey;
   fileName: string;
+}
+
+/** What a call named to run against. Null names nothing: the rules for an unnamed call apply. */
+export interface CallTargetRequest {
+  fileKey: FigmaFileKey | null;
+  session: SessionHandle | null;
 }
 
 /** Why a call got no document. Nothing was submitted in any of them. */
@@ -29,10 +39,25 @@ export type CallTargetBlock =
   | { kind: "document-unprovable"; fileKey: FigmaFileKey | null; problem: string }
   | { kind: "grant-denied"; fileName: string }
   | { kind: "grant-unavailable"; fileName: string }
-  | { kind: "grant-pending"; fileName: string | null };
+  | { kind: "grant-pending"; fileName: string | null }
+  | { kind: "session-not-found"; session: SessionHandle }
+  // Two open plugin runs answered for one handle: a minting collision across plugins. Never guessed.
+  | { kind: "session-ambiguous"; session: SessionHandle }
+  | {
+      kind: "session-document-mismatch";
+      session: SessionHandle;
+      sessionFileName: string;
+      fileKey: FigmaFileKey;
+    };
 
 export type CallTarget =
-  | { kind: "targeted"; link: RelayConnection; document: CallDocument }
+  | {
+      kind: "targeted";
+      link: RelayConnection;
+      document: CallDocument;
+      /** The session the call named, which the run resumes; null runs in a fresh one. */
+      session: SessionHandle | null;
+    }
   | { kind: "blocked"; block: CallTargetBlock };
 
 // Human-scale wait. SDK 1.29 only resets idle timeouts if the CLIENT opts into
@@ -61,6 +86,12 @@ export interface CallTargetDeps {
     signal: AbortSignal,
   ): Promise<GrantState>;
   closePrompt(link: RelayConnection): void;
+  /** Whether a link's plugin holds `session` for this project, in its proven document. */
+  lookupSession(
+    link: RelayConnection,
+    session: SessionHandle,
+    signal: AbortSignal,
+  ): Promise<boolean>;
 }
 
 /** What counting granted documents reads: each link's document, and its plugin's grant on it. */
@@ -110,11 +141,64 @@ export async function grantedOpenDocuments(
 
 export async function targetPluginCall(
   deps: CallTargetDeps,
-  fileKey: FigmaFileKey | null,
+  { fileKey, session }: CallTargetRequest,
   options: CallTargetOptions,
 ): Promise<CallTarget> {
   await abortable(deps.documents.settled(deps.links()), options.signal);
+  if (session !== null) return targetSession(deps, session, fileKey, options);
   return fileKey === null ? targetUnnamed(deps, options) : targetNamed(deps, fileKey, options);
+}
+
+/**
+ * A call naming its session: the one plugin run holding it, asked for a grant on the session's
+ * document and nowhere else.
+ */
+async function targetSession(
+  deps: CallTargetDeps,
+  session: SessionHandle,
+  fileKey: FigmaFileKey | null,
+  options: CallTargetOptions,
+): Promise<CallTarget> {
+  const { documents } = deps;
+  const links = deps.links();
+  const held = await Promise.all(
+    links.map((link) => deps.lookupSession(link, session, options.signal).catch(() => false)),
+  );
+  options.signal.throwIfAborted();
+  const holders = links.filter((_, index) => held[index]);
+  if (holders.length > 1) return blocked({ kind: "session-ambiguous", session });
+  const [holder] = holders;
+  if (!holder) return blocked({ kind: "session-not-found", session });
+  // The plugin answers only for its proven document, but another server may be the one that proved
+  // it: this server proves the plugin's claim itself before running there.
+  if (documents.documentOf(holder).kind !== "proven" && options.reader)
+    await abortable(documents.proveClaims([holder], options.reader), options.signal);
+  const document = documents.documentOf(holder);
+  if (document.kind !== "proven")
+    return blocked({
+      kind: "document-unprovable",
+      fileKey,
+      problem: !options.reader
+        ? "this server has no Figma token to read the file with"
+        : document.kind === "claimed" && document.problem
+          ? document.problem
+          : "the plugin holding the session didn't name a file this server could read",
+    });
+  if (fileKey !== null && fileKey !== document.fileKey)
+    return blocked({
+      kind: "session-document-mismatch",
+      session,
+      sessionFileName: document.fileName,
+      fileKey,
+    });
+  const open = () => deps.links().includes(holder);
+  return waitForGrant(deps, options, {
+    ask: () => (open() ? [{ link: holder, fileKey: document.fileKey, prompt: "grant" }] : []),
+    onRound: (answers) =>
+      grantDecision(documents, answers, session) ??
+      (open() ? null : blocked({ kind: "session-not-found", session })),
+    expired: () => blocked({ kind: "grant-pending", fileName: document.fileName }),
+  });
 }
 
 /** A call that named its file: prove a link is in it if none is yet, then ask only there. */
@@ -156,24 +240,11 @@ async function targetNamed(
   }
   return waitForGrant(deps, options, {
     ask: () => holders().map((link) => ({ link, fileKey, prompt: "grant" })),
-    onRound(answers) {
-      const granted = answers.find((answer) => answer.state === "granted");
-      if (granted) return targeted(documents, granted.link);
-      const denied = answers.find((answer) => answer.state === "denied");
-      if (denied)
-        return blocked({
-          kind: "grant-denied",
-          fileName: documentOf(documents, denied.link).fileName,
-        });
-      if (answers.length && answers.every((answer) => answer.state === "absent"))
-        return blocked({
-          kind: "grant-unavailable",
-          fileName: documentOf(documents, answers[0].link).fileName,
-        });
-      if (!answers.length && !holders().length)
-        return blocked({ kind: "document-not-open", fileKey });
-      return null;
-    },
+    onRound: (answers) =>
+      grantDecision(documents, answers, null) ??
+      (!answers.length && !holders().length
+        ? blocked({ kind: "document-not-open", fileKey })
+        : null),
     expired: () => {
       const holder = holders()[0];
       return blocked({
@@ -203,7 +274,7 @@ async function targetUnnamed(
     },
     options.signal,
   );
-  if (granted.size === 1) return targeted(documents, [...granted.values()][0].link);
+  if (granted.size === 1) return targeted(documents, [...granted.values()][0].link, null);
 
   const anyProven = deps.links().some((link) => documents.documentOf(link).kind === "proven");
   if (!anyProven && !options.reader)
@@ -230,7 +301,7 @@ async function targetUnnamed(
         (answer) =>
           answer.state === "granted" && documents.documentOf(answer.link).kind === "proven",
       );
-      return picked ? targeted(documents, picked.link) : null;
+      return picked ? targeted(documents, picked.link, null) : null;
     },
     expired: () => blocked({ kind: "grant-pending", fileName: null }),
   });
@@ -296,8 +367,34 @@ async function waitForGrant(
   }
 }
 
-function targeted(documents: LinkDocuments, link: RelayConnection): CallTarget {
-  return { kind: "targeted", link, document: documentOf(documents, link) };
+/**
+ * One round of asking the panels of a document the call named for a grant: decided, or null to ask
+ * again.
+ */
+function grantDecision(
+  documents: LinkDocuments,
+  answers: readonly Answer[],
+  session: SessionHandle | null,
+): CallTarget | null {
+  const granted = answers.find((answer) => answer.state === "granted");
+  if (granted) return targeted(documents, granted.link, session);
+  const denied = answers.find((answer) => answer.state === "denied");
+  if (denied)
+    return blocked({ kind: "grant-denied", fileName: documentOf(documents, denied.link).fileName });
+  if (answers.length && answers.every((answer) => answer.state === "absent"))
+    return blocked({
+      kind: "grant-unavailable",
+      fileName: documentOf(documents, answers[0].link).fileName,
+    });
+  return null;
+}
+
+function targeted(
+  documents: LinkDocuments,
+  link: RelayConnection,
+  session: SessionHandle | null,
+): CallTarget {
+  return { kind: "targeted", link, document: documentOf(documents, link), session };
 }
 
 function blocked(block: CallTargetBlock): CallTarget {

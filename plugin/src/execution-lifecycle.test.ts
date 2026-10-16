@@ -26,6 +26,7 @@ const FRAME_DEADLINE_MS = 5_000;
 // The installation every test plugin is paired with, and the file every test plugin is proven in.
 const CREDENTIAL = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
 const FILE_KEY = "FILEkey123";
+const SHARED_SESSION = "test-shared-session-handle";
 type Storage = Map<string, unknown>;
 const pairedStorage = (): Storage => new Map([["code-mode:link-credential:" + CREDENTIAL.id, CREDENTIAL.secret]]);
 const clientStorageOver = (storage: Storage) => ({
@@ -126,18 +127,34 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   vm.runInContext(code, context);
   // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
   // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window,
-  // and every run names this file unless the test says otherwise.
-  const sendFrame = (connKey: ConnKey, frame: Frame) =>
+  // and every run names this file unless the test says otherwise. Unless a test names a session,
+  // every run of a project is in one shared session, created by the first run the plugin admits —
+  // as an agent passing its handle back would.
+  const projectOf = new Map<ConnKey, string>();
+  const sessionOpened = new Set<string>();
+  const sendFrame = (connKey: ConnKey, frame: Frame) => {
+    const project = projectOf.get(connKey) ?? "/proj";
+    const sharedSession = frame.type === "EXECUTE_CODE" && frame.session === undefined;
+    const before = sent.length;
     figma.ui.onmessage({
       from: "server",
       connKey,
       frame:
         frame.type === "EXECUTE_CODE"
-          ? { lateChangeWindowMs: 60_000, fileKey: FILE_KEY, ...frame }
+          ? {
+              lateChangeWindowMs: 60_000,
+              fileKey: FILE_KEY,
+              session: { handle: SHARED_SESSION, create: !sessionOpened.has(project) },
+              ...frame,
+            }
           : frame.type === "SCREENSHOT"
             ? { fileKey: FILE_KEY, ...frame }
             : frame,
     });
+    // Admission is synchronous, and announces the queued run before onmessage returns.
+    if (sharedSession && sent.slice(before).some((s) => s.frame.type === "RUN_STATE" && s.frame.runId === frame.id))
+      sessionOpened.add(project);
+  };
   const sendControl = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   /** A server request, answered: resolves with the reply frame. */
   let nextId = 0;
@@ -148,6 +165,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   };
   /** A socket that authenticated with the paired credential and introduced its project. */
   const introduce = async (key: ConnKey, project = "/proj", framelinkOrigin = "https://app.framelink.ai") => {
+    projectOf.set(key, project);
     sendControl({ type: "WS_CONNECTED", connKey: key });
     assert.equal((await ask(key, { type: "AUTHENTICATE", credentialId: CREDENTIAL.id, nonce: `nonce-${key}-0000` })).type, "LINK_PROOF");
     return ask(key, { type: "INTRODUCE", project, framelinkOrigin });
@@ -587,6 +605,32 @@ test("session identity, snapshots and last survive fresh calls, reconnects and p
   await reopened.connect(1);
   result = await execute(reopened, `return Object.keys(session);`);
   assert.deepEqual(JSON.parse(JSON.stringify(result.result)), []);
+});
+
+test("each handle has its own session; a handle not held for this project, or minted twice, is refused unrun", async () => {
+  const h = host();
+  await h.connect(1);
+  await h.connect(2, "/other-project");
+  const preamble = await realPreamble;
+  const run = (key: ConnKey, id: string, handle: string, create: boolean, body: string) => {
+    h.sendFrame(key, { type: "EXECUTE_CODE", id, preamble, code: body, session: { handle, create } });
+    return h.frame((f) => f.id === id, `the reply to ${id}`);
+  };
+  assert.equal((await run(1, "a1", "alpha-agent-one-store", true, `session.mine = "a"; return "from a";`)).errors, null);
+  assert.equal((await run(1, "b1", "bravo-agent-two-store", true, `session.mine = "b"; return "from b";`)).errors, null);
+  const resumed = await run(1, "a2", "alpha-agent-one-store", false, `return [session.mine, session.last];`);
+  assert.deepEqual(JSON.parse(JSON.stringify(resumed.result)), ["a", "from a"]);
+
+  h.context.ran = false;
+  const refused = [
+    await run(1, "unknown", "never-minted-this-handle", false, `globalThis.ran = true;`),
+    await run(2, "elsewhere", "bravo-agent-two-store", false, `globalThis.ran = true;`),
+    await run(2, "taken", "bravo-agent-two-store", true, `globalThis.ran = true;`),
+  ];
+  assert.deepEqual(refused.map((f) => f.type), ["SESSION_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_HANDLE_TAKEN"]);
+  assert.equal(h.context.ran, false);
+  assert.equal((await h.ask(1, { type: "SESSION_LOOKUP", handle: "bravo-agent-two-store" })).held, true);
+  assert.equal((await h.ask(2, { type: "SESSION_LOOKUP", handle: "bravo-agent-two-store" })).held, false);
 });
 
 test("session rejects request plumbing and alias attacks at every write boundary", async () => {

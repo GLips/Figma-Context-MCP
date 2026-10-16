@@ -310,14 +310,25 @@ export function createGrantGate({
       show();
     },
 
-    /** The check when a run arrives. False means it was already answered NOT_GRANTED. */
-    admit(to: ReplyTo, fileKey: string): boolean {
+    /**
+     * The check when a run arrives. Past the grant, `alsoAdmit` makes the run's own arrival checks
+     * under the scope it runs in, answering for itself when it refuses. False means the run was
+     * already answered.
+     */
+    admit(to: ReplyTo, fileKey: string, alsoAdmit: (scope: GrantScope) => boolean = () => true): boolean {
       const answer = admission(to.connKey, fileKey);
+      if (answer !== "granted" && answer !== "unknown") {
+        reply(to, { type: "NOT_GRANTED", reason: answer });
+        return false;
+      }
+      // Non-null: either answer came from the store, which needs the scope to give one.
+      if (!alsoAdmit(scopeOf(to.connKey, fileKey)!)) return false;
       if (answer === "granted") takeBaton(to.connKey);
-      if (answer === "granted" || answer === "unknown") return true;
-      reply(to, { type: "NOT_GRANTED", reason: answer });
-      return false;
+      return true;
     },
+
+    /** The grant scope a run on this connection would run under, once its document is proven. */
+    provenScopeOf,
 
     /** The check again at dequeue, once storage has a definite answer: null admits. */
     async refusalAtDequeue(key: ConnKey, fileKey: string): Promise<NotGrantedReason | null> {

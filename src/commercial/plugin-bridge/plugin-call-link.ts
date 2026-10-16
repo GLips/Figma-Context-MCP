@@ -15,6 +15,7 @@ import type {
   UnlinkedResolution,
 } from "./bridge.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
+import type { SessionHandle } from "./session-handle.js";
 import type { CallTargetOptions } from "./call-target.js";
 import type { PluginCallTarget } from "./execution.js";
 import {
@@ -52,6 +53,9 @@ export type PluginCallBlock =
   | "grant_denied"
   | "grant_unavailable"
   | "grant_pending"
+  | "session_not_found"
+  | "session_ambiguous"
+  | "session_document_mismatch"
   | "incompatible"
   | "disconnected"
   | "credential_unusable"
@@ -87,6 +91,8 @@ export type PluginCallPairing =
 export interface PluginCallTargetOptions {
   /** The file the call names, or null to run in the one granted file or let the human pick. */
   fileKey: FigmaFileKey | null;
+  /** The session the call resumes, which binds it to that session's plugin and file; null: fresh. */
+  session: SessionHandle | null;
   pairing: PluginCallPairing;
   signal: AbortSignal;
   surface: PairingSurface;
@@ -103,7 +109,17 @@ export interface PluginCallTargetOptions {
  */
 export async function targetForPluginCall(
   bridge: PluginBridge,
-  { fileKey, pairing, signal, surface, reader, waitMs, pollMs, onWaiting }: PluginCallTargetOptions,
+  {
+    fileKey,
+    session,
+    pairing,
+    signal,
+    surface,
+    reader,
+    waitMs,
+    pollMs,
+    onWaiting,
+  }: PluginCallTargetOptions,
 ): Promise<PluginCallTargeting> {
   let resolution = await bridge.resolveLink(signal);
   if (resolution.kind === "unpaired" && pairing.kind === "offer") {
@@ -112,7 +128,10 @@ export async function targetForPluginCall(
     resolution = await bridge.resolveLink(signal);
   }
   if (resolution.kind !== "linked") return unlinked(resolution, surface);
-  const target = await bridge.targetCall(fileKey, { reader, signal, waitMs, pollMs, onWaiting });
+  const target = await bridge.targetCall(
+    { fileKey, session },
+    { reader, signal, waitMs, pollMs, onWaiting },
+  );
   if (target.kind === "targeted") return target;
   return blocked(
     BLOCK_FOR_TARGET[target.block.kind],
@@ -128,6 +147,9 @@ const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
   "grant-denied": "grant_denied",
   "grant-unavailable": "grant_unavailable",
   "grant-pending": "grant_pending",
+  "session-not-found": "session_not_found",
+  "session-ambiguous": "session_ambiguous",
+  "session-document-mismatch": "session_document_mismatch",
 };
 
 /** Pair this server with the plugin unless it already is. Nothing is submitted here. */

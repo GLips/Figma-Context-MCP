@@ -124,7 +124,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       writeMeter: createTestWriteAccess().writeMeter,
       readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
     },
-    { link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT },
+    { link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT, session: null },
     code,
   );
   return fetched!;

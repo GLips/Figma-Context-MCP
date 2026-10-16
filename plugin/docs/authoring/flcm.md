@@ -27,7 +27,7 @@ A read is a spec with ids, so `const { node } = await flcm.get(target); await fl
 
 ### Session across calls
 
-Each call has a fresh scope: top-level declarations and that call's `flcm` are gone when it returns. `session` is the one object that persists — the same object for the whole plugin run, shared by every caller granted on that file, kept across WebSocket reconnects and page switches, cleared when the plugin closes or the file switches, and never saved anywhere. Save specs, constants, SVG markup and looked-up ids in session. Ids keep pointing at live nodes; everything else is a snapshot, so re-read with `flcm.get` when the canvas may have changed.
+Each call has a fresh scope: top-level declarations and that call's `flcm` are gone when it returns. `session` is the one object that persists, and only through its handle: every reply names the session it ran in (four words, like `maple-orbit-velvet-quarry`), and passing that handle as `session` on the next figma_execute_code call gives it the same `session`, with its `last`. A call without a handle gets a fresh, empty session. A session runs in the file it started in, survives WebSocket reconnects and page switches, lives in memory only, and is gone when the plugin closes; a handle from before that is refused and nothing runs. A handle separates agents, it doesn't lock anyone out: two agents passing the same handle share one session. Save specs, constants, SVG markup and looked-up ids in session, and keep it small: a session over its memory budget is cleared. Ids keep pointing at live nodes; everything else is a snapshot, so re-read with `flcm.get` when the canvas may have changed.
 
 ```js
 // Call 1
@@ -151,7 +151,7 @@ At the `return` and `console` boundary, unchanged read objects are projected whe
 
 A null size means a REST depth limit dropped the list upstream, so its size is unknown. To see what was cut, `flcm.get` it in a fresh call and return the field or a summary — `return (await flcm.get("12:34")).node.children.map(n => ({ id: n.id, type: n.type, name: n.name }));` — never rerun editing code to expand output. A marker-only object such as `{ elided: { children: 4200 } }` left in a spec's `children` keeps the live children it stands for; it is never a node to create or edit.
 
-`session.last` holds a detached snapshot of the previous successful call's full return, from before projection, when that return was plain data; otherwise it is undefined, as it is after a call that returns nothing. A failed call leaves it, and any session writes the call made, in place. Survey `session.last` instead of re-reading, and return a summary of it to keep output small.
+`session.last` holds a detached snapshot of the full return of the previous successful call in this session, from before projection, when that return was plain data; otherwise it is undefined, as it is after a call that returns nothing. A failed call leaves it, and any session writes the call made, in place. Survey `session.last` instead of re-reading, and return a summary of it to keep output small.
 
 ### readOnlySource
 

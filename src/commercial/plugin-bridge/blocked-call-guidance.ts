@@ -95,7 +95,44 @@ export function callTargetGuidance(
             `Required before re-running: ${action}. A grant is remembered for this project, so it is ` +
             `needed once. This run waited ${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`;
     }
+    case "session-not-found":
+      return sessionNotFoundText(block.session, surface);
+    case "session-ambiguous":
+      return (
+        `Blocked: two open Framelink plugins both hold the session ${block.session}, so this call ` +
+        `can't tell which one it names, and nothing was submitted. ${freshSession(surface)}.`
+      );
+    case "session-document-mismatch": {
+      const [fileFlag, sessionFlag] =
+        surface === "mcp" ? ["fileKey", "session"] : ["--file-key", "--session"];
+      return (
+        `Blocked: the session ${block.session} is in "${block.sessionFileName}", but this call ` +
+        `named the Figma file ${block.fileKey}, so nothing was submitted. A session stays in the ` +
+        `file it started in: drop ${fileFlag} to keep working in "${block.sessionFileName}", or ` +
+        `drop ${sessionFlag} to start a fresh session in ${block.fileKey}.`
+      );
+    }
   }
+}
+
+/**
+ * No open plugin holds the session a call named. Nothing was submitted, and the call never runs
+ * anywhere else in its place.
+ */
+export function sessionNotFoundText(session: string, surface: "mcp" | "cli"): string {
+  return (
+    `Blocked: no open Framelink plugin holds the session ${session}, so nothing was submitted. A ` +
+    `session lives only in the plugin run that made it: the plugin was closed or reloaded, or the ` +
+    `session was cleared to stay within its memory budget, and what it held is gone. ` +
+    `${freshSession(surface)}, then rebuild what you need: re-read nodes with flcm.get rather than ` +
+    `repeating edits that already landed.`
+  );
+}
+
+function freshSession(surface: "mcp" | "cli"): string {
+  return surface === "mcp"
+    ? "Call again without session to start a fresh one"
+    : "Run again without --session to start a fresh one";
 }
 
 /**

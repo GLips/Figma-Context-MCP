@@ -23,6 +23,7 @@ import {
   GRANT_WAITING_TEXT,
   notGrantedText,
   pairingCodeUnknownText,
+  sessionNotFoundText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
   executePluginCode,
@@ -36,6 +37,11 @@ import {
 } from "~/commercial/plugin-bridge/bridge.js";
 import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
 import { parseFigmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
+import {
+  parseSessionHandle,
+  type SessionHandle,
+} from "~/commercial/plugin-bridge/session-handle.js";
+import type { CallTargetRequest } from "~/commercial/plugin-bridge/call-target.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
 import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
@@ -231,10 +237,11 @@ function registerCodeModeTools(
     call: FramelinkToolCall<CodeModeFacts>,
     facts: CodeModeFacts,
     extra: ToolExtra,
-    fileKey: FigmaFileKey | null,
+    { fileKey, session }: CallTargetRequest,
   ): Promise<PluginCallTarget | { reply: CallToolResult }> {
     const targeted = await targetForPluginCall(bridge, {
       fileKey,
+      session,
       pairing: { kind: "offer", ask: pairingCodeAsker(extra) },
       signal: extra.signal,
       surface: "mcp",
@@ -291,6 +298,12 @@ function registerCodeModeTools(
               "JavaScript to run in the Figma sandbox. Runs in an async body; use await freely; return a value. Pass code or scriptPath, not both.",
             ),
           fileKey: FILE_KEY_PARAM,
+          session: z
+            .string()
+            .optional()
+            .describe(
+              "The session handle a previous figma_execute_code reply named (four words, e.g. maple-orbit-velvet-quarry), to keep that call's `session` values and session.last. The call runs in the file that session is in. Omit to start a fresh session; every reply names the handle of the session it used.",
+            ),
           scriptPath: z
             .string()
             .optional()
@@ -300,7 +313,12 @@ function registerCodeModeTools(
             ),
         },
         handler: async (
-          { code, scriptPath, fileKey }: { code?: string; scriptPath?: string; fileKey?: string },
+          {
+            code,
+            scriptPath,
+            fileKey,
+            session,
+          }: { code?: string; scriptPath?: string; fileKey?: string; session?: string },
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
@@ -314,6 +332,8 @@ function registerCodeModeTools(
           if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
           const targetFileKey = fileKeyParam(fileKey);
           if (targetFileKey === "invalid") return fileKeyReply();
+          const targetSession = sessionParam(session);
+          if (targetSession === "invalid") return sessionReply();
           let script: string;
           if (code !== undefined) script = code;
           else if (scriptPath !== undefined) {
@@ -338,7 +358,10 @@ function registerCodeModeTools(
             }
           } else return scriptSourceReply("neither");
           return answeringExpectedFailures(call, extra, source, async () => {
-            const target = await pluginCallTarget(runtime, call, source, extra, targetFileKey);
+            const target = await pluginCallTarget(runtime, call, source, extra, {
+              fileKey: targetFileKey,
+              session: targetSession,
+            });
             if ("reply" in target) return target.reply;
             const { link } = target;
             const outcome = await executePluginCode(runtime, target, script, {
@@ -347,6 +370,13 @@ function registerCodeModeTools(
             });
             if (outcome.kind === "not-granted")
               return notGrantedReply(call, source, target, outcome.reason);
+            if (outcome.kind === "session-not-found") {
+              call.record({ ...source, outcome: "not_run", failure: "session_not_found" });
+              return {
+                isError: true,
+                content: [{ type: "text", text: sessionNotFoundText(outcome.session, "mcp") }],
+              };
+            }
             if (outcome.kind === "refused") {
               call.record({
                 ...source,
@@ -366,7 +396,11 @@ function registerCodeModeTools(
               content: [
                 {
                   type: "text",
-                  text: `${ranIn(target.document)}\n${formatExecuteCodeReply(outcome.reply)}`,
+                  text: [
+                    ranIn(target.document),
+                    usedSession(outcome.session),
+                    formatExecuteCodeReply(outcome.reply),
+                  ].join("\n"),
                 },
               ],
             };
@@ -492,7 +526,10 @@ Returns a PNG image.`,
             );
           }
           return answeringExpectedFailures(call, extra, {}, async () => {
-            const located = await pluginCallTarget(runtime, call, {}, extra, targetFileKey);
+            const located = await pluginCallTarget(runtime, call, {}, extra, {
+              fileKey: targetFileKey,
+              session: null,
+            });
             if ("reply" in located) return located.reply;
             const { link } = located;
             const outcome = await capturePluginScreenshot(
@@ -635,6 +672,23 @@ function fileKeyReply(): CallToolResult {
   return retryableToolReply(
     "fileKey must be the alphanumeric key from a Figma file URL (figma.com/design/<fileKey>/…), so this call did not run. This is NOT a failure: correct fileKey, or omit it, and retry.",
   );
+}
+
+/** The session param, branded once here at the edge: null when omitted. */
+function sessionParam(session: string | undefined): SessionHandle | null | "invalid" {
+  if (session === undefined) return null;
+  return parseSessionHandle(session) ?? "invalid";
+}
+
+function sessionReply(): CallToolResult {
+  return retryableToolReply(
+    "session must be the four-word handle a figma_execute_code reply named (e.g. maple-orbit-velvet-quarry), so this call did not run. This is NOT a failure: copy the handle exactly, or omit session to start a fresh one, and retry.",
+  );
+}
+
+/** Every run is in a session, and the agent keeps it only by passing this handle back. */
+function usedSession(session: SessionHandle): string {
+  return `Session: ${session} (pass it as session to continue with this session's values)`;
 }
 
 /** Every reply names the document it ran against, so a wrong file is noticed on the first call. */

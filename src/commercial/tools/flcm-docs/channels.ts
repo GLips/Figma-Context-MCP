@@ -17,6 +17,8 @@ export interface DocsChannel {
   commentsHowTo: string;
   /** The quick-start's line on running a script from a file; null where every run already does. */
   savedScriptHowTo: string | null;
+  /** Completes "every reply names the session it ran in, and …": how the next call continues it. */
+  sessionHowTo: string;
 }
 
 export const MCP_DOCS_CHANNEL: DocsChannel = {
@@ -36,6 +38,8 @@ return session.card.id;
 { "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 \`\`\``,
   commentsHowTo: "the `get_figma_comments` tool reads them, given the node's id in `scope`",
+  sessionHowTo:
+    "passing that handle as `session` on the next figma_execute_code call gives it the same `session`, with its `last`.",
   savedScriptHowTo: `LONG SCRIPT? Pass scriptPath to a .js file in the asset root; resend after fixes. Elsewhere, send code or run \`npx ${CLI_NAME} execute <file>\`.`,
 };
 
@@ -54,4 +58,5 @@ ${CLI_NAME} execute look.js --screenshot out/card@3x.png --node-id 12:345 --scal
 \`\`\``,
   commentsHowTo: `\`${CLI_NAME} comments --file-key <fileKey> --node-id <id>\` reads them`,
   savedScriptHowTo: null,
+  sessionHowTo: `passing that handle to the next run as \`${CLI_NAME} execute <file> --session <handle>\` gives it the same \`session\`, with its \`last\`.`,
 };

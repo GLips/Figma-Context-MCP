@@ -10,6 +10,7 @@ import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bri
 import type { FigmaService } from "~/services/figma.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
+import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 
 const bridges: PluginBridge[] = [];
 function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
@@ -40,6 +41,7 @@ async function running(
       socket.link,
       {
         type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
         fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
@@ -367,6 +369,7 @@ it.each([false, true])(
     await granted;
     const result = (await bridge.request(socket.link, {
       type: "EXECUTE_CODE",
+      session: TEST_SESSION_REQUEST,
       fileKey: "FAKEfile1",
       lateChangeWindowMs: 60_000,
       // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
@@ -526,6 +529,7 @@ it("hands each channel request the credentials of the request that started its r
         socket.link,
         {
           type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
           fileKey: "FAKEfile1",
           code: "x",
           preamble: "x",

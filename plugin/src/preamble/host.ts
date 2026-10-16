@@ -33,7 +33,10 @@ type NativeTraceStage = Extract<HostTraceStage, `native-${string}`>;
 export type RunCancelCause = "server" | "disconnected" | "revoked";
 
 export interface FlcmHost {
-  /** Retain one preamble-initialized object for this plugin run; never retain the initializer. */
+  /**
+   * The run's agent session: retain one preamble-initialized object per session handle, for this
+   * plugin run; never retain the initializer.
+   */
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /**

@@ -26,7 +26,9 @@ import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-opti
 import {
   GRANT_WAITING_TEXT,
   notGrantedText,
+  sessionNotFoundText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
+import { parseSessionHandle } from "~/commercial/plugin-bridge/session-handle.js";
 import { documentReaderFor } from "~/commercial/plugin-bridge/link-documents.js";
 import { targetForPluginCall } from "~/commercial/plugin-bridge/plugin-call-link.js";
 import { parseFigmaFileKey } from "~/utils/figma-url.js";
@@ -56,12 +58,17 @@ open file this project may edit, or you pick one in the plugin. A Figma API toke
 which file the plugin is in (it reads the file to check), and lets the script read the file's
 comment pins, as it can through the MCP server.
 
-stdout gets the reply as JSON, { file, result, console, errors }; progress goes to stderr. Exits 0
-when errors is null, 1 on a script, connection or grant failure, 130 on Ctrl-C. A run is never
-resubmitted automatically.`,
+Each run gets a fresh \`session\` unless --session names the one an earlier run's reply did: that
+run continues it, with its session values and session.last, in the file the session is in. A
+session lasts as long as the plugin stays open.
+
+stdout gets the reply as JSON, { file, session, result, console, errors }; progress goes to
+stderr. Exits 0 when errors is null, 1 on a script, connection or grant failure, 130 on Ctrl-C. A
+run is never resubmitted automatically.`,
       exampleArgs: [
         "card.js",
         "card.js --file-key aBcD1234efGH",
+        "tweak.js --session maple-orbit-velvet-quarry",
         "card.js --output out/reply.json --screenshot out/card.png --key card --scale 2",
         "card.js --screenshot out/card.png --key card --context --margin 120",
       ],
@@ -74,6 +81,12 @@ resubmitted automatically.`,
         type: String,
         placeholder: "<key>",
         description: "Run only in this Figma file: the key from its URL (figma.com/design/<key>/…)",
+      },
+      session: {
+        type: String,
+        placeholder: "<handle>",
+        description:
+          "Continue the session an earlier run's reply named, with its session values and session.last",
       },
       output: {
         type: String,
@@ -145,6 +158,7 @@ resubmitted automatically.`,
 
 interface ExecuteFlags {
   fileKey?: string;
+  session?: string;
   output?: string;
   screenshot?: string;
   nodeId?: string;
@@ -178,6 +192,11 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   const fileKey = flags.fileKey === undefined ? null : parseFigmaFileKey(flags.fileKey);
   if (flags.fileKey !== undefined && fileKey === null)
     throw new UsageError("--file-key must be the alphanumeric key from a Figma file URL.");
+  const session = flags.session === undefined ? null : parseSessionHandle(flags.session);
+  if (flags.session !== undefined && session === null)
+    throw new UsageError(
+      "--session must be the four-word handle an earlier run's reply named, e.g. maple-orbit-velvet-quarry.",
+    );
   if (!flags.screenshot && Object.values(target).some((value) => value !== undefined)) {
     throw new UsageError(
       "--node-id, --key, --scale, --context, and --margin require --screenshot <file.png>.",
@@ -230,6 +249,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     );
     const bound = await targetForPluginCall(runtime.bridge, {
       fileKey,
+      session,
       // Pairing is the `pair` command's: it reads the person's typed code, which a run whose stdin
       // may be a pipe or an agent's shell can't count on.
       pairing: { kind: "refuse" },
@@ -252,9 +272,12 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "not-granted")
       throw new Error(notGrantedText(outcome.reason, document.fileName));
+    if (outcome.kind === "session-not-found")
+      throw new Error(sessionNotFoundText(outcome.session, "cli"));
     try {
       const reply = {
         file: document,
+        session: outcome.session,
         ...withoutTokenMarks(outcome.reply),
       };
       const json = JSON.stringify(reply, null, 2) + "\n";

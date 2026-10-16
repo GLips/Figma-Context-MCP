@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -55,6 +55,9 @@ export const PROTOCOL_VERSION = 12;
  *     SESSION_TOKEN, SESSION_CLAIM and REVOKE_SESSION are gone; GRANT_CHANGED carries grant changes
  *     between plugin instances, and DOCUMENT_CLAIMED a file key for a server to prove: a link the
  *     human pasted, or the file another server just proved.
+ * v13: per-agent sessions. EXECUTE_CODE names the session it runs in, created or resumed, and may be
+ *     answered SESSION_NOT_FOUND or SESSION_HANDLE_TAKEN; SESSION_LOOKUP asks which plugin holds one.
+ *     FlcmHost.getSession keeps the run's session rather than one store per plugin run.
  */
 
 // ---- Transport ----
@@ -227,6 +230,28 @@ export type GrantState = (typeof GRANT_STATES)[number];
 export const NOT_GRANTED_REASONS = ["no-grant", "other-document"] as const;
 export type NotGrantedReason = (typeof NOT_GRANTED_REASONS)[number];
 
+// ---- Agent sessions ----
+
+/**
+ * A session handle: four lowercase words joined by dashes (`maple-orbit-velvet-quarry`), minted by
+ * the server. It names one agent's `session` store in one plugin run. Not a credential: two agents
+ * passing the same handle share that store.
+ */
+export const SESSION_HANDLE_PATTERN = /^[a-z]{3,8}(?:-[a-z]{3,8}){3}$/;
+
+export function isSessionHandle(value: unknown): value is string {
+  return typeof value === "string" && SESSION_HANDLE_PATTERN.test(value);
+}
+
+/**
+ * Which session a run uses. `create`: a handle the server just minted, refused as taken if this
+ * plugin already holds it. Otherwise the plugin must already hold it, or the run is refused.
+ */
+export interface SessionRequest {
+  handle: string;
+  create: boolean;
+}
+
 /** What the plugin panel shows about write access, pushed from the server. */
 export type WriteAccessNotice =
   | { kind: "allowance-exhausted"; allowance: number; resetsAt: string; signedIn: boolean }
@@ -277,12 +302,16 @@ export type ServerRequest =
   | { type: "GRANT_PROMPT_CLOSED" }
   // Another plugin instance changed this grant: re-read it. A hint; storage is the record.
   | { type: "GRANT_CHANGED_ELSEWHERE"; project: string; fileKey: string }
+  // Does this plugin hold session `handle` for this server's project, in its proven document?
+  | { type: "SESSION_LOOKUP"; handle: string }
   | {
       type: "EXECUTE_CODE";
       code: string;
       preamble: string;
       // The document this run is for. The plugin runs it only there, and only under a grant.
       fileKey: string;
+      // The agent session the run's `session` binding is, scoped to the grant it runs under.
+      session: SessionRequest;
       // How long past a "no change" reply the plugin keeps watching for a change it would charge to
       // this run. The server owns the number (write-access.ts); the plugin only obeys it.
       lateChangeWindowMs: number;
@@ -379,20 +408,26 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
       return isProject(f.project) && isWireFileKey(f.fileKey)
         ? { type: "GRANT_CHANGED_ELSEWHERE", id, project: f.project, fileKey: f.fileKey }
         : null;
-    case "EXECUTE_CODE":
-      // No std-lib, window or document means a server that predates this plugin: refused, never
-      // defaulted.
+    case "SESSION_LOOKUP":
+      return isSessionHandle(f.handle) ? { type: "SESSION_LOOKUP", id, handle: f.handle } : null;
+    case "EXECUTE_CODE": {
+      // No std-lib, window, document or session means a server that predates this plugin: refused,
+      // never defaulted.
       if (typeof f.preamble !== "string" || !f.preamble) return null;
       if (typeof f.lateChangeWindowMs !== "number" || !(f.lateChangeWindowMs >= 0)) return null;
       if (!isWireFileKey(f.fileKey)) return null;
+      const session = parseSessionRequest(f.session);
+      if (!session) return null;
       return {
         type: "EXECUTE_CODE",
         id,
         code: typeof f.code === "string" ? f.code : "",
         preamble: f.preamble,
         fileKey: f.fileKey,
+        session,
         lateChangeWindowMs: f.lateChangeWindowMs,
       };
+    }
     case "WRITE_ACCESS": {
       const notice = parseWriteAccessNotice(f.notice);
       return notice ? { type: "WRITE_ACCESS", id, notice } : null;
@@ -418,6 +453,12 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
 
 /** A run refused before anything executed. Nothing about the canvas changed. */
 export type NotGrantedReply = { type: "NOT_GRANTED"; reason: NotGrantedReason };
+
+/**
+ * A run refused for its session before anything executed: a resumed handle this plugin doesn't hold
+ * in the run's scope, or a created one it already holds (the server mints another and resubmits).
+ */
+export type SessionRefusedReply = { type: "SESSION_NOT_FOUND" } | { type: "SESSION_HANDLE_TAKEN" };
 
 /**
  * What a run reported. `result` is absent when the code returned nothing or threw (undefined isn't
@@ -458,8 +499,9 @@ export interface ReplyByRequest {
   GRANT_STATUS: { type: "GRANT"; state: GrantState };
   GRANT_PROMPT_CLOSED: { type: "GRANT_PROMPT_CLOSED_ACK" };
   GRANT_CHANGED_ELSEWHERE: { type: "GRANT_CHANGED_ELSEWHERE_ACK" };
-  // Runs pass the grant check first, on arrival and again at dequeue.
-  EXECUTE_CODE: ExecuteCodeResult | NotGrantedReply;
+  SESSION_LOOKUP: { type: "SESSION_LOOKUP_RESULT"; held: boolean };
+  // Runs pass the grant check first, on arrival and again at dequeue; the session check on arrival.
+  EXECUTE_CODE: ExecuteCodeResult | NotGrantedReply | SessionRefusedReply;
   WRITE_ACCESS: { type: "WRITE_ACCESS_ACK" };
   SCREENSHOT: ScreenshotResult | NotGrantedReply;
 }
@@ -521,7 +563,12 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
       return f.type === "GRANT_CHANGED_ELSEWHERE_ACK" ? { type: "GRANT_CHANGED_ELSEWHERE_ACK" } : null;
     case "WRITE_ACCESS":
       return f.type === "WRITE_ACCESS_ACK" ? { type: "WRITE_ACCESS_ACK" } : null;
+    case "SESSION_LOOKUP":
+      return f.type === "SESSION_LOOKUP_RESULT" && typeof f.held === "boolean"
+        ? { type: "SESSION_LOOKUP_RESULT", held: f.held }
+        : null;
     case "EXECUTE_CODE":
+      if (f.type === "SESSION_NOT_FOUND" || f.type === "SESSION_HANDLE_TAKEN") return { type: f.type };
       return parseNotGranted(f) ?? parseExecuteCodeResult(f);
     case "SCREENSHOT":
       if (f.type === "NOT_GRANTED") return parseNotGranted(f);
@@ -652,6 +699,11 @@ function parseProofOutcome(value: unknown): ProofOutcome | null {
   return value.kind === "proven" && typeof value.fileName === "string"
     ? { kind: "proven", fileKey: value.fileKey, fileName: value.fileName }
     : null;
+}
+
+function parseSessionRequest(value: unknown): SessionRequest | null {
+  if (!isRecord(value) || !isSessionHandle(value.handle) || typeof value.create !== "boolean") return null;
+  return { handle: value.handle, create: value.create };
 }
 
 function parseNotGranted(f: Record<string, unknown>): NotGrantedReply | null {

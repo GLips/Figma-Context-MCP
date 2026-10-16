@@ -34,7 +34,7 @@ import {
   type VerbCategory,
 } from "@framelink/plugin/schema";
 import {
-  MENTAL_MODEL,
+  mentalModel,
   CHILDREN,
   RICH_TEXT,
   LAYOUT_MODEL,
@@ -296,7 +296,8 @@ const SECTIONS: Section[] = [
     title: "The mental model",
     blurb:
       "what a spec is, and the identity, copying, session and fidelity rules every other section assumes. Read this first",
-    body: () => `${MENTAL_MODEL}\n\n### Fidelity and scope\n\n${FIDELITY_AND_SCOPE}`,
+    body: (channel) =>
+      `${mentalModel(channel.sessionHowTo)}\n\n### Fidelity and scope\n\n${FIDELITY_AND_SCOPE}`,
   },
   {
     id: "layout",

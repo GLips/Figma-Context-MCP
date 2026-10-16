@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
+import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 
 const bridges: PluginBridge[] = [];
 // A request with a trivial reply, for tests about the ledger rather than the payload.
@@ -46,6 +47,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
         fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
@@ -71,6 +73,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
         fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
@@ -98,6 +101,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
         fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
@@ -125,6 +129,7 @@ describe("link-owned execution", () => {
     const call = bridge
       .request(socket.link, {
         type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
         fileKey: "FAKEfile1",
         code: "x",
         preamble: "x",
@@ -177,6 +182,7 @@ describe("link-owned execution", () => {
     const oldCall = bridge
       .request(old.link, {
         type: "EXECUTE_CODE",
+        session: TEST_SESSION_REQUEST,
         fileKey: "FAKEfile1",
         code: "old",
         preamble: "x",

@@ -17,7 +17,7 @@ import type {
   LinkResolution,
   PluginLink,
 } from "~/commercial/plugin-bridge/bridge.js";
-import type { PluginOwner, WriteAccessNotice } from "@framelink/plugin/protocol";
+import type { PluginOwner, SessionRequest, WriteAccessNotice } from "@framelink/plugin/protocol";
 
 export const TEST_PLUGIN_OWNER: PluginOwner = {
   figmaUserId: "figma-user-1",
@@ -38,10 +38,19 @@ export async function linkedTestResolution(): Promise<LinkResolution> {
   return { kind: "linked", links: [TEST_PLUGIN_LINK] };
 }
 
-/** A fake bridge's `targetCall`: every call bound to TEST_DOCUMENT on TEST_PLUGIN_LINK, granted. */
+/**
+ * A fake bridge's `targetCall`: every call bound to TEST_DOCUMENT on TEST_PLUGIN_LINK, granted, in a
+ * fresh session.
+ */
 export async function targetedTestCall(): Promise<CallTarget> {
-  return { kind: "targeted", link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT };
+  return { kind: "targeted", link: TEST_PLUGIN_LINK, document: TEST_DOCUMENT, session: null };
 }
+
+/** The session a test submits a run in directly, past the execution layer that mints one. */
+export const TEST_SESSION_REQUEST: SessionRequest = {
+  handle: "test-fresh-session-handle",
+  create: true,
+};
 
 /**
  * Write access over an isolated temp state dir, wired the way the runtime wires it. With no `apiUrl`

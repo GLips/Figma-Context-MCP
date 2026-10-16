@@ -19,8 +19,13 @@ import {
   writesUsedThisMonth,
 } from "~/commercial/entitlement/write-ledger.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
-import { DOCUMENT_DATA_NAMESPACE, DOCUMENT_PROOF_KEY_PREFIX } from "@framelink/plugin/protocol";
+import {
+  DOCUMENT_DATA_NAMESPACE,
+  DOCUMENT_PROOF_KEY_PREFIX,
+  SESSION_HANDLE_PATTERN,
+} from "@framelink/plugin/protocol";
 import { answerLinkSetup } from "./fixtures/plugin-link-peer.js";
+import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 
 // Exercise production startup/handshake/images/execution on an ephemeral test port.
 // Figma only scans its fixed production block, so these tests cannot drive a live document.
@@ -219,8 +224,10 @@ describe("saved-script CLI using production plugin services", () => {
       payload: { "./asset.png": png.toString("base64") },
     });
     expect(screenshotRequest).toMatchObject({ key: "card", scale: 2, fileKey: FIGMA_FILE.fileKey });
+    expect(execution?.session).toEqual({ handle: expect.any(String), create: true });
     expect(JSON.parse(stdout)).toEqual({
       file: FIGMA_FILE,
+      session: (execution?.session as { handle: string }).handle,
       result: { answer: 42 },
       console: ["saved workflow"],
       errors: null,
@@ -241,6 +248,7 @@ describe("saved-script CLI using production plugin services", () => {
     await closed;
     expect(JSON.parse(stdout)).toEqual({
       file: FIGMA_FILE,
+      session: expect.stringMatching(SESSION_HANDLE_PATTERN),
       console: ["before throw"],
       errors: "boom",
     });
@@ -407,6 +415,7 @@ describe("one-shot bridge lifecycle", () => {
               if (resolution.kind !== "linked") throw new Error(`plugin ${resolution.kind}`);
               return bridge.request(resolution.links[0], {
                 type: "EXECUTE_CODE",
+                session: TEST_SESSION_REQUEST,
                 fileKey: "FAKEfile1",
                 code: "return 1",
                 preamble: "test runtime",

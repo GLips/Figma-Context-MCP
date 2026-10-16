@@ -4,10 +4,15 @@
  */
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
-import { figmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
+import { figmaFileKey } from "~/utils/figma-url.js";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
-import { targetPluginCall, type CallTarget, type CallTargetOptions } from "./call-target.js";
+import {
+  targetPluginCall,
+  type CallTarget,
+  type CallTargetOptions,
+  type CallTargetRequest,
+} from "./call-target.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
 import { LinkCredentialStore } from "./link-credential.js";
 import {
@@ -52,7 +57,12 @@ import {
 export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
 export type { CapabilityHandler } from "./channel-server.js";
 export type { LinkStage } from "./relay-connection.js";
-export type { CallDocument, CallTarget, CallTargetBlock } from "./call-target.js";
+export type {
+  CallDocument,
+  CallTarget,
+  CallTargetBlock,
+  CallTargetRequest,
+} from "./call-target.js";
 export type { DocumentReader, LinkDocument } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
 
@@ -352,11 +362,11 @@ export class PluginBridge {
   }
 
   /**
-   * The one document a call runs against, and the link to run it on — see call-target.ts. `fileKey`
-   * null lets the human pick. Prompts in the plugin; submits nothing.
+   * The one document a call runs against, and the link to run it on — see call-target.ts. Naming
+   * neither a session nor a file lets the human pick. Prompts in the plugin; submits nothing.
    */
   targetCall(
-    fileKey: FigmaFileKey | null,
+    request: CallTargetRequest,
     options: Omit<CallTargetOptions, "reader"> & { reader?: DocumentReader | null },
   ): Promise<CallTarget> {
     return targetPluginCall(
@@ -367,8 +377,10 @@ export class PluginBridge {
         closePrompt: (link) => {
           this.request(link, { type: "GRANT_PROMPT_CLOSED" }).catch(() => {});
         },
+        lookupSession: async (link, handle, signal) =>
+          (await this.request(link, { type: "SESSION_LOOKUP", handle }, { signal })).held,
       },
-      fileKey,
+      request,
       { ...options, reader: options.reader ?? this.documentReader },
     );
   }

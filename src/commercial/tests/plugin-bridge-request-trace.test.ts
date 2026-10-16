@@ -7,6 +7,7 @@ import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { RequestTrace, type TraceEvent } from "~/commercial/plugin-bridge/request-trace.js";
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
+import { TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -34,6 +35,7 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
   const result = bridge
     .request(link, {
       type: "EXECUTE_CODE",
+      session: TEST_SESSION_REQUEST,
       fileKey: "FAKEfile1",
       code: "private code",
       preamble: "private preamble",
@@ -73,6 +75,7 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
   const result = bridge
     .request(link, {
       type: "EXECUTE_CODE",
+      session: TEST_SESSION_REQUEST,
       fileKey: "FAKEfile1",
       code: "",
       preamble: "",
@@ -129,6 +132,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
         link,
         {
           type: "EXECUTE_CODE",
+          session: TEST_SESSION_REQUEST,
           fileKey: "FAKEfile1",
           code: "",
           preamble: "",
@@ -178,6 +182,7 @@ test("execution error result is traced as error without changing successful enve
   const { bridge, link, trace, sent, receive } = await connectedBridge();
   const result = bridge.request(link, {
     type: "EXECUTE_CODE",
+    session: TEST_SESSION_REQUEST,
     fileKey: "FAKEfile1",
     code: "",
     preamble: "",

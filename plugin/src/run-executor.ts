@@ -4,7 +4,8 @@
  */
 // Runs what a granted server submits — agent code and screenshots — one at a time, against the
 // live document, and owns everything a run carries: its phase and cancellation, its mid-run server
-// calls, the late-change watch, and the agent's session store.
+// calls, the late-change watch, and the agents' session stores.
+import { createAgentSessions, type AgentSession } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
@@ -13,7 +14,14 @@ import { observeDocumentChanges, type DocumentChangeObserver } from "./document-
 import { createServerCallTable } from "./server-calls.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import type { HostTraceStage, NativeOperation, NotGrantedReason, RunPhase, ServerFrame } from "./protocol.js";
+import type {
+  HostTraceStage,
+  NativeOperation,
+  NotGrantedReason,
+  RunPhase,
+  ServerFrame,
+  SessionRequest,
+} from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
@@ -50,8 +58,8 @@ export function createRunExecutor({
   // (document-changes.ts watchLate). Bounded by the next run's start and by the window its
   // EXECUTE_CODE carried — the server's number, since the server is what holds the run open for it.
   let lateChangeWatch: DocumentChangeObserver | null = null;
-  // One store per plugin run, shared by granted callers across socket generations and pages.
-  let agentSession: Record<string, unknown> | undefined;
+  // One store per session handle, kept across socket generations and pages for this plugin run.
+  const sessions = createAgentSessions();
 
   /**
    * One writer at a time (Invariant) — enforced by SERIALIZING writes rather than refusing the
@@ -136,6 +144,7 @@ export function createRunExecutor({
   async function executeCode(
     to: ReplyTo,
     fileKey: string,
+    agentSession: AgentSession,
     code: string,
     preamble: string,
     lateChangeWindowMs: number,
@@ -149,7 +158,10 @@ export function createRunExecutor({
         documentChanged: false,
       }),
     );
-    if (!admitted) return;
+    if (!admitted) {
+      sessions.release(agentSession);
+      return;
+    }
     const runStartedAt = beginRun(to);
     const traceStarted = Date.now();
     const trace = (stage: HostTraceStage, operation?: NativeOperation) => {
@@ -199,7 +211,10 @@ export function createRunExecutor({
       // than serve a runtime the agent kept past its reply. Tracing goes quiet instead: a diagnostic
       // that refused would change execution.
       const host: FlcmHost = {
-        getSession: (initialize) => agentSession ??= initialize(),
+        getSession: (initialize) => {
+          agentSession.store ??= initialize();
+          return agentSession.store;
+        },
         traceNative: (stage, operation) => { if (!settled) trace(stage, operation); },
         // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
         callServer: (capability: string, payload: unknown) => serverCalls.call(to, capability, payload),
@@ -278,6 +293,9 @@ export function createRunExecutor({
       });
     }
     if (runtime) consoleLog.push(...runtime.warnings.summary());
+    // After `last` is captured and the run settled, so the budgets see everything the run kept.
+    const sessionNotice = sessions.release(agentSession);
+    if (sessionNotice) consoleLog.push(`[warn] ${sessionNotice}`);
 
     reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
   }
@@ -314,12 +332,31 @@ export function createRunExecutor({
 
   return {
     /**
-     * Queue an admitted EXECUTE_CODE for `fileKey`, the document it was admitted for. Queued, not
-     * awaited, so another server's write can't interleave.
+     * Pin the session a run arriving under grant scope `scope` names. Checked on arrival only: the
+     * pin keeps the session until the run settles.
      */
-    runCode(to: ReplyTo, fileKey: string, code: string, preamble: string, lateChangeWindowMs: number): void {
+    admitSession(scope: string, request: SessionRequest) {
+      return sessions.admit(scope, request);
+    },
+
+    holdsSession(scope: string, handle: string): boolean {
+      return sessions.holds(scope, handle);
+    },
+
+    /**
+     * Queue an admitted EXECUTE_CODE for `fileKey`, the document it was admitted for, in its pinned
+     * session. Queued, not awaited, so another server's write can't interleave.
+     */
+    runCode(
+      to: ReplyTo,
+      fileKey: string,
+      session: AgentSession,
+      code: string,
+      preamble: string,
+      lateChangeWindowMs: number,
+    ): void {
       acceptRun(to);
-      enqueueWrite(() => executeCode(to, fileKey, code, preamble, lateChangeWindowMs));
+      enqueueWrite(() => executeCode(to, fileKey, session, code, preamble, lateChangeWindowMs));
     },
 
     runScreenshot(to: ReplyTo, fileKey: string, target: ScreenshotTarget, options: CaptureOptions): void {

@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { LinkCredentialStore, linkProof } from "../src/commercial/plugin-bridge/link-credential.ts";
+import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handle.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import {
@@ -60,6 +61,8 @@ const execute = (bridge, link, fields = {}) =>
   bridge.request(link, {
     type: "EXECUTE_CODE",
     fileKey: contractFile.key,
+    // Fresh each run: a real plugin refuses a created handle it already holds.
+    session: { handle: mintSessionHandle(), create: true },
     code: "return 'ok';",
     preamble: PREAMBLE,
     lateChangeWindowMs: 60_000,
@@ -69,7 +72,10 @@ const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
 /** Bind a call to `fileKey` (null: let the human pick), waiting `waitMs` for the plugin's answer. */
 const target = (bridge, fileKey, waitMs = 5_000) =>
-  bridge.targetCall(fileKey, { signal: new AbortController().signal, waitMs, pollMs: 20 });
+  bridge.targetCall(
+    { fileKey, session: null },
+    { signal: new AbortController().signal, waitMs, pollMs: 20 },
+  );
 
 // Every bridge gets its OWN state dir — the link credential — so nothing one bridge persists is
 // reloaded by another in this one process, and nothing touches the operator's real state root. The
