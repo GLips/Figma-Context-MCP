@@ -262,6 +262,7 @@ export function startLoopbackPlugin(
       console,
       setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms).unref(),
       clearTimeout,
+      setInterval: (callback: () => void, ms: number) => setInterval(callback, ms).unref(),
     }),
   );
   vm.runInContext(bundle("ui.ts"), relay);

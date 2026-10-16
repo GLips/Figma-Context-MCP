@@ -14,6 +14,7 @@ import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-tar
 import { createRunCancellationRegistry } from "./run-cancellation.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
 import { createServerCallTable } from "./server-calls.js";
+import type { FigmaPauseWatch } from "./figma-pause.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
 import type {
@@ -45,11 +46,14 @@ const CALLS_ABANDONED: Record<Exclude<RunCancelCause, "server">, string> = {
 };
 
 export function createRunExecutor({
+  figmaPause,
   isConnected,
   refusalAtDequeue,
   sessions,
   activity,
 }: {
+  /** Named on a CANCEL's answer: a run Figma paused is stuck, not slow. */
+  figmaPause: FigmaPauseWatch;
   isConnected: (key: ConnKey) => boolean;
   /** The grant gate, asked again at dequeue: null admits. */
   refusalAtDequeue: (key: ConnKey, documentId: string) => Promise<NotGrantedReason | null>;
@@ -224,7 +228,7 @@ export function createRunExecutor({
           agentSession.store ??= initialize();
           return agentSession.store;
         },
-        traceNative: (stage, operation) => { if (!settled) trace(stage, operation); },
+        trace: (stage, operation) => { if (!settled) trace(stage, operation); },
         // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
         callServer: (capability: string, payload: unknown) => serverCalls.call(to, capability, payload),
         runCancellation: () => cancelledRuns.cancellation(to),
@@ -250,6 +254,7 @@ export function createRunExecutor({
       const { flcm, session } = built;
       // Indirect eval gives agent code global scope, never this function's host/transport locals.
       const raw = await (0, eval)("(async function(flcm, session){ " + code + "\n })")(flcm, session);
+      trace("code-returned");
       // Return-path node guard: a returned live node would otherwise collapse to
       // { id } and silently drop everything else. Make that loud instead of lossy.
       guardReturnValue(raw);
@@ -257,6 +262,7 @@ export function createRunExecutor({
       // Session capture is optional; its narrower data contract must not reject a valid wire result.
       try { session.last = raw; } catch { session.last = undefined; }
     } catch (err) {
+      trace("code-returned");
       errorMessage = formatError(err);
     } finally {
       // Drain before anything else in here, and the order of the three is load-bearing:
@@ -375,7 +381,13 @@ export function createRunExecutor({
      * finishes. Rejecting its pending server calls then kills a run suspended at its await right now.
      */
     cancel(connKey: ConnKey, executionId: string): void {
-      toServer(connKey, { type: "CANCEL_RESULT", executionId, disposition: cancelledRuns.recordCancellation(connKey, executionId) });
+      const figmaPausedMs = figmaPause.pausedForMs() ?? undefined;
+      toServer(connKey, {
+        type: "CANCEL_RESULT",
+        executionId,
+        disposition: cancelledRuns.recordCancellation(connKey, executionId),
+        figmaPausedMs,
+      });
       serverCalls.reject(
         (call) => call.executionId === executionId && call.connKey === connKey,
         "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",

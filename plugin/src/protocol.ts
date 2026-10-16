@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -67,6 +67,9 @@ export const PROTOCOL_VERSION = 16;
  *     prompt lets the human choose between two open copies of one document.
  * v16: intent. EXECUTE_CODE, SCREENSHOT and every prompting GRANT_STATUS carry the call's intent, one
  *     line the panel shows in the call's prompt and in its activity feed.
+ * v17: Figma pauses. A plugin whose timers have stopped firing answers a run FIGMA_PAUSED and says so
+ *     on CANCEL_RESULT as `figmaPausedMs`. RUN_TRACE reports each flcm verb's steps and when the
+ *     agent's code returned; FlcmHost.traceNative is FlcmHost.trace.
  */
 
 // ---- Transport ----
@@ -131,6 +134,8 @@ export type RunPhase = (typeof RUN_PHASES)[number];
 /** The host stages RUN_TRACE may report. Diagnostic only; the server drops any other word. */
 export const HOST_TRACE_STAGES = [
   "eval-start",
+  // The agent's code returned or threw; what follows is the verb-queue drain and the change check.
+  "code-returned",
   "eval-end",
   "native-start",
   "native-end",
@@ -566,6 +571,13 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
 export type NotGrantedReply = { type: "NOT_GRANTED"; reason: NotGrantedReason };
 
 /**
+ * A run refused before anything executed because Figma has paused this plugin: no timer has fired
+ * for `pausedMs`, so no await in a run could complete. Seen while the file's window is in the
+ * background; messages are still delivered, which is what lets the plugin say so.
+ */
+export type FigmaPausedReply = { type: "FIGMA_PAUSED"; pausedMs: number };
+
+/**
  * A run refused for its session before anything executed: a resumed handle this plugin doesn't hold
  * in the run's scope, or a created one it already holds (the server mints another and resubmits).
  */
@@ -609,9 +621,9 @@ export interface ReplyByRequest {
   GRANT_CHANGED_ELSEWHERE: { type: "GRANT_CHANGED_ELSEWHERE_ACK" };
   SESSION_LOOKUP: { type: "SESSION_LOOKUP_RESULT"; held: boolean };
   // Runs pass the grant check first, on arrival and again at dequeue; the session check on arrival.
-  EXECUTE_CODE: ExecuteCodeResult | NotGrantedReply | SessionRefusedReply;
+  EXECUTE_CODE: ExecuteCodeResult | NotGrantedReply | SessionRefusedReply | FigmaPausedReply;
   WRITE_ACCESS: { type: "WRITE_ACCESS_ACK" };
-  SCREENSHOT: ScreenshotResult | NotGrantedReply;
+  SCREENSHOT: ScreenshotResult | NotGrantedReply | FigmaPausedReply;
 }
 export type ReplyFor<T extends ServerRequestType> = ReplyByRequest[T];
 
@@ -673,9 +685,10 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
         : null;
     case "EXECUTE_CODE":
       if (f.type === "SESSION_NOT_FOUND" || f.type === "SESSION_HANDLE_TAKEN") return { type: f.type };
-      return parseNotGranted(f) ?? parseExecuteCodeResult(f);
+      return parseNotGranted(f) ?? parseFigmaPaused(f) ?? parseExecuteCodeResult(f);
     case "SCREENSHOT":
       if (f.type === "NOT_GRANTED") return parseNotGranted(f);
+      if (f.type === "FIGMA_PAUSED") return parseFigmaPaused(f);
       if (f.type !== "SCREENSHOT_RESULT") return null;
       if (typeof f.image === "string" && f.errors === undefined) return { type: "SCREENSHOT_RESULT", image: f.image };
       if (typeof f.errors === "string" && f.image === undefined) return { type: "SCREENSHOT_RESULT", errors: f.errors };
@@ -719,7 +732,7 @@ export type PluginEvent =
   | { type: "RUN_STATE"; executionId: string; phase: RunPhase; at: number }
   | { type: "RUN_TRACE"; executionId: string; stage: HostTraceStage; operation?: TraceOperation; elapsedMs: number }
   // The answer to a CANCEL.
-  | { type: "CANCEL_RESULT"; executionId: string; disposition: CancelDisposition }
+  | { type: "CANCEL_RESULT"; executionId: string; disposition: CancelDisposition; figmaPausedMs?: number }
   // The document changed after the run's reply said it hadn't. At most one per run.
   | { type: "RUN_CHANGED"; executionId: string }
   // The run's late-change watch closed with no change: nothing more will be reported for it. Never
@@ -758,11 +771,17 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
       if (isTraceOperation(f.operation)) event.operation = f.operation;
       return event;
     }
-    case "CANCEL_RESULT":
+    case "CANCEL_RESULT": {
+      if (typeof f.executionId !== "string") return null;
       // An unrecognized word reads as "the plugin cannot say", which is what `unknown` means.
-      return typeof f.executionId === "string"
-        ? { type: "CANCEL_RESULT", executionId: f.executionId, disposition: isOneOf(CANCEL_DISPOSITIONS, f.disposition) ? f.disposition : "unknown" }
-        : null;
+      const event: PluginEvent = {
+        type: "CANCEL_RESULT",
+        executionId: f.executionId,
+        disposition: isOneOf(CANCEL_DISPOSITIONS, f.disposition) ? f.disposition : "unknown",
+      };
+      if (isPausedMs(f.figmaPausedMs)) event.figmaPausedMs = f.figmaPausedMs;
+      return event;
+    }
     case "RUN_CHANGED":
     case "RUN_SETTLED":
       return typeof f.executionId === "string" ? { type: f.type, executionId: f.executionId } : null;
@@ -804,6 +823,14 @@ function isExecutionId(value: unknown): value is string {
 function parseSessionRequest(value: unknown): SessionRequest | null {
   if (!isRecord(value) || !isSessionHandle(value.handle) || typeof value.create !== "boolean") return null;
   return { handle: value.handle, create: value.create };
+}
+
+function isPausedMs(value: unknown): value is number {
+  return typeof value === "number" && value >= 0 && value <= 86_400_000;
+}
+
+function parseFigmaPaused(f: Record<string, unknown>): FigmaPausedReply | null {
+  return f.type === "FIGMA_PAUSED" && isPausedMs(f.pausedMs) ? { type: "FIGMA_PAUSED", pausedMs: f.pausedMs } : null;
 }
 
 function parseNotGranted(f: Record<string, unknown>): NotGrantedReply | null {

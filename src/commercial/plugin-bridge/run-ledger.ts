@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
+import { figmaPausedReason } from "./figma-paused.js";
 import type { RelayConnection } from "./relay-connection.js";
 import type { RequestTrace } from "./request-trace.js";
 import {
@@ -148,7 +149,10 @@ export class RunLedger {
   // is outstanding is which SENTENCE the caller gets.
   private readonly cancelsAwaitingAnswer = new Map<
     string,
-    { connection: RelayConnection; settle: (disposition: CancelDisposition) => void }
+    {
+      connection: RelayConnection;
+      settle: (disposition: CancelDisposition, figmaPausedMs?: number) => void;
+    }
   >();
 
   constructor(private readonly options: RunLedgerOptions) {}
@@ -283,12 +287,13 @@ export class RunLedger {
     id: string,
     disposition: CancelDisposition,
     connection?: RelayConnection,
+    figmaPausedMs?: number,
   ): void {
     const awaiting = this.cancelsAwaitingAnswer.get(id);
     if (!awaiting || (connection && awaiting.connection !== connection)) return;
     this.cancelsAwaitingAnswer.delete(id);
     Logger.log(`Bridge request ${id}: cancelled, plugin reports ${disposition}`);
-    awaiting.settle(disposition);
+    awaiting.settle(disposition, figmaPausedMs);
   }
 
   /**
@@ -383,8 +388,8 @@ export class RunLedger {
     if (callerWithdrew) this.trace.record(id, entry.connection, "caller-cancelled");
     const open = entry.connection.isOpen;
     if (open) entry.connection.send({ type: "CANCEL", executionId: id });
-    const reject = (disposition: CancelDisposition): void =>
-      entry.reject(cancelRejection(entry, why, disposition));
+    const reject = (disposition: CancelDisposition, figmaPausedMs?: number): void =>
+      entry.reject(cancelRejection(entry, why, disposition, figmaPausedMs));
     // Three requests have no answer worth waiting for: one on a dead socket, a non-run one (the plugin
     // tracks no phase for it), and one the CALLER withdrew — it is no longer reading.
     if (!open || callerWithdrew || !RUN_REQUESTS.has(entry.payloadType)) {
@@ -394,9 +399,9 @@ export class RunLedger {
     const giveUp = setTimeout(() => this.settleCancelAnswer(id, "unknown"), CANCEL_ANSWER_MS);
     this.cancelsAwaitingAnswer.set(id, {
       connection: entry.connection,
-      settle: (disposition) => {
+      settle: (disposition, figmaPausedMs) => {
         clearTimeout(giveUp);
-        reject(disposition);
+        reject(disposition, figmaPausedMs);
       },
     });
   }
@@ -411,8 +416,12 @@ function cancelRejection(
   entry: LedgerEntry,
   why: string,
   disposition: CancelDisposition,
+  figmaPausedMs?: number,
 ): BridgeRequestError {
-  const head = `Bridge request ${entry.id} (${entry.payloadType}, last phase ${entry.phase}, ${Date.now() - entry.startedAt}ms) ${why}. `;
+  // A paused plugin is the reason the run went silent, so it leads what the run's outcome says.
+  const paused =
+    figmaPausedMs === undefined ? "" : `${figmaPausedReason(figmaPausedMs, "this file")} `;
+  const head = `Bridge request ${entry.id} (${entry.payloadType}, last phase ${entry.phase}, ${Date.now() - entry.startedAt}ms) ${why}. ${paused}`;
   if (!RUN_REQUESTS.has(entry.payloadType))
     return new BridgeRequestError(
       head + "No answer was received; no code was submitted.",

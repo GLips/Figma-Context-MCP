@@ -11,7 +11,7 @@ test("pending native await reports its start and preserves its eventual outcome"
   const events: string[] = [];
   globals.__flcmHost = {
     callServer: async () => ({}), runCancellation: () => null, isRunFinished: () => false,
-    traceNative: (stage, operation) => events.push(`${stage}:${operation}`),
+    trace: (stage, operation) => events.push(`${stage}:${operation}`),
   };
   try {
     let resolve!: (value: number) => void;
@@ -30,7 +30,7 @@ test("old hosts and failing diagnostics preserve native results", async () => {
   globals.__flcmHost = { callServer: async () => ({}), runCancellation: () => null, isRunFinished: () => false };
   try {
     assert.equal(await awaitNative("page-switch", async () => 7), 7);
-    globals.__flcmHost.traceNative = () => { throw new Error("report failed"); };
+    globals.__flcmHost.trace = () => { throw new Error("report failed"); };
     assert.equal(await awaitNative("page-switch", async () => 9), 9);
   } finally { delete globals.__flcmHost; }
 });

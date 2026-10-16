@@ -136,7 +136,21 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     }
   // Unref'd so a run's minute-long late-change watch can't hold the test process open after it ends.
   const hostSetTimeout = (callback: () => void, ms?: number) => setTimeout(callback, ms).unref();
-  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout });
+  // Figma pausing the plugin (figma-pause.ts): its timers stop firing while its clock runs on.
+  let figmaPaused = false;
+  let clockOffsetMs = 0;
+  const hostSetInterval = (callback: () => void, ms?: number) =>
+    setInterval(() => figmaPaused || callback(), ms).unref();
+  const HostDate = class extends Date {
+    static override now() {
+      return Date.now() + clockOffsetMs;
+    }
+  };
+  const pauseFigma = (forMs: number) => {
+    figmaPaused = true;
+    clockOffsetMs += forMs;
+  };
+  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout, setInterval: hostSetInterval, Date: HostDate });
   vm.runInContext(code, context);
   // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
   // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window,
@@ -232,8 +246,30 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     ) as Promise<any>;
   const running = (id: string, key: ConnKey) =>
     frame((f, connKey) => f.type === "RUN_STATE" && f.executionId === id && connKey === key && f.phase === "running", `${id} running`);
-  return { sent, renders, context, storage, pluginData, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
+  return { sent, renders, context, storage, pluginData, pauseFigma, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
 }
+
+test("while Figma has paused the plugin, a new run is refused at once and a stuck run's cancel says why", async () => {
+  const h = host();
+  await h.connect(1);
+  let release!: () => void;
+  h.context.hold = new Promise<void>((r) => {
+    release = r;
+  });
+  const preamble = "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "stuck", preamble, code: "await hold;" });
+  await h.running("stuck", 1);
+  h.pauseFigma(30_000);
+
+  const refused = await h.ask(1, { type: "EXECUTE_CODE", preamble, code: "return 1;" });
+  assert.equal(refused.type, "FIGMA_PAUSED");
+  assert.ok((refused.pausedMs as number) >= 30_000);
+  h.sendFrame(1, { type: "CANCEL", executionId: "stuck" });
+  const cancelled = await h.frame((f) => f.type === "CANCEL_RESULT" && f.executionId === "stuck", "the stuck run's CANCEL_RESULT");
+  assert.equal(cancelled.disposition, "was-running");
+  assert.ok((cancelled.figmaPausedMs as number) >= 30_000);
+  release();
+});
 
 test("queued cancellation never executes, old settlement cannot cancel or erase replacement run", async () => {
   const h = host();

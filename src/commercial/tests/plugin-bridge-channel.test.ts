@@ -329,6 +329,7 @@ it.each([false, true])(
         console: { ...console },
         setTimeout,
         clearTimeout,
+        setInterval: (callback: () => void, ms: number) => setInterval(callback, ms).unref(),
       }),
     );
     // The relay's two envelopes: server frames (after a JSON round trip in the fake socket) and panel input.

@@ -40,8 +40,8 @@ export interface FlcmHost {
    */
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
   /** Reports a step of the run to the server as it happens, so a run that never replies still says
-   * where it stopped. Named for its first use; verbs report through it too. */
-  traceNative?(stage: NativeTraceStage | VerbTraceStage, operation: TraceOperation): void;
+   * where it stopped. */
+  trace?(stage: NativeTraceStage | VerbTraceStage, operation: TraceOperation): void;
   /**
    * Private transport for server-shipped verbs. Never expose this on flcm or session. Every call
    * goes through serverCall below: withServerCall (server-deadline.ts) keeps the run's clock from
@@ -171,11 +171,11 @@ function serverCall(host: FlcmHost, action: string, capability: string, payload:
 
 /** Diagnostics must not change the result or rejection of a native operation. */
 export function traceNative(stage: NativeTraceStage, operation: NativeOperation): void {
-  try { currentHost()?.traceNative?.(stage, operation); } catch { /* Reporting is best effort. */ }
+  try { currentHost()?.trace?.(stage, operation); } catch { /* Reporting is best effort. */ }
 }
 
 export function traceVerb(stage: VerbTraceStage, verb: string): void {
-  try { currentHost()?.traceNative?.(stage, `flcm.${verb}`); } catch { /* Reporting is best effort. */ }
+  try { currentHost()?.trace?.(stage, `flcm.${verb}`); } catch { /* Reporting is best effort. */ }
 }
 
 export async function awaitNative<T>(operation: NativeOperation, run: () => Promise<T>): Promise<T> {

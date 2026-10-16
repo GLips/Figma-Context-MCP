@@ -7,6 +7,7 @@
 // (link-auth.ts), the file's stamp (document-identity.ts), the grant gate (grant-gate.ts), the
 // runner (run-executor.ts) and the panel (grant-panel.ts) do the work.
 import { createActivityFeed } from "./activity-feed.js";
+import { watchForFigmaPause } from "./figma-pause.js";
 import { createDocumentIdentity } from "./document-identity.js";
 import { createGrantGate } from "./grant-gate.js";
 import { createGrantStore } from "./grant-store.js";
@@ -104,7 +105,9 @@ const panel = createGrantPanel({
 });
 // One store per session handle, kept across socket generations and pages for this plugin run.
 const sessions = createAgentSessions();
+const figmaPause = watchForFigmaPause();
 const executor = createRunExecutor({
+  figmaPause,
   isConnected: gate.isConnected,
   refusalAtDequeue: gate.refusalAtDequeue,
   sessions,
@@ -249,6 +252,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       // pinned until the run settles. A request missing its std-lib, document, session or intent
       // never got this far: the parser refused it.
       activity.arrived(msg.id, msg.intent, gate.projectOf(key));
+      if (refuseWhileFigmaPaused(to)) return;
       const scope = gate.admit(to, msg.documentId);
       if (!scope) return;
       const admission = sessions.admit(scope, msg.session);
@@ -262,6 +266,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     }
     case "SCREENSHOT":
       activity.arrived(msg.id, msg.intent, gate.projectOf(key));
+      if (refuseWhileFigmaPaused(to)) return;
       if (gate.admit(to, msg.documentId)) {
         const { nodeId, key: nodeKey, scale, context, margin } = msg;
         executor.runScreenshot(to, msg.documentId, { nodeId, key: nodeKey }, { scale, context, margin });
@@ -272,4 +277,13 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       reply(to, { type: "WRITE_ACCESS_ACK" });
       return;
   }
+}
+
+/** A run accepted while Figma has us paused could only queue, unable to finish; refuse it now. */
+function refuseWhileFigmaPaused(to: ReplyTo): boolean {
+  const pausedMs = figmaPause.pausedForMs();
+  if (pausedMs === null) return false;
+  activity.advance(to.id, "refused");
+  reply(to, { type: "FIGMA_PAUSED", pausedMs });
+  return true;
 }

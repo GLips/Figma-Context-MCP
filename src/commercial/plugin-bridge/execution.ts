@@ -17,6 +17,7 @@ import {
 import type { ExecutionId } from "~/commercial/execution-id.js";
 import type { CallIntent } from "./call-intent.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
+import { FigmaPausedError } from "./figma-paused.js";
 import { mintSessionHandle, type SessionHandle } from "./session-handle.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
 import { LATE_CHANGE_WINDOW_MS } from "../entitlement/write-meter.js";
@@ -146,6 +147,8 @@ export async function executePluginCode(
     if (reply.type === "SESSION_HANDLE_TAKEN" && attempt < SESSION_MINT_ATTEMPTS) continue;
     charge.lost({ mayHaveRun: false });
     if (reply.type === "NOT_GRANTED") return { kind: "not-granted", reason: reply.reason };
+    if (reply.type === "FIGMA_PAUSED")
+      throw new FigmaPausedError(reply.pausedMs, document.fileName);
     if (reply.type === "SESSION_NOT_FOUND")
       return { kind: "session-not-found", session: session.handle };
     throw new Error(
@@ -177,6 +180,7 @@ export async function capturePluginScreenshot(
     executionId,
     { signal },
   );
+  if (reply.type === "FIGMA_PAUSED") throw new FigmaPausedError(reply.pausedMs, document.fileName);
   return reply.type === "NOT_GRANTED"
     ? { kind: "not-granted", reason: reply.reason }
     : { kind: "captured", reply };

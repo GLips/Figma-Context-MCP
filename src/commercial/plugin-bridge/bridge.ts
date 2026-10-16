@@ -168,7 +168,12 @@ export class PluginBridge {
     RUN_STATE: (link, event) => this.ledger.runState(link, event),
     // Run-scoped, so it settles here rather than through the correlated-reply path.
     CANCEL_RESULT: (link, event) =>
-      this.ledger.settleCancelAnswer(event.executionId, event.disposition, link),
+      this.ledger.settleCancelAnswer(
+        event.executionId,
+        event.disposition,
+        link,
+        event.figmaPausedMs,
+      ),
     // Metering outlives the caller, so these go to the meter, never to the run's caller.
     RUN_CHANGED: (link, event) =>
       this.events.onRunEvent?.({ type: "changed", executionId: event.executionId, link }),
