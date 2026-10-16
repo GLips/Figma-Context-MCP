@@ -32,6 +32,7 @@ export const COMMERCIAL_PATHS = [
   "scripts/probe-constraints-stretch.mjs",
   "scripts/probe-queued-writes.mjs",
   "scripts/probe-vector.mjs",
+  "scripts/bench-live.mjs",
 ];
 
 const COMMERCIAL_SPDX_ID = "LicenseRef-Framelink-Commercial";
