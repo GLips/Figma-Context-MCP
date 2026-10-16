@@ -104,10 +104,8 @@ callback, re-sent `EXECUTE_CODE` as their "poll" and could never pass. Fixed in
 
 ### 8. Silent exit when another server holds the port
 
-With the MCP server holding 9876 from the same cwd, a probe hits EADDRINUSE, waits to reclaim on an
-`unref()`'d timer, and Node exits in under a second with code 0 and no output. Workaround:
-`FRAMELINK_STATE_DIR=/tmp/fl-probe-state`, which drops the reclaim wait. **Fixed in `c7a76b3`:** the
-timer is referenced and the wait announces itself, naming the state-dir escape hatch.
+**Resolved by plugin-owned grants (fig-93):** a probe started beside a running MCP server binds the
+next free port in the block and the plugin dials it too, so there is nothing to wait for.
 
 ### 9. Two failed probe runs left their nodes behind (open)
 
