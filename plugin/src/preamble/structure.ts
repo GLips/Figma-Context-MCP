@@ -236,7 +236,7 @@ type PlacementAnchor = "currentPage" | { arg: "parent" | "sibling"; target: Targ
 // act on a node the agent never named.
 function refuseNullishTarget(subject: string, arg: string, value: unknown, remedy: string): void {
   if (value == null) {
-    throw new Error(subject + ": " + arg + " is " + showValue(value) + " — pass a target (id, flcm/key, flcm.id(id) or a handle)" + remedy + ".");
+    throw new Error(subject + ": " + arg + " is " + showValue(value) + " — pass a target (id, flcm/key or a handle)" + remedy + ".");
   }
 }
 

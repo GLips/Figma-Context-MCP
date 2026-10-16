@@ -331,8 +331,8 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
           " — got " + JSON.stringify(specOrTarget) + ".",
       );
     }
-    const spec = typeof specOrTarget === "string" || "__flcmId" in specOrTarget
-      ? { id: (await resolveTarget(specOrTarget as Target)).id } : specOrTarget;
+    const spec = typeof specOrTarget === "string"
+      ? { id: (await resolveTarget(specOrTarget)).id } : specOrTarget;
     const tree = compileTree(spec, "flcm.component.spec");
     const loaded = await loadTreeResources(tree);
     if (tree.liveId !== undefined) assertPromotable(loaded.live.entries.get(tree)!.node);

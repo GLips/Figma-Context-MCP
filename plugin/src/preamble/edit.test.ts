@@ -13,7 +13,6 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { image } from "./value-sugar.js";
-import { id } from "./target.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
 
@@ -94,14 +93,14 @@ test("a node type with no vocabulary of its own takes only the shared words, and
   // component-edit.test.ts.)
   const polygon = figma.createPolygon();
   figma.currentPage.appendChild(polygon);
-  await assert.rejects(edit(id(polygon.id), { fill: "#ff0000" }), /`fill` is not a POLYGON word/);
-  const handle = await edit(id(polygon.id), { name: "renamed", visible: false });
+  await assert.rejects(edit(polygon.id, { fill: "#ff0000" }), /`fill` is not a POLYGON word/);
+  const handle = await edit(polygon.id, { name: "renamed", visible: false });
   assert.equal(polygon.name, "renamed");
   assert.equal(polygon.visible, false);
   assert.equal(handle.id, polygon.id);
   // SLICE has no blend mixin at all — opacity would be an undo step that changed nothing.
   const slice = figma.createSlice();
-  await assert.rejects(edit(id(slice.id), { opacity: 0.5 }), /`opacity` is not a SLICE word/);
+  await assert.rejects(edit(slice.id, { opacity: 0.5 }), /`opacity` is not a SLICE word/);
 });
 
 test("an image fill in a delta fetches bytes through the host channel and stamps flcm/image", async () => {
@@ -844,7 +843,7 @@ test("a Figma refusal on an instance child names the instance — and never auto
       throw new Error("in set_fills: this property cannot be overridden on an instance sublayer");
     },
   });
-  await assert.rejects(edit(id(child.id), { fill: "#ff0000" }), (err: Error) => {
+  await assert.rejects(edit(child.id, { fill: "#ff0000" }), (err: Error) => {
     assert.match(err.message, /lives inside instance "Card"/);
     assert.match(err.message, /never auto-detaches/);
     return true;

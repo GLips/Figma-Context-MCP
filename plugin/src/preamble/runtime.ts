@@ -7,7 +7,6 @@
 //
 // Only these exports are visible to sandbox authors.
 import { gradient, image, effects } from "./value-sugar.js";
-import { id } from "./target.js";
 import { get, find, findOne, selection } from "./read.js";
 import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
@@ -34,11 +33,11 @@ const designTokens = (async (from?: unknown) => {
   return listing;
 }) as typeof listDesignTokens;
 
-export { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens };
+export { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens };
 
 // Tier-1 drift guard, held at the one true public boundary: the exported surface must match the typed
 // Flcm interface schema.ts derives docs and examples from — exhaustively, so a verb added to Flcm but
 // not exported here (or exported with a drifted signature) fails plugin typecheck. `satisfies` checks
 // without widening; the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmSurface = { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens } satisfies Flcm;
+const _flcmSurface = { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens } satisfies Flcm;
 void _flcmSurface;

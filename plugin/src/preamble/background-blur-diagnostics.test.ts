@@ -9,7 +9,6 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { effects as effectsSugar } from "./value-sugar.js";
-import { id } from "./target.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
 import { component } from "./component.js";
@@ -40,11 +39,11 @@ test("edit judges the node's final state: blur onto a filled node is silent, cle
   const panel = await render({ type: "FRAME", width: 200, height: 120, fill: "rgba(255,255,255,0.14)" });
 
   // The delta names only effects — the fill it must be weighed against is the one already on the node.
-  await edit(id(panel.id), { effects: backgroundBlur() });
+  await edit(panel.id, { effects: backgroundBlur() });
   assert.deepEqual(blurWarnings(), []);
 
   // And the mirror: the delta names only the fill, while the blur is the node's standing state.
-  await edit(id(panel.id), { fill: "none" });
+  await edit(panel.id, { fill: "none" });
   assert.equal(blurWarnings().length, 1);
 });
 
@@ -66,7 +65,7 @@ test("a blur warning raised while building a component lands on the component", 
 
   diagnostics.discardFrom(0);
   const panel = await render({ type: "FRAME", left: 400, width: 200, height: 120, fill: "none", effects: backgroundBlur() });
-  const promoted = await component(id(panel.id), { name: "Pane" });
+  const promoted = await component(panel.id, { name: "Pane" });
   assert.notEqual(promoted.id, panel.id);
   assert.deepEqual(diagnostics.records.map((w) => w.id), [panel.id]);
 });

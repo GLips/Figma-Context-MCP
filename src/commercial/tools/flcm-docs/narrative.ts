@@ -311,7 +311,7 @@ export const IMAGE_REF_REUSE = `An \`imageRef\` identifies an existing image in 
 
 export const UNRENDERABLE_GLYPHS = `**A character the resolved font can't render draws as nothing**: no glyph, no tofu, no error, because the plugin API has no glyph-coverage check. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph and switch to a font that covers it.`;
 
-export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` patches one live node and returns its updated handle: only the fields you pass change. The target is a key or node id string, a handle, or \`flcm.id(id)\`. A node type takes the words it is created with (see props); a word its type lacks, such as \`fill\` on a LINE, rejects and lists that type's words.`;
+export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` patches one live node and returns its updated handle: only the fields you pass change. The target is a node id or key string, or a handle. A node type takes the words it is created with (see props); a word its type lacks, such as \`fill\` on a LINE, rejects and lists that type's words.`;
 
 export const EDIT_REMOVAL = `### Removal — \`"none"\`
 

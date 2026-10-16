@@ -6,7 +6,6 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { clone } from "./structure.js";
-import { id } from "./target.js";
 let figma: any;
 beforeEach(() => { figma = createFigmaMock(); });
 function fixture() {
@@ -38,7 +37,7 @@ for (const context of ["same-set", "standalone", "different-set"]) {
       destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
       destination.addComponentProperty("Same", "TEXT", "Unrelated");
     }
-    const result = await clone(id(source.id), id(destination.id));
+    const result = await clone(source.id, destination.id);
     const copy = await figma.getNodeByIdAsync(result.id);
     const owner = context === "standalone" ? copy : destination;
     const refs = copy.children.map(n => n.componentPropertyReferences);
@@ -54,7 +53,7 @@ for (const context of ["same-set", "standalone", "different-set"]) {
 test("unsupported property definitions reject before native clone", async () => {
   const source = figma.createComponent(); figma.currentPage.appendChild(source); source.addComponentProperty("Content", "SLOT", "");
   let called = false; source.clone = () => { called = true; throw new Error("unexpected clone"); };
-  await assert.rejects(clone(id(source.id)), /unsupported component property type SLOT/);
+  await assert.rejects(clone(source.id), /unsupported component property type SLOT/);
   assert.equal(called, false);
 });
 test("restoration refusal compensates its copy before sealing the failed span", async () => {
@@ -62,7 +61,7 @@ test("restoration refusal compensates its copy before sealing the failed span", 
   const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
   destination.addComponentProperty = () => { throw new Error("injected restoration refusal"); };
   figma.undoLog.length = 0;
-  await assert.rejects(clone(id(source.id), id(destination.id)), /restoration refusal/);
+  await assert.rejects(clone(source.id, destination.id), /restoration refusal/);
   // Completed compensation seals its span without undoing the cleanup.
   assert.deepEqual(figma.undoLog, ["commit", "commit"]);
 });
@@ -75,7 +74,7 @@ test("nested component owners retain independent controls and instance-swap refe
   const a = figma.createComponent(); const b = figma.createComponent(); figma.currentPage.appendChild(a); figma.currentPage.appendChild(b);
   const nested = a.createInstance(); outer.appendChild(nested);
   const swapId = outer.addComponentProperty("Choice", "INSTANCE_SWAP", a.id); nested.componentPropertyReferences = { mainComponent: swapId };
-  const copied = await clone(id(outer.id)); const root = await figma.getNodeByIdAsync(copied.id);
+  const copied = await clone(outer.id); const root = await figma.getNodeByIdAsync(copied.id);
   const copiedInner = root.children[0]; const copiedLabelId = copiedInner.children[0].componentPropertyReferences.characters;
   const innerInstance = copiedInner.createInstance(); innerInstance.setProperties({ [copiedLabelId]: "Independent" });
   assert.equal(innerInstance.children[0].characters, "Independent");
@@ -93,7 +92,7 @@ test("same-set restoration does not reread definitions while the duplicate varia
     if (set.children.length > 1) throw Error("Component set has existing errors");
     return definitions;
   } });
-  const result = await clone(id(source.id), id(set.id));
+  const result = await clone(source.id, set.id);
   const copy = await figma.getNodeByIdAsync(result.id);
   assert.deepEqual(copy.children.map(n => n.componentPropertyReferences), source.children.map(n => n.componentPropertyReferences));
 });
@@ -116,12 +115,12 @@ for (const preservesIdentity of [true, false]) test("native collision-adjusted b
   if (!preservesIdentity) {
     const beforeChildren = destination.children.map(n => n.id);
     const beforeDefinitions = JSON.stringify(destination.componentPropertyDefinitions);
-    await assert.rejects(clone(id(source.id), id(destination.id)), /native binding restoration did not persist/);
+    await assert.rejects(clone(source.id, destination.id), /native binding restoration did not persist/);
     assert.deepEqual(destination.children.map(n => n.id), beforeChildren);
     assert.equal(JSON.stringify(destination.componentPropertyDefinitions), beforeDefinitions);
     return;
   }
-  const result = await clone(id(source.id), id(destination.id));
+  const result = await clone(source.id, destination.id);
   const copy = await figma.getNodeByIdAsync(result.id);
   assert.ok(copy.children.every(n => Object.values(n.componentPropertyReferences).every((value: any) => value.includes("#display2#"))));
 });
@@ -130,7 +129,7 @@ test("unknown native clone effects and incomplete compensation retain ordinary r
   const { source } = fixture();
   source.clone = () => { throw Error("native clone refused before returning"); };
   figma.undoLog.length = 0;
-  await assert.rejects(clone(id(source.id)), /native clone refused/);
+  await assert.rejects(clone(source.id), /native clone refused/);
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
   const next = fixture();
   const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
@@ -139,6 +138,6 @@ test("unknown native clone effects and incomplete compensation retain ordinary r
   destination.addComponentProperty = (...args: any[]) => { if (++count > 1) throw Error("second definition refused"); return add(...args); };
   destination.deleteComponentProperty = () => { throw Error("cleanup refused"); };
   figma.undoLog.length = 0;
-  await assert.rejects(clone(id(next.source.id), id(destination.id)), /second definition refused.*Cleanup also failed.*cleanup refused/);
+  await assert.rejects(clone(next.source.id, destination.id), /second definition refused.*Cleanup also failed.*cleanup refused/);
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });

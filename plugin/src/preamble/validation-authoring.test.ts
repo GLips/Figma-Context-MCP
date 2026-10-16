@@ -6,7 +6,6 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { render, append, prepend } from "./structure.js";
@@ -53,7 +52,7 @@ test("native grid aliases compose across scopes and normalize through every writ
   const read = (await get(built)).node;
   assert.equal(read.layout!.gridTemplateColumns, "40px 40px 40px");
   assert.deepEqual(read.children![0].layout, { gridColumn: "2 / span 2", gridRow: "2 / span 2", justifySelf: "center", alignSelf: "end" });
-  const child = id(built.children![0].id);
+  const child = built.children![0].id;
   await edit(child, { gridColumnAnchorIndex: 0, gridColumnSpan: 2, gridChildHorizontalAlign: "AUTO", layout: { gridColumn: "1 / span 2" } });
   await editMany([
     { id: built.id, layout: { gridColumnSizes: [{ type: "FLEX" }, { type: "FIXED", value: 40 }, { type: "HUG" }], gridRowsSizing: "30px 30px 30px" },
@@ -152,8 +151,8 @@ test("promotion returns the new identity and stale root ids fail", async () => {
   createFigmaMock();
   const built = await render({ type: "FRAME" });
   const promoted = await component(built.id);
-  assert.equal((await get(id(promoted.id))).node.id, promoted.id);
-  await assert.rejects(resolveTarget(id(built.id)), /no live node/);
+  assert.equal((await get(promoted.id)).node.id, promoted.id);
+  await assert.rejects(resolveTarget(built.id), /no live node/);
 });
 
 test("selected variants and slot content inherit resolved auto layout", async () => {
@@ -235,7 +234,7 @@ test("shipped factory supports RegExp input across separate evaluations", async 
   );
   install();
   const result = await runInContext(
-    '(async () => { const re = /copy/gi; re.lastIndex = 99; return [(await flcm.find({name:re})).length, (await flcm.find({name:new RegExp("copy", "i")})).length, re.lastIndex, (await flcm.get(flcm.id(newId))).node.id === newId]; })()',
+    '(async () => { const re = /copy/gi; re.lastIndex = 99; return [(await flcm.find({name:re})).length, (await flcm.find({name:new RegExp("copy", "i")})).length, re.lastIndex, (await flcm.get(newId)).node.id === newId]; })()',
     context,
   );
   assert.deepEqual(Array.from(result), [1, 1, 99, true]);

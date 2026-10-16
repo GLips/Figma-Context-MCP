@@ -758,7 +758,10 @@ class Node {
   }
   findAllWithCriteria(opts) {
     const types = (opts && opts.types) || [];
-    return this.findAll((n) => types.length === 0 || types.indexOf(n.type) !== -1);
+    const keys = opts && opts.pluginData ? opts.pluginData.keys : undefined;
+    return this.findAll((n) =>
+      (types.length === 0 || types.indexOf(n.type) !== -1) &&
+      (!opts || !opts.pluginData || (keys ? keys.some((k) => n.getPluginData(k) !== "") : Object.values(n._plugin).some(Boolean))));
   }
 
   // Live Figma sizes a vector to the geometry you give it: assigning vectorPaths snaps the node's box to
@@ -869,7 +872,7 @@ class Node {
   // --- component / instance ---
   createInstance() {
     if (this.type !== "COMPONENT") throw new Error("createInstance: not a COMPONENT");
-    const instId = nextId("i");
+    const instId = nextId();
     const root = cloneInto(this, instId, true);
     root.type = "INSTANCE";
     root.mainComponent = this;

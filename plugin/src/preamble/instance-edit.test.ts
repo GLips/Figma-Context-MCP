@@ -15,7 +15,6 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { render } from "./structure.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
@@ -74,14 +73,14 @@ async function variantSet() {
 
 test("a frame's words land on an instance's root, and the layout gate reads its LIVE mode", async () => {
   const { comp, inst } = await chipComponent();
-  const handle = await edit(id(inst.id), { fill: "#ff0000", width: 200, name: "Chip A" });
+  const handle = await edit(inst.id, { fill: "#ff0000", width: 200, name: "Chip A" });
   assert.deepEqual(inst.fills[0].color, { r: 1, g: 0, b: 0 });
   assert.equal(inst.width, 200);
   assert.equal(inst.name, "Chip A");
   assert.equal(handle.id, inst.id);
   // The component's own auto-layout survives a recolor, exactly as a frame's does.
   assert.equal(inst.layoutMode, "HORIZONTAL");
-  await edit(id(inst.id), { layout: { gap: 12 } });
+  await edit(inst.id, { layout: { gap: 12 } });
   assert.equal(inst.itemSpacing, 12);
 
   // The same word on an instance of a FREE-FORM component is refused by the live mode, not by type.
@@ -89,7 +88,7 @@ test("a frame's words land on an instance's root, and the layout gate reads its 
   const plain = figma.createComponentFromNode(await figma.getNodeByIdAsync(plainFrame.id));
   const stamped = await render({ type: "INSTANCE", componentId: plain.id });
   await assert.rejects(
-    edit(id(stamped.id), { layout: { gap: 8 } }),
+    edit(stamped.id, { layout: { gap: 8 } }),
     /need an auto-layout \(row\/column\/grid\) container/,
   );
   assert.equal(comp.itemSpacing, 4); // the component is untouched by any of it
@@ -97,7 +96,7 @@ test("a frame's words land on an instance's root, and the layout gate reads its 
 
 test("componentProperties set a bound text and boolean on the live instance", async () => {
   const { inst, labelProp, iconProp } = await chipComponent();
-  await edit(id(inst.id), { componentProperties: { Label: "Save", Icon: false } });
+  await edit(inst.id, { componentProperties: { Label: "Save", Icon: false } });
   assert.equal(inst.componentProperties[labelProp].value, "Save");
   assert.equal(inst.componentProperties[iconProp].value, false);
   assert.equal(inst.children[1].characters, "Save");
@@ -108,14 +107,14 @@ test("a variant change completes the tuple from the variant the instance is ON, 
   const { variants, inst } = await variantSet();
   const before = inst.id;
   // Only State is named; Size=Large comes from the instance's current variant.
-  const handle = await edit(id(inst.id), { componentProperties: { State: "Hover" } });
+  const handle = await edit(inst.id, { componentProperties: { State: "Hover" } });
   assert.equal(inst.mainComponent, variants[2]);
   assert.equal(handle.id, before);
   // Back the other way, and a combination the set lacks names the ones it has — with nothing applied.
-  await edit(id(inst.id), { componentProperties: { State: "Default" } });
+  await edit(inst.id, { componentProperties: { State: "Default" } });
   assert.equal(inst.mainComponent, variants[1]);
   await assert.rejects(
-    edit(id(inst.id), { componentProperties: { Size: "Small", State: "Hover" } }),
+    edit(inst.id, { componentProperties: { Size: "Small", State: "Hover" } }),
     /has no variant Size=Small, State=Hover — its variants are "Size=Small, State=Default"/,
   );
   assert.equal(inst.mainComponent, variants[1]);
@@ -124,7 +123,7 @@ test("a variant change completes the tuple from the variant the instance is ON, 
 test("an override edits the LIVE sublayer — live wrap and all — and never the definition", async () => {
   const { label, inst } = await chipComponent();
   const liveLabelId = "I" + inst.id + ";" + label.id;
-  await edit(id(inst.id), { overrides: { [label.id]: { text: "Hi", fill: "#00ff00" } } });
+  await edit(inst.id, { overrides: { [label.id]: { text: "Hi", fill: "#00ff00" } } });
   const liveLabel = await figma.getNodeByIdAsync(liveLabelId);
   assert.equal(liveLabel.characters, "Hi");
   assert.deepEqual(liveLabel.fills[0].color, { r: 0, g: 1, b: 0 });
@@ -133,9 +132,9 @@ test("an override edits the LIVE sublayer — live wrap and all — and never th
   // The live-node compile is load-bearing, not an implementation detail: this sublayer has been
   // given a bounded width, so a clamp is realizable — the DEFINITION still hugs, and compiling
   // against it (as a create must) would reject the same delta.
-  await edit(id(liveLabelId), { width: 60 });
+  await edit(liveLabelId, { width: 60 });
   assert.equal(label.textAutoResize, "WIDTH_AND_HEIGHT");
-  await edit(id(inst.id), { overrides: { [label.id]: { textStyle: { lineClamp: 2 } } } });
+  await edit(inst.id, { overrides: { [label.id]: { textStyle: { lineClamp: 2 } } } });
   assert.equal((await figma.getNodeByIdAsync(liveLabelId)).maxLines, 2);
 });
 
@@ -158,7 +157,7 @@ test("componentId swaps the component; overrides in the same delta land on the N
   compB.name = "Chip B";
   const labelB = await figma.getNodeByIdAsync(specNode(builtB, "labelB").id);
 
-  const handle = await edit(id(inst.id), {
+  const handle = await edit(inst.id, {
     componentId: compB.id,
     overrides: { [labelB.id]: { text: "Swapped", fill: "#ff0000" } },
     opacity: 0.5,
@@ -173,7 +172,7 @@ test("componentId swaps the component; overrides in the same delta land on the N
 
   // A path from the OUTGOING component is refused by name, with nothing applied.
   await assert.rejects(
-    edit(id(inst.id), { componentId: compB.id, overrides: { "999:999": { fill: "#000" } } }),
+    edit(inst.id, { componentId: compB.id, overrides: { "999:999": { fill: "#000" } } }),
     /"Chip B" \(id .*\) has no sublayer at that path/,
   );
 });
@@ -202,7 +201,7 @@ test("the main component is proven at the seal: a swap during the font load refu
   };
   try {
     await assert.rejects(
-      edit(id(inst.id), { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } }),
+      edit(inst.id, { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } }),
       /the main component of INSTANCE .* changed while this call was resolving targets and loading resources \(it was COMPONENT "Chip"/,
     );
   } finally {
@@ -238,24 +237,24 @@ test("every component-word refusal fires before the seal, with zero writes and z
   const plain = await render({ type: "RECTANGLE", width: 10, height: 10 });
   const logBefore = [...figma.undoLog];
   await assert.rejects(
-    edit(id(inst.id), { componentProperties: { Lable: "x" } }),
+    edit(inst.id, { componentProperties: { Lable: "x" } }),
     /no property "Lable" — its properties are "Label", "Icon"/,
   );
   await assert.rejects(
-    edit(id(inst.id), { componentProperties: { Icon: "yes" } }),
+    edit(inst.id, { componentProperties: { Icon: "yes" } }),
     /is a boolean property — got "yes"/,
   );
   await assert.rejects(
-    edit(id(inst.id), { overrides: { "999:999": { fill: "#000" } } }),
+    edit(inst.id, { overrides: { "999:999": { fill: "#000" } } }),
     /has no sublayer at that path/,
   );
   await assert.rejects(
-    edit(id(inst.id), { componentId: 7 as never }),
+    edit(inst.id, { componentId: 7 as never }),
     /the component to swap to must be a component's node id/,
   );
-  await assert.rejects(edit(id(inst.id), { componentId: plain.id }), /is not a component/);
+  await assert.rejects(edit(inst.id, { componentId: plain.id }), /is not a component/);
   await assert.rejects(
-    edit(id(inst.id), { componentId: id(inst.id) as never }),
+    edit(inst.id, { componentId: inst.id as never }),
     /is itself an instance, not a component/,
   );
   // A nested instance's own component is out of an override's reach, and says where to go instead.
@@ -310,7 +309,7 @@ test("detach hands back a NEW frame and leaves the instance node behind", async 
   const { inst } = await chipComponent();
   const parent = inst.parent;
   const at = parent.children.indexOf(inst);
-  const handle = await detach(id(inst.id));
+  const handle = await detach(inst.id);
   assert.equal(handle.type, "FRAME");
   assert.notEqual(handle.id, inst.id);
   assert.equal(inst.removed, true);
@@ -341,7 +340,7 @@ test("detach refuses a NESTED instance, naming the outer one, and anything that 
   const outer = await figma.getNodeByIdAsync(stamped.id);
   const nested = outer.children[0];
   assert.equal(nested.type, "INSTANCE");
-  await assert.rejects(detach(id(nested.id)), (err: Error) => {
+  await assert.rejects(detach(nested.id), (err: Error) => {
     assert.match(err.message, /is nested inside instance "Panel"/);
     assert.match(
       err.message,
@@ -350,10 +349,10 @@ test("detach refuses a NESTED instance, naming the outer one, and anything that 
     return true;
   });
   assert.equal(nested.removed, false);
-  await assert.rejects(detach(id(comp.id)), /is not an instance.*detach an INSTANCE of it/s);
+  await assert.rejects(detach(comp.id), /is not an instance.*detach an INSTANCE of it/s);
   await assert.rejects(detach("no-such-key"), /no live node|flcm/);
   // The whole outer instance detaches fine — the nested one comes along as an ordinary instance.
-  const handle = await detach(id(outer.id));
+  const handle = await detach(outer.id);
   assert.equal(handle.type, "FRAME");
   assert.equal(inst.removed, false); // an unrelated instance is untouched
 });
@@ -379,12 +378,12 @@ test("a NESTED instance takes the same words — its live ids carry exactly ONE 
   assert.equal(nested.id.indexOf("II"), -1);
   // Figma spells a sublayer with one `I` however deep, so the nested instance's own id is already
   // the prefix — doubling it is what made every override on a nested instance unaddressable.
-  await edit(id(nested.id), { overrides: { [label.id]: { text: "Deep", fill: "#00ff00" } } });
+  await edit(nested.id, { overrides: { [label.id]: { text: "Deep", fill: "#00ff00" } } });
   const liveLabel = await figma.getNodeByIdAsync(nested.id + ";" + label.id);
   assert.equal(liveLabel.characters, "Deep");
   assert.deepEqual(liveLabel.fills[0].color, { r: 0, g: 1, b: 0 });
   // Its component link is readable too, so property values land on it like any other instance.
-  await edit(id(nested.id), { componentProperties: { Icon: false } });
+  await edit(nested.id, { componentProperties: { Icon: false } });
   assert.equal(nested.children[0].visible, false);
 });
 
@@ -392,13 +391,13 @@ test("an empty component bag is refused rather than minting an undo step for zer
   const { inst } = await chipComponent();
   const before = [...figma.undoLog];
   await assert.rejects(
-    edit(id(inst.id), { componentProperties: {} }),
+    edit(inst.id, { componentProperties: {} }),
     /the delta compiled to nothing/,
   );
-  await assert.rejects(edit(id(inst.id), { overrides: {} }), /the delta compiled to nothing/);
+  await assert.rejects(edit(inst.id, { overrides: {} }), /the delta compiled to nothing/);
   assert.deepEqual(figma.undoLog, before);
   // Riding beside a real word it is simply inert — the delta still has work to do.
-  await edit(id(inst.id), { componentProperties: {}, opacity: 0.5 });
+  await edit(inst.id, { componentProperties: {}, opacity: 0.5 });
   assert.equal(inst.opacity, 0.5);
 });
 
@@ -431,7 +430,7 @@ test("a swap and a layout word in one delta gate on the component the swap bring
   // Swapping a free-form instance to a row MAKES the gap legal — the pre-swap mode must not refuse it.
   const stampedFree = await render({ type: "INSTANCE", componentId: freeComp.id });
   const freeInst = await figma.getNodeByIdAsync(stampedFree.id);
-  await edit(id(freeInst.id), { componentId: rowComp.id, layout: { gap: 20 } });
+  await edit(freeInst.id, { componentId: rowComp.id, layout: { gap: 20 } });
   assert.equal(freeInst.layoutMode, "HORIZONTAL");
   assert.equal(freeInst.itemSpacing, 20);
 
@@ -439,7 +438,7 @@ test("a swap and a layout word in one delta gate on the component the swap bring
   // landing the swap and letting Figma refuse the write inside the sealed span.
   const before = [...figma.undoLog];
   await assert.rejects(
-    edit(id(inst.id), { componentId: freeComp.id, layout: { gap: 20 } }),
+    edit(inst.id, { componentId: freeComp.id, layout: { gap: 20 } }),
     /need an auto-layout \(row\/column\/grid\) container/,
   );
   assert.deepEqual(figma.undoLog, before);
@@ -464,7 +463,7 @@ test("an override's live gate runs BEFORE the seal — a refusal costs zero writ
   const pinst = await figma.getNodeByIdAsync(stamped.id);
   const before = [...figma.undoLog];
   await assert.rejects(
-    edit(id(pinst.id), { overrides: { [inner.id]: { layout: { gap: 8 } } } }),
+    edit(pinst.id, { overrides: { [inner.id]: { layout: { gap: 8 } } } }),
     /need an auto-layout \(row\/column\/grid\) container/,
   );
   assert.deepEqual(figma.undoLog, before);
@@ -513,7 +512,7 @@ test("instance direction mismatch rejects all root words before writes; matching
     undo: [...figma.undoLog],
   };
   await assert.rejects(
-    edit(id(inst.id), { name: "Changed", opacity: 0.5, layout: { mode: "column", gap: 20 } }),
+    edit(inst.id, { name: "Changed", opacity: 0.5, layout: { mode: "column", gap: 20 } }),
     /instance root inherits its layout direction/,
   );
   assert.equal(inst.layoutMode, "HORIZONTAL");
@@ -521,7 +520,7 @@ test("instance direction mismatch rejects all root words before writes; matching
     { gap: inst.itemSpacing, name: inst.name, opacity: inst.opacity, undo: figma.undoLog },
     before,
   );
-  await edit(id(inst.id), { layout: { mode: "row", gap: 20 } });
+  await edit(inst.id, { layout: { mode: "row", gap: 20 } });
   assert.equal(inst.itemSpacing, 20);
   assert.equal(inst.layoutMode, "HORIZONTAL");
 });
@@ -556,7 +555,7 @@ for (const retarget of ["swap", "variant"] as const) {
         : { componentProperties: { State: "Hover" } };
     const before = [...figma.undoLog];
     await assert.rejects(
-      edit(id(inst.id), { ...changes, opacity: 0.5, layout: { mode: "row", gap: 20 } }),
+      edit(inst.id, { ...changes, opacity: 0.5, layout: { mode: "row", gap: 20 } }),
       /instance root inherits its layout direction/,
     );
     assert.equal(inst.mainComponent, variants[1]);
@@ -581,7 +580,7 @@ test("nested instance direction overrides reject before root writes on live and 
     const before = [...figma.undoLog];
     const current = inst.mainComponent;
     await assert.rejects(
-      edit(id(inst.id), {
+      edit(inst.id, {
         ...(retarget ? { componentId: outer.id } : {}),
         opacity: 0.5,
         overrides: { [nested.id]: { layout: { mode: "column", gap: 20 } } },
@@ -602,7 +601,7 @@ test("inherited rectangle dimensions reject before style writes, while fill and 
   const before = [...figma.undoLog];
   for (const dimensions of [{ width: 72 }, { height: 72 }]) {
     await assert.rejects(
-      edit(id(liveIcon.id), { ...dimensions, fill: "#00ff00" }),
+      edit(liveIcon.id, { ...dimensions, fill: "#00ff00" }),
       /explicit width\/height cannot resize an inherited rectangle/,
     );
     assert.equal(liveIcon.width, 12);
@@ -610,13 +609,13 @@ test("inherited rectangle dimensions reject before style writes, while fill and 
     assert.deepEqual(liveIcon.fills[0].color, { r: 1, g: 1, b: 1 });
     assert.deepEqual(figma.undoLog, before);
   }
-  await edit(id(liveIcon.id), { width: "fill", fill: "#00ff00" });
+  await edit(liveIcon.id, { width: "fill", fill: "#00ff00" });
   assert.equal(liveIcon.layoutSizingHorizontal, "FILL");
   assert.deepEqual(liveIcon.fills[0].color, { r: 0, g: 1, b: 0 });
-  await edit(id(inst.id), { width: 200, height: 80 });
+  await edit(inst.id, { width: 200, height: 80 });
   assert.equal(inst.width, 200);
   assert.equal(inst.height, 80);
-  await edit(id(icon.id), { width: 72 });
+  await edit(icon.id, { width: 72 });
   assert.equal(icon.width, 72);
 });
 
@@ -646,13 +645,13 @@ test("rectangle overrides gate before creating an instance or retargeting its co
   );
   assert.deepEqual(figma.currentPage.children, children);
   await assert.rejects(
-    edit(id(inst.id), { opacity: 0.5, overrides }),
+    edit(inst.id, { opacity: 0.5, overrides }),
     /explicit width\/height cannot resize an inherited rectangle/,
   );
   const other = figma.createComponent();
   const outgoing = other.createInstance();
   await assert.rejects(
-    edit(id(outgoing.id), { componentId: comp.id, opacity: 0.5, overrides }),
+    edit(outgoing.id, { componentId: comp.id, opacity: 0.5, overrides }),
     /explicit width\/height cannot resize an inherited rectangle/,
   );
   assert.equal(outgoing.mainComponent, other);

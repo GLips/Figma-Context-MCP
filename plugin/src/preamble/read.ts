@@ -8,7 +8,7 @@ import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
 import { readCommentCounts } from "./comment-counts.js";
 import { Target, FindQuery, SlimHandle, ReadPredicate, GetResult, ReadNode } from "./ir.js";
-import { readKey, identityOf } from "./identity.js";
+import { keyedDescendants, readKey, identityOf } from "./identity.js";
 import { resolveTarget, resolveScanRoot, type ScanRoot } from "./target.js";
 import { type UnreadableSink, type SceneNodeLike, type SceneTokenResolver } from "./node-to-snapshot.js";
 import { readSceneDesign, type CommentCounts } from "./scene-read.js";
@@ -306,7 +306,7 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   // means "the current page".
   if ("within" in query && query.within == null) {
     throw new Error(
-      `flcm.find: within is ${showValue(query.within)} — pass a container target (id, flcm/key, flcm.id(id) or a handle), ` +
+      `flcm.find: within is ${showValue(query.within)} — pass a container target (id, flcm/key or a handle), ` +
         "or omit within to search the current page.",
     );
   }
@@ -314,7 +314,9 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   // findAllWithCriteria, not findAll(callback): Figma's own walk crashes the whole search when a
   // callback reads a node it lists but cannot read. Collecting first lets each node be checked.
   const unreadable: UnreadableSink = new Set();
-  const hits = root.findAllWithCriteria({ types: [] }).filter((node) => {
+  // A key facet narrows natively, so Figma never hands over the rest of a large page.
+  const candidates = query.key ? keyedDescendants(root) : root.findAllWithCriteria({ types: [] });
+  const hits = candidates.filter((node) => {
     if (isReadableSceneNode(node)) return matchesQuery(node, query);
     unreadable.add(node.id);
     return false;

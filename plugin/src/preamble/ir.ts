@@ -519,7 +519,7 @@ export interface VariantEntryInput { component: Target; variant: Record<string, 
 // A component property value as authored: the read shape's own scalar (`Record<name, boolean |
 // string>`), plus a Target for an instance-swap property — the read reports a swap value as the
 // component's node id, and a handle from `find` names the same thing.
-export type ComponentPropertyInput = boolean | string | RawIdRef | Handle | SlimHandle;
+export type ComponentPropertyInput = boolean | string | Handle | SlimHandle;
 
 // One sublayer's override delta as authored — the read's `overrides` entry (a partial node whose
 // fields may be `null`) or an edit delta in the same words. Typed open here because the words a
@@ -712,14 +712,8 @@ export interface FindQuery { type?: string; name?: string | RegExp; key?: string
 // Returns anything truthy, or a Promise of it (find awaits each verdict, so an async predicate can call flcm).
 export type ReadPredicate = (node: SimplifiedNode) => unknown;
 
-// An explicit raw-id target — the escape hatch flcm.id(id) returns. Tagged (not a bare string) so the
-// resolver treats it as a live-node id and NEVER as an flcm/key: the one way to force id resolution when a
-// string could be read either way. Plain data, like a WriteNode.
-export interface RawIdRef { __flcmId: string }
-
 // What any target-taking verb (get/find/edit) accepts, resolved by shape (target.ts resolveTarget):
-// a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any
-// handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
+// a bare string (a node id when spelled like one, otherwise an flcm/key), or any handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
 // POJO. SlimHandle is named in the union (not just assignable) because it's what the locate verbs
 // actually return, and the runtime accepts any `{ id }` regardless.
-export type Target = string | RawIdRef | { id: string };
+export type Target = string | { id: string };

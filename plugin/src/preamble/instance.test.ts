@@ -11,7 +11,6 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { get } from "./read.js";
 import { render, append } from "./structure.js";
 
@@ -131,7 +130,7 @@ test("dropping a read instance's id creates independent copies with its override
     componentProperties: { Label: "Go" },
     overrides: { [label.id]: { fill: "#00ff00" } },
   });
-  const { node: read } = await get(id(first.id));
+  const { node: read } = await get(first.id);
   assert.equal(read.type, "INSTANCE");
   assert.equal(read.componentId, comp.id);
 

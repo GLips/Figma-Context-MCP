@@ -10,6 +10,14 @@
  * instance boundary, the id the node has inside the definition itself.
  */
 
+/**
+ * Whether `value` is spelled like a plugin node id: `12:34`, or a sublayer's `I12:34;56:78`. An flcm
+ * key may never take this shape, which is what lets a bare target string resolve by id alone.
+ */
+export function isNodeIdShaped(value: string): boolean {
+  return /^I?\d+:\d+(;\d+:\d+)*$/.test(value);
+}
+
 /** Whether `id` names a node inside an instance — a composite id, rather than a plain one. */
 export function isSublayerId(id: string): boolean {
   return id.startsWith("I");

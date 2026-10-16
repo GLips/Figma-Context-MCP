@@ -58,7 +58,7 @@ const QUEUED_WRITE = `
 let caught = null;
 try {
   await Promise.all([
-    flcm.edit(flcm.id("0:0"), { name: "nope" }),
+    flcm.edit("0:0", { name: "nope" }),
     flcm.render({ type: "FRAME", name: ${JSON.stringify(SURVIVOR)}, width: 40, height: 40 }),
   ]);
 } catch (e) { caught = String(e.message || e); }
@@ -72,7 +72,7 @@ return { found: await flcm.find({ name: ${JSON.stringify(SURVIVOR)} }) };
 
 const STALE_WRITE = `
 try {
-  await __flcmProbeStale.edit(flcm.id(${JSON.stringify("__ID__")}), { name: ${JSON.stringify(STALE_MARK)} });
+  await __flcmProbeStale.edit(${JSON.stringify("__ID__")}, { name: ${JSON.stringify(STALE_MARK)} });
   return { wrote: true };
 } catch (e) { return { refusal: String(e.message || e) }; }
 `;

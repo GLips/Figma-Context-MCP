@@ -40,7 +40,7 @@ return session.card.id;
   commentsHowTo: "the `get_figma_comments` tool reads them, given the node's id in `scope`",
   sessionHowTo:
     "passing that handle as `session` on the next figma_execute_code call gives it the same `session`, with its `last`.",
-  savedScriptHowTo: `LONG SCRIPT? scriptPath takes a .js in the asset root; resend once fixed. Else send code or run \`npx ${CLI_NAME} execute <file> --intent <why>\`.`,
+  savedScriptHowTo: `LONG SCRIPT? scriptPath: a .js in the asset root; resend once fixed. Or run \`npx ${CLI_NAME} execute <file> --intent <why> --session <handle>\`.`,
 };
 
 export const CLI_DOCS_CHANNEL: DocsChannel = {

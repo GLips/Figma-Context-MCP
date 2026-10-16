@@ -880,7 +880,7 @@ test("a write queued behind a rejected batch lands before the reply, and the rep
     let caught = null;
     try {
       await Promise.all([
-        flcm.edit(flcm.id("0:0"), { name: "nope" }),
+        flcm.edit("0:0", { name: "nope" }),
         flcm.render({ type: "FRAME", name: "QUEUED-SURVIVOR", width: 40, height: 40 }),
       ]);
     } catch (e) { caught = String(e.message || e); }

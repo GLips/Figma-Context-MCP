@@ -24,6 +24,12 @@ export function readKey(node: { getPluginData(key: string): string }): string {
   return node.getPluginData(FLCM_KEY);
 }
 
+// Every node under `root` carrying an flcm key. Figma filters on the pluginData key natively and hands
+// back only those, so a lookup costs the keyed nodes, not the tens of thousands of nodes on a large page.
+export function keyedDescendants(root: { findAllWithCriteria(criteria: { pluginData: { keys: string[] } }): SceneNode[] }): SceneNode[] {
+  return root.findAllWithCriteria({ pluginData: { keys: [FLCM_KEY] } });
+}
+
 // Stamp a node's flcm key.
 export function writeKey(node: { setPluginData(key: string, value: string): void }, key: string): void {
   node.setPluginData(FLCM_KEY, key);

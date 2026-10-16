@@ -10,7 +10,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { effects } from "./value-sugar.js";
-import { id } from "./target.js";
 import { get } from "./read.js";
 import { render } from "./structure.js";
 
@@ -76,7 +75,7 @@ test("get on a component names it in the components sidecar, not on the node", a
   };
   figma.currentPage.appendChild(comp);
 
-  const { node: read, components } = await get(id(comp.id));
+  const { node: read, components } = await get(comp.id);
   assert.equal(read.type, "COMPONENT");
   assert.deepEqual(components?.[comp.id], {
     type: "COMPONENT",
@@ -96,7 +95,7 @@ test("get on an instance carries an honest type and its componentId", async () =
   figma.currentPage.appendChild(comp);
   const inst = comp.createInstance();
 
-  const { node: read } = await get(id(inst.id));
+  const { node: read } = await get(inst.id);
   assert.equal(read.type, "INSTANCE");
   assert.equal(read.componentId, comp.id);
 });

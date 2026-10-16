@@ -6,7 +6,6 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { find } from "./read.js";
@@ -41,9 +40,9 @@ test("four bounds survive creation, canonical/plugin reads, edits, and explicit 
   const result = await simplify([snapshot]);
   assert.deepEqual(boundsOf(result.nodes[0]), bounds);
   assert.deepEqual(boundsOf((await find({ type: "FRAME" }))[0]), bounds);
-  await edit(id(node.id), { width: 210 });
+  await edit(node.id, { width: 210 });
   assert.deepEqual(boundsOf(node), bounds);
-  await edit(id(node.id), {
+  await edit(node.id, {
     minWidth: "none",
     maxWidth: "none",
     minHeight: "none",
@@ -267,7 +266,7 @@ test("a subtree replace takes its overflow off the canvas with it", async () => 
     ],
   });
   diagnostics.discardFrom(0);
-  await replace(id(specNode(built, "old").id), {
+  await replace(specNode(built, "old").id, {
     type: "FRAME", width: "50%", height: "fill", layout: { mode: "row" },
     children: [{ type: "RECTANGLE", width: 20, height: 20 }],
   });

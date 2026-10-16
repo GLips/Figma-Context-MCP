@@ -2,13 +2,14 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// target — the grammar every verb addresses a node by (a bare string: id or flcm/key; flcm.id(id);
-// anything carrying an `id`, like a handle) and its one resolver. Read and write verbs both come
+// target — the grammar every verb addresses a node by (a bare string: id or flcm/key; anything
+// carrying an `id`, like a handle) and its one resolver. Read and write verbs both come
 // here, so an id or key can't resolve differently depending on which verb named it.
 
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
-import type { Target, RawIdRef } from "./ir.js";
-import { readKey } from "./identity.js";
+import type { Target } from "./ir.js";
+import { keyedDescendants, readKey } from "./identity.js";
+import { isNodeIdShaped } from "@framelink/core";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { isReadableSceneNode } from "./scene-readability.js";
 
@@ -18,11 +19,10 @@ import { isReadableSceneNode } from "./scene-readability.js";
 export function isTargetShaped(value: unknown): value is Target {
   if (typeof value === "string") return value.trim().length > 0;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const v = value as { __flcmId?: unknown; id?: unknown };
-  return typeof v.__flcmId === "string" || typeof v.id === "string";
+  return typeof (value as { id?: unknown }).id === "string";
 }
 
-export const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
+export const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, or a handle from flcm.find";
 
 // Component target syntax is shared by new instances and swaps; prepare resolves live identity.
 export function compileSwapTarget(raw: unknown, subject: string): Target {
@@ -32,23 +32,9 @@ export function compileSwapTarget(raw: unknown, subject: string): Target {
   return raw;
 }
 
-// flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
-// it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
-// way). resolveTarget unwraps it structurally, never via this function.
-export function id(nodeId: unknown): RawIdRef {
-  if (typeof nodeId !== "string" || !nodeId.trim()) {
-    throw new Error('flcm.id: expected a node id string, e.g. flcm.id("12:34") — got ' + JSON.stringify(nodeId) + ".");
-  }
-  return { __flcmId: nodeId };
-}
-
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
 export type ScanRoot = (PageNode | SceneNode) & ChildrenMixin;
-
-function isRawIdRef(value: unknown): value is RawIdRef {
-  return !!value && typeof value === "object" && typeof (value as RawIdRef).__flcmId === "string";
-}
 
 // Anything carrying a string `id` — a render Handle, a slim handle, a read POJO. Its `id` is a live-node id.
 function hasId(value: unknown): value is { id: string } {
@@ -66,55 +52,44 @@ async function byId(id: string): Promise<SceneNode | null> {
 }
 
 function scanKey(key: string, root: ScanRoot): SceneNode[] {
-  return root.findAllWithCriteria({ types: [] }).filter((n) => isReadableSceneNode(n) && readKey(n) === key);
+  return keyedDescendants(root).filter((n) => isReadableSceneNode(n) && readKey(n) === key);
 }
 
 // Resolve a target to a live node, or throw. `within` scopes the key scan (default: current page); it is
 // itself a target, resolved by the same rules, so `within: 'card'` searches inside the node keyed "card".
 export async function resolveTarget(target: Target, within?: Target): Promise<SceneNode> {
   invalidateSceneAccess();
-  if (isRawIdRef(target)) {
-    const node = await byId(target.__flcmId);
-    if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target.__flcmId)} (flcm.id(...)).`);
-    return node;
-  }
   if (typeof target === "string") return resolveString(target, within);
   if (hasId(target)) {
     const node = await byId(target.id);
     if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target.id)} — it may have been deleted.`);
     return node;
   }
-  throw new Error(`flcm: cannot resolve target ${JSON.stringify(target)} — pass a node id, an flcm/key, flcm.id(id), or a handle.`);
+  throw new Error(`flcm: cannot resolve target ${JSON.stringify(target)} — pass a node id, an flcm/key, or a handle.`);
 }
 
-// A bare string is resolved by what actually EXISTS, not by guessing from its shape: try it as a live id and
-// as an flcm/key, then resolve by the single match. Checking both is what makes the pathological
-// id-that-is-also-a-key case fail loud instead of silently picking one. (Common paths — a handle or
-// flcm.id(...) — skip the key scan entirely; only a bare string pays it.)
+// A bare string is read by its shape: one spelled like a node id is an id, anything else is an flcm/key.
+// Keys can't take an id's shape (compile-nodes.ts base), so the two never compete, and an id costs one
+// lookup with no search of the page.
 async function resolveString(target: string, within?: Target): Promise<SceneNode> {
   if (!target.trim()) {
-    throw new Error("flcm: empty target — pass a node id, an flcm/key, flcm.id(id), or a handle.");
+    throw new Error("flcm: empty target — pass a node id, an flcm/key, or a handle.");
   }
-  const root = await resolveScanRoot(within);
-  const byIdNode = await byId(target);
-  const byKey = scanKey(target, root);
-
-  if (byIdNode && byKey.length) {
-    throw new Error(
-      `flcm: target ${JSON.stringify(target)} is ambiguous — it matches BOTH a live node id and ${byKey.length} node(s) with the flcm/key ${JSON.stringify(target)}. ` +
-        `Use flcm.id(${JSON.stringify(target)}) to force the id, or rename the key.`,
-    );
+  if (isNodeIdShaped(target)) {
+    const node = await byId(target);
+    if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target)} — it may have been deleted.`);
+    return node;
   }
-  if (byIdNode) return byIdNode;
+  const byKey = scanKey(target, await resolveScanRoot(within));
   if (byKey.length === 1) return byKey[0];
   if (byKey.length > 1) {
     throw new Error(
       `flcm: target ${JSON.stringify(target)} is ambiguous — ${byKey.length} nodes carry the flcm/key ${JSON.stringify(target)}. ` +
-        `Keys must be unique; scope with \`within\`, or address a specific node by id or flcm.id(...).`,
+        `Keys must be unique; scope with \`within\`, or address a specific node by id.`,
     );
   }
   throw new Error(
-    `flcm: no node found for target ${JSON.stringify(target)} — no live node has that id, and no node carries it as an flcm/key on the searched root.`,
+    `flcm: no node found for target ${JSON.stringify(target)} — no node carries it as an flcm/key on the searched root, and it isn't spelled like a node id.`,
   );
 }
 
@@ -137,11 +112,10 @@ export interface ResolvedTargets {
   node(target: Target, subject: string): SceneNode;
 }
 
-// The cache key is the target's FORM plus its value: a bare string is resolved by a different rule
-// (id or key, both checked) than the same string wrapped in flcm.id(), so they are different asks.
+// The cache key is the target's FORM plus its value: a bare string may be a key, so it is a different
+// ask from a handle carrying the same id.
 function targetCacheKey(target: Target): string {
   if (typeof target === "string") return "s:" + target;
-  if (isRawIdRef(target)) return "r:" + target.__flcmId;
   if (hasId(target)) return "h:" + target.id;
   return "?:" + JSON.stringify(target);
 }

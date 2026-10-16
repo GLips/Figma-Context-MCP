@@ -13,7 +13,6 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { image } from "./value-sugar.js";
-import { id } from "./target.js";
 import { render, append,
   prepend,
   insertBefore,
@@ -212,13 +211,13 @@ test("legality is re-asked against the DESTINATION: a written fill can't land on
   });
   const before = [...figma.undoLog];
   await assert.rejects(
-    append(id(figma.currentPage.id), { type: "RECTANGLE", width: "fill", height: 20 }),
+    append(figma.currentPage.id, { type: "RECTANGLE", width: "fill", height: 20 }),
     /"fill" and "N%" resolve against a parent frame/,
   );
   assert.deepEqual(figma.undoLog, before); // the reject fired before any seal
   // A fill the node only carries from its row isn't a write: it keeps its px on the page.
   const grower = await figma.getNodeByIdAsync((await resolveTarget("grower")).id);
-  await append(id(figma.currentPage.id), { id: grower.id });
+  await append(figma.currentPage.id, { id: grower.id });
   assert.equal(grower.parent.type, "PAGE");
   assert.deepEqual([grower.width, grower.height], [300, 20]);
 });
@@ -288,7 +287,7 @@ test("a source deleted while the destination resolved refuses at the seal — Fi
   };
   try {
     await assert.rejects(
-      clone(id(src.id), id(dest.id)),
+      clone(src.id, dest.id),
       /flcm\.clone: "RECTANGLE" \(id .*\) was deleted while this call was resolving targets and loading resources/,
     );
   } finally {
@@ -441,11 +440,11 @@ test("an instance's CHILD LIST is closed, but the instance itself is an ordinary
   instance.name = "Card instance";
   const dest = await render({ type: "FRAME", key: "dest", width: 100, height: 100 });
   await assert.rejects(
-    append(id(instance.id), { type: "RECTANGLE" }),
+    append(instance.id, { type: "RECTANGLE" }),
     /inside component instance "Card instance"/,
   );
   await assert.rejects(
-    append(id(instance.children[0].id), { type: "RECTANGLE" }),
+    append(instance.children[0].id, { type: "RECTANGLE" }),
     /inside component instance "Card instance"/,
   );
   await assert.rejects(
@@ -454,10 +453,10 @@ test("an instance's CHILD LIST is closed, but the instance itself is an ordinary
   );
   // …and the other half of the rule: Figma freezes an instance's CHILDREN, not the instance, which
   // is a normal child of its own parent. Moving and deleting one are everyday operations.
-  await append("dest", { id: (await resolveTarget(id(instance.id))).id });
+  await append("dest", { id: (await resolveTarget(instance.id)).id });
   assert.equal(instance.parent.id, specNode(dest, "dest").id);
   const second = component.createInstance();
-  const gone = await remove(id(second.id));
+  const gone = await remove(second.id);
   assert.equal(gone.removedId, second.id);
 });
 

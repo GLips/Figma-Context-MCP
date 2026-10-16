@@ -13,7 +13,6 @@ import { compileTree } from "./compile-tree.js";
 import { component } from "./component.js";
 import { render, append } from "./structure.js";
 import { get } from "./read.js";
-import { id } from "./target.js";
 
 test("a word changed on an instance's inherited child compiles to an override at its path", () => {
   const readShape = {
@@ -71,10 +70,10 @@ test("a read-modify-write of an instance's tree lands the nested text edit on th
   const holder = await render({ type: "FRAME", left: 400, top: 400 });
   const live = await figma.getNodeByIdAsync(stamped.id!);
 
-  const { node } = await get(id(stamped.id!));
+  const { node } = await get(stamped.id!);
   const echo = JSON.parse(JSON.stringify(node));
   echo.children[0].children[0].text = "After";
-  await append(id(holder.id!), echo);
+  await append(holder.id!, echo);
 
   assert.equal(live.children[0].children[0].characters, "After");
 });

@@ -3,16 +3,15 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { specNode } from "../../harness/spec-node.js";
-// Target resolution: one node from a key, its bare id, flcm.id(...), or a handle — and FAIL LOUD (naming the
+// Target resolution: one node from a key, its bare id, ..., or a handle — and FAIL LOUD (naming the
 // key/count) on not-found or ambiguous, so a blind agent never silently acts on the wrong node.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { render } from "./structure.js";
 import { resolveTarget } from "./target.js";
 
-test("resolves the SAME node from its key, bare id, flcm.id(), and a handle", async () => {
+test("resolves the SAME node from its key, bare id, and a handle", async () => {
   createFigmaMock();
   const out = await render({
     type: "FRAME",
@@ -23,7 +22,6 @@ test("resolves the SAME node from its key, bare id, flcm.id(), and a handle", as
 
   assert.equal((await resolveTarget("card")).id, cardId); // by flcm/key
   assert.equal((await resolveTarget(cardId)).id, cardId); // by bare id
-  assert.equal((await resolveTarget(id(cardId))).id, cardId); // by explicit flcm.id(...)
   assert.equal((await resolveTarget(specNode(out, "card"))).id, cardId); // by handle
 });
 
@@ -33,9 +31,9 @@ test("a not-found target throws, naming the target", async () => {
   await assert.rejects(() => resolveTarget("ghost"), /no node found.*ghost/s);
 });
 
-test("flcm.id() to a deleted/absent node fails loud", async () => {
+test("an id-shaped target to a deleted/absent node fails loud", async () => {
   createFigmaMock();
-  await assert.rejects(() => resolveTarget(id("99:99")), /no live node with id.*99:99/s);
+  await assert.rejects(() => resolveTarget("99:99"), /no live node with id.*99:99/s);
 });
 
 test("a duplicated key throws, naming the key and the count", async () => {
@@ -45,7 +43,7 @@ test("a duplicated key throws, naming the key and the count", async () => {
   await assert.rejects(() => resolveTarget("dup"), /ambiguous.*2 nodes.*dup/s);
 });
 
-test("a string matching BOTH a live id and an flcm/key fails loud — flcm.id() forces the id lane", async () => {
+test("a key spelled like a node id is refused, so a bare id string always resolves by id", async () => {
   createFigmaMock();
   const out = await render({
     type: "FRAME",
@@ -53,10 +51,8 @@ test("a string matching BOTH a live id and an flcm/key fails loud — flcm.id() 
     children: [{ type: "RECTANGLE", key: "card", width: 10, height: 10 }],
   });
   const cardId = specNode(out, "card").id;
-  await render({ type: "FRAME", key: cardId }); // a second node whose flcm/key collides with card's id
-
-  await assert.rejects(() => resolveTarget(cardId), /ambiguous.*BOTH a live node id/s);
-  assert.equal((await resolveTarget(id(cardId))).id, cardId);
+  await assert.rejects(() => render({ type: "FRAME", key: cardId }), /spelled like a node id/);
+  assert.equal((await resolveTarget(cardId)).id, cardId);
 });
 
 test("`within` scopes the key scan to a subtree, disambiguating a page-wide clash", async () => {

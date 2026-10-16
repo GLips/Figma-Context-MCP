@@ -6,7 +6,6 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { edit } from "./edit.js";
 import { render, append } from "./structure.js";
 import { component } from "./component.js";
@@ -30,21 +29,21 @@ test("wrap and unequal CSS gaps create, edit, inherit and round-trip", async () 
   assert.equal(native.layoutWrap, "WRAP");
   assert.equal(native.itemSpacing, 24);
   assert.equal(native.counterAxisSpacing, 12);
-  const read = await get(id(native.id));
+  const read = await get(native.id);
   assert.equal(read.node.layout.gap, "12px 24px");
   assert.equal(read.node.layout.wrap, true);
-  await edit(id(native.id), { layout: { gap: 6 } });
+  await edit(native.id, { layout: { gap: 6 } });
   assert.equal(native.itemSpacing, 6);
   assert.equal(native.counterAxisSpacing, 6);
-  await assert.rejects(edit(id(native.id), { layout: { mode: "column" } }), /disable wrap/);
+  await assert.rejects(edit(native.id, { layout: { mode: "column" } }), /disable wrap/);
   assert.equal(native.layoutMode, "HORIZONTAL");
-  await edit(id(native.id), { layout: { mode: "column", wrap: false, gap: 9 } });
+  await edit(native.id, { layout: { mode: "column", wrap: false, gap: 9 } });
   assert.equal(native.layoutMode, "VERTICAL");
   assert.equal(native.layoutWrap, "NO_WRAP");
   assert.equal(native.itemSpacing, 9);
-  await edit(id(native.id), { layout: { wrap: false } });
-  assert.equal((await get(id(native.id))).node.layout?.mode, "column");
-  await assert.rejects(edit(id(native.id), { layout: { gap: "4px 8px" } }), /unequal.*require/);
+  await edit(native.id, { layout: { wrap: false } });
+  assert.equal((await get(native.id)).node.layout?.mode, "column");
+  await assert.rejects(edit(native.id, { layout: { gap: "4px 8px" } }), /unequal.*require/);
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "column", wrap: true } }),
     /requires.*row/,
@@ -97,9 +96,9 @@ test("new text fills independently bounded columns; explicit sizing and edits ar
   }
   assert.notEqual((await figma.getNodeByIdAsync(specNode(tree, "hug").id)).layoutAlign, "STRETCH");
   assert.equal((await figma.getNodeByIdAsync(specNode(tree, "fixed").id)).width, 90);
-  const inserted = await append(id(tree.id), { type: "TEXT", text: "Inserted" });
+  const inserted = await append(tree.id, { type: "TEXT", text: "Inserted" });
   assert.equal((await figma.getNodeByIdAsync(inserted.id)).layoutAlign, "STRETCH");
-  await edit(id(specNode(tree, "hug").id), { text: "Edit leaves explicit hug alone" });
+  await edit(specNode(tree, "hug").id, { text: "Edit leaves explicit hug alone" });
   assert.notEqual((await figma.getNodeByIdAsync(specNode(tree, "hug").id)).layoutAlign, "STRETCH");
   const hugColumn = await render({
     type: "FRAME",
@@ -146,11 +145,11 @@ test("nested exposure is applied after promotion and placement, and rejected out
   });
   const nested = await figma.getNodeByIdAsync(specNode(outer, "nested").id);
   assert.equal(nested.isExposedInstance, true);
-  assert.equal((await get(id(nested.id))).node.exposed, true);
-  await edit(id(nested.id), { exposed: false });
+  assert.equal((await get(nested.id)).node.exposed, true);
+  await edit(nested.id, { exposed: false });
   assert.equal(nested.isExposedInstance, false);
-  assert.equal((await get(id(nested.id))).node.exposed, undefined);
-  const appended = await append(id(outer.id), {
+  assert.equal((await get(nested.id)).node.exposed, undefined);
+  const appended = await append(outer.id, {
     type: "INSTANCE",
     componentId: inner.id,
     exposed: true,
@@ -158,5 +157,5 @@ test("nested exposure is applied after promotion and placement, and rejected out
   assert.equal((await figma.getNodeByIdAsync(appended.id)).isExposedInstance, true);
   const visible = await render({ type: "INSTANCE", componentId: outer.id });
   const inherited = (await figma.getNodeByIdAsync(visible.id)).children[0];
-  await assert.rejects(edit(id(inherited.id), { exposed: false }), /primary nested instance/);
+  await assert.rejects(edit(inherited.id, { exposed: false }), /primary nested instance/);
 });

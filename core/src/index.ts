@@ -99,6 +99,7 @@ export {
   definitionId,
   guidOf,
   isSublayerId,
+  isNodeIdShaped,
   liveSublayerId,
   outermostInstanceId,
   sublayerPrefix,

@@ -15,7 +15,6 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id } from "./target.js";
 import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
@@ -124,7 +123,7 @@ const fullName = (comp: { componentPropertyDefinitions: Record<string, unknown> 
 
 test("a component's root takes a frame's words, and its instances follow", async () => {
   const { comp, inst } = await chipComponent();
-  await edit(id(comp.id), { fill: "#ff0000", layout: { gap: 12 }, name: "Chip A" });
+  await edit(comp.id, { fill: "#ff0000", layout: { gap: 12 }, name: "Chip A" });
   assert.deepEqual(comp.fills[0].color, { r: 1, g: 0, b: 0 });
   assert.equal(comp.itemSpacing, 12);
   assert.equal(comp.name, "Chip A");
@@ -135,7 +134,7 @@ test("a component's root takes a frame's words, and its instances follow", async
 
 test("`description` is a component word, and no other node type takes it", async () => {
   const { comp } = await chipComponent();
-  await edit(id(comp.id), { description: "A compact labelled chip." });
+  await edit(comp.id, { description: "A compact labelled chip." });
   assert.equal(comp.description, "A compact labelled chip.");
   const plain = await render({ type: "FRAME", key: "plain", width: 10, height: 10 });
   await assert.rejects(edit("plain", { description: "nope" }), /`description` is not a FRAME word/);
@@ -175,25 +174,25 @@ test("an added property's default is its binder's content after the batch's own 
 // changes nothing rather than refusing — so a component read round-trips through edit.
 test("a read's propertyDefinitions written back unchanged are a no-op", async () => {
   const { comp } = await chipComponent();
-  const { components } = await get(id(comp.id));
+  const { components } = await get(comp.id);
   const definitions = JSON.stringify(comp.componentPropertyDefinitions);
-  await edit(id(comp.id), { propertyDefinitions: components![comp.id].propertyDefinitions as any });
+  await edit(comp.id, { propertyDefinitions: components![comp.id].propertyDefinitions as any });
   assert.equal(JSON.stringify(comp.componentPropertyDefinitions), definitions);
 });
 
 test("propertyDefinitions RENAMES a property — the bound sublayer follows, and the new name resolves", async () => {
   const { comp, label, inst } = await chipComponent();
   const before = fullName(comp, "Label");
-  await edit(id(comp.id), { propertyDefinitions: { Label: { name: "Caption" } } });
+  await edit(comp.id, { propertyDefinitions: { Label: { name: "Caption" } } });
   const after = fullName(comp, "Caption");
   assert.equal(comp.componentPropertyDefinitions[before], undefined);
   // Figma re-points every reference to it; the definition's own sublayer is the one flcm can see.
   assert.equal(label.componentPropertyReferences.characters, after);
   // And the new name is what an instance now addresses the property by.
-  await edit(id(inst.id), { componentProperties: { Caption: "Hi" } });
+  await edit(inst.id, { componentProperties: { Caption: "Hi" } });
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Label").characters, "Hi");
   await assert.rejects(
-    edit(id(inst.id), { componentProperties: { Label: "x" } }),
+    edit(inst.id, { componentProperties: { Label: "x" } }),
     /this component has no property "Label"/,
   );
 });
@@ -211,13 +210,13 @@ test("a rename re-points the definition's bound layers even when Figma leaves th
     label.componentPropertyReferences = { ...label.componentPropertyReferences, characters: stale };
     return full;
   };
-  await edit(id(comp.id), { propertyDefinitions: { Label: { name: "Caption" } } });
+  await edit(comp.id, { propertyDefinitions: { Label: { name: "Caption" } } });
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Caption"));
 });
 
 test("a bag may rename onto a name it deletes, whatever order its keys are written in", async () => {
   const { comp, label } = await chipComponent();
-  await edit(id(comp.id), { propertyDefinitions: { Label: { name: "Icon" }, Icon: null } });
+  await edit(comp.id, { propertyDefinitions: { Label: { name: "Icon" }, Icon: null } });
   const names = Object.keys(comp.componentPropertyDefinitions).map(bare);
   assert.deepEqual(names.sort(), ["Icon", "Trailing"]);
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Icon")].type, "TEXT");
@@ -239,7 +238,7 @@ test("a bag that lands two properties on one name refuses whatever its key order
   assert.deepEqual(figma.undoLog.slice(before), []);
   const iconFull = fullName(comp, "Icon");
   const labelFull = fullName(comp, "Label");
-  await edit(id(comp.id), { propertyDefinitions: { Icon: { name: "Label" }, Label: { name: "Icon" } } });
+  await edit(comp.id, { propertyDefinitions: { Icon: { name: "Label" }, Label: { name: "Icon" } } });
   assert.equal(comp.componentPropertyDefinitions[icon.componentPropertyReferences.visible].type, "BOOLEAN");
   assert.equal(bare(icon.componentPropertyReferences.visible), "Label");
   assert.equal(bare(label.componentPropertyReferences.characters), "Icon");
@@ -254,7 +253,7 @@ test("a bag that deletes a property and declares its name again re-declares it r
   const old = fullName(comp, "Label");
   const before = figma.undoLog.length;
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { [old]: null, Label: { type: "text" } } }),
+    edit(comp.id, { propertyDefinitions: { [old]: null, Label: { type: "text" } } }),
     /\["Label"\]: nothing in this call binds "Label"/,
   );
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -264,23 +263,23 @@ test("a bag that deletes a property and declares its name again re-declares it r
 test("propertyDefinitions DELETES a property — the sublayer is freed and instances fall back", async () => {
   const { comp, icon, inst } = await chipComponent();
   const iconProp = fullName(comp, "Icon");
-  await edit(id(inst.id), { componentProperties: { Icon: false } });
+  await edit(inst.id, { componentProperties: { Icon: false } });
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Icon").visible, false);
 
-  await edit(id(comp.id), { propertyDefinitions: { Icon: null } });
+  await edit(comp.id, { propertyDefinitions: { Icon: null } });
   assert.equal(comp.componentPropertyDefinitions[iconProp], undefined);
   assert.equal(icon.componentPropertyReferences.visible, undefined); // the definition's binding is gone
   // The instance's sublayer stops being driven and falls back to the definition's own value.
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Icon").visible, true);
   await assert.rejects(
-    edit(id(inst.id), { componentProperties: { Icon: true } }),
+    edit(inst.id, { componentProperties: { Icon: true } }),
     /this component has no property "Icon"/,
   );
 });
 
 test("propertyDefinitions DELETES a SLOT too — the frame becomes an ordinary frame", async () => {
   const { comp, trailing } = await chipComponent();
-  await edit(id(comp.id), { propertyDefinitions: { Trailing: null } });
+  await edit(comp.id, { propertyDefinitions: { Trailing: null } });
   assert.ok(!Object.keys(comp.componentPropertyDefinitions).some((k) => bare(k) === "Trailing"));
   assert.equal(trailing.componentPropertyReferences.slotContentId, undefined);
   assert.equal(trailing.type, "FRAME"); // it was always a frame in the definition; now it is only that
@@ -311,10 +310,10 @@ test("a definition edit and the node's own words are one delta, one undo step", 
   const { comp } = await chipComponent();
   // The control: what ONE verb costs the undo log (entry seal + success commit).
   const control = figma.undoLog.length;
-  await edit(id(comp.id), { name: "Chip A" });
+  await edit(comp.id, { name: "Chip A" });
   const perVerb = figma.undoLog.length - control;
   const before = figma.undoLog.length;
-  await edit(id(comp.id), {
+  await edit(comp.id, {
     name: "Chip B",
     propertyDefinitions: { Label: { name: "Caption" } },
   });
@@ -331,27 +330,27 @@ test("componentPropertyReferences BINDS a live sublayer, and the property then d
     { id: comp.id, propertyDefinitions: { Heading: { type: "text" } } },
     { id: title.id, componentPropertyReferences: { text: "Heading" } },
   ]);
-  await edit(id(title.id), { componentPropertyReferences: { text: null } });
-  await edit(id(title.id), { componentPropertyReferences: { text: "Heading" } });
+  await edit(title.id, { componentPropertyReferences: { text: null } });
+  await edit(title.id, { componentPropertyReferences: { text: "Heading" } });
   const heading = fullName(comp, "Heading");
   assert.equal(title.componentPropertyReferences.characters, heading);
   // A fresh instance is what proves the wire: the property now drives the bound sublayer.
   const stamped = await render({ type: "INSTANCE", componentId: comp.id, left: 800, top: 800 });
   const fresh = await figma.getNodeByIdAsync(stamped.id);
-  await edit(id(fresh.id), { componentProperties: { Heading: "Ship it" } });
+  await edit(fresh.id, { componentProperties: { Heading: "Ship it" } });
   assert.equal(fresh.findOne((n: { name: string }) => n.name === "Title").characters, "Ship it");
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Title").characters, "Title"); // untouched
 });
 
 test("componentPropertyReferences UNBINDS a field with null, leaving its value alone", async () => {
   const { comp, label } = await chipComponent();
-  await edit(id(label.id), { componentPropertyReferences: { text: null } });
+  await edit(label.id, { componentPropertyReferences: { text: null } });
   assert.equal(label.componentPropertyReferences.characters, undefined);
   assert.equal(label.characters, "Label"); // the field keeps the value it had
   // The property still exists — it just drives nothing now.
   assert.ok(fullName(comp, "Label"));
   await assert.rejects(
-    edit(id(label.id), { componentPropertyReferences: { text: null } }),
+    edit(label.id, { componentPropertyReferences: { text: null } }),
     /nothing to unbind/,
   );
 });
@@ -362,7 +361,7 @@ test("a binding edit merges onto the node's live bag rather than replacing it", 
     { id: comp.id, propertyDefinitions: { "Show Label": { type: "boolean" } } },
     { id: icon.id, componentPropertyReferences: { visible: "Show Label" } },
   ]);
-  await edit(id(label.id), { componentPropertyReferences: { visible: "Show Label" } });
+  await edit(label.id, { componentPropertyReferences: { visible: "Show Label" } });
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Label"));
   assert.equal(label.componentPropertyReferences.visible, fullName(comp, "Show Label"));
 });
@@ -410,7 +409,7 @@ test("binding a layer to an existing property nothing else binds keeps its conte
     { id: title.id, componentPropertyReferences: { text: "Label" } },
     { id: dot.id, componentPropertyReferences: { visible: "Shown" } },
   ]);
-  await edit(id(mark.id), { componentPropertyReferences: { componentId: "Badge" } });
+  await edit(mark.id, { componentPropertyReferences: { componentId: "Badge" } });
   const defaults = comp.componentPropertyDefinitions;
   assert.equal(title.characters, "Overview");
   assert.equal(dot.visible, false);
@@ -420,7 +419,7 @@ test("binding a layer to an existing property nothing else binds keeps its conte
   assert.equal(defaults[fullName(comp, "Badge")].defaultValue, badgeB.id);
   // A bound insert is the same binding, reached by building the layer.
   const { comp: other } = await unboundTag();
-  await append(id(other.id), { type: "TEXT", text: "Fresh", name: "Fresh", componentPropertyReferences: { text: "Label" } });
+  await append(other.id, { type: "TEXT", text: "Fresh", name: "Fresh", componentPropertyReferences: { text: "Label" } });
   assert.equal(other.findOne((n: { name: string }) => n.name === "Fresh").characters, "Fresh");
   assert.equal(other.componentPropertyDefinitions[fullName(other, "Label")].defaultValue, "Fresh");
 });
@@ -438,14 +437,14 @@ test("binders of an existing property that show different content are refused, e
   );
   assert.deepEqual(figma.undoLog.slice(before), []);
   // …and against a layer already bound to it, whichever path the new binder takes.
-  await edit(id(title.id), { componentPropertyReferences: { text: "Label" } });
+  await edit(title.id, { componentPropertyReferences: { text: "Label" } });
   const bound = figma.undoLog.length;
   await assert.rejects(
-    edit(id(label.id), { componentPropertyReferences: { text: "Label" } }),
+    edit(label.id, { componentPropertyReferences: { text: "Label" } }),
     /2 layers bind "Label" and show different text — "Title" \(already bound\) is "Overview", "Label" .* is "Label"/,
   );
   await assert.rejects(
-    append(id(comp.id), { type: "TEXT", text: "Other", name: "Other", componentPropertyReferences: { text: "Label" } }),
+    append(comp.id, { type: "TEXT", text: "Other", name: "Other", componentPropertyReferences: { text: "Label" } }),
     /2 layers bind "Label" and show different text — "Title" \(already bound\) is "Overview", "Other" .* is "Other"/,
   );
   assert.deepEqual(figma.undoLog.slice(bound), []);
@@ -462,7 +461,7 @@ test("binders of an existing property that show different content are refused, e
     { id: title.id, componentPropertyReferences: { text: "Label" } },
   ]);
   // The same content just binds.
-  await edit(id(label.id), { text: "Overview", componentPropertyReferences: { text: "Label" } });
+  await edit(label.id, { text: "Overview", componentPropertyReferences: { text: "Label" } });
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Label"));
   assert.equal(title.characters, "Overview");
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Overview");
@@ -475,10 +474,10 @@ test("a new layer with its bound field unwritten inherits the existing property'
   const label = fullName(comp, "Label");
   const shown = fullName(comp, "Shown");
   // Shown's default becomes false, which a new layer's unwritten `visible` (true) would contradict.
-  await edit(id(dot.id), { componentPropertyReferences: { visible: "Shown" } });
+  await edit(dot.id, { componentPropertyReferences: { visible: "Shown" } });
   const before = comp.componentPropertyDefinitions;
-  await append(id(comp.id), { type: "TEXT", name: "Blank", componentPropertyReferences: { text: "Label" } });
-  await append(id(comp.id), { type: "FRAME", name: "Dot2", width: 4, height: 4, componentPropertyReferences: { visible: "Shown" } });
+  await append(comp.id, { type: "TEXT", name: "Blank", componentPropertyReferences: { text: "Label" } });
+  await append(comp.id, { type: "FRAME", name: "Dot2", width: 4, height: 4, componentPropertyReferences: { visible: "Shown" } });
   const blank = comp.findOne((n: { name: string }) => n.name === "Blank");
   assert.equal(comp.componentPropertyDefinitions[label].defaultValue, before[label].defaultValue);
   assert.equal(blank.characters, before[label].defaultValue);
@@ -486,12 +485,12 @@ test("a new layer with its bound field unwritten inherits the existing property'
   assert.equal(comp.findOne((n: { name: string }) => n.name === "Dot2").visible, before[shown].defaultValue);
   // Bound alongside a layer with content, it takes that content instead of conflicting with it…
   const { comp: other, title: title2 } = await unboundTag();
-  await edit(id(title2.id), { componentPropertyReferences: { text: "Label" } });
-  await append(id(other.id), { type: "TEXT", name: "Blank2", componentPropertyReferences: { text: "Label" } });
+  await edit(title2.id, { componentPropertyReferences: { text: "Label" } });
+  await append(other.id, { type: "TEXT", name: "Blank2", componentPropertyReferences: { text: "Label" } });
   assert.equal(other.findOne((n: { name: string }) => n.name === "Blank2").characters, "Overview");
   // …and one whose `text` IS written still drives the value, so a conflict is still refused.
   await assert.rejects(
-    append(id(other.id), { type: "TEXT", name: "Written", text: "", componentPropertyReferences: { text: "Label" } }),
+    append(other.id, { type: "TEXT", name: "Written", text: "", componentPropertyReferences: { text: "Label" } }),
     /show different text — "Title" \(already bound\) is "Overview", "Blank2" \(already bound\) is "Overview", "Written" .* is ""/,
   );
 });
@@ -500,9 +499,9 @@ test("a new layer with its bound field unwritten inherits the existing property'
 // bound to it — so a layer leaving a property is freed before any of the call's writes land.
 test("a layer leaving a property is freed before the call's writes, so they don't reach its old binders", async () => {
   const { comp, label, title, mark, badgeB } = await unboundTag();
-  await edit(id(title.id), { componentPropertyReferences: { text: "Label" } });
-  await edit(id(label.id), { text: "Overview", componentPropertyReferences: { text: "Label" } });
-  await edit(id(label.id), { text: "Z", componentPropertyReferences: { text: null } });
+  await edit(title.id, { componentPropertyReferences: { text: "Label" } });
+  await edit(label.id, { text: "Overview", componentPropertyReferences: { text: "Label" } });
+  await edit(label.id, { text: "Z", componentPropertyReferences: { text: null } });
   assert.equal(label.characters, "Z");
   assert.equal(title.characters, "Overview");
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Overview");
@@ -510,7 +509,7 @@ test("a layer leaving a property is freed before the call's writes, so they don'
   // A rebind too: the swap binder moving to a new property must not be swapped to Badge's new
   // default and back on the way (which would drop its overrides).
   const badge = comp.findOne((n: { name: string }) => n.name === "Badge");
-  await edit(id(badge.id), { componentPropertyReferences: { componentId: "Badge" } });
+  await edit(badge.id, { componentPropertyReferences: { componentId: "Badge" } });
   const swaps: unknown[] = [];
   const swap = badge.swapComponent.bind(badge);
   badge.swapComponent = (main: unknown) => (swaps.push(main), swap(main));
@@ -525,7 +524,7 @@ test("a layer leaving a property is freed before the call's writes, so they don'
 
 test("an insert into a component may carry bindings — an existing property, and a NEW slot it declares", async () => {
   const { comp } = await chipComponent();
-  await append(id(comp.id), {
+  await append(comp.id, {
     type: "FRAME",
     layout: { mode: "row", gap: 2 },
     children: [
@@ -564,12 +563,12 @@ test("an instance's SLOT takes the frame surface under edit", async () => {
   const { inst } = await chipComponent();
   const slot = inst.findOne((n: { type: string }) => n.type === "SLOT");
   assert.ok(slot);
-  await edit(id(slot.id), { layout: { mode: "column", gap: 6 }, fill: "#00ff00" });
+  await edit(slot.id, { layout: { mode: "column", gap: 6 }, fill: "#00ff00" });
   assert.equal(slot.layoutMode, "VERTICAL");
   assert.equal(slot.itemSpacing, 6);
   assert.deepEqual(slot.fills[0].color, { r: 0, g: 1, b: 0 });
   // Still a slot, not a text: the words are a frame's, not everything.
-  await assert.rejects(edit(id(slot.id), { text: "nope" }), /`text` is not a SLOT word/);
+  await assert.rejects(edit(slot.id, { text: "nope" }), /`text` is not a SLOT word/);
 });
 
 test("editMany refuses a batch that both renames a property and binds to it, naming both entries", async () => {
@@ -578,7 +577,7 @@ test("editMany refuses a batch that both renames a property and binds to it, nam
     { id: comp.id, propertyDefinitions: { Heading: { type: "text" } } },
     { id: title.id, componentPropertyReferences: { text: "Heading" } },
   ]);
-  await edit(id(title.id), { componentPropertyReferences: { text: null } });
+  await edit(title.id, { componentPropertyReferences: { text: null } });
   const before = figma.undoLog.length;
   await assert.rejects(
     editMany([
@@ -611,7 +610,7 @@ test("a batch may delete one property and add-and-bind another", async () => {
 
 test("an added property's binders must agree, and each is named when they don't", async () => {
   const { comp, label, icon } = await chipComponent();
-  await edit(id(icon.id), { visible: false });
+  await edit(icon.id, { visible: false });
   const before = figma.undoLog.length;
   await assert.rejects(
     editMany([
@@ -658,17 +657,17 @@ test("every definition refusal names the cause and writes nothing", async () => 
 
   // A type can't change — Figma has no such call.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: { type: "boolean" } } }),
+    edit(comp.id, { propertyDefinitions: { Label: { type: "boolean" } } }),
     /is "text" and Figma can't change a property's type\. Delete it in one call .* in ONE flcm\.editMany/s,
   );
   // A slot IS a frame, so it is made by inserting one, never declared on its own.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Extra: { type: "slot" } } }),
+    edit(comp.id, { propertyDefinitions: { Extra: { type: "slot" } } }),
     /a slot IS the frame that holds its placeholder content/,
   );
   // One delta can't bind a sublayer, so a property it adds has no layer to read its default off.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Heading: { type: "text" } } }),
+    edit(comp.id, { propertyDefinitions: { Heading: { type: "text" } } }),
     /nothing in this call binds "Heading"\. A property's default IS its bound layer's content, so add it and bind the layer that shows its value in ONE flcm\.editMany/,
   );
   // An editMany add nothing in the batch binds is the same refusal.
@@ -678,36 +677,36 @@ test("every definition refusal names the cause and writes nothing", async () => 
   );
   // A default is not a word: it is the bound layer's content.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: { defaultValue: "Save" } as any } }),
+    edit(comp.id, { propertyDefinitions: { Label: { defaultValue: "Save" } as any } }),
     /unknown prop "defaultValue".*A property's default is its bound layer's content/,
   );
   // `variantOptions` restates a set's axis, and nothing else.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: { type: "text", variantOptions: ["x"] } } }),
+    edit(comp.id, { propertyDefinitions: { Label: { type: "text", variantOptions: ["x"] } } }),
     /`variantOptions` belongs to a set's variant axis/,
   );
   // An entry that names nothing at all.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: {} } }),
+    edit(comp.id, { propertyDefinitions: { Label: {} } }),
     /names nothing/,
   );
   // A rename onto a name the component already uses.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: { name: "Icon" } } }),
+    edit(comp.id, { propertyDefinitions: { Label: { name: "Icon" } } }),
     /already has a property named "Icon"/,
   );
   // A name that isn't there and isn't being declared.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Nope: null } }),
+    edit(comp.id, { propertyDefinitions: { Nope: null } }),
     /this component has no property "Nope"/,
   );
   // The definition words reach a COMPONENT, not one of its layers or an instance.
   await assert.rejects(
-    edit(id(icon.id), { propertyDefinitions: { Icon: null } }),
+    edit(icon.id, { propertyDefinitions: { Icon: null } }),
     /`propertyDefinitions` is not a RECTANGLE word/,
   );
   await assert.rejects(
-    edit(id(inst.id), { propertyDefinitions: { Icon: null } }),
+    edit(inst.id, { propertyDefinitions: { Icon: null } }),
     /`propertyDefinitions` is not an? INSTANCE word/,
   );
 
@@ -737,7 +736,7 @@ test("a variant's properties live on the SET, and the refusal points there", asy
   const variant = setNode.children[0];
   const before = figma.undoLog.length;
   await assert.rejects(
-    edit(id(variant.id), { propertyDefinitions: { Label: { type: "text" } } }),
+    edit(variant.id, { propertyDefinitions: { Label: { type: "text" } } }),
     /is a VARIANT, and a set's properties live on the SET/,
   );
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -749,9 +748,9 @@ test("a variant's properties live on the SET, and the refusal points there", asy
   ]);
   assert.equal(setNode.componentPropertyDefinitions[fullName(setNode, "Label")].defaultValue, "Go");
   // The axis it already has is not a definition anyone can change — but restating it is a no-op.
-  await edit(id(set.id), { propertyDefinitions: { Size: { type: "variant", variantOptions: setNode.componentPropertyDefinitions[fullName(setNode, "Size")].variantOptions } } });
+  await edit(set.id, { propertyDefinitions: { Size: { type: "variant", variantOptions: setNode.componentPropertyDefinitions[fullName(setNode, "Size")].variantOptions } } });
   await assert.rejects(
-    edit(id(set.id), { propertyDefinitions: { Size: null } }),
+    edit(set.id, { propertyDefinitions: { Size: null } }),
     /is a VARIANT axis, and a set's axes ARE its member components' names/,
   );
 });
@@ -785,8 +784,8 @@ test("a set's slot needs its own frame in every variant, and each variant's is i
   });
   // Into the first variant the insert MINTS the set's slot property; into the second it binds that
   // same property, which is what makes the set's slot whole.
-  await append(id(a.id), slotFrame());
-  await append(id(b.id), slotFrame());
+  await append(a.id, slotFrame());
+  await append(b.id, slotFrame());
   const trailing = fullName(setNode, "Trailing");
   const frameA = a.findOne((n: { name: string }) => n.name === "Trailing");
   const frameB = b.findOne((n: { name: string }) => n.name === "Trailing");
@@ -795,12 +794,12 @@ test("a set's slot needs its own frame in every variant, and each variant's is i
   // The other variant's frame is no help to this one: unbinding leaves THIS variant with a slot
   // property and nowhere to put an instance's content.
   await assert.rejects(
-    edit(id(frameA.id), { componentPropertyReferences: { slot: null } }),
+    edit(frameA.id, { componentPropertyReferences: { slot: null } }),
     /this is the only frame in .* bound to slot property "Trailing"/,
   );
   // And within one variant it is still one hole.
   await assert.rejects(
-    append(id(a.id), slotFrame()),
+    append(a.id, slotFrame()),
     /slot property "Trailing" already has its frame/,
   );
 });
@@ -818,27 +817,27 @@ test("every binding refusal names the cause and writes nothing", async () => {
   // Inside an INSTANCE the binding belongs to the definition. (Its echoed `text: "Label"` is no change.)
   const liveLabel = inst.findOne((n: { name: string }) => n.name === "Label");
   await assert.rejects(
-    edit(id(liveLabel.id), { componentPropertyReferences: { visible: "Icon" } }),
+    edit(liveLabel.id, { componentPropertyReferences: { visible: "Icon" } }),
     /is inside component instance .* A binding belongs to the DEFINITION/s,
   );
   // Per-type field legality, exactly as at construction — read off the LIVE node's type.
   await assert.rejects(
-    edit(id(label.id), { componentPropertyReferences: { slot: "Trailing" } }),
+    edit(label.id, { componentPropertyReferences: { slot: "Trailing" } }),
     /`slot` is not one of a TEXT's binding fields \(visible, text\)/,
   );
   // A field drives one property TYPE.
   await assert.rejects(
-    edit(id(icon.id), { componentPropertyReferences: { visible: "Label" } }),
+    edit(icon.id, { componentPropertyReferences: { visible: "Label" } }),
     /`visible` is driven by a boolean property, and "Label" is "text"/,
   );
   // An unknown name lists the component's own.
   await assert.rejects(
-    edit(id(icon.id), { componentPropertyReferences: { visible: "Nope" } }),
+    edit(icon.id, { componentPropertyReferences: { visible: "Nope" } }),
     /this component has no property "Nope"/,
   );
   // A slot with no frame has nowhere to put an instance's content — delete the property instead.
   await assert.rejects(
-    edit(id(trailing.id), { componentPropertyReferences: { slot: null } }),
+    edit(trailing.id, { componentPropertyReferences: { slot: null } }),
     /this is the only frame in .* bound to slot property "Trailing"/,
   );
 
@@ -863,7 +862,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
   );
   // A non-slot binding names a property that must already exist.
   await assert.rejects(
-    append(id(comp.id), {
+    append(comp.id, {
       type: "TEXT",
       text: "Hi",
       componentPropertyReferences: { text: "Nope" },
@@ -872,7 +871,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
   );
   // A slot is one hole, whether the second claim comes from the document or from this same tree.
   await assert.rejects(
-    append(id(comp.id), {
+    append(comp.id, {
       type: "FRAME",
       width: 10,
       height: 10,
@@ -881,7 +880,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
     /slot property "Trailing" already has its frame/,
   );
   await assert.rejects(
-    append(id(comp.id), {
+    append(comp.id, {
       type: "FRAME",
       layout: { mode: "row" },
       children: [
@@ -917,7 +916,7 @@ test("an insert into a COMPONENT_SET is refused — its children are its variant
   const setNode = await figma.getNodeByIdAsync(set.id);
   const before = figma.undoLog.length;
   await assert.rejects(
-    append(id(set.id), { type: "RECTANGLE", width: 10, height: 10 }),
+    append(set.id, { type: "RECTANGLE", width: 10, height: 10 }),
     /is a COMPONENT_SET, and a set's children are its VARIANTS/,
   );
   assert.deepEqual(figma.undoLog.slice(before), []);

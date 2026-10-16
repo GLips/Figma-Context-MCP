@@ -13,6 +13,7 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import { compileBounds } from "./size-bounds.js";
 import { compileAspectRatio } from "./aspect-ratio.js";
 import { compileAnnotations } from "./annotations.js";
+import { isNodeIdShaped } from "@framelink/core";
 import {
   BuiltNode, WriteProps, WriteLayout, WritePaintStack, Sizing, Edges, ConstraintX, ConstraintY, Justify, Align,
   WriteType, Bindable, CornerRadii, isTokenRef,
@@ -363,7 +364,14 @@ export function assertScalarType(value: unknown, want: "string" | "number" | "bo
 export function base(wn: WriteProps, props: BaseProps & { annotations?: unknown }): void {
   if (props.annotations !== undefined) wn.annotations = compileAnnotations(props.annotations);
   if (props.name != null) { assertScalarType(props.name, "string", "name"); wn.name = props.name; }
-  if (props.key != null) { assertScalarType(props.key, "string", "key"); wn.key = props.key; }
+  if (props.key != null) {
+    assertScalarType(props.key, "string", "key");
+    // A bare target string spelled like an id is always read as one (target.ts resolveString).
+    if (isNodeIdShaped(props.key)) {
+      throw new Error("key: " + JSON.stringify(props.key) + " is spelled like a node id, and a target spelled like an id always means the id. Choose a key that isn't, e.g. \"card\".");
+    }
+    wn.key = props.key;
+  }
   if (props.opacity != null) wn.opacity = compileBindable(props.opacity, "opacity", "FLOAT", (v: unknown) => { assertScalarType(v, "number", "opacity"); return v as number; });
   if (props.mixBlendMode != null) wn.blendMode = parseBlendMode(props.mixBlendMode);
   if (props.visible != null) { assertScalarType(props.visible, "boolean", "visible"); wn.visible = props.visible; }

@@ -9,7 +9,6 @@ import { get } from "./read.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { render, append, measure } from "./structure.js";
-import { id } from "./target.js";
 
 test("grid vocabulary round-trips through render/get/edit/editMany, with parent-dependent alignment", async () => {
   createFigmaMock();
@@ -43,7 +42,7 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
   assert.equal((await get(flowCopy)).node.children![0].height, "fill");
   for (const mode of ["row", "column"] as const) {
     const parent = mode === "row" ? flow : await render({ type: "FRAME", width: 120, height: 70, layout: { mode }, children: [{ type: "RECTANGLE", width: 20, height: 20 }] });
-    const target = id(parent.children![0].id);
+    const target = parent.children![0].id;
     for (const alignSelf of ["flex-start", "center", "flex-end", "auto", "start", "end"]) {
       const layout = { alignSelf } as never;
       const reason = /layout\.alignItems.*parent.*every child.*fill-sized frame.*alignItems/;
@@ -54,7 +53,7 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
   }
   assert.equal((await get(flow)).node.children![0].height, "fill");
   // CSS grid's commonest pair: stretch is a request to fill the cell, on either axis.
-  const cell = id(built.children![1].id);
+  const cell = built.children![1].id;
   await edit(cell, { layout: { alignSelf: "stretch", justifySelf: "stretch" } });
   const stretched = (await get(built)).node.children![1];
   assert.deepEqual([stretched.width, stretched.height], ["fill", "fill"]);
@@ -74,7 +73,7 @@ test("grid spans and template edits use read words and refuse unresolved layout 
   createFigmaMock();
   const layout = { mode: "grid", gridTemplateColumns: "40px 40px 40px", gridTemplateRows: "30px 30px 30px" } as const;
   const built = await render({ type: "FRAME", layout, children: [{ type: "RECTANGLE", width: "fill", height: "fill", layout: { gridColumn: "2 / span 2", gridRow: "2 / span 2" } }] });
-  const child = id(built.children![0].id);
+  const child = built.children![0].id;
   const read = (await get(built)).node.children![0];
   assert.equal(read.layout!.gridColumn, "2 / span 2");
   assert.equal(read.layout!.gridRow, "2 / span 2");
@@ -103,9 +102,9 @@ test("one explicit grid zIndex reserves its slot; edits reorder either way witho
   ] });
   const stacking = async () => (await get(built)).node.children!.map(c => [c.name, c.layout?.zIndex ?? null]);
   assert.deepEqual(await stacking(), [["second", 0], ["third", 1], ["first", 2]]);
-  const positions = () => Promise.all(built.children!.map(child => measure(id(child.id))));
+  const positions = () => Promise.all(built.children!.map(child => measure(child.id)));
   const before = await positions();
-  const first = id(built.children![0].id);
+  const first = built.children![0].id;
   await edit(first, { layout: { zIndex: 0 } });
   assert.deepEqual(await stacking(), [["first", null], ["second", null], ["third", null]]);
   await edit(first, { layout: { zIndex: 2 } });
@@ -149,18 +148,18 @@ test("a grid that fills its row/column parent divides that parent's real width",
   // The commonest placement for a grid: a fill-width child of the page column that frames it.
   const column = await render({ type: "FRAME", width: 1200, layout: { mode: "column", padding: "48px 56px 56px 56px" }, children: [grid] });
   const inColumn = column.children![0];
-  assert.equal((await get(id(inColumn.id))).node.width, "fill");
-  assert.equal((await measure(id(inColumn.id))).width, 1088); // 1200 - 56 - 56
-  assert.equal((await measure(id(inColumn.children![0].id))).width, 254); // (1088 - 3 * 24) / 4
+  assert.equal((await get(inColumn.id)).node.width, "fill");
+  assert.equal((await measure(inColumn.id)).width, 1088); // 1200 - 56 - 56
+  assert.equal((await measure(inColumn.children![0].id)).width, 254); // (1088 - 3 * 24) / 4
   // The main axis of a row is the other half of the same rule (layoutGrow, not STRETCH).
   const row = await render({ type: "FRAME", width: 600, height: 400, layout: { mode: "row" }, children: [grid] });
   const inRow = row.children![0];
-  assert.equal((await get(id(inRow.id))).node.width, "fill");
-  assert.equal((await measure(id(inRow.id))).width, 600);
+  assert.equal((await get(inRow.id)).node.width, "fill");
+  assert.equal((await measure(inRow.id)).width, 600);
   // And an edit re-fills a grid that was sized fixed, without the tracks clobbering the fill.
-  await edit(id(inRow.id), { width: 300 });
-  assert.equal((await measure(id(inRow.id))).width, 300);
-  await edit(id(inRow.id), { width: "fill", layout: { gridTemplateColumns: "repeat(4, 2fr)" } });
-  assert.equal((await get(id(inRow.id))).node.width, "fill");
-  assert.equal((await measure(id(inRow.id))).width, 600);
+  await edit(inRow.id, { width: 300 });
+  assert.equal((await measure(inRow.id)).width, 300);
+  await edit(inRow.id, { width: "fill", layout: { gridTemplateColumns: "repeat(4, 2fr)" } });
+  assert.equal((await get(inRow.id)).node.width, "fill");
+  assert.equal((await measure(inRow.id)).width, 600);
 });

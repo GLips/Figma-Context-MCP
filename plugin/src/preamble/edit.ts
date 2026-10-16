@@ -25,7 +25,7 @@ import type { EditDelta } from "./schema.js";
 const SUBJECT = "flcm.edit";
 
 /**
- * flcm.edit(target, changes) — nudge an existing node. Resolves the target (key | id | flcm.id() |
+ * flcm.edit(target, changes) — nudge an existing node. Resolves the target (key | id |
  * handle), validates the whole delta before the first write, applies it through the bridge's
  * appliers under the mutation lock (one undo step; a Figma refusal rolls back commit-then-undo),
  * and returns the node's updated Handle with fresh geometry.

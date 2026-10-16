@@ -193,7 +193,6 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `flcm.gradient(sugar)` | a paint value | { type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?). |
 | `flcm.image(url, options?)` | a paint value | Raster fill from an https url, a path under the asset root, or an upload handle. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb. |
 | `flcm.effects(sugar)` | effect values[] | CSS and Figma effect values for an effects prop. |
-| `flcm.id(nodeId)` | { __flcmId: nodeId } | Force raw-id resolution in a target argument. |
 | `await flcm.page.current()` | { fileName, page, pages } | Current page and available pages. |
 | `await flcm.page.use(nameOrId)` | { fileName, page, pages } | Switch to an existing page. |
 | `await flcm.page.new(name)` | { fileName, page, pages } | Create a uniquely named page and switch to it. |
@@ -251,7 +250,7 @@ New nodes require type; INSTANCE also requires componentId, and VECTOR exactly o
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `name` | string | Layer name. |
-| `key` | string | Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity. |
+| `key` | string | Persistent metadata for find/findOne. Unique within one authored tree, and never spelled like a node id (12:34); id alone decides live identity. |
 | `opacity` | number (0–1) \| { variable } |  |
 | `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) |  |
 | `visible` | boolean | get and find still return hidden nodes, with their annotations. |
@@ -681,7 +680,7 @@ An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves i
 
 ## edit() / editMany() — changing existing nodes
 
-`await flcm.edit(target, changes)` patches one live node and returns its updated handle: only the fields you pass change. The target is a key or node id string, a handle, or `flcm.id(id)`. A node type takes the words it is created with (see props); a word its type lacks, such as `fill` on a LINE, rejects and lists that type's words.
+`await flcm.edit(target, changes)` patches one live node and returns its updated handle: only the fields you pass change. The target is a node id or key string, or a handle. A node type takes the words it is created with (see props); a word its type lacks, such as `fill` on a LINE, rejects and lists that type's words.
 
 ### Where edit differs from create
 

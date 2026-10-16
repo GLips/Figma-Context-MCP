@@ -175,7 +175,7 @@ test("inherited slot content moves only between its own instance's slots", async
   assert.deepEqual(figma.undoLog, before);
   assert.equal(source.children.length, 1);
 
-  const moved = await flcm.append(flcm.id(destination.id), { id: subject });
+  const moved = await flcm.append(destination.id, { id: subject });
   assert.equal(destination.children[0].id, moved.id);
   assert.equal(source.children.length, 0);
 });

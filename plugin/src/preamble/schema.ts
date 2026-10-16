@@ -37,7 +37,7 @@ import {
 export { INPUT_ALIASES };
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, Handle,
-  ConstraintX, ConstraintY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult, ReadNode,
+  ConstraintX, ConstraintY, Target, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult, ReadNode,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
   VariableInput, StyleInput, TokenIdentityInput, DesignTokens, DesignTokenLibraryQuery, LibraryDesignTokens, DesignTokenUsedQuery, UsedDesignTokens,
@@ -139,7 +139,7 @@ const ANNOTATION_FIELDS = fieldsFor(WORD_GROUPS.annotation)({
 
 const SHARED_FIELDS = fieldsFor(WORD_GROUPS.shared)({
   name: prop(z.string(), "Layer name."),
-  key: prop(z.string(), "Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity."),
+  key: prop(z.string(), "Persistent metadata for find/findOne. Unique within one authored tree, and never spelled like a node id (12:34); id alone decides live identity."),
   opacity: prop(z.union([z.number(), variable]), "", "number (0–1) | { variable }"),
   mixBlendMode: prop(
     z.string(),
@@ -839,8 +839,6 @@ export interface Flcm {
   designTokens(from: DesignTokenUsedQuery): Promise<UsedDesignTokens>;
   // One enabled library's variables, imported so they bind: the slow half, asked for by name.
   designTokens(from: DesignTokenLibraryQuery): Promise<LibraryDesignTokens>;
-  // The target escape hatch: wraps a raw node id so target resolution treats it as an id, never an flcm/key.
-  id(nodeId: string): RawIdRef;
   // The document verbs — the only words about which PAGE the other verbs act on. Every other verb works
   // on the current page, so this is how an agent finds out where it is and moves.
   page: {
@@ -895,7 +893,6 @@ export const VERBS: VerbDoc[] = [
   {"category": "value", "signature": "flcm.gradient(sugar)", "builds": "a paint value", "args": "{ type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?)."},
   {"category": "value", "signature": "flcm.image(url, options?)", "builds": "a paint value", "args": "Raster fill from an https url, a path under the asset root, or an upload handle. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb."},
   {"category": "value", "signature": "flcm.effects(sugar)", "builds": "effect values[]", "args": "CSS and Figma effect values for an effects prop."},
-  {"category": "target", "signature": "flcm.id(nodeId)", "builds": "{ __flcmId: nodeId }", "args": "Force raw-id resolution in a target argument."},
   {"category": "page", "signature": "await flcm.page.current()", "builds": "{ fileName, page, pages }", "args": "Current page and available pages."},
   {"category": "page", "signature": "await flcm.page.use(nameOrId)", "builds": "{ fileName, page, pages }", "args": "Switch to an existing page."},
   {"category": "page", "signature": "await flcm.page.new(name)", "builds": "{ fileName, page, pages }", "args": "Create a uniquely named page and switch to it."},
