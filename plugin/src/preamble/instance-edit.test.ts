@@ -620,6 +620,25 @@ test("inherited rectangle dimensions reject before style writes, while fill and 
   assert.equal(icon.width, 72);
 });
 
+// Live Figma can no-op resize() on a nested instance whose main component pins its size; the
+// mock always honors it, so the refusal is stubbed on the one node.
+test("a height Figma ignores on a nested instance fails the edit and rolls it back", async () => {
+  const { comp } = await chipComponent();
+  const outer = figma.createComponent();
+  outer.appendChild(comp.createInstance());
+  const nested = outer.createInstance().children[0];
+  await edit(nested.id, { height: 40 });
+  assert.equal(nested.height, 40);
+  nested.resize = () => {};
+  await assert.rejects(edit(nested.id, { height: 48 }), (err: Error) => {
+    assert.match(err.message, /Figma refused a write on INSTANCE .* Figma ignored height 48 and kept it at 40px/);
+    assert.match(err.message, /rolled back/);
+    assert.match(err.message, /lives inside instance/);
+    return true;
+  });
+  assert.deepEqual(figma.undoLog.slice(-2), ["commit", "trigger"]);
+});
+
 test("inherited rectangle dimensions reject an entire editMany batch", async () => {
   const { inst, comp } = await chipComponent();
   const before = [...figma.undoLog];

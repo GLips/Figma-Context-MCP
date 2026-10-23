@@ -11,7 +11,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
 import type { NodeSpec } from "./schema.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
-import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
+import { resizeToAuthoredSize, resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 import { aspectRatioAgrees, settleAspectRatio } from "./aspect-ratio.js";
 import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js";
 // bridge — the ONE mutation authority: every property lands on a live Figma node through the appliers
@@ -386,7 +386,7 @@ function applyOwnSize(f: any, layout: WriteLayout, tokens: ResolvedTokens | unde
   if (fixedW || fixedH) {
     const w = fixedW && typeof dims.width === "number" ? dims.width : f.width;
     const h = fixedH && typeof dims.height === "number" ? dims.height : f.height;
-    resizeWithDiagnostics(f, Math.max(w, 0.01), Math.max(h, 0.01));
+    resizeToAuthoredSize(f, Math.max(w, 0.01), Math.max(h, 0.01), { width: fixedW && typeof dims.width === "number", height: fixedH && typeof dims.height === "number" });
   }
   bindDimensions(f, layout.dimensions, tokens);
 }
@@ -528,10 +528,11 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
     if (sizing.vertical === "hug" && (node.textAutoResize === "NONE" || node.textAutoResize === "TRUNCATE")) node.textAutoResize = "HEIGHT";
   }
   if (node.type === "LINE") {
-    if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), 0);
+    if (typeof dims.width === "number") resizeToAuthoredSize(node, Math.max(dims.width, 0.01), 0, { width: true, height: false });
   } else if (typeof dims.width === "number" || typeof dims.height === "number") {
-    resizeWithDiagnostics(node, Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
-                Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01));
+    resizeToAuthoredSize(node, Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
+                Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01),
+                { width: typeof dims.width === "number", height: typeof dims.height === "number" });
   }
   bindDimensions(node, layout.dimensions, tokens);
 }

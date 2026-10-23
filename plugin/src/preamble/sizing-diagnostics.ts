@@ -92,6 +92,30 @@ export function resizeWithDiagnostics(node: SizingNode, width: number, height: n
   requests.set(node.id, { node, width, height });
 }
 
+// The min/max that clamps a requested size, if one does. A clamp is a warning at finish, not a refusal.
+function clampingBound(node: SizingNode, axis: "width" | "height", requested: number): "minWidth" | "maxWidth" | "minHeight" | "maxHeight" | undefined {
+  const [min, max] = axis === "width" ? ["minWidth", "maxWidth"] as const : ["minHeight", "maxHeight"] as const;
+  return node[min] != null && requested < node[min]! ? min : node[max] != null && requested > node[max]! ? max : undefined;
+}
+
+/**
+ * Resize for an authored px size, and refuse if Figma silently keeps the old one. Figma ignores
+ * resize() on some instance sublayers (a nested instance whose size its main component's default
+ * pins); reporting success there leaves the agent measuring a size it was told landed. The throw is
+ * mid-apply, so the verb rolls back. Only the `authored` axes are judged: the other axis is a
+ * carried size a text or hug may legitimately re-measure.
+ */
+export function resizeToAuthoredSize(node: SizingNode, width: number, height: number, authored: { width: boolean; height: boolean }): void {
+  resizeWithDiagnostics(node, width, height);
+  for (const [axis, requested] of [["width", width], ["height", height]] as const) {
+    const actual = node[axis];
+    if (!authored[axis] || Math.abs(actual - requested) <= 0.01 || clampingBound(node, axis, requested)) continue;
+    throw new Error(
+      "Figma ignored " + axis + " " + Number(requested.toFixed(2)) + " and kept it at " + Number(actual.toFixed(2)) + "px",
+    );
+  }
+}
+
 // Project each child's own corners into the container's coordinates. Absolute transforms avoid
 // the special coordinate convention of children under groups and handle rotated containers.
 function overflow(container: SizingNode, child: SizingNode): { axis: "x" | "y"; amount: number } {
@@ -121,9 +145,9 @@ export function finishSizingDiagnostics(verb: string): void {
     for (const request of requests.values()) {
       const node = request.node;
       if (!onCanvas(node)) continue;
-      for (const [axis, min, max] of [["width", "minWidth", "maxWidth"], ["height", "minHeight", "maxHeight"]] as const) {
+      for (const axis of ["width", "height"] as const) {
         const requested = request[axis], actual = node[axis];
-        const bound = node[min] != null && requested < node[min] ? min : node[max] != null && requested > node[max] ? max : undefined;
+        const bound = clampingBound(node, axis, requested);
         if (bound && Math.abs(actual - requested) > 0.01) warnings.add({
           id: node.id, prop: axis, authored: requested, realized: actual,
           message: "flcm." + verb + ": size constrained by " + bound + " " + node[bound] + ".",
