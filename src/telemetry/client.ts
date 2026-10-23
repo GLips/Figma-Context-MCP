@@ -129,7 +129,8 @@ export function captureEvent(event: string, properties: Record<string, unknown>)
     client.capture({
       distinctId: sessionId,
       event,
-      properties: { ...commonProps, ...processed },
+      // `$session_id` is how PostHog's MCP analytics groups calls into one agent's session.
+      properties: { ...commonProps, $session_id: sessionId, ...processed },
     });
   } catch {
     // intentionally empty

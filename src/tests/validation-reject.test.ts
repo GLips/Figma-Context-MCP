@@ -5,8 +5,6 @@ vi.mock("~/telemetry/index.js", async (importOriginal) => {
   return {
     ...actual,
     captureToolCall: vi.fn(),
-    captureGetFigmaDataCall: vi.fn(),
-    captureDownloadImagesCall: vi.fn(),
   };
 });
 

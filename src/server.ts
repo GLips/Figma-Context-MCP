@@ -73,6 +73,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     transport: config.isStdioMode ? "stdio" : "http",
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
+    askUserGoal: telemetryEnabled,
     extensions: [codeModeExtension(pluginBridge, { codeMode: config.codeMode })],
   };
   // Everything this machine's operator may spend. Only a caller proven to be the operator gets it.

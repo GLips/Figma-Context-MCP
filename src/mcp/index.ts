@@ -2,9 +2,9 @@ import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server
 import { FigmaService, staticCredentialSource } from "../services/figma.js";
 import {
   authMode,
-  captureDownloadImagesCall,
-  captureGetFigmaDataCall,
   captureToolCall,
+  downloadImagesCallEvent,
+  getFigmaDataCallEvent,
   type ToolCallContext,
   type ToolCallEvent,
   type ToolEventProperties,
@@ -12,7 +12,11 @@ import {
 } from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
-import type { ObserveToolCall, ToolCallObservation } from "./framelink-tool.js";
+import {
+  askAgentsForUserGoal,
+  type ObserveToolCall,
+  type ToolCallObservation,
+} from "./framelink-tool.js";
 import type { DescribeReadRecovery } from "./tools/index.js";
 import { serverInfo } from "./server-info.js";
 import type { CallerContext } from "./caller-context.js";
@@ -51,6 +55,8 @@ export type CreateServerOptions<Caller extends CallerContext = CallerContext> = 
   outputFormat?: OutputFormat;
   /** Don't offer download_figma_images at all, to any caller. */
   skipImageDownloads?: boolean;
+  /** Offer every tool an optional `userGoal` param; only worth its tokens while telemetry records it. */
+  askUserGoal?: boolean;
   extensions?: readonly ServerExtension<Caller>[];
 };
 
@@ -60,10 +66,13 @@ function createServer<Caller extends CallerContext>(
     transport,
     outputFormat = "tree",
     skipImageDownloads = false,
+    askUserGoal = false,
     extensions = [],
   }: CreateServerOptions<Caller>,
 ) {
   const server = new McpServer(serverInfo);
+  // Before any tool registers: it decides each tool's schema.
+  if (askUserGoal) askAgentsForUserGoal(server);
   const figmaService = new FigmaService(staticCredentialSource(caller.credential));
   const context: ToolCallContext = {
     transport,
@@ -112,21 +121,19 @@ function createServer<Caller extends CallerContext>(
 }
 
 function captureReadToolOutcome(outcome: ReadToolOutcome, context: ToolCallContext): void {
-  if (outcome.kind !== "completed" || !outcome.facts) {
-    captureToolCall(toolCallEvent(outcome), context);
-    return;
-  }
+  captureToolCall({ ...readToolCallEvent(outcome), intent: outcome.intent }, context);
+}
+
+function readToolCallEvent(outcome: ReadToolOutcome): ToolCallEvent {
+  if (outcome.kind !== "completed" || !outcome.facts) return toolCallEvent(outcome);
   switch (outcome.tool) {
     case "get_figma_data":
-      return captureGetFigmaDataCall(outcome.facts, context);
+      return getFigmaDataCallEvent(outcome.facts);
     case "download_figma_images":
-      return captureDownloadImagesCall(outcome.facts, context);
+      return downloadImagesCallEvent(outcome.facts);
     case "get_figma_comments": {
       const { durationMs, error } = outcome.facts;
-      return captureToolCall(
-        { tool: outcome.tool, durationMs, isError: error !== undefined, error },
-        context,
-      );
+      return { tool: outcome.tool, durationMs, isError: error !== undefined, error };
     }
   }
 }
@@ -136,14 +143,14 @@ function toolCallEvent(
   observation: ToolCallObservation<string, unknown>,
   properties?: ToolEventProperties,
 ): ToolCallEvent {
-  const { tool, durationMs } = observation;
+  const { tool, durationMs, intent } = observation;
   switch (observation.kind) {
     case "rejected":
-      return { tool, durationMs, isError: true, rejection: observation.rejection };
+      return { tool, durationMs, intent, isError: true, rejection: observation.rejection };
     case "threw":
-      return { tool, durationMs, isError: true, error: observation.error, properties };
+      return { tool, durationMs, intent, isError: true, error: observation.error, properties };
     case "completed":
-      return { tool, durationMs, isError: observation.isError, properties };
+      return { tool, durationMs, intent, isError: observation.isError, properties };
   }
 }
 

@@ -48,6 +48,8 @@ export type ToolCallEvent = {
   /** The arguments failed validation, so the tool's work never ran. */
   rejection?: ParamRejection;
   properties?: ToolEventProperties;
+  /** What the agent said the call is for, in its own words; also sent as `$mcp_intent` (capture.ts). */
+  intent?: string;
 };
 
 export type ErrorCallProps = {

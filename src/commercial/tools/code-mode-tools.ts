@@ -307,6 +307,7 @@ function registerCodeModeTools(
       {
         name: "figma_execute_code",
         unknownParams: "fail-loud",
+        agentIntent: "own-param",
         description: EXECUTE_CODE_DESCRIPTION,
         inputSchema: {
           // Both optional at the wire so a call with neither or both reaches the handler's named,
@@ -364,6 +365,7 @@ function registerCodeModeTools(
           const callIntent = parseCallIntent(intent);
           if (callIntent.kind === "invalid")
             return intentReply(call, "figma_execute_code", callIntent);
+          call.recordIntent(callIntent.intent);
           const targetDocument = documentParam(document);
           if (targetDocument === "invalid") return documentReply();
           const targetFileKey = fileKeyParam(fileKey);
@@ -457,6 +459,7 @@ function registerCodeModeTools(
       {
         name: "get_flcm_reference",
         unknownParams: "fail-loud",
+        agentIntent: "user-goal",
         description:
           "Full authoring reference for the `flcm` DSL used in figma_execute_code. Requires an array of " +
           'section ids (deduped, served in canonical order); start with ["mental-model"], which carries the ' +
@@ -500,6 +503,7 @@ function registerCodeModeTools(
       {
         name: "get_screenshot",
         unknownParams: "fail-loud",
+        agentIntent: "own-param",
         description: `Capture a PNG of what you've built so you can see it and self-correct. Build → screenshot → look → fix.
 
 Target ONE node, or omit both targets to snapshot the whole current page:
@@ -563,6 +567,7 @@ Returns a PNG image.`,
           // the same retryable shape as an unknown param, so the agent fixes the call and retries.
           const callIntent = parseCallIntent(intent);
           if (callIntent.kind === "invalid") return intentReply(call, "get_screenshot", callIntent);
+          call.recordIntent(callIntent.intent);
           const targetDocument = documentParam(document);
           if (targetDocument === "invalid") return documentReply();
           const targetFileKey = fileKeyParam(fileKey);
@@ -616,6 +621,7 @@ Returns a PNG image.`,
       {
         name: "pair_figma_plugin",
         unknownParams: "fail-loud",
+        agentIntent: "user-goal",
         description:
           "Pair this server with the Framelink plugin in Figma, so figma_execute_code and " +
           "get_screenshot can reach it. Pairing is remembered: it is needed once, when a tool says " +

@@ -76,6 +76,8 @@ describe("code-mode tool telemetry", () => {
     const [event] = reported();
     expect(event).toMatchObject({
       tool: "figma_execute_code",
+      // The call intent the agent already writes for the panel; no separate userGoal is asked.
+      intent: "Test run",
       isError: false,
       properties: {
         figma_user_id: TEST_PLUGIN_OWNER.figmaUserId,

@@ -16,9 +16,14 @@ import type {
  * phase, the responder's fingerprint — never as the error's free text, which quotes what the user
  * sent and what servers answered. An UNEXPECTED failure (no category, or `internal`) also goes to
  * error tracking, message and stack scrubbed (client.ts), since codes can't say what broke.
+ *
+ * The one free text sent on purpose is the agent's stated intent (Graham, fig-138): it is the
+ * agent's own summary, scrubbed like every string, and PostHog's MCP analytics groups it into
+ * themes, which is the point of collecting it.
  */
 export function captureToolCall(event: ToolCallEvent, context: ToolCallContext): void {
-  const { tool, durationMs, isError, error, rejection, properties } = event;
+  const { tool, durationMs, isError, error, rejection, properties, intent } = event;
+  const failed = isError || rejection !== undefined;
   captureEvent("tool_called", {
     ...properties,
     tool,
@@ -27,7 +32,8 @@ export function captureToolCall(event: ToolCallEvent, context: ToolCallContext):
     auth_mode: context.authMode,
     client_name: context.clientInfo?.name,
     client_version: context.clientInfo?.version,
-    is_error: isError || rejection !== undefined,
+    has_intent: intent !== undefined,
+    is_error: failed,
     ...(rejection
       ? {
           error_phase: "validate",
@@ -40,6 +46,7 @@ export function captureToolCall(event: ToolCallEvent, context: ToolCallContext):
         ? {}
         : errorFields(error)),
   });
+  if (intent !== undefined) captureMcpIntent(tool, intent, durationMs, failed, context);
   if (error !== undefined && isUnexpectedError(error))
     captureUnexpectedError(error, messageWithoutResponseBodies(error), {
       tool,
@@ -49,36 +56,56 @@ export function captureToolCall(event: ToolCallEvent, context: ToolCallContext):
     });
 }
 
+// PostHog's MCP analytics reads `$mcp_tool_call` events keyed by `$session_id` (client.ts stamps
+// it on every event) — its intent digest and clusters both query exactly these properties, so the
+// event goes out only for a call that stated an intent: calls without one feed neither view.
+const MAX_INTENT_LENGTH = 300;
+
+function captureMcpIntent(
+  tool: string,
+  intent: string,
+  durationMs: number,
+  isError: boolean,
+  context: ToolCallContext,
+): void {
+  captureEvent("$mcp_tool_call", {
+    $mcp_tool_name: tool,
+    // Clipped where PostHog's digest clips, so a rambling agent can't pay for an oversized event.
+    $mcp_intent: intent.slice(0, MAX_INTENT_LENGTH),
+    $mcp_intent_source: "context_parameter",
+    $mcp_is_error: isError,
+    $mcp_duration_ms: durationMs,
+    $mcp_client_name: context.clientInfo?.name,
+    $mcp_client_version: context.clientInfo?.version,
+  });
+}
+
+/** For a caller with nothing to add to the read's own event: the `fetch` command. */
 export function captureGetFigmaDataCall(
   outcome: GetFigmaDataOutcome,
   context: ToolCallContext,
 ): void {
-  captureToolCall(
-    {
-      tool: "get_figma_data",
-      durationMs: outcome.durationMs,
-      isError: outcome.error !== undefined,
-      error: outcome.error,
-      properties: getFigmaDataProperties(outcome),
-    },
-    context,
-  );
+  captureToolCall(getFigmaDataCallEvent(outcome), context);
 }
 
-export function captureDownloadImagesCall(
-  outcome: DownloadImagesOutcome,
-  context: ToolCallContext,
-): void {
-  captureToolCall(
-    {
-      tool: "download_figma_images",
-      durationMs: outcome.durationMs,
-      isError: outcome.error !== undefined,
-      error: outcome.error,
-      properties: { image_count: outcome.imageCount, success_count: outcome.successCount },
-    },
-    context,
-  );
+export function getFigmaDataCallEvent(outcome: GetFigmaDataOutcome): ToolCallEvent {
+  return {
+    tool: "get_figma_data",
+    durationMs: outcome.durationMs,
+    isError: outcome.error !== undefined,
+    error: outcome.error,
+    properties: getFigmaDataProperties(outcome),
+  };
+}
+
+export function downloadImagesCallEvent(outcome: DownloadImagesOutcome): ToolCallEvent {
+  return {
+    tool: "download_figma_images",
+    durationMs: outcome.durationMs,
+    isError: outcome.error !== undefined,
+    error: outcome.error,
+    properties: { image_count: outcome.imageCount, success_count: outcome.successCount },
+  };
 }
 
 function getFigmaDataProperties(outcome: GetFigmaDataOutcome): ToolEventProperties {
