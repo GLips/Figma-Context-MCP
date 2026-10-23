@@ -15,15 +15,14 @@ export const AGENT_COMMENT_PREFIX = "[AGENT]";
 
 /**
  * The reaction an agent leaves on a thread's root once it has dealt with it. Figma's API can't
- * resolve a thread, so this is how a read tells handled threads from open ones.
+ * resolve a thread, so this is how a read tells handled threads from open ones. Figma reads it back
+ * as this same shortcode.
  */
 export const AGENT_HANDLED_REACTION = ":white_check_mark:";
 
-// `as_md` reads may escape the brackets, so the marker matches either way.
-const AGENT_COMMENT_PATTERN = /^\s*\\?\[AGENT\\?\]/;
-
+// Figma returns the marker verbatim, `as_md` or not (checked live), so a prefix match is enough.
 export function isAgentComment(message: string): boolean {
-  return AGENT_COMMENT_PATTERN.test(message);
+  return message.startsWith(AGENT_COMMENT_PREFIX);
 }
 
 export interface CommentPoint {
@@ -98,13 +97,10 @@ export function readCommentThreads(comments: readonly Comment[]): CommentThread[
   return [...threads.values()].map(({ thread }) => thread).sort((a, b) => byTime(b, a));
 }
 
-// The shortcode we post, and the character itself in case Figma reads reactions back that way.
-const HANDLED_REACTION_FORMS = new Set([AGENT_HANDLED_REACTION, "✅"]);
-
 /** Whether `userId` left the handled reaction on this comment. */
 export function hasHandledReaction(comment: Comment, userId: string): boolean {
   return comment.reactions.some(
-    (reaction) => HANDLED_REACTION_FORMS.has(reaction.emoji) && reaction.user.id === userId,
+    (reaction) => reaction.emoji === AGENT_HANDLED_REACTION && reaction.user.id === userId,
   );
 }
 
