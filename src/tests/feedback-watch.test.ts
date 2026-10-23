@@ -3,7 +3,9 @@ import type { Comment, GetFileResponse, User } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
 import {
   FeedbackCursorError,
+  followFigmaFeedback,
   watchFigmaFeedback,
+  type FollowedFeedback,
   type AnnotationChangeSource,
   type AnnotationPoll,
   type AnnotationWatchCursor,
@@ -148,4 +150,29 @@ it("refuses a cursor minted for another file", async () => {
       signal: new AbortController().signal,
     }),
   ).rejects.toThrow(FeedbackCursorError);
+});
+
+it("a follow says once that it's watching, then emits only feedback, until stopped", async () => {
+  const { figma, add } = fakeFigma();
+  const lines: FollowedFeedback[] = [];
+  const stop = new AbortController();
+  const following = followFigmaFeedback(figma, fileKey, {
+    annotations: null,
+    signal: stop.signal,
+    emit: (line) => lines.push(line),
+    chunkMs: 40,
+    commentPollMs: 10,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  add(designer, "Swap the hero image");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  stop.abort();
+  await following;
+
+  expect(lines.map((line) => line.status)).toEqual(["watching", "feedback"]);
+  expect(lines[0].cursor).toBeTruthy();
+  expect(lines[1].status === "feedback" && lines[1].comments?.[0].message).toBe(
+    "Swap the hero image",
+  );
 });

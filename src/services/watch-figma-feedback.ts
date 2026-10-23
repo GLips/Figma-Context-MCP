@@ -97,8 +97,12 @@ interface FeedbackCursor {
 const NO_PLUGIN_SOURCE_NOTE =
   "Annotations aren't watched by this server: only comments are. Annotations reach the local Framelink server through its Figma plugin.";
 
+/**
+ * `figma` as `{ none }` watches annotations only, for the `watch` command run from a shell with no
+ * Figma token; its `noCommentsNote` says why comments aren't watched and how to fix it.
+ */
 export async function watchFigmaFeedback(
-  figma: FigmaService,
+  figma: FigmaService | { none: true; noCommentsNote: string },
   fileKey: FigmaFileKey,
   {
     cursor,
@@ -122,9 +126,12 @@ export async function watchFigmaFeedback(
   const stop = new AbortController();
   const abandon = () => stop.abort(signal.reason);
   signal.addEventListener("abort", abandon, { once: true });
-  const scoped = figma.withSignal(stop.signal);
-
   async function watchComments(): Promise<boolean> {
+    if ("none" in figma) {
+      notes.push(figma.noCommentsNote);
+      return false;
+    }
+    const scoped = figma.withSignal(stop.signal);
     for (;;) {
       if (state.comments === undefined) {
         // The first read only marks what already exists: a watch reports what's new from here on.
@@ -210,6 +217,85 @@ export async function watchFigmaFeedback(
   };
   if (notes.length) result.notes = [...new Set(notes)];
   return result;
+}
+
+/** One line of a follow: what a watch found, or `watching` (started), or `error` (it retries). */
+export type FollowedFeedback =
+  | WatchFigmaFeedbackResult
+  | { status: "watching"; cursor: string; notes?: string[] }
+  | { status: "error"; message: string; cursor: string | null; retryInSeconds: number };
+
+/** How long a follow waits after a failed watch before trying again (rate limits, a network drop). */
+export const FOLLOW_RETRY_MS = 60_000;
+
+/**
+ * Watch without end, for a caller that hears each emitted value as it happens (the `watch --follow`
+ * command, whose lines Claude Code's Monitor turns into notifications). Emits `watching` once the
+ * starting point is fixed, then only feedback, changed notes and errors, each carrying the cursor to
+ * restart from, so a quiet hour costs nothing. Ends only when `signal` aborts.
+ */
+export async function followFigmaFeedback(
+  figma: Parameters<typeof watchFigmaFeedback>[0],
+  fileKey: FigmaFileKey,
+  {
+    cursor,
+    annotations,
+    signal,
+    emit,
+    chunkMs = WATCH_TIMEOUT_MAX_SECONDS * 1000,
+    retryMs = FOLLOW_RETRY_MS,
+    commentPollMs,
+  }: {
+    cursor?: string;
+    annotations: AnnotationChangeSource | null;
+    signal: AbortSignal;
+    emit: (line: FollowedFeedback) => void;
+    chunkMs?: number;
+    retryMs?: number;
+    commentPollMs?: number;
+  },
+): Promise<void> {
+  let at = cursor;
+  let started = false;
+  let lastNotes = "[]";
+  while (!signal.aborted) {
+    try {
+      // The first watch is short: it only fixes where watching starts, and says so.
+      const result = await watchFigmaFeedback(figma, fileKey, {
+        cursor: at,
+        timeoutMs: started ? chunkMs : 1,
+        annotations,
+        signal,
+        commentPollMs,
+      });
+      at = result.cursor;
+      const notes = JSON.stringify(result.notes ?? []);
+      if (!started) {
+        started = true;
+        emit(
+          result.status === "quiet"
+            ? {
+                status: "watching",
+                cursor: result.cursor,
+                ...(result.notes ? { notes: result.notes } : {}),
+              }
+            : result,
+        );
+      } else if (result.status === "feedback" || notes !== lastNotes) emit(result);
+      lastNotes = notes;
+    } catch (error) {
+      if (signal.aborted) return;
+      // A cursor the caller passed can't get better by waiting.
+      if (error instanceof FeedbackCursorError) throw error;
+      emit({
+        status: "error",
+        message: error instanceof Error ? error.message : String(error),
+        cursor: at ?? null,
+        retryInSeconds: Math.round(retryMs / 1000),
+      });
+      await delay(retryMs, undefined, { signal }).catch(() => {});
+    }
+  }
 }
 
 // Opaque to the agent: base64url JSON, bound to the file it was minted for.
