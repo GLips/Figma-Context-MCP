@@ -35,7 +35,7 @@ const parameters = {
     .enum(["unresolved", "all"])
     .default("unresolved")
     .describe(
-      "unresolved (default): open threads, skipping resolved ones and ones an agent marked handled with reply_to_figma_comment. all: every thread.",
+      "unresolved (default): open threads, skipping resolved ones and ones an agent marked handled. all: every thread.",
     ),
   since: z
     .string()

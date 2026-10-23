@@ -1,8 +1,12 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { expect, it } from "vitest";
 import type { Comment, GetFileResponse, User } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
 import { getFigmaComments } from "~/services/get-figma-comments.js";
-import { replyToFigmaComment } from "~/services/reply-to-figma-comment.js";
+import { replyToFigmaComment } from "~/commercial/reply-to-figma-comment.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
 
 const designer: User = { id: "u-designer", handle: "Ana", img_url: "" };

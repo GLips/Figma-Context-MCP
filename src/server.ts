@@ -16,6 +16,7 @@ import {
   codeModeExtension,
   type CodeModeCallerContext,
 } from "./commercial/tools/code-mode-tools.js";
+import { commentReplyExtension } from "./commercial/tools/reply-to-figma-comment-tool.js";
 import { requireGlobalCredential, type ServerConfig } from "./config.js";
 import type { FigmaCredential } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -74,7 +75,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
     askUserGoal: telemetryEnabled,
-    extensions: [codeModeExtension(pluginBridge, { codeMode: config.codeMode })],
+    extensions: [
+      codeModeExtension(pluginBridge, { codeMode: config.codeMode }),
+      commentReplyExtension(),
+    ],
   };
   // Everything this machine's operator may spend. Only a caller proven to be the operator gets it.
   const operator: CodeModeCallerContext = {

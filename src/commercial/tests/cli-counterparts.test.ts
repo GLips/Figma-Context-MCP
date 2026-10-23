@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
+import { commentReplyExtension } from "~/commercial/tools/reply-to-figma-comment-tool.js";
 import { createServer } from "~/mcp/index.js";
 import { CLI_COMMANDS, MCP_TOOL_CLI_COUNTERPARTS } from "~/commands/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
@@ -27,7 +28,10 @@ async function listEveryTool(): Promise<Map<string, string[]>> {
   };
   const server = createServer(
     { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd(), plugin: runtime },
-    { transport: "http", extensions: [codeModeExtension(runtime, { codeMode: true })] },
+    {
+      transport: "http",
+      extensions: [codeModeExtension(runtime, { codeMode: true }), commentReplyExtension()],
+    },
   );
   const client = new Client({ name: "cli-counterparts-test", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();

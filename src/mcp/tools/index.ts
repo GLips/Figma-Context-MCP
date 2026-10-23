@@ -5,11 +5,6 @@ export {
 } from "./download-figma-images-tool.js";
 export { getFigmaCommentsTool } from "./get-figma-comments-tool.js";
 export type { GetFigmaCommentsOutcome, GetFigmaCommentsParams } from "./get-figma-comments-tool.js";
-export { replyToFigmaCommentTool } from "./reply-to-figma-comment-tool.js";
-export type {
-  ReplyToFigmaCommentOutcome,
-  ReplyToFigmaCommentParams,
-} from "./reply-to-figma-comment-tool.js";
 export type {
   DownloadImageDestinationParams,
   DownloadImagesParams,

@@ -2,11 +2,11 @@ import type { Command } from "cleye";
 import { executeCommand } from "~/commercial/commands/execute.js";
 import { pairCommand } from "~/commercial/commands/pair.js";
 import { referenceCommand } from "~/commercial/commands/reference.js";
+import { replyCommand } from "~/commercial/commands/reply.js";
 import { uploadCommand } from "~/commercial/commands/upload.js";
 import { watchCommand } from "~/commercial/commands/watch.js";
 import { commentsCommand } from "./comments.js";
 import { fetchCommand } from "./fetch.js";
-import { replyCommand } from "./reply.js";
 
 export const CLI_COMMANDS: Command[] = [
   fetchCommand,

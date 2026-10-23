@@ -1,11 +1,19 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { type Command, command } from "cleye";
 import { z } from "zod";
 import { UsageError } from "~/config.js";
 import { FigmaService, staticCredentialSource } from "~/services/figma.js";
-import { replyToFigmaComment } from "~/services/reply-to-figma-comment.js";
-import { parseReplyToFigmaCommentParams } from "~/mcp/tools/reply-to-figma-comment-tool.js";
+import { replyToFigmaComment } from "~/commercial/reply-to-figma-comment.js";
+import { parseReplyToFigmaCommentParams } from "~/commercial/tools/reply-to-figma-comment-tool.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-import { REST_COMMAND_FLAGS, prepareRestCommand, resolveRestTarget } from "./rest-command.js";
+import {
+  REST_COMMAND_FLAGS,
+  prepareRestCommand,
+  resolveRestTarget,
+} from "~/commands/rest-command.js";
 
 export const replyCommand: Command = command(
   {

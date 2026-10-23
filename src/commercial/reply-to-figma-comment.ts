@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 /**
  * The reply tool's work: post an agent's answer into a comment thread and set the thread's handled
  * mark to match.
@@ -10,7 +14,7 @@
  * handled reply then hides their comment. A second read would only shrink that window, not close it.
  */
 import type { Comment } from "@figma/rest-api-spec";
-import type { FigmaService } from "./figma.js";
+import type { FigmaService } from "~/services/figma.js";
 import {
   AGENT_COMMENT_PREFIX,
   AGENT_HANDLED_REACTION,
@@ -19,7 +23,7 @@ import {
   isAgentComment,
   readCommentReply,
   type CommentReply,
-} from "./figma-comments.js";
+} from "~/services/figma-comments.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 
