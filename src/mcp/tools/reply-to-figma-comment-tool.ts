@@ -21,7 +21,7 @@ const parameters = {
     .string()
     .regex(/^\d+$/, "A Figma comment id is digits only, e.g. 1957645446")
     .describe(
-      "The `id` of the thread, or of any reply in it, from get_figma_comments with include: full.",
+      "The newest comment in the thread you've read — the root or a reply — from get_figma_comments with include: full. If someone commented after it, nothing is posted and you get their comments.",
     ),
   message: z
     .string()
@@ -59,6 +59,18 @@ async function handleReplyToFigmaComment(
     const { fileKey, options } = parseReplyToFigmaCommentParams(params);
     const result = await replyToFigmaComment(figmaService, fileKey, options);
     onComplete({ durationMs: Date.now() - startedAt });
+    if (result.kind === "stale") {
+      const { unseen, newestCommentId } = result;
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text" as const,
+            text: `Not posted: ${unseen.length} newer comment(s) in this thread since ${options.commentId}. Read them, rework the reply if they change it, then call again with commentId ${newestCommentId}.\n${JSON.stringify(result)}`,
+          },
+        ],
+      };
+    }
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   } catch (error) {
     onComplete({ durationMs: Date.now() - startedAt, error });

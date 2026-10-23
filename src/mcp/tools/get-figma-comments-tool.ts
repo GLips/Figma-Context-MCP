@@ -42,7 +42,7 @@ const parameters = {
     .datetime({ offset: true })
     .optional()
     .describe(
-      "ISO timestamp, usually a previous response's `watermark`. Keeps threads with any comment created at or after it, so the newest thread repeats. Edits, deletions and reopened threads are not detected.",
+      "ISO timestamp, usually a previous response's `watermark`. Keeps threads with a person's comment created at or after it (agent replies don't count), so the newest thread repeats. Edits, deletions and reopened threads are not detected.",
     ),
 };
 

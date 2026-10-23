@@ -71,6 +71,7 @@ it("a handled reply drops the thread from unresolved reads until a person replie
     handled: true,
   });
   expect(result).toMatchObject({
+    kind: "posted",
     threadId: root.id,
     handled: true,
     reply: { message: "[AGENT] Changed the header fill to #1E3A8A.", author: { handle: "Graham" } },
@@ -84,31 +85,55 @@ it("a handled reply drops the thread from unresolved reads until a person replie
   expect(await open()).toEqual([root.id]);
 });
 
-it("an open reply takes back an earlier handled mark, and since ignores the agent's own reply", async () => {
+it("refuses a reply written before someone's newer comment, then an open reply takes back the ✅", async () => {
   const { figma, add, open } = fakeFigma();
   const root = add(designer, "Fix the spacing");
-  await replyToFigmaComment(figma, fileKey, {
+  await replyToFigmaComment(figma, fileKey, { commentId: root.id, message: "Done", handled: true });
+  const question = add(designer, "Which spacing token did you use?", root.id);
+
+  // The agent names the root it read first, so it hasn't seen the question: nothing is posted.
+  const stale = await replyToFigmaComment(figma, fileKey, {
     commentId: root.id,
-    message: "Done",
+    message: "Done again",
     handled: true,
   });
-  add(designer, "Which spacing token did you use?", root.id);
+  expect(stale).toMatchObject({
+    kind: "stale",
+    unseen: [{ id: question.id }],
+    newestCommentId: question.id,
+  });
 
-  const question = await replyToFigmaComment(figma, fileKey, {
-    commentId: root.id,
+  const answer = await replyToFigmaComment(figma, fileKey, {
+    commentId: question.id,
     message: "[AGENT] space-4. Should it be space-3?",
     handled: false,
   });
+  expect(answer).toMatchObject({ kind: "posted", handled: false });
   expect(await open()).toEqual([root.id]);
   // Polling from its own reply, the agent isn't handed back the thread it just asked in.
   const since = await getFigmaComments(figma, fileKey, {
     include: "full",
     status: "unresolved",
-    since: question.reply.createdAt,
+    since: answer.kind === "posted" ? answer.reply.createdAt : "",
   });
   expect(since.total).toBe(0);
   const [thread] = (await getFigmaComments(figma, fileKey, { include: "full", status: "all" }))
     .threads!;
-  // An agent that already wrote the marker doesn't get it twice.
-  expect(thread.replies!.at(-1)!.message).toBe("[AGENT] space-4. Should it be space-3?");
+  // One "Done", no "Done again", and a marker the agent already wrote isn't doubled.
+  expect(thread.replies!.map((reply) => reply.message)).toEqual([
+    "[AGENT] Done",
+    "Which spacing token did you use?",
+    "[AGENT] space-4. Should it be space-3?",
+  ]);
+});
+
+it("a post that fails without Figma refusing it warns that the reply may exist", async () => {
+  const { figma, add } = fakeFigma();
+  const root = add(designer, "Fix the spacing");
+  figma.postCommentReply = async () => {
+    throw new Error("socket hang up");
+  };
+  await expect(
+    replyToFigmaComment(figma, fileKey, { commentId: root.id, message: "Done", handled: true }),
+  ).rejects.toThrow(/may have been posted anyway/);
 });

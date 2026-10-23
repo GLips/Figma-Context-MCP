@@ -29,7 +29,8 @@ export const replyCommand: Command = command(
       commentId: {
         type: String,
         placeholder: "<id>",
-        description: "The thread's id, or any reply's in it, from `comments --full`",
+        description:
+          "The newest comment in the thread you've read, from `comments --full`; refused if someone commented after it",
       },
       message: {
         type: String,
@@ -77,6 +78,12 @@ export async function runReply(flags: ReplyFlags, positionals: string[]): Promis
     options,
   );
   console.log(JSON.stringify(result, null, 2));
+  if (result.kind === "stale") {
+    console.error(
+      `Not posted: newer comments in this thread. Read them, then retry with --comment-id ${result.newestCommentId}.`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 // The tool's own validation, so a missing --comment-id or --message is a UsageError naming the

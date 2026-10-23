@@ -87,14 +87,24 @@ export function readCommentThreads(comments: readonly Comment[]): CommentThread[
     if (comment.parent_id)
       threads.get(comment.parent_id)?.thread.replies.push(readCommentReply(comment));
   }
-  const byTime = (a: { createdAt: string }, b: { createdAt: string }) =>
-    a.createdAt.localeCompare(b.createdAt);
+  const byTime = commentOrder;
   for (const { thread, root } of threads.values()) {
     thread.replies.sort(byTime);
     const newest = thread.replies.at(-1) ?? thread;
     thread.handled = isAgentComment(newest.message) && hasHandledReaction(root, newest.author.id);
   }
   return [...threads.values()].map(({ thread }) => thread).sort((a, b) => byTime(b, a));
+}
+
+/**
+ * Oldest first: by time, then by id. Figma's comment ids count up, so two comments in the same
+ * millisecond still have an order, and "newest" never depends on how the list arrived.
+ */
+export function commentOrder(
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+): number {
+  return Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.id) - Number(b.id);
 }
 
 /** Whether `userId` left the handled reaction on this comment. */
