@@ -3,7 +3,6 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { type Command, command } from "cleye";
-import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import {
   loadEnvFile,
@@ -19,13 +18,10 @@ import {
   WATCH_TIMEOUT_MAX_SECONDS,
   followFigmaFeedback,
   watchFigmaFeedback,
-  type AnnotationChangeSource,
 } from "~/services/watch-figma-feedback.js";
 import { parseWatchFigmaFeedbackParams } from "~/mcp/tools/watch-figma-feedback-tool.js";
 import { startPluginBridge } from "~/commercial/plugin-bridge/index.js";
-import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { createBridgeAnnotationSource } from "~/commercial/plugin-bridge/annotation-watch.js";
-import type { FigmaFileKey } from "~/utils/figma-url.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
 
 export const watchCommand: Command = command(
@@ -119,10 +115,7 @@ export async function runWatch(flags: WatchFlags, positionals: string[]): Promis
     assetRoot: config.assetRoot.value,
     framelinkApiUrl: config.framelinkApiUrl.value,
   });
-  const annotations = oncePluginLinked(
-    runtime.bridge,
-    createBridgeAnnotationSource(runtime.bridge),
-  );
+  const annotations = createBridgeAnnotationSource(runtime.bridge);
   const controller = new AbortController();
   const interrupt = () => controller.abort(new Error("Interrupted"));
   process.once("SIGINT", interrupt);
@@ -152,43 +145,6 @@ export async function runWatch(flags: WatchFlags, positionals: string[]): Promis
     if (runtime.stop) runtime.stop();
     else runtime.bridge.stop();
   }
-}
-
-/**
- * This command's relay is new, and an open plugin dials it only on its next redial, so the first ask
- * waits for a plugin in the file to link, or for every open plugin to have had its chance.
- */
-function oncePluginLinked(
-  bridge: PluginBridge,
-  source: AnnotationChangeSource,
-): AnnotationChangeSource {
-  let linked: Promise<void> | null = null;
-  const inFile = (fileKey: FigmaFileKey) =>
-    bridge.authenticatedLinks().some((link) => {
-      const document = bridge.documentOf(link);
-      return document.kind === "identified" && document.fileKey === fileKey;
-    });
-  return {
-    async poll(fileKey, after, holdMs, signal) {
-      linked ??= (async () => {
-        const found = new AbortController();
-        const settled = bridge.whenLinksSettled(AbortSignal.any([signal, found.signal])).then(
-          () => true,
-          () => true,
-        );
-        try {
-          let done = inFile(fileKey);
-          while (!done)
-            done =
-              (await Promise.race([settled, delay(250, false, { signal })])) || inFile(fileKey);
-        } finally {
-          found.abort();
-        }
-      })();
-      await linked;
-      return source.poll(fileKey, after, holdMs, signal);
-    },
-  };
 }
 
 // The tool's own validation, so the CLI accepts exactly what watch_figma_feedback does.

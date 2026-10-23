@@ -45,6 +45,7 @@ import {
   PLUGIN_REDIAL_MAX_MS,
   parseExecuteCodeResult,
   parsePluginEvent,
+  type AnnotationCursor,
   type GrantState,
   type LINK_SETUP_REQUEST_TYPES,
   type PluginEvent,
@@ -136,6 +137,9 @@ export class PluginBridge {
   private readonly linkSettleMs: number;
   private onConnect: (() => void) | undefined;
   private readonly connectionWaiters = new Set<() => void>();
+  // Each link's latest ANNOTATIONS_CHANGED, gone with the link, and who waits for the next.
+  private readonly annotationLogs = new WeakMap<PluginLink, AnnotationCursor>();
+  private readonly annotationLogWaiters = new Set<() => void>();
   private readonly listener: RelayListener;
   private readonly ledger: RunLedger;
   private readonly channel: ChannelServer;
@@ -179,6 +183,11 @@ export class PluginBridge {
       this.events.onRunEvent?.({ type: "changed", executionId: event.executionId, link }),
     RUN_SETTLED: (link, event) =>
       this.events.onRunEvent?.({ type: "settled", executionId: event.executionId, link }),
+    ANNOTATIONS_CHANGED: (link, event) => {
+      this.annotationLogs.set(link, event.cursor);
+      for (const wake of this.annotationLogWaiters) wake();
+      this.annotationLogWaiters.clear();
+    },
   };
 
   // Everything injectable for the tests and the contract harness: `linkCredentials` isolates
@@ -425,6 +434,21 @@ export class PluginBridge {
 
   private linksSettleAt(): number {
     return this.linksUnsettledSince + this.linkSettleMs;
+  }
+
+  /** Where `link`'s annotation log last said it had moved to, if it has said. */
+  annotationLogOf(link: PluginLink): AnnotationCursor | undefined {
+    return this.annotationLogs.get(link);
+  }
+
+  /** Resolves at the next ANNOTATIONS_CHANGED from any link. */
+  whenAnnotationLogMoves(signal: AbortSignal): Promise<void> {
+    let wake!: () => void;
+    const moved = new Promise<void>((resolve) => (wake = resolve));
+    this.annotationLogWaiters.add(wake);
+    const forget = () => this.annotationLogWaiters.delete(wake);
+    signal.addEventListener("abort", forget, { once: true });
+    return waitForSignal(moved, signal).finally(() => signal.removeEventListener("abort", forget));
   }
 
   /** Which file `link` is in, as far as this server knows. */

@@ -118,6 +118,8 @@ export interface LoopbackPlugin {
   toasts: string[];
   /** Deliver the node changes Figma has noticed since the last call. */
   deliverChanges(): void;
+  /** The human sets a node's notes in Figma's panel, which Figma reports at once. */
+  annotate(nodeId: string, label: string): void;
   /** Drop the socket the way a server restart does; the relay redials on its own cadence. */
   drop(): void;
   /** Close the plugin for good: no socket stays open, and the relay stops redialing. */
@@ -201,6 +203,7 @@ export function startLoopbackPlugin(
   // ---- Figma, as the host sees it ----
   const nodeChangeListeners = new Set<(event: unknown) => void>();
   const noticed: unknown[] = [];
+  const nodes = new Map<string, Record<string, unknown>>();
   const page = {
     id: "0:1",
     name: "Page 1",
@@ -233,6 +236,8 @@ export function startLoopbackPlugin(
     on() {},
     off() {},
     openExternal() {},
+    getNodeByIdAsync: async (id: string) => nodes.get(id) ?? null,
+    annotations: { getAnnotationCategoriesAsync: async () => [] },
     createRectangle() {
       noticed.push({ type: "CREATE", id: "9:9", origin: "LOCAL" });
       return { id: "9:9", type: "RECTANGLE" };
@@ -342,6 +347,23 @@ export function startLoopbackPlugin(
       const nodeChanges = noticed.splice(0);
       if (nodeChanges.length)
         for (const listener of [...nodeChangeListeners]) listener({ nodeChanges });
+    },
+    annotate(nodeId, label) {
+      nodes.set(nodeId, {
+        id: nodeId,
+        name: `Node ${nodeId}`,
+        type: "FRAME",
+        parent: page,
+        removed: false,
+        annotations: [{ label }],
+      });
+      noticed.push({
+        type: "PROPERTY_CHANGE",
+        id: nodeId,
+        properties: ["annotations"],
+        origin: "LOCAL",
+      });
+      this.deliverChanges();
     },
     drop() {
       for (const socket of sockets) socket.terminate();

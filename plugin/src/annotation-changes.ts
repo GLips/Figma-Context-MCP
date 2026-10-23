@@ -2,9 +2,10 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// Which nodes' annotations changed, for a server watching the file (ANNOTATION_CHANGES). The log
-// lives for the plugin run and keeps node ids only: a watcher is answered with each node's
-// annotations as they are when it asks, so a burst of edits to one note reads as one change.
+// Which nodes' annotations changed, for a server watching the file. The log lives for the plugin run
+// and keeps node ids only: a watcher reads it (ANNOTATION_CHANGES) when told it moved
+// (ANNOTATIONS_CHANGED), and is answered with each node's annotations as they are then, so a burst of
+// edits to one note reads as one change.
 //
 // Verified live (fig-72): a human editing a note in Figma's right panel fires the page's
 // "nodechange" as PROPERTY_CHANGE with properties ["annotations"], origin LOCAL. So unlike
@@ -20,8 +21,8 @@ import { ANNOTATION_CHANGES_MAX_NODES, type AnnotationChange, type AnnotationCur
 export const ANNOTATION_LOG_LIMIT = 500;
 
 /**
- * How long the log waits after a change for the next before answering a held ask, so typing a note
- * lands as one answer rather than one per keystroke batch. Never past the ask's hold.
+ * How long the log waits after a change for the next before saying it moved, so typing a note lands
+ * as one notice rather than one per keystroke batch.
  */
 export const ANNOTATION_QUIET_MS = 1_500;
 
@@ -43,13 +44,16 @@ const realTimers: Timers = {
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
+/** `onSettled` hears where the log is once edits have been quiet for `quietMs`. */
 export function createAnnotationChangeLog({
   epoch,
+  onSettled,
   limit = ANNOTATION_LOG_LIMIT,
   quietMs = ANNOTATION_QUIET_MS,
   timers = realTimers,
 }: {
   epoch: string;
+  onSettled: (cursor: AnnotationCursor) => void;
   limit?: number;
   quietMs?: number;
   timers?: Timers;
@@ -59,7 +63,7 @@ export function createAnnotationChangeLog({
   let droppedThrough = 0;
   // node id → seq of its latest change. Insertion order is change order: a re-change moves to the end.
   const latest = new Map<string, number>();
-  const wakers = new Set<() => void>();
+  let quiet: unknown;
 
   function slice(after: AnnotationCursor | null): AnnotationLogSlice {
     if (after === null) return { cursor: { epoch, seq }, nodeIds: [], restarted: false, overflowed: false };
@@ -89,34 +93,14 @@ export function createAnnotationChangeLog({
         latest.delete(oldest);
         droppedThrough = at;
       }
-      for (const wake of [...wakers]) wake();
+      if (quiet !== undefined) timers.clear(quiet);
+      quiet = timers.set(() => {
+        quiet = undefined;
+        onSettled({ epoch, seq });
+      }, quietMs);
     },
 
     slice,
-
-    /**
-     * The changes after `after`: at once when there are some (or `after` is null, or from another
-     * plugin run), else at the first change once edits go quiet, else empty when `holdMs` ends.
-     */
-    wait(after: AnnotationCursor | null, holdMs: number): Promise<AnnotationLogSlice> {
-      const now = slice(after);
-      if (after === null || now.restarted || now.nodeIds.length || holdMs <= 0) return Promise.resolve(now);
-      return new Promise((resolve) => {
-        let quiet: unknown;
-        const finish = (): void => {
-          timers.clear(hold);
-          if (quiet !== undefined) timers.clear(quiet);
-          wakers.delete(wake);
-          resolve(slice(after));
-        };
-        const hold = timers.set(finish, holdMs);
-        const wake = (): void => {
-          if (quiet !== undefined) timers.clear(quiet);
-          quiet = timers.set(finish, quietMs);
-        };
-        wakers.add(wake);
-      });
-    },
   };
 }
 

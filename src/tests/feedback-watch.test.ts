@@ -22,13 +22,18 @@ const fileKey = figmaFileKey("abc");
 function fakeFigma({ readMs = 0 } = {}) {
   const comments: Comment[] = [];
   let reads = 0;
-  const add = (user: User, message: string, parent_id = ""): Comment => {
+  const add = (
+    user: User,
+    message: string,
+    parent_id = "",
+    created_at = new Date().toISOString(),
+  ): Comment => {
     const comment = {
       id: String(1000 + comments.length),
       parent_id,
       file_key: "abc",
       user,
-      created_at: new Date().toISOString(),
+      created_at,
       resolved_at: null,
       message,
       order_id: null,
@@ -70,19 +75,15 @@ const watch = (
 
 const later = (ms: number, run: () => void) => setTimeout(run, ms);
 
-// The plugin's annotation log at the bridge boundary: holds an ask until a change or the hold ends,
-// and drops it when the server aborts the request.
+// The plugin at the bridge boundary: answers a read at once, and says its log moved once a change
+// is pending, dropping a wait the server aborts.
 function fakePlugin() {
   const asked: (AnnotationWatchCursor | null)[] = [];
   const position = { epoch: "run-1", seq: 0 };
   let pending = false;
   const source: AnnotationChangeSource = {
-    poll: async (_key, after, holdMs, signal) => {
+    read: async (_key, after) => {
       asked.push(after);
-      for (const until = Date.now() + holdMs; after !== null && !pending && Date.now() < until; ) {
-        signal.throwIfAborted();
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
       const changes =
         pending && after !== null
           ? [
@@ -107,11 +108,14 @@ function fakePlugin() {
         overflowed: false,
       } satisfies AnnotationPoll;
     },
+    moved: async (_key, _after, signal) => {
+      while (!pending) await delay(10, undefined, { signal });
+    },
   };
   return { source, asked, change: () => (pending = true) };
 }
 
-it("reports only what arrives after the watch starts, once, and never the agent's own reply", async () => {
+it("reports only what arrives after the watch starts, once, never the agent's own reply, and never skips a tie", async () => {
   const { figma, add } = fakeFigma();
   const old = add(designer, "Old feedback, already known");
 
@@ -129,6 +133,12 @@ it("reports only what arrives after the watch starts, once, and never the agent'
   later(30, () => add(designer, "Still too small", old.id));
   const reply = await watch(figma, { cursor: quiet.cursor });
   expect(reply.comments?.map((thread) => thread.id)).toEqual([old.id]);
+
+  // Figma can show a comment late that shares the newest one's millisecond: it's still new.
+  const newest = reply.comments![0].replies!.at(-1)!.createdAt;
+  const tied = add(designer, "Same instant, shown late", "", newest);
+  const late = await watch(figma, { cursor: reply.cursor });
+  expect(late.comments?.map((thread) => thread.id)).toEqual([tied.id]);
 });
 
 it("returns an annotation change at once, and resumes the plugin's log from the cursor it returned", async () => {
@@ -171,7 +181,7 @@ it("an annotation change found during the first comment read doesn't swallow com
   ]);
 });
 
-it("refuses a cursor minted for another file", async () => {
+it("refuses a cursor minted for another file, and fails at once when Figma refuses the token", async () => {
   const { figma } = fakeFigma();
   const { cursor } = await watch(figma, { timeoutMs: 10 });
   await expect(
@@ -182,6 +192,22 @@ it("refuses a cursor minted for another file", async () => {
       signal: new AbortController().signal,
     }),
   ).rejects.toThrow(FeedbackCursorError);
+
+  // The plugin is still being waited for when the comments read fails: the watch mustn't wait on it.
+  const refused = {
+    withSignal: () => refused,
+    getComments: async () => {
+      throw new Error("403: token lacks file_comments:read");
+    },
+  } as unknown as FigmaService;
+  const linking: AnnotationChangeSource = {
+    read: (_key, _after, signal) =>
+      delay(10_000, undefined, { signal }).then(() => ({ kind: "unwatched", note: "never" })),
+    moved: () => new Promise(() => {}),
+  };
+  const startedAt = Date.now();
+  await expect(watch(refused, { annotations: linking, timeoutMs: 20_000 })).rejects.toThrow(/403/);
+  expect(Date.now() - startedAt).toBeLessThan(1_000);
 });
 
 it("a follow says once that it's watching, then emits only feedback, until stopped", async () => {

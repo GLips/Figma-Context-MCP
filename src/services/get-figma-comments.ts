@@ -11,7 +11,7 @@ import type { Comment, Node as FigmaNode, GetFileResponse } from "@figma/rest-ap
 import { hitTestCommentPin, type CommentPinGeometry } from "@framelink/core";
 import type { FigmaService } from "./figma.js";
 import {
-  commentTimes,
+  personComments,
   readCommentThreads,
   type CommentPoint,
   type CommentReply,
@@ -25,8 +25,10 @@ export interface GetFigmaCommentsOptions {
   include: "counts" | "full";
   /** `unresolved` also drops threads an agent marked handled; `all` keeps both. */
   status: "unresolved" | "all";
-  /** ISO timestamp; keeps threads with any comment created at or after it. */
+  /** ISO timestamp; keeps threads with a person's comment created at or after it. */
   since?: string;
+  /** Comments created at exactly `since` the caller already has, which don't count as new. */
+  seenAtSince?: readonly string[];
 }
 
 /** A node named the way an agent orients: its name and the names above it, page first. */
@@ -84,12 +86,27 @@ export async function getFigmaComments(
   options: GetFigmaCommentsOptions,
 ): Promise<GetFigmaCommentsResult> {
   const { comments } = await figma.getComments(fileKey);
-  const watermark = commentsWatermark(comments);
+  return shapeFigmaComments(figma, fileKey, comments, options);
+}
+
+/** getFigmaComments over comments already fetched from the file. */
+export async function shapeFigmaComments(
+  figma: FigmaService,
+  fileKey: FigmaFileKey,
+  comments: readonly Comment[],
+  options: GetFigmaCommentsOptions,
+): Promise<GetFigmaCommentsResult> {
+  const watermark = commentsMark(comments)?.time;
   const since = options.since === undefined ? undefined : Date.parse(options.since);
+  const seen = new Set(options.seenAtSince);
+  const isNew = ({ id, createdAt }: { id: string; createdAt: string }) =>
+    since === undefined ||
+    Date.parse(createdAt) > since ||
+    (Date.parse(createdAt) === since && !seen.has(id));
   const threads = readCommentThreads(comments).filter(
     (thread) =>
       (options.status === "all" || (thread.resolvedAt === null && !thread.handled)) &&
-      (since === undefined || commentTimes(thread).some((time) => Date.parse(time) >= since)),
+      personComments(thread).some(isNew),
   );
 
   const located = threads.length
@@ -111,12 +128,19 @@ export async function getFigmaComments(
   return result;
 }
 
-/** The newest comment's creation time, agents' included: what a later `since` resumes from. */
-export function commentsWatermark(comments: readonly Comment[]): string | undefined {
-  let newest: string | undefined;
+/**
+ * The newest comment's creation time, agents' included, and every comment created at exactly it: a
+ * later `since` and `seenAtSince` resume from there, neither repeating nor skipping a tie.
+ */
+export function commentsMark(
+  comments: readonly Comment[],
+): { time: string; seen: string[] } | undefined {
+  let newest: number | undefined;
   for (const { created_at } of comments)
-    if (!newest || Date.parse(created_at) > Date.parse(newest)) newest = created_at;
-  return newest;
+    newest = Math.max(newest ?? -Infinity, Date.parse(created_at));
+  if (newest === undefined) return undefined;
+  const at = comments.filter(({ created_at }) => Date.parse(created_at) === newest);
+  return { time: at[0].created_at, seen: at.map(({ id }) => id) };
 }
 
 interface AnchorTree {

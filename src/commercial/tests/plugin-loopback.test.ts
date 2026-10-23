@@ -40,6 +40,8 @@ import {
   type LoopbackPlugin,
 } from "./fixtures/loopback-plugin.js";
 import { createTestWriteAccess } from "./fixtures/write-access.js";
+import { createBridgeAnnotationSource } from "~/commercial/plugin-bridge/annotation-watch.js";
+import { watchFigmaFeedback } from "~/services/watch-figma-feedback.js";
 import { figmaFileKey } from "~/utils/figma-url.js";
 
 const ports = vi.hoisted(() => [] as number[]);
@@ -793,4 +795,35 @@ it("a handle passed with another document refuses without running, and without a
   });
   // The handle alone binds to its own file, though two granted files are open.
   expect((await runIn(bridge, { session }, "return session.kept;")).reply.result).toBe(true);
+});
+
+it("a watch hears a person's note edit once the plugin says its log moved, and only once the project is allowed in the file", async () => {
+  const bridge = startBridge(dir, ports[0]);
+  const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout", { key: "FILEkeyA" }) });
+  await pairByPanel(bridge, plugin);
+  await linksReported(bridge, 1);
+  const watch = (timeoutMs: number) =>
+    watchFigmaFeedback({ none: true, noCommentsNote: "No token" }, figmaFileKey("FILEkeyA"), {
+      timeoutMs,
+      annotations: createBridgeAnnotationSource(bridge),
+      signal: new AbortController().signal,
+    });
+
+  const refused = await watch(50);
+  expect(refused.notes).toContainEqual(expect.stringContaining(`isn't allowed in "Checkout"`));
+
+  await target(bridge, documentOf(plugin), () => plugin.allow());
+  setTimeout(() => plugin.annotate("5:1", "Use the brand blue"), 100);
+  const heard = await watch(5_000);
+  expect(heard).toMatchObject({
+    status: "feedback",
+    annotations: [
+      {
+        id: "5:1",
+        name: "Node 5:1",
+        path: "Page 1",
+        annotations: [{ text: "Use the brand blue" }],
+      },
+    ],
+  });
 });

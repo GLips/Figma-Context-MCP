@@ -132,11 +132,9 @@ function readCommentPin(meta: Comment["client_meta"] | null): CommentPin | null 
 }
 
 /**
- * When people commented in the thread, root first — what `since` looks at. An agent's own replies are
- * left out, so an agent polling with `since` isn't handed back the thread it just answered.
+ * The comments people wrote in the thread, root first — what `since` looks at. An agent's own replies
+ * are left out, so an agent polling with `since` isn't handed back the thread it just answered.
  */
-export function commentTimes(thread: CommentThread): string[] {
-  return [thread, ...thread.replies]
-    .filter((comment) => !isAgentComment(comment.message))
-    .map((comment) => comment.createdAt);
+export function personComments(thread: CommentThread): CommentReply[] {
+  return [thread, ...thread.replies].filter((comment) => !isAgentComment(comment.message));
 }

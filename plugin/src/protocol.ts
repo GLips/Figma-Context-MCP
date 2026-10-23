@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -72,6 +72,8 @@ export const PROTOCOL_VERSION = 18;
  *     agent's code returned; FlcmHost.traceNative is FlcmHost.trace.
  * v18: annotation watching. ANNOTATION_CHANGES asks a granted plugin which nodes' annotations changed
  *     after a cursor, held until one does or the hold ends, and is answered with their annotations now.
+ * v19: ANNOTATION_CHANGES answers at once (no `holdMs`); the plugin says when its log moved with the
+ *     ANNOTATIONS_CHANGED event, so a watcher asks when told rather than holding an ask open.
  */
 
 // ---- Transport ----
@@ -100,12 +102,6 @@ export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
  * started, or just lost a link, hears from every open plugin within it.
  */
 export const PLUGIN_REDIAL_MAX_MS = 15_000;
-
-/**
- * The longest the plugin holds an ANNOTATION_CHANGES request open waiting for a change. Under the
- * inactivity deadline, which a request that is no run is held to as well, with room for the readout.
- */
-export const ANNOTATION_HOLD_MAX_MS = 10_000;
 
 /** The most changed nodes one ANNOTATION_CHANGES reply reads out; the rest come on the next ask. */
 export const ANNOTATION_CHANGES_MAX_NODES = 50;
@@ -474,8 +470,8 @@ export type ServerRequest =
       margin?: number;
     }
   // Which nodes' annotations changed after `after` (null: none yet, only the cursor now) in
-  // `documentId`, held up to `holdMs` for one to change. A read, granted like a run, but never queued.
-  | { type: "ANNOTATION_CHANGES"; documentId: string; after: AnnotationCursor | null; holdMs: number };
+  // `documentId`. A read, granted like a run, but never queued.
+  | { type: "ANNOTATION_CHANGES"; documentId: string; after: AnnotationCursor | null };
 
 export type ServerRequestType = ServerRequest["type"];
 
@@ -597,10 +593,9 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
     }
     case "ANNOTATION_CHANGES": {
       if (!isDocumentId(f.documentId)) return null;
-      if (typeof f.holdMs !== "number" || !(f.holdMs >= 0 && f.holdMs <= ANNOTATION_HOLD_MAX_MS)) return null;
       const after = f.after === null ? null : parseAnnotationCursor(f.after);
       if (after === undefined) return null;
-      return { type: "ANNOTATION_CHANGES", id, documentId: f.documentId, after, holdMs: f.holdMs };
+      return { type: "ANNOTATION_CHANGES", id, documentId: f.documentId, after };
     }
     default:
       return null;
@@ -852,7 +847,10 @@ export type PluginEvent =
   | { type: "RUN_CHANGED"; executionId: string }
   // The run's late-change watch closed with no change: nothing more will be reported for it. Never
   // sent for a run whose reply said documentChanged, nor alongside a RUN_CHANGED.
-  | { type: "RUN_SETTLED"; executionId: string };
+  | { type: "RUN_SETTLED"; executionId: string }
+  // This plugin's annotation log moved to `cursor`, once edits went quiet. Sent to every link, granted
+  // or not, and says only that: what changed is an ANNOTATION_CHANGES read, which checks the grant.
+  | { type: "ANNOTATIONS_CHANGED"; cursor: AnnotationCursor };
 
 export type PluginEventType = PluginEvent["type"];
 
@@ -900,6 +898,10 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
     case "RUN_CHANGED":
     case "RUN_SETTLED":
       return typeof f.executionId === "string" ? { type: f.type, executionId: f.executionId } : null;
+    case "ANNOTATIONS_CHANGED": {
+      const cursor = parseAnnotationCursor(f.cursor);
+      return cursor ? { type: "ANNOTATIONS_CHANGED", cursor } : null;
+    }
     default:
       return null;
   }

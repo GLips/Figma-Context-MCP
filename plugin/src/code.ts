@@ -117,7 +117,12 @@ const executor = createRunExecutor({
   activity,
 });
 // Random per plugin run, so a watcher's cursor from before a reload is recognised as stale.
-const annotationLog = createAnnotationChangeLog({ epoch: Math.random().toString(36).slice(2, 14) });
+const annotationLog = createAnnotationChangeLog({
+  epoch: Math.random().toString(36).slice(2, 14),
+  onSettled: (cursor) => {
+    for (const key of linkAuth.authenticatedConnections()) toServer(key, { type: "ANNOTATIONS_CHANGED", cursor });
+  },
+});
 watchAnnotationChanges(annotationLog);
 identity.start();
 panel.render();
@@ -280,7 +285,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       }
       return;
     case "ANNOTATION_CHANGES":
-      void answerAnnotationChanges(to, msg.documentId, msg.after, msg.holdMs);
+      void answerAnnotationChanges(to, msg.documentId, msg.after);
       return;
     case "WRITE_ACCESS":
       panel.noteWriteAccess(key, msg.notice);
@@ -290,19 +295,14 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
 }
 
 /**
- * A watching server's ask. Not in the activity feed: a watcher asks again every few seconds and would
- * bury every real call. The grant is checked again last, after every await, since it may have been
- * revoked or the file re-stamped while the ask waited or read.
+ * A watching server's read. Not in the activity feed: a watcher reads on every notice and every few
+ * seconds besides, and would bury every real call. The grant is checked again last, after every
+ * await, since it may have been revoked or the file re-stamped while the read ran.
  */
-async function answerAnnotationChanges(
-  to: ReplyTo,
-  documentId: string,
-  after: AnnotationCursor | null,
-  holdMs: number,
-): Promise<void> {
+async function answerAnnotationChanges(to: ReplyTo, documentId: string, after: AnnotationCursor | null): Promise<void> {
   const refusedBefore = await gate.readRefusal(to.connKey, documentId);
   if (refusedBefore) return reply(to, { type: "NOT_GRANTED", reason: refusedBefore });
-  const slice = await annotationLog.wait(after, holdMs);
+  const slice = annotationLog.slice(after);
   let changes: AnnotationChange[];
   try {
     changes = await readAnnotationChanges(slice.nodeIds);
