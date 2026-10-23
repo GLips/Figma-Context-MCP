@@ -7,6 +7,7 @@
 // (link-auth.ts), the file's stamp (document-identity.ts), the grant gate (grant-gate.ts), the
 // runner (run-executor.ts) and the panel (grant-panel.ts) do the work.
 import { createActivityFeed } from "./activity-feed.js";
+import { createAnnotationChangeLog, readAnnotationChanges, watchAnnotationChanges } from "./annotation-changes.js";
 import { watchForFigmaPause } from "./figma-pause.js";
 import { createDocumentIdentity } from "./document-identity.js";
 import { createGrantGate } from "./grant-gate.js";
@@ -20,6 +21,7 @@ import {
   LINK_SETUP_REQUEST_TYPES,
   PROTOCOL_VERSION,
   parseServerFrame,
+  type AnnotationCursor,
   type ServerRequestType,
 } from "./protocol.js";
 import type { ConnKey, HostInbound, PanelControl } from "./panel.js";
@@ -113,6 +115,9 @@ const executor = createRunExecutor({
   sessions,
   activity,
 });
+// Random per plugin run, so a watcher's cursor from before a reload is recognised as stale.
+const annotationLog = createAnnotationChangeLog({ epoch: Math.random().toString(36).slice(2, 14) });
+watchAnnotationChanges(annotationLog);
 identity.start();
 panel.render();
 
@@ -273,10 +278,38 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
         executor.runScreenshot(to, msg.documentId, { nodeId, key: nodeKey }, { scale, context, margin });
       }
       return;
+    case "ANNOTATION_CHANGES":
+      void answerAnnotationChanges(to, msg.documentId, msg.after, msg.holdMs);
+      return;
     case "WRITE_ACCESS":
       panel.noteWriteAccess(key, msg.notice);
       reply(to, { type: "WRITE_ACCESS_ACK" });
       return;
+  }
+}
+
+/**
+ * A watching server's ask. Not in the activity feed: a watcher asks again every few seconds and would
+ * bury every real call. The grant is checked again after the hold, since it may have been revoked
+ * or the file re-stamped while the ask waited.
+ */
+async function answerAnnotationChanges(
+  to: ReplyTo,
+  documentId: string,
+  after: AnnotationCursor | null,
+  holdMs: number,
+): Promise<void> {
+  const refusedBefore = await gate.readRefusal(to.connKey, documentId);
+  if (refusedBefore) return reply(to, { type: "NOT_GRANTED", reason: refusedBefore });
+  const slice = await annotationLog.wait(after, holdMs);
+  const refusedAfter = await gate.readRefusal(to.connKey, documentId);
+  if (refusedAfter) return reply(to, { type: "NOT_GRANTED", reason: refusedAfter });
+  try {
+    const changes = await readAnnotationChanges(slice.nodeIds);
+    const { cursor, restarted, overflowed } = slice;
+    reply(to, { type: "ANNOTATION_CHANGES_RESULT", cursor, changes, restarted, overflowed });
+  } catch (error) {
+    reply(to, { type: "ERROR", error: `The plugin couldn't read the changed annotations: ${String(error)}` });
   }
 }
 

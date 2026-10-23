@@ -7,7 +7,7 @@
  * call) and only frame anchors go into the geometry fetch. Worst case: one Tier-2 comments call plus two
  * Tier-1 file calls. A call with no matching threads stops after the comments call.
  */
-import type { Node as FigmaNode, GetFileResponse } from "@figma/rest-api-spec";
+import type { Comment, Node as FigmaNode, GetFileResponse } from "@figma/rest-api-spec";
 import { hitTestCommentPin, type CommentPinGeometry } from "@framelink/core";
 import type { FigmaService } from "./figma.js";
 import {
@@ -84,7 +84,7 @@ export async function getFigmaComments(
   options: GetFigmaCommentsOptions,
 ): Promise<GetFigmaCommentsResult> {
   const { comments } = await figma.getComments(fileKey);
-  const watermark = newestTime(comments.map((comment) => comment.created_at));
+  const watermark = commentsWatermark(comments);
   const since = options.since === undefined ? undefined : Date.parse(options.since);
   const threads = readCommentThreads(comments).filter(
     (thread) =>
@@ -111,9 +111,11 @@ export async function getFigmaComments(
   return result;
 }
 
-function newestTime(times: string[]): string | undefined {
+/** The newest comment's creation time, agents' included: what a later `since` resumes from. */
+export function commentsWatermark(comments: readonly Comment[]): string | undefined {
   let newest: string | undefined;
-  for (const time of times) if (!newest || Date.parse(time) > Date.parse(newest)) newest = time;
+  for (const { created_at } of comments)
+    if (!newest || Date.parse(created_at) > Date.parse(newest)) newest = created_at;
   return newest;
 }
 

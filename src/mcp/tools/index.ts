@@ -16,3 +16,8 @@ export type {
   LocalPathRejection,
 } from "./download-figma-images-tool.js";
 export type { DescribeReadRecovery, GetFigmaDataParams } from "./get-figma-data-tool.js";
+export { watchFigmaFeedbackTool } from "./watch-figma-feedback-tool.js";
+export type {
+  WatchFigmaFeedbackOutcome,
+  WatchFigmaFeedbackParams,
+} from "./watch-figma-feedback-tool.js";

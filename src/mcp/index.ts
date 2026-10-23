@@ -13,6 +13,8 @@ import {
 import type { OutputFormat } from "~/utils/serialize.js";
 import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
 import { registerCommentWriteTools } from "./comment-write-tools.js";
+import { registerFeedbackWatchTool } from "./feedback-watch-tool.js";
+import type { AnnotationChangeSource } from "~/services/watch-figma-feedback.js";
 import {
   askAgentsForUserGoal,
   type ObserveToolCall,
@@ -47,6 +49,8 @@ export interface ServerExtensionContext<Caller extends CallerContext = CallerCon
 export interface ServerExtension<Caller extends CallerContext = CallerContext> {
   /** Guidance appended to a failed get_figma_data for this caller: another way to get the same data. */
   describeReadRecovery?(caller: Caller): DescribeReadRecovery | null;
+  /** Where watch_figma_feedback reads annotation changes for this caller; none watches comments only. */
+  annotationChanges?(caller: Caller): AnnotationChangeSource | null;
   register(server: McpServer, context: ServerExtensionContext<Caller>): void;
 }
 
@@ -111,6 +115,25 @@ function createServer<Caller extends CallerContext>(
             intent: outcome.intent,
             isError: outcome.facts.error !== undefined,
             error: outcome.facts.error,
+          }
+        : toolCallEvent(outcome),
+      context,
+    ),
+  );
+
+  const annotationSources = extensions.flatMap(
+    (extension) => extension.annotationChanges?.(caller) ?? [],
+  );
+  registerFeedbackWatchTool(server, figmaService, annotationSources[0] ?? null, (outcome) =>
+    captureToolCall(
+      outcome.kind === "completed" && outcome.facts
+        ? {
+            tool: outcome.tool,
+            durationMs: outcome.facts.durationMs,
+            intent: outcome.intent,
+            isError: outcome.facts.error !== undefined,
+            error: outcome.facts.error,
+            properties: outcome.facts.status ? { watch_status: outcome.facts.status } : undefined,
           }
         : toolCallEvent(outcome),
       context,

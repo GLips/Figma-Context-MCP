@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -70,6 +70,8 @@ export const PROTOCOL_VERSION = 17;
  * v17: Figma pauses. A plugin whose timers have stopped firing answers a run FIGMA_PAUSED and says so
  *     on CANCEL_RESULT as `figmaPausedMs`. RUN_TRACE reports each flcm verb's steps and when the
  *     agent's code returned; FlcmHost.traceNative is FlcmHost.trace.
+ * v18: annotation watching. ANNOTATION_CHANGES asks a granted plugin which nodes' annotations changed
+ *     after a cursor, held until one does or the hold ends, and is answered with their annotations now.
  */
 
 // ---- Transport ----
@@ -98,6 +100,15 @@ export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
  * started, or just lost a link, hears from every open plugin within it.
  */
 export const PLUGIN_REDIAL_MAX_MS = 15_000;
+
+/**
+ * The longest the plugin holds an ANNOTATION_CHANGES request open waiting for a change. Under the
+ * inactivity deadline, which a request that is no run is held to as well, with room for the readout.
+ */
+export const ANNOTATION_HOLD_MAX_MS = 10_000;
+
+/** The most changed nodes one ANNOTATION_CHANGES reply reads out; the rest come on the next ask. */
+export const ANNOTATION_CHANGES_MAX_NODES = 50;
 
 /** How often a call waiting on the human polls GRANT_STATUS. */
 export const GRANT_POLL_MS = 750;
@@ -382,6 +393,27 @@ function parseWriteAccessNotice(value: unknown): WriteAccessNotice | null {
   return null;
 }
 
+/**
+ * Where an annotation watcher has read up to in one plugin's change log. `epoch` names the plugin run
+ * that kept the log: a cursor from another run (the plugin was closed or reloaded since) is read from
+ * the start of this one's log.
+ */
+export interface AnnotationCursor {
+  epoch: string;
+  seq: number;
+}
+
+const MAX_EPOCH_LENGTH = 64;
+
+/** A cursor, or undefined when the value isn't one. */
+function parseAnnotationCursor(value: unknown): AnnotationCursor | undefined {
+  if (!isRecord(value)) return undefined;
+  const { epoch, seq } = value;
+  if (typeof epoch !== "string" || !epoch || epoch.length > MAX_EPOCH_LENGTH) return undefined;
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0) return undefined;
+  return { epoch, seq };
+}
+
 // ---- Server → plugin ----
 
 /**
@@ -440,7 +472,10 @@ export type ServerRequest =
       scale?: number;
       context?: boolean;
       margin?: number;
-    };
+    }
+  // Which nodes' annotations changed after `after` (null: none yet, only the cursor now) in
+  // `documentId`, held up to `holdMs` for one to change. A read, granted like a run, but never queued.
+  | { type: "ANNOTATION_CHANGES"; documentId: string; after: AnnotationCursor | null; holdMs: number };
 
 export type ServerRequestType = ServerRequest["type"];
 
@@ -560,6 +595,13 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
         margin: typeof f.margin === "number" ? f.margin : undefined,
       };
     }
+    case "ANNOTATION_CHANGES": {
+      if (!isDocumentId(f.documentId)) return null;
+      if (typeof f.holdMs !== "number" || !(f.holdMs >= 0 && f.holdMs <= ANNOTATION_HOLD_MAX_MS)) return null;
+      const after = f.after === null ? null : parseAnnotationCursor(f.after);
+      if (after === undefined) return null;
+      return { type: "ANNOTATION_CHANGES", id, documentId: f.documentId, after, holdMs: f.holdMs };
+    }
     default:
       return null;
   }
@@ -600,6 +642,35 @@ export type ExecuteCodeResult = {
 /** Exactly one of a base64 PNG or the failure. */
 export type ScreenshotResult = { type: "SCREENSHOT_RESULT"; image: string } | { type: "SCREENSHOT_RESULT"; errors: string };
 
+/** One annotation as a read shows it: flcm's own vocabulary (see the `annotations` reference). */
+export interface WireAnnotation {
+  text?: string;
+  category?: string;
+  properties?: string[];
+}
+
+/**
+ * A node whose annotations changed, read when the reply was made: what they say now, not what
+ * changed. `annotations: []` means they were all removed. `path` is the page and the ancestors above
+ * the node, as get_figma_comments names nodes.
+ */
+export type AnnotationChange =
+  | { id: string; name: string; type: string; path: string; annotations: WireAnnotation[] }
+  | { id: string; removed: true };
+
+/**
+ * `cursor` covers every change reported here. `restarted`: the asked cursor came from an earlier
+ * plugin run, so changes made while the plugin was closed are missing. `overflowed`: more nodes
+ * changed than the log keeps, so some since the asked cursor were dropped.
+ */
+export type AnnotationChangesResult = {
+  type: "ANNOTATION_CHANGES_RESULT";
+  cursor: AnnotationCursor;
+  changes: AnnotationChange[];
+  restarted: boolean;
+  overflowed: boolean;
+};
+
 /** FROZEN, like HELLO. Both optional: a plugin that can't name them reads as the protocol floor. */
 export type HelloReply = { type: "HELLO_RESULT"; pluginVersion?: string; protocolVersion?: number };
 
@@ -624,6 +695,7 @@ export interface ReplyByRequest {
   EXECUTE_CODE: ExecuteCodeResult | NotGrantedReply | SessionRefusedReply | FigmaPausedReply;
   WRITE_ACCESS: { type: "WRITE_ACCESS_ACK" };
   SCREENSHOT: ScreenshotResult | NotGrantedReply | FigmaPausedReply;
+  ANNOTATION_CHANGES: AnnotationChangesResult | NotGrantedReply;
 }
 export type ReplyFor<T extends ServerRequestType> = ReplyByRequest[T];
 
@@ -693,7 +765,50 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
       if (typeof f.image === "string" && f.errors === undefined) return { type: "SCREENSHOT_RESULT", image: f.image };
       if (typeof f.errors === "string" && f.image === undefined) return { type: "SCREENSHOT_RESULT", errors: f.errors };
       return null;
+    case "ANNOTATION_CHANGES":
+      return parseNotGranted(f) ?? parseAnnotationChangesResult(f);
   }
+}
+
+function parseAnnotationChangesResult(f: Record<string, unknown>): AnnotationChangesResult | null {
+  if (f.type !== "ANNOTATION_CHANGES_RESULT") return null;
+  const cursor = parseAnnotationCursor(f.cursor);
+  if (!cursor || typeof f.restarted !== "boolean" || typeof f.overflowed !== "boolean") return null;
+  if (!Array.isArray(f.changes) || f.changes.length > ANNOTATION_CHANGES_MAX_NODES) return null;
+  const changes: AnnotationChange[] = [];
+  for (const raw of f.changes) {
+    const change = parseAnnotationChange(raw);
+    if (!change) return null;
+    changes.push(change);
+  }
+  return { type: "ANNOTATION_CHANGES_RESULT", cursor, changes, restarted: f.restarted, overflowed: f.overflowed };
+}
+
+function parseAnnotationChange(value: unknown): AnnotationChange | null {
+  if (!isRecord(value) || typeof value.id !== "string") return null;
+  if (value.removed === true) return { id: value.id, removed: true };
+  const { id, name, type, path, annotations } = value;
+  if (typeof name !== "string" || typeof type !== "string" || typeof path !== "string") return null;
+  if (!Array.isArray(annotations)) return null;
+  const read: WireAnnotation[] = [];
+  for (const entry of annotations) {
+    if (!isRecord(entry)) return null;
+    const annotation: WireAnnotation = {};
+    if (entry.text !== undefined) {
+      if (typeof entry.text !== "string") return null;
+      annotation.text = entry.text;
+    }
+    if (entry.category !== undefined) {
+      if (typeof entry.category !== "string") return null;
+      annotation.category = entry.category;
+    }
+    if (entry.properties !== undefined) {
+      if (!Array.isArray(entry.properties) || !entry.properties.every((p) => typeof p === "string")) return null;
+      annotation.properties = entry.properties as string[];
+    }
+    read.push(annotation);
+  }
+  return { id, name, type, path, annotations: read };
 }
 
 /** An EXECUTE_CODE_RESULT, or null. Also read off a reply whose caller already gave up (bridge.ts). */

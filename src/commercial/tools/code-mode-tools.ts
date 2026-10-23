@@ -57,6 +57,7 @@ import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-t
 import { retryableToolReply } from "~/mcp/fail-loud-params.js";
 import type { ToolEventProperties } from "~/telemetry/index.js";
 import { referenceDocumentsNote } from "~/commercial/plugin-bridge/reference-documents-note.js";
+import { createBridgeAnnotationSource } from "~/commercial/plugin-bridge/annotation-watch.js";
 import { advertisePluginReadRoute, describePluginReadRecovery } from "./plugin-read-route.js";
 import {
   buildQuickStart,
@@ -110,6 +111,7 @@ export function codeModeExtension(
   return {
     describeReadRecovery: ({ plugin }) =>
       plugin && ((error, request) => describePluginReadRecovery(plugin, error, request)),
+    annotationChanges: ({ plugin }) => plugin && createBridgeAnnotationSource(plugin.bridge),
     register(server, context) {
       // A remote caller can't use the plugin, so get_figma_data mustn't point it there.
       if (context.caller.plugin)

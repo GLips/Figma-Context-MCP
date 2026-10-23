@@ -369,6 +369,16 @@ export function createGrantGate({
       return null;
     },
 
+    /**
+     * The check for a read that is no run (ANNOTATION_CHANGES): the dequeue check's settled answer,
+     * without taking the baton, since a read doesn't drive the document. Null admits.
+     */
+    async readRefusal(key: ConnKey, documentId: string): Promise<NotGrantedReason | null> {
+      if (identity.rereadDocumentId() !== documentId) return "other-document";
+      const scope = scopeOf(key, documentId);
+      return scope && (await store.settledAnswer(scope)) === "granted" ? null : "no-grant";
+    },
+
     rows,
 
     /** Every call's prompt still waiting on the human, oldest first. */

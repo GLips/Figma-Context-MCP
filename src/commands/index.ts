@@ -3,6 +3,7 @@ import { executeCommand } from "~/commercial/commands/execute.js";
 import { pairCommand } from "~/commercial/commands/pair.js";
 import { referenceCommand } from "~/commercial/commands/reference.js";
 import { uploadCommand } from "~/commercial/commands/upload.js";
+import { watchCommand } from "~/commercial/commands/watch.js";
 import { commentsCommand } from "./comments.js";
 import { fetchCommand } from "./fetch.js";
 import { replyCommand } from "./reply.js";
@@ -11,6 +12,7 @@ export const CLI_COMMANDS: Command[] = [
   fetchCommand,
   commentsCommand,
   replyCommand,
+  watchCommand,
   executeCommand,
   referenceCommand,
   uploadCommand,
@@ -64,6 +66,11 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
       message: "--message",
       handled: "--handled",
     },
+    figmaRest: true,
+  },
+  watch_figma_feedback: {
+    command: "watch",
+    inputs: { fileKey: "--file-key", cursor: "--cursor", timeoutSeconds: "--timeout" },
     figmaRest: true,
   },
   download_figma_images: {
