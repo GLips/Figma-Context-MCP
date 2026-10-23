@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
+import { childListClosingInstanceOf } from "./identity.js";
 // One accumulator per synchronous mutation span. Diagnostics observe final geometry after all
 // entries, overrides and percent sizing settle; they never turn a successful write into a failure.
 interface SizingNode {
@@ -32,6 +33,7 @@ let measured = new Map<string, Measurement>();
 let affected = new Map<string, SizingNode>();
 let requests = new Map<string, ResizeRequest>();
 let roots = new Set<string>();
+let misses: { node: SizingNode; prop: "width" | "height"; authored: number; realized: number; message: string }[] = [];
 let inspectionError: unknown;
 
 export function beginSizingDiagnostics(): void {
@@ -39,6 +41,7 @@ export function beginSizingDiagnostics(): void {
   affected = new Map();
   requests = new Map();
   roots = new Set();
+  misses = [];
   inspectionError = undefined;
 }
 
@@ -84,6 +87,7 @@ export function retargetSizingDiagnostics(from: SizingNode, to: SizingNode): voi
   const request = requests.get(from.id);
   if (request) { requests.delete(from.id); requests.set(to.id, { ...request, node: to }); }
   if (roots.delete(from.id)) roots.add(to.id);
+  for (const miss of misses) if (miss.node === from) miss.node = to;
 }
 
 export function resizeWithDiagnostics(node: SizingNode, width: number, height: number): void {
@@ -99,23 +103,24 @@ function clampingBound(node: SizingNode, axis: "width" | "height", requested: nu
 }
 
 /**
- * Resize for an authored px size, and refuse if Figma silently keeps the old one. Figma ignores
- * resize() on some instance sublayers (a nested instance whose size its main component's default
- * pins); reporting success there leaves the agent measuring a size it was told landed. The throw is
- * mid-apply, so the verb rolls back. Only the `authored` axes are judged: the other axis is a
- * carried size a text or hug may legitimately re-measure.
+ * Resize for an authored px size, and check it landed (or clamped to a min/max). Live Figma has
+ * no-op'd resize() on a nested instance; inside an instance's closed tree a miss throws mid-apply,
+ * so the verb rolls back. Elsewhere no miss has been seen, so it only warns. Only `authored` axes
+ * are judged: the other axis carries a size a text or hug may legitimately re-measure.
  */
 export function resizeToAuthoredSize(node: SizingNode, width: number, height: number, authored: { width: boolean; height: boolean }): void {
   resizeWithDiagnostics(node, width, height);
   for (const [axis, requested] of [["width", width], ["height", height]] as const) {
+    if (!authored[axis]) continue;
+    // Figma enforces min/max only in auto-layout, so a bound may or may not have clamped.
+    const bound = clampingBound(node, axis, requested);
     const actual = node[axis];
-    if (!authored[axis] || Math.abs(actual - requested) <= 0.01 || clampingBound(node, axis, requested)) continue;
-    throw new Error(
-      "Figma ignored " + axis + " " + Number(requested.toFixed(2)) + " and kept it at " + Number(actual.toFixed(2)) + "px",
-    );
+    if (Math.abs(actual - requested) <= 0.01 || (bound && Math.abs(actual - node[bound]!) <= 0.01)) continue;
+    const message = "requested " + axis + " " + Number(requested.toFixed(2)) + "; Figma realized " + Number(actual.toFixed(2));
+    if (childListClosingInstanceOf(node, false)) throw new Error(message);
+    misses.push({ node, prop: axis, authored: requested, realized: actual, message });
   }
 }
-
 // Project each child's own corners into the container's coordinates. Absolute transforms avoid
 // the special coordinate convention of children under groups and handle rotated containers.
 function overflow(container: SizingNode, child: SizingNode): { axis: "x" | "y"; amount: number } {
@@ -142,6 +147,9 @@ function overflow(container: SizingNode, child: SizingNode): { axis: "x" | "y"; 
 export function finishSizingDiagnostics(verb: string): void {
   try {
     if (inspectionError) throw inspectionError;
+    for (const { node, prop, authored, realized, message } of misses) {
+      warnings.add({ id: node.id, prop, authored, realized, message: "flcm." + verb + ": " + message + "." });
+    }
     for (const request of requests.values()) {
       const node = request.node;
       if (!onCanvas(node)) continue;

@@ -631,7 +631,7 @@ test("a height Figma ignores on a nested instance fails the edit and rolls it ba
   assert.equal(nested.height, 40);
   nested.resize = () => {};
   await assert.rejects(edit(nested.id, { height: 48 }), (err: Error) => {
-    assert.match(err.message, /Figma refused a write on INSTANCE .* Figma ignored height 48 and kept it at 40px/);
+    assert.match(err.message, /Figma refused a write on INSTANCE .* requested height 48; Figma realized 40/);
     assert.match(err.message, /rolled back/);
     assert.match(err.message, /lives inside instance/);
     return true;

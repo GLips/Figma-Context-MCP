@@ -302,3 +302,14 @@ test("a built or promoted component's sizing diagnostics follow the component, n
   const promoted = await component({ id: live.id, width: 100 } as never, { name: "Tile" });
   assert.deepEqual(warnings(), ['[warn] ' + live.children![0].id + ' "Fill" overflows ' + promoted.id + ' "Tile" by 50px on x; the parent does not clip, so the excess paints outside it.']);
 });
+
+// Outside an instance no refused resize has been seen live, so a miss warns rather than failing the
+// write. A bound excuses only the size it clamps to, never an ignored resize.
+test("a resize Figma ignores outside an instance warns instead of failing", async () => {
+  const built = await render({ type: "FRAME", width: 200, height: 60, maxHeight: 40 });
+  const node = await figma.getNodeByIdAsync(built.id);
+  diagnostics.discardFrom(0);
+  node.resize = () => {};
+  await edit(built, { height: 48 });
+  assert.match(warnings().join("\n"), /flcm\.edit: requested height 48; Figma realized 60/);
+});
