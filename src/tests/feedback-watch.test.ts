@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import type { Comment, GetFileResponse, User } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
@@ -18,7 +19,7 @@ const fileKey = figmaFileKey("abc");
 
 // An in-memory Figma comments API at the network boundary, stamping comments with the real clock as
 // Figma does, in milliseconds.
-function fakeFigma() {
+function fakeFigma({ readMs = 0 } = {}) {
   const comments: Comment[] = [];
   let reads = 0;
   const add = (user: User, message: string, parent_id = ""): Comment => {
@@ -37,17 +38,21 @@ function fakeFigma() {
     comments.push(comment);
     return comment;
   };
-  const figma = {
-    withSignal: () => figma,
-    getComments: async () => {
-      reads++;
-      return { comments: structuredClone(comments) };
-    },
-    getFileSlice: async () =>
-      ({
-        document: { children: [{ id: "1:1", name: "Home", type: "CANVAS", children: [] }] },
-      }) as unknown as GetFileResponse,
-  } as unknown as FigmaService;
+  const scoped = (signal?: AbortSignal): FigmaService =>
+    ({
+      withSignal: scoped,
+      getComments: async () => {
+        reads++;
+        const snapshot = structuredClone(comments);
+        await delay(readMs, undefined, { signal });
+        return { comments: snapshot };
+      },
+      getFileSlice: async () =>
+        ({
+          document: { children: [{ id: "1:1", name: "Home", type: "CANVAS", children: [] }] },
+        }) as unknown as GetFileResponse,
+    }) as unknown as FigmaService;
+  const figma = scoped();
   return { figma, add, reads: () => reads };
 }
 
@@ -64,6 +69,47 @@ const watch = (
   });
 
 const later = (ms: number, run: () => void) => setTimeout(run, ms);
+
+// The plugin's annotation log at the bridge boundary: holds an ask until a change or the hold ends,
+// and drops it when the server aborts the request.
+function fakePlugin() {
+  const asked: (AnnotationWatchCursor | null)[] = [];
+  const position = { epoch: "run-1", seq: 0 };
+  let pending = false;
+  const source: AnnotationChangeSource = {
+    poll: async (_key, after, holdMs, signal) => {
+      asked.push(after);
+      for (const until = Date.now() + holdMs; after !== null && !pending && Date.now() < until; ) {
+        signal.throwIfAborted();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const changes =
+        pending && after !== null
+          ? [
+              {
+                id: "2:3",
+                name: "CTA",
+                type: "FRAME",
+                path: "Home › Hero",
+                annotations: [{ text: "Use the brand blue" }],
+              },
+            ]
+          : [];
+      if (changes.length) {
+        position.seq++;
+        pending = false;
+      }
+      return {
+        kind: "watched",
+        cursor: { ...position },
+        changes,
+        restarted: false,
+        overflowed: false,
+      } satisfies AnnotationPoll;
+    },
+  };
+  return { source, asked, change: () => (pending = true) };
+}
 
 it("reports only what arrives after the watch starts, once, and never the agent's own reply", async () => {
   const { figma, add } = fakeFigma();
@@ -87,39 +133,11 @@ it("reports only what arrives after the watch starts, once, and never the agent'
 
 it("returns an annotation change at once, and resumes the plugin's log from the cursor it returned", async () => {
   const { figma } = fakeFigma();
-  const asked: (AnnotationWatchCursor | null)[] = [];
-  const position = { epoch: "run-1", seq: 0 };
-  let pending = false;
-  const annotations: AnnotationChangeSource = {
-    poll: async (_key, after, holdMs) => {
-      asked.push(after);
-      // Held like the plugin holds: until a change, or the hold ends.
-      for (const until = Date.now() + holdMs; after !== null && !pending && Date.now() < until; )
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      const changes = pending
-        ? [
-            {
-              id: "2:3",
-              name: "CTA",
-              type: "FRAME",
-              path: "Home › Hero",
-              annotations: [{ text: "Use the brand blue" }],
-            },
-          ]
-        : [];
-      if (pending) position.seq++;
-      pending = false;
-      return {
-        kind: "watched",
-        cursor: { ...position },
-        changes,
-        restarted: false,
-        overflowed: false,
-      } satisfies AnnotationPoll;
-    },
-  };
+  const plugin = fakePlugin();
+  const annotations = plugin.source;
+  const asked = plugin.asked;
 
-  later(40, () => (pending = true));
+  later(40, () => plugin.change());
   const startedAt = Date.now();
   const found = await watch(figma, { annotations, timeoutMs: 5_000 });
   expect(Date.now() - startedAt).toBeLessThan(2_000);
@@ -139,6 +157,20 @@ it("returns an annotation change at once, and resumes the plugin's log from the 
   expect(asked[0]).toEqual({ epoch: "run-1", seq: 1 });
 });
 
+it("an annotation change found during the first comment read doesn't swallow comments posted meanwhile", async () => {
+  const { figma, add } = fakeFigma({ readMs: 60 });
+  const plugin = fakePlugin();
+  plugin.change();
+  const first = await watch(figma, { annotations: plugin.source, timeoutMs: 2_000 });
+  expect(first.annotations?.map((change) => change.id)).toEqual(["2:3"]);
+
+  add(designer, "Posted while the agent handled the annotation");
+  const next = await watch(figma, { annotations: plugin.source, cursor: first.cursor });
+  expect(next.comments?.map((thread) => thread.message)).toEqual([
+    "Posted while the agent handled the annotation",
+  ]);
+});
+
 it("refuses a cursor minted for another file", async () => {
   const { figma } = fakeFigma();
   const { cursor } = await watch(figma, { timeoutMs: 10 });
@@ -153,26 +185,30 @@ it("refuses a cursor minted for another file", async () => {
 });
 
 it("a follow says once that it's watching, then emits only feedback, until stopped", async () => {
-  const { figma, add } = fakeFigma();
+  const { figma, add, reads } = fakeFigma();
+  const plugin = fakePlugin();
   const lines: FollowedFeedback[] = [];
   const stop = new AbortController();
   const following = followFigmaFeedback(figma, fileKey, {
-    annotations: null,
+    annotations: plugin.source,
     signal: stop.signal,
     emit: (line) => lines.push(line),
-    chunkMs: 40,
-    commentPollMs: 10,
+    commentPollMs: 200,
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  add(designer, "Swap the hero image");
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  // A burst of annotation edits mustn't hasten comment reads, which Figma rate-limits.
+  for (let i = 0; i < 5; i++) later(20 + i * 30, () => plugin.change());
+  later(250, () => add(designer, "Swap the hero image"));
+  await new Promise((resolve) => setTimeout(resolve, 500));
   stop.abort();
   await following;
 
-  expect(lines.map((line) => line.status)).toEqual(["watching", "feedback"]);
-  expect(lines[0].cursor).toBeTruthy();
-  expect(lines[1].status === "feedback" && lines[1].comments?.[0].message).toBe(
+  const comments = lines.filter((line) => line.status === "feedback" && line.comments);
+  expect(lines[0].status).toBe("watching");
+  expect(lines.slice(1).every((line) => line.status === "feedback")).toBe(true);
+  expect(lines.filter((line) => line.status === "feedback" && line.annotations).length).toBe(5);
+  expect(comments.map((line) => line.status === "feedback" && line.comments?.[0].message)).toEqual([
     "Swap the hero image",
-  );
+  ]);
+  expect(reads()).toBeLessThanOrEqual(4);
 });

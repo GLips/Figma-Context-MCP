@@ -85,14 +85,19 @@ export interface WatchFigmaFeedbackResult {
 /** A `cursor` this server didn't mint for this file. The agent's to fix, so it's answered, not thrown. */
 export class FeedbackCursorError extends Error {}
 
-/**
- * `comments`: the watermark already seen, or null when the file had no comments; absent until the
- * first read. `annotations`: absent until the plugin was first asked.
- */
-interface FeedbackCursor {
-  comments?: string | null;
+/** The newest comment seen (null: the file had none), and when comments were last read. */
+interface CommentsPosition {
+  watermark: string | null;
+  readAt: number;
+}
+
+/** Each source's position, absent until it was first read; a watch reports only what's past it. */
+interface FeedbackPositions {
+  comments?: CommentsPosition;
   annotations?: AnnotationWatchCursor;
 }
+
+type FeedbackFigma = FigmaService | { none: true; noCommentsNote: string };
 
 const NO_PLUGIN_SOURCE_NOTE =
   "Annotations aren't watched by this server: only comments are. Annotations reach the local Framelink server through its Figma plugin.";
@@ -102,7 +107,7 @@ const NO_PLUGIN_SOURCE_NOTE =
  * Figma token; its `noCommentsNote` says why comments aren't watched and how to fix it.
  */
 export async function watchFigmaFeedback(
-  figma: FigmaService | { none: true; noCommentsNote: string },
+  figma: FeedbackFigma,
   fileKey: FigmaFileKey,
   {
     cursor,
@@ -118,194 +123,293 @@ export async function watchFigmaFeedback(
     commentPollMs?: number;
   },
 ): Promise<WatchFigmaFeedbackResult> {
-  const state = decodeFeedbackCursor(cursor, fileKey);
-  const deadline = Date.now() + timeoutMs;
+  const at = decodeFeedbackCursor(cursor, fileKey);
+  const notes = new Set(sourceNotes(figma, annotations));
+  const untilDeadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+  const unwatched = await fixFeedbackPositions(
+    figma,
+    fileKey,
+    at,
+    annotations,
+    untilDeadline,
+  ).catch((error: unknown) => {
+    if (signal.aborted || !untilDeadline.aborted) throw error;
+    return null;
+  });
+  if (unwatched) notes.add(unwatched);
+
   const found: Pick<WatchFigmaFeedbackResult, "comments" | "annotations"> = {};
-  const notes: string[] = [];
-  // Aborted when either source finds something (the other stops where it is), or by the caller.
-  const stop = new AbortController();
-  const abandon = () => stop.abort(signal.reason);
-  signal.addEventListener("abort", abandon, { once: true });
-  async function watchComments(): Promise<boolean> {
-    if ("none" in figma) {
-      notes.push(figma.noCommentsNote);
-      return false;
-    }
-    const scoped = figma.withSignal(stop.signal);
-    for (;;) {
-      if (state.comments === undefined) {
-        // The first read only marks what already exists: a watch reports what's new from here on.
-        state.comments = commentsWatermark((await scoped.getComments(fileKey)).comments) ?? null;
-      } else {
-        // `since` is inclusive (the newest thread repeats); one millisecond past the watermark makes
-        // it exclusive, which Figma's millisecond timestamps make exact.
-        const since =
-          state.comments === null
-            ? undefined
-            : new Date(Date.parse(state.comments) + 1).toISOString();
-        const result = await getFigmaComments(scoped, fileKey, {
-          include: "full",
-          status: "all",
-          since,
-        });
-        state.comments = result.watermark ?? state.comments;
-        if (result.total) {
-          found.comments = result.threads;
-          return true;
-        }
-      }
-      const wait = Math.min(commentPollMs, deadline - Date.now());
-      if (wait <= 0) return false;
-      await delay(wait, undefined, { signal: stop.signal });
-    }
-  }
-
-  async function watchAnnotations(): Promise<boolean> {
-    if (!annotations) {
-      notes.push(NO_PLUGIN_SOURCE_NOTE);
-      return false;
-    }
-    for (;;) {
-      const after = state.annotations ?? null;
-      const hold = after === null ? 0 : Math.min(ANNOTATION_HOLD_MS, deadline - Date.now());
-      if (after !== null && hold <= 0) return false;
-      const poll = await annotations.poll(fileKey, after, hold, stop.signal);
-      if (poll.kind === "unwatched") {
-        notes.push(poll.note);
-        return false;
-      }
-      state.annotations = poll.cursor;
-      if (poll.restarted)
-        notes.push(
-          "The Figma plugin was closed or reloaded since your last watch, so annotation changes made in between aren't reported.",
-        );
-      if (poll.overflowed)
-        notes.push(
-          "More annotations changed than the plugin keeps track of, so some changes were dropped. Re-read with flcm.find({ hasAnnotations: true }).",
-        );
-      if (poll.changes.length) {
-        found.annotations = poll.changes;
-        return true;
-      }
-    }
-  }
-
+  const done = new AbortController();
+  const listening = AbortSignal.any([untilDeadline, done.signal]);
   let failure: { error: unknown } | null = null;
-  const settle = (run: () => Promise<boolean>) =>
-    run().then(
-      (foundSome) => {
-        if (foundSome) stop.abort();
-      },
-      (error: unknown) => {
-        // A source stopped by the other's find, or by the caller, isn't a failure of its own.
-        if (!stop.signal.aborted) failure ??= { error };
-        stop.abort();
-      },
-    );
-  try {
-    await Promise.all([settle(watchComments), settle(watchAnnotations)]);
-  } finally {
-    signal.removeEventListener("abort", abandon);
-  }
+  // Every source has a position by now, so stopping one mid-read loses nothing: it reads again
+  // from there next watch.
+  const listen = (run: Promise<void>) =>
+    run.catch((error: unknown) => {
+      if (listening.aborted) return;
+      failure ??= { error };
+      done.abort();
+    });
+  await Promise.all([
+    !("none" in figma) &&
+      at.comments &&
+      listen(
+        listenForComments(figma, fileKey, at, commentPollMs, listening, (threads) => {
+          found.comments = threads;
+          done.abort();
+        }),
+      ),
+    annotations &&
+      at.annotations &&
+      listen(
+        listenForAnnotations(annotations, fileKey, at, null, listening, (heard) => {
+          if ("note" in heard) {
+            notes.add(heard.note);
+            return;
+          }
+          heard.notes.forEach((note) => notes.add(note));
+          if (!heard.changes.length) return;
+          found.annotations = heard.changes;
+          done.abort();
+        }),
+      ),
+  ]);
   if (signal.aborted) throw signal.reason;
   if (failure) throw (failure as { error: unknown }).error;
 
   const result: WatchFigmaFeedbackResult = {
     status: found.comments || found.annotations ? "feedback" : "quiet",
     ...found,
-    cursor: encodeFeedbackCursor(fileKey, state),
+    cursor: encodeFeedbackCursor(fileKey, at),
   };
-  if (notes.length) result.notes = [...new Set(notes)];
+  if (notes.size) result.notes = [...notes];
   return result;
 }
 
-/** One line of a follow: what a watch found, or `watching` (started), or `error` (it retries). */
+/** One line of a follow: what a watch found, or `watching` (started, or its notes changed), or `error` (it retries). */
 export type FollowedFeedback =
-  | WatchFigmaFeedbackResult
+  | (WatchFigmaFeedbackResult & { status: "feedback" })
   | { status: "watching"; cursor: string; notes?: string[] }
   | { status: "error"; message: string; cursor: string | null; retryInSeconds: number };
 
-/** How long a follow waits after a failed watch before trying again (rate limits, a network drop). */
+/** How long a follow waits after a failed read before trying again (rate limits, a network drop). */
 export const FOLLOW_RETRY_MS = 60_000;
+
+/** How often a follow asks again after the plugin couldn't watch annotations. Local, so cheap. */
+const UNWATCHED_RETRY_MS = 15_000;
 
 /**
  * Watch without end, for a caller that hears each emitted value as it happens (the `watch --follow`
  * command, whose lines Claude Code's Monitor turns into notifications). Emits `watching` once the
  * starting point is fixed, then only feedback, changed notes and errors, each carrying the cursor to
- * restart from, so a quiet hour costs nothing. Ends only when `signal` aborts.
+ * restart from. Each source keeps its own pace, so a quiet hour costs one comment read per poll and
+ * nothing else. Ends only when `signal` aborts.
  */
 export async function followFigmaFeedback(
-  figma: Parameters<typeof watchFigmaFeedback>[0],
+  figma: FeedbackFigma,
   fileKey: FigmaFileKey,
   {
     cursor,
     annotations,
     signal,
     emit,
-    chunkMs = WATCH_TIMEOUT_MAX_SECONDS * 1000,
     retryMs = FOLLOW_RETRY_MS,
-    commentPollMs,
+    unwatchedRetryMs = UNWATCHED_RETRY_MS,
+    commentPollMs = COMMENT_POLL_MS,
   }: {
     cursor?: string;
     annotations: AnnotationChangeSource | null;
     signal: AbortSignal;
     emit: (line: FollowedFeedback) => void;
-    chunkMs?: number;
     retryMs?: number;
+    unwatchedRetryMs?: number;
     commentPollMs?: number;
   },
 ): Promise<void> {
-  let at = cursor;
-  let started = false;
-  let lastNotes = "[]";
-  while (!signal.aborted) {
-    try {
-      // The first watch is short: it only fixes where watching starts, and says so.
-      const result = await watchFigmaFeedback(figma, fileKey, {
-        cursor: at,
-        timeoutMs: started ? chunkMs : 1,
-        annotations,
-        signal,
-        commentPollMs,
-      });
-      at = result.cursor;
-      const notes = JSON.stringify(result.notes ?? []);
-      if (!started) {
-        started = true;
-        emit(
-          result.status === "quiet"
-            ? {
-                status: "watching",
-                cursor: result.cursor,
-                ...(result.notes ? { notes: result.notes } : {}),
-              }
-            : result,
-        );
-      } else if (result.status === "feedback" || notes !== lastNotes) emit(result);
-      lastNotes = notes;
-    } catch (error) {
-      if (signal.aborted) return;
-      // A cursor the caller passed can't get better by waiting.
-      if (error instanceof FeedbackCursorError) throw error;
-      emit({
-        status: "error",
-        message: error instanceof Error ? error.message : String(error),
-        cursor: at ?? null,
-        retryInSeconds: Math.round(retryMs / 1000),
-      });
-      await delay(retryMs, undefined, { signal }).catch(() => {});
+  const at = decodeFeedbackCursor(cursor, fileKey);
+  const fixedNotes = sourceNotes(figma, annotations);
+  let unwatchedNote: string | null = null;
+  const notesNow = (extra: string[] = []) => {
+    const notes = [...fixedNotes, ...(unwatchedNote ? [unwatchedNote] : []), ...extra];
+    return notes.length ? { notes } : {};
+  };
+  const cursorNow = () => encodeFeedbackCursor(fileKey, at);
+  const retrying = async (listen: () => Promise<void>) => {
+    for (;;) {
+      try {
+        return await listen();
+      } catch (error) {
+        if (signal.aborted) return;
+        emit({
+          status: "error",
+          message: error instanceof Error ? error.message : String(error),
+          cursor: at.comments || at.annotations ? cursorNow() : null,
+          retryInSeconds: Math.round(retryMs / 1000),
+        });
+        await delay(retryMs, undefined, { signal }).catch(() => {});
+      }
     }
+  };
+
+  await retrying(async () => {
+    unwatchedNote = await fixFeedbackPositions(figma, fileKey, at, annotations, signal);
+  });
+  if (signal.aborted) return;
+  emit({ status: "watching", cursor: cursorNow(), ...notesNow() });
+
+  await Promise.all([
+    !("none" in figma) &&
+      retrying(() =>
+        listenForComments(figma, fileKey, at, commentPollMs, signal, (comments) =>
+          emit({ status: "feedback", comments, cursor: cursorNow(), ...notesNow() }),
+        ),
+      ),
+    annotations &&
+      retrying(() =>
+        listenForAnnotations(annotations, fileKey, at, unwatchedRetryMs, signal, (heard) => {
+          const note = "note" in heard ? heard.note : null;
+          const noteChanged = note !== unwatchedNote;
+          unwatchedNote = note;
+          if ("changes" in heard && heard.changes.length)
+            emit({
+              status: "feedback",
+              annotations: heard.changes,
+              cursor: cursorNow(),
+              ...notesNow(heard.notes),
+            });
+          else if (noteChanged || ("notes" in heard && heard.notes.length))
+            emit({
+              status: "watching",
+              cursor: cursorNow(),
+              ...notesNow("notes" in heard ? heard.notes : []),
+            });
+        }),
+      ),
+  ]);
+}
+
+/** Why a source isn't watched at all, from how the watch was composed. */
+function sourceNotes(figma: FeedbackFigma, annotations: AnnotationChangeSource | null): string[] {
+  return [
+    ...("none" in figma ? [figma.noCommentsNote] : []),
+    ...(annotations ? [] : [NO_PLUGIN_SOURCE_NOTE]),
+  ];
+}
+
+/**
+ * Reads each available source's starting position where `at` has none, all before any watching
+ * starts, so no source's find can cut another's start short. Returns why the plugin can't watch
+ * annotations right now, if it can't.
+ */
+async function fixFeedbackPositions(
+  figma: FeedbackFigma,
+  fileKey: FigmaFileKey,
+  at: FeedbackPositions,
+  annotations: AnnotationChangeSource | null,
+  signal: AbortSignal,
+): Promise<string | null> {
+  let unwatched: string | null = null;
+  await Promise.all([
+    !("none" in figma) &&
+      !at.comments &&
+      (async () => {
+        const readAt = Date.now();
+        const { comments } = await figma.withSignal(signal).getComments(fileKey);
+        at.comments = { watermark: commentsWatermark(comments) ?? null, readAt };
+      })(),
+    annotations &&
+      !at.annotations &&
+      (async () => {
+        const poll = await annotations.poll(fileKey, null, 0, signal);
+        if (poll.kind === "unwatched") unwatched = poll.note;
+        else at.annotations = poll.cursor;
+      })(),
+  ]);
+  return unwatched;
+}
+
+/**
+ * Reads comments every `pollMs`, advancing `at.comments` past each read, and hands `hear` every batch
+ * of new threads, until `signal` aborts. The pace is kept from `readAt`, across watches, so feedback
+ * from the plugin never hastens a read (Figma rate-limits this endpoint, Tier 2).
+ */
+async function listenForComments(
+  figma: FigmaService,
+  fileKey: FigmaFileKey,
+  at: FeedbackPositions,
+  pollMs: number,
+  signal: AbortSignal,
+  hear: (threads: LocatedCommentThread[]) => void,
+): Promise<void> {
+  const scoped = figma.withSignal(signal);
+  for (;;) {
+    const from = at.comments!;
+    await delay(Math.max(0, from.readAt + pollMs - Date.now()), undefined, { signal });
+    const readAt = Date.now();
+    // `since` is inclusive (the newest thread repeats); one millisecond past the watermark makes it
+    // exclusive, which Figma's millisecond timestamps make exact.
+    const since =
+      from.watermark === null ? undefined : new Date(Date.parse(from.watermark) + 1).toISOString();
+    const result = await getFigmaComments(scoped, fileKey, {
+      include: "full",
+      status: "all",
+      since,
+    });
+    at.comments = { watermark: result.watermark ?? from.watermark, readAt };
+    if (result.threads?.length) hear(result.threads);
+  }
+}
+
+type HeardAnnotations = { changes: AnnotationNodeChange[]; notes: string[] } | { note: string };
+
+/**
+ * Asks the plugin for annotation changes in held turns, advancing `at.annotations`, until `signal`
+ * aborts. When it can't watch, `hear` gets the note, then the ask is repeated after `unwatchedRetryMs`,
+ * or never (null), ending the listen.
+ */
+async function listenForAnnotations(
+  source: AnnotationChangeSource,
+  fileKey: FigmaFileKey,
+  at: FeedbackPositions,
+  unwatchedRetryMs: number | null,
+  signal: AbortSignal,
+  hear: (heard: HeardAnnotations) => void,
+): Promise<void> {
+  for (;;) {
+    signal.throwIfAborted();
+    const after = at.annotations ?? null;
+    const poll = await source.poll(fileKey, after, after ? ANNOTATION_HOLD_MS : 0, signal);
+    if (poll.kind === "unwatched") {
+      hear({ note: poll.note });
+      if (unwatchedRetryMs === null) return;
+      await delay(unwatchedRetryMs, undefined, { signal });
+      continue;
+    }
+    at.annotations = poll.cursor;
+    const notes: string[] = [];
+    if (poll.restarted)
+      notes.push(
+        "The Figma plugin was closed or reloaded since your last watch, so annotation changes made in between aren't reported.",
+      );
+    if (poll.overflowed)
+      notes.push(
+        "More annotations changed than the plugin keeps track of, so some changes were dropped. Re-read with flcm.find({ hasAnnotations: true }).",
+      );
+    hear({ changes: poll.changes, notes });
   }
 }
 
 // Opaque to the agent: base64url JSON, bound to the file it was minted for.
-function encodeFeedbackCursor(fileKey: FigmaFileKey, state: FeedbackCursor): string {
-  return Buffer.from(
-    JSON.stringify({ f: fileKey, c: state.comments, a: state.annotations }),
-  ).toString("base64url");
+function encodeFeedbackCursor(fileKey: FigmaFileKey, at: FeedbackPositions): string {
+  return Buffer.from(JSON.stringify({ f: fileKey, c: at.comments, a: at.annotations })).toString(
+    "base64url",
+  );
 }
 
-function decodeFeedbackCursor(cursor: string | undefined, fileKey: FigmaFileKey): FeedbackCursor {
+function decodeFeedbackCursor(
+  cursor: string | undefined,
+  fileKey: FigmaFileKey,
+): FeedbackPositions {
   if (cursor === undefined) return {};
   let raw: unknown;
   try {
@@ -317,14 +421,22 @@ function decodeFeedbackCursor(cursor: string | undefined, fileKey: FigmaFileKey)
     throw new FeedbackCursorError("cursor isn't one this tool returned");
   const { f, c, a } = raw as Record<string, unknown>;
   if (f !== fileKey) throw new FeedbackCursorError("cursor was returned for a different file");
-  const comments =
-    c === undefined || c === null || (typeof c === "string" && !Number.isNaN(Date.parse(c)))
-      ? c
-      : false;
-  const annotationsCursor = a === undefined ? undefined : readAnnotationCursor(a);
-  if (comments === false || annotationsCursor === null)
+  const comments = c === undefined ? undefined : readCommentsPosition(c);
+  const annotations = a === undefined ? undefined : readAnnotationCursor(a);
+  if (comments === null || annotations === null)
     throw new FeedbackCursorError("cursor isn't one this tool returned");
-  return { comments, annotations: annotationsCursor };
+  return { comments, annotations };
+}
+
+function readCommentsPosition(value: unknown): CommentsPosition | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { watermark, readAt } = value as Record<string, unknown>;
+  return (watermark === null ||
+    (typeof watermark === "string" && !Number.isNaN(Date.parse(watermark)))) &&
+    typeof readAt === "number" &&
+    Number.isFinite(readAt)
+    ? { watermark, readAt }
+    : null;
 }
 
 function readAnnotationCursor(value: unknown): AnnotationWatchCursor | null {

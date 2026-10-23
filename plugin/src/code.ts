@@ -21,6 +21,7 @@ import {
   LINK_SETUP_REQUEST_TYPES,
   PROTOCOL_VERSION,
   parseServerFrame,
+  type AnnotationChange,
   type AnnotationCursor,
   type ServerRequestType,
 } from "./protocol.js";
@@ -290,8 +291,8 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
 
 /**
  * A watching server's ask. Not in the activity feed: a watcher asks again every few seconds and would
- * bury every real call. The grant is checked again after the hold, since it may have been revoked
- * or the file re-stamped while the ask waited.
+ * bury every real call. The grant is checked again last, after every await, since it may have been
+ * revoked or the file re-stamped while the ask waited or read.
  */
 async function answerAnnotationChanges(
   to: ReplyTo,
@@ -302,15 +303,16 @@ async function answerAnnotationChanges(
   const refusedBefore = await gate.readRefusal(to.connKey, documentId);
   if (refusedBefore) return reply(to, { type: "NOT_GRANTED", reason: refusedBefore });
   const slice = await annotationLog.wait(after, holdMs);
+  let changes: AnnotationChange[];
+  try {
+    changes = await readAnnotationChanges(slice.nodeIds);
+  } catch (error) {
+    return reply(to, { type: "ERROR", error: `The plugin couldn't read the changed annotations: ${String(error)}` });
+  }
   const refusedAfter = await gate.readRefusal(to.connKey, documentId);
   if (refusedAfter) return reply(to, { type: "NOT_GRANTED", reason: refusedAfter });
-  try {
-    const changes = await readAnnotationChanges(slice.nodeIds);
-    const { cursor, restarted, overflowed } = slice;
-    reply(to, { type: "ANNOTATION_CHANGES_RESULT", cursor, changes, restarted, overflowed });
-  } catch (error) {
-    reply(to, { type: "ERROR", error: `The plugin couldn't read the changed annotations: ${String(error)}` });
-  }
+  const { cursor, restarted, overflowed } = slice;
+  reply(to, { type: "ANNOTATION_CHANGES_RESULT", cursor, changes, restarted, overflowed });
 }
 
 /** A run accepted while Figma has us paused could only queue, unable to finish; refuse it now. */
