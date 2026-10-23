@@ -6,6 +6,26 @@
  */
 import type { Comment } from "@figma/rest-api-spec";
 
+/**
+ * Opens every comment an agent posts through Framelink. Agent writes go out under the user's own
+ * token, so they carry the user's name: without this marker a later read takes the agent's reply for
+ * new feedback and the agent answers itself.
+ */
+export const AGENT_COMMENT_PREFIX = "[AGENT]";
+
+/**
+ * The reaction an agent leaves on a thread's root once it has dealt with it. Figma's API can't
+ * resolve a thread, so this is how a read tells handled threads from open ones.
+ */
+export const AGENT_HANDLED_REACTION = ":white_check_mark:";
+
+// `as_md` reads may escape the brackets, so the marker matches either way.
+const AGENT_COMMENT_PATTERN = /^\s*\\?\[AGENT\\?\]/;
+
+export function isAgentComment(message: string): boolean {
+  return AGENT_COMMENT_PATTERN.test(message);
+}
+
 export interface CommentPoint {
   x: number;
   y: number;
@@ -34,6 +54,11 @@ export interface CommentReply {
 
 export interface CommentThread extends CommentReply {
   resolvedAt: string | null;
+  /**
+   * An agent answered last and marked the thread done: the newest comment is an agent's, and its
+   * poster left the handled reaction on the root. A human reply after it reopens the thread.
+   */
+  handled: boolean;
   /** Null only for a root Figma sent without `client_meta` — unlocated, like a bare canvas point. */
   pin: CommentPin | null;
   replies: CommentReply[];
@@ -45,27 +70,45 @@ export interface CommentThread extends CommentReply {
  * was deleted.
  */
 export function readCommentThreads(comments: readonly Comment[]): CommentThread[] {
-  const threads = new Map<string, CommentThread>();
+  const threads = new Map<string, { thread: CommentThread; root: Comment }>();
   for (const comment of comments) {
     if (comment.parent_id) continue;
     threads.set(comment.id, {
-      ...readCommentReply(comment),
-      resolvedAt: comment.resolved_at ?? null,
-      pin: readCommentPin(comment.client_meta),
-      replies: [],
+      root: comment,
+      thread: {
+        ...readCommentReply(comment),
+        resolvedAt: comment.resolved_at ?? null,
+        handled: false,
+        pin: readCommentPin(comment.client_meta),
+        replies: [],
+      },
     });
   }
   for (const comment of comments) {
-    if (comment.parent_id) threads.get(comment.parent_id)?.replies.push(readCommentReply(comment));
+    if (comment.parent_id)
+      threads.get(comment.parent_id)?.thread.replies.push(readCommentReply(comment));
   }
   const byTime = (a: { createdAt: string }, b: { createdAt: string }) =>
     a.createdAt.localeCompare(b.createdAt);
-  const ordered = [...threads.values()].sort((a, b) => byTime(b, a));
-  for (const thread of ordered) thread.replies.sort(byTime);
-  return ordered;
+  for (const { thread, root } of threads.values()) {
+    thread.replies.sort(byTime);
+    const newest = thread.replies.at(-1) ?? thread;
+    thread.handled = isAgentComment(newest.message) && hasHandledReaction(root, newest.author.id);
+  }
+  return [...threads.values()].map(({ thread }) => thread).sort((a, b) => byTime(b, a));
 }
 
-function readCommentReply(comment: Comment): CommentReply {
+// The shortcode we post, and the character itself in case Figma reads reactions back that way.
+const HANDLED_REACTION_FORMS = new Set([AGENT_HANDLED_REACTION, "✅"]);
+
+/** Whether `userId` left the handled reaction on this comment. */
+export function hasHandledReaction(comment: Comment, userId: string): boolean {
+  return comment.reactions.some(
+    (reaction) => HANDLED_REACTION_FORMS.has(reaction.emoji) && reaction.user.id === userId,
+  );
+}
+
+export function readCommentReply(comment: Comment): CommentReply {
   return {
     id: comment.id,
     author: { id: comment.user.id, handle: comment.user.handle },
@@ -82,7 +125,12 @@ function readCommentPin(meta: Comment["client_meta"] | null): CommentPin | null 
   return { point: { x: meta.x, y: meta.y } };
 }
 
-/** Every comment in the thread, root first — what `since` and the watermark look at. */
+/**
+ * When people commented in the thread, root first — what `since` looks at. An agent's own replies are
+ * left out, so an agent polling with `since` isn't handed back the thread it just answered.
+ */
 export function commentTimes(thread: CommentThread): string[] {
-  return [thread.createdAt, ...thread.replies.map((reply) => reply.createdAt)];
+  return [thread, ...thread.replies]
+    .filter((comment) => !isAgentComment(comment.message))
+    .map((comment) => comment.createdAt);
 }

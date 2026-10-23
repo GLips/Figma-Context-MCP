@@ -5,10 +5,12 @@ import { referenceCommand } from "~/commercial/commands/reference.js";
 import { uploadCommand } from "~/commercial/commands/upload.js";
 import { commentsCommand } from "./comments.js";
 import { fetchCommand } from "./fetch.js";
+import { replyCommand } from "./reply.js";
 
 export const CLI_COMMANDS: Command[] = [
   fetchCommand,
   commentsCommand,
+  replyCommand,
   executeCommand,
   referenceCommand,
   uploadCommand,
@@ -51,6 +53,16 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
       include: "--full",
       status: "--all",
       since: "--since",
+    },
+    figmaRest: true,
+  },
+  reply_to_figma_comment: {
+    command: "reply",
+    inputs: {
+      fileKey: "--file-key",
+      commentId: "--comment-id",
+      message: "--message",
+      handled: "--handled",
     },
     figmaRest: true,
   },

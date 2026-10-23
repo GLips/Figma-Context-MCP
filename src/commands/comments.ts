@@ -38,7 +38,8 @@ export const commentsCommand: Command = command(
       },
       all: {
         type: Boolean,
-        description: "Include resolved threads (default: unresolved only)",
+        description:
+          "Include resolved threads and ones an agent marked handled (default: open threads only)",
       },
       since: {
         type: String,

@@ -2,11 +2,14 @@ import { getErrorMeta } from "~/utils/error-meta.js";
 import { HttpError } from "~/utils/fetch-json.js";
 import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 
-// Comments are a separate grant: a token that reads the file fine can still be refused its comments.
-function missingScopeCause(endpoint: string): string {
-  return endpoint.includes("/comments")
-    ? "- The access token is missing the comments scope (File comments: Read, `file_comments:read`) — a token that can read the file may still lack it"
-    : "- The access token is missing required scopes (File content: Read, Dev resources: Read)";
+// Comments are a separate grant: a token that reads the file fine can still be refused its comments,
+// and one that reads comments can still be refused writing them.
+function missingScopeCause(endpoint: string, write: boolean): string {
+  if (!endpoint.includes("/comments"))
+    return "- The access token is missing required scopes (File content: Read, Dev resources: Read)";
+  return write
+    ? "- The access token is missing the comment write scope (File comments: Write, `file_comments:write`) — a token that reads comments may still lack it"
+    : "- The access token is missing the comments scope (File comments: Read, `file_comments:read`) — a token that can read the file may still lack it";
 }
 
 const FORBIDDEN_CAUSES = [
@@ -44,7 +47,7 @@ const PROXY_HINTS: Record<ProxyMode, string | undefined> = {
  * Full per-error resolution steps live in the docs so they can be updated
  * without a release.
  */
-export function buildForbiddenMessage(endpoint: string, error: unknown): string {
+export function buildForbiddenMessage(endpoint: string, error: unknown, write: boolean): string {
   const body = error instanceof HttpError ? error.responseBody : undefined;
   const proxyHint = PROXY_HINTS[proxyMode()];
   const causesHeader = body
@@ -56,7 +59,7 @@ export function buildForbiddenMessage(endpoint: string, error: unknown): string 
       `Request to Figma API endpoint '${endpoint}' returned 403 Forbidden.`,
       ...(body ? [`Response body: ${body}`] : []),
     ],
-    [causesHeader, missingScopeCause(endpoint), ...FORBIDDEN_CAUSES],
+    [causesHeader, missingScopeCause(endpoint, write), ...FORBIDDEN_CAUSES],
     [TROUBLESHOOTING_GUIDE],
     ...(body ? [[LLM_INSTRUCTIONS]] : []),
     ...(proxyHint ? [[proxyHint]] : []),

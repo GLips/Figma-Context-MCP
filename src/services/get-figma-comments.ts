@@ -23,6 +23,7 @@ export interface GetFigmaCommentsOptions {
   /** Node ids; a thread matches when the node it is assigned to sits in one of their subtrees. */
   scope?: string[];
   include: "counts" | "full";
+  /** `unresolved` also drops threads an agent marked handled; `all` keeps both. */
   status: "unresolved" | "all";
   /** ISO timestamp; keeps threads with any comment created at or after it. */
   since?: string;
@@ -46,6 +47,8 @@ export type CommentAnchor =
 
 export interface LocatedCommentThread extends CommentReply {
   resolvedAt?: string;
+  /** An agent answered last and marked it done. Only seen with `status: "all"`. */
+  handled?: true;
   anchor: CommentAnchor;
   /** Our hit-test guess at the node under the pin — never proof of what the commenter meant. */
   inferredTarget?: CommentNodeRef;
@@ -85,7 +88,7 @@ export async function getFigmaComments(
   const since = options.since === undefined ? undefined : Date.parse(options.since);
   const threads = readCommentThreads(comments).filter(
     (thread) =>
-      (options.status === "all" || thread.resolvedAt === null) &&
+      (options.status === "all" || (thread.resolvedAt === null && !thread.handled)) &&
       (since === undefined || commentTimes(thread).some((time) => Date.parse(time) >= since)),
   );
 
@@ -179,13 +182,14 @@ interface PlacedThread {
 
 function locateThreads(threads: readonly CommentThread[], tree: AnchorTree): PlacedThread[] {
   return threads.map((thread) => {
-    const { pin, replies, resolvedAt, ...root } = thread;
+    const { pin, replies, resolvedAt, handled, ...root } = thread;
     const shaped = (
       anchor: CommentAnchor,
       inferredTarget?: CommentNodeRef,
     ): LocatedCommentThread => ({
       ...root,
       ...(resolvedAt ? { resolvedAt } : {}),
+      ...(handled ? { handled } : {}),
       anchor,
       ...(inferredTarget ? { inferredTarget } : {}),
       ...(replies.length ? { replies } : {}),

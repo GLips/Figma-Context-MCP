@@ -12,6 +12,7 @@ import {
 } from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
+import { registerCommentWriteTools } from "./comment-write-tools.js";
 import {
   askAgentsForUserGoal,
   type ObserveToolCall,
@@ -100,6 +101,21 @@ function createServer<Caller extends CallerContext>(
           null
       : undefined,
   });
+
+  registerCommentWriteTools(server, figmaService, (outcome) =>
+    captureToolCall(
+      outcome.kind === "completed" && outcome.facts
+        ? {
+            tool: outcome.tool,
+            durationMs: outcome.facts.durationMs,
+            intent: outcome.intent,
+            isError: outcome.facts.error !== undefined,
+            error: outcome.facts.error,
+          }
+        : toolCallEvent(outcome),
+      context,
+    ),
+  );
 
   for (const extension of extensions)
     extension.register(server, {

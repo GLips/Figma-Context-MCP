@@ -5,6 +5,7 @@ import type {
   GetImageFillsResponse,
   GetComponentResponse,
   GetCommentsResponse,
+  PostCommentResponse,
   Transform,
 } from "@figma/rest-api-spec";
 import { limitConcurrency } from "~/utils/concurrency.js";
@@ -111,6 +112,9 @@ function figmaEndpoint(
   return search ? `${path}?${search}` : path;
 }
 
+/** A request that changes the file: its method, and the JSON body if it sends one. */
+type FigmaWrite = { method: "POST" | "DELETE"; body?: Record<string, string> };
+
 export class FigmaService {
   private readonly credentials: FigmaCredentialSource;
   private readonly options: FigmaServiceOptions;
@@ -161,8 +165,8 @@ export class FigmaService {
     >;
   }
 
-  private async request<T>(endpoint: string): Promise<T> {
-    const { data } = await this.requestWithSize<T>(endpoint);
+  private async request<T>(endpoint: string, write?: FigmaWrite): Promise<T> {
+    const { data } = await this.requestWithSize<T>(endpoint, write);
     return data;
   }
 
@@ -172,16 +176,24 @@ export class FigmaService {
    * we care about (`getRawFile` / `getRawNodeInContext`); image-fetching endpoints
    * continue to use `request` unchanged.
    */
-  private async requestWithSize<T>(endpoint: string): Promise<{ data: T; rawSize: number }> {
+  private async requestWithSize<T>(
+    endpoint: string,
+    write?: FigmaWrite,
+  ): Promise<{ data: T; rawSize: number }> {
     try {
-      Logger.log(`Calling ${this.baseUrl}${endpoint}`);
+      Logger.log(`Calling ${write?.method ?? "GET"} ${this.baseUrl}${endpoint}`);
       const { signal } = this.options;
       const credential = await this.credentials.resolve({
         signal: signal ?? new AbortController().signal,
       });
 
       return await fetchJSON<T>(`${this.baseUrl}${endpoint}`, {
-        headers: this.getAuthHeaders(credential),
+        headers: {
+          ...this.getAuthHeaders(credential),
+          ...(write?.body ? { "Content-Type": "application/json" } : {}),
+        },
+        method: write?.method,
+        body: write?.body && JSON.stringify(write.body),
         signal,
         redactFromResponseBody: [credential.token],
         maxBytes: this.options.maxResponseBytes,
@@ -193,7 +205,9 @@ export class FigmaService {
         throw new Error(buildRateLimitMessage(error), { cause: error });
       }
       if (meta.http_status === 403) {
-        throw new Error(buildForbiddenMessage(endpoint, error), { cause: error });
+        throw new Error(buildForbiddenMessage(endpoint, error, write !== undefined), {
+          cause: error,
+        });
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -392,6 +406,41 @@ export class FigmaService {
   async getComments(fileKey: FigmaFileKey): Promise<GetCommentsResponse> {
     return this.request<GetCommentsResponse>(
       figmaEndpoint(["files", fileKey, "comments"], { as_md: true }),
+    );
+  }
+
+  /**
+   * Posts `message` as a reply in the thread rooted at `threadId` (a root comment — Figma refuses a
+   * reply to a reply). It posts as the token's own user. Needs `file_comments:write`.
+   */
+  async postCommentReply(
+    fileKey: FigmaFileKey,
+    threadId: string,
+    message: string,
+  ): Promise<PostCommentResponse> {
+    return this.request<PostCommentResponse>(figmaEndpoint(["files", fileKey, "comments"]), {
+      method: "POST",
+      body: { message, comment_id: threadId },
+    });
+  }
+
+  /** Leaves `emoji` (a shortcode like `:white_check_mark:`) on a comment, as the token's user. */
+  async addCommentReaction(fileKey: FigmaFileKey, commentId: string, emoji: string): Promise<void> {
+    await this.request(figmaEndpoint(["files", fileKey, "comments", commentId, "reactions"]), {
+      method: "POST",
+      body: { emoji },
+    });
+  }
+
+  /** Takes back the token user's own `emoji` reaction on a comment. */
+  async removeCommentReaction(
+    fileKey: FigmaFileKey,
+    commentId: string,
+    emoji: string,
+  ): Promise<void> {
+    await this.request(
+      figmaEndpoint(["files", fileKey, "comments", commentId, "reactions"], { emoji }),
+      { method: "DELETE" },
     );
   }
 

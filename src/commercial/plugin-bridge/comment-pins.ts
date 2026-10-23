@@ -5,7 +5,7 @@
 import { readCommentThreads } from "~/services/figma-comments.js";
 import type { CapabilityHandler } from "./bridge.js";
 
-/** One unresolved thread's pin, in the anchor's own frame — the preamble hit-tests it on live geometry. */
+/** One open thread's pin, in the anchor's own frame — the preamble hit-tests it on live geometry. */
 export interface CommentPinRecord {
   nodeId: string;
   x: number;
@@ -13,7 +13,8 @@ export interface CommentPinRecord {
 }
 
 /**
- * `comments.pins`: the unresolved threads pinned to a node, for the plugin's read counts.
+ * `comments.pins`: the open threads pinned to a node — unresolved and not handled by an agent — for
+ * the plugin's read counts.
  *
  * Pins only — no bodies, authors or times cross to the sandbox, because the counts need none of them.
  * Nothing is cached: the fetch spends the run's own caller's token (ChannelRunContext), and its result
@@ -39,7 +40,7 @@ export function createCommentPinsCapability(): CapabilityHandler {
     const { comments } = await run.figma.withSignal(signal).getComments(fileKey);
     const pins: CommentPinRecord[] = [];
     for (const thread of readCommentThreads(comments)) {
-      if (thread.resolvedAt === null && thread.pin?.nodeId)
+      if (thread.resolvedAt === null && !thread.handled && thread.pin?.nodeId)
         pins.push({ nodeId: thread.pin.nodeId, x: thread.pin.offset.x, y: thread.pin.offset.y });
     }
     return { pins };
