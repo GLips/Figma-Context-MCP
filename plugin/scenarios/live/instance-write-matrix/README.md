@@ -21,4 +21,9 @@ It then writes each word straight through the raw Plugin API to a live instance 
   - Does a restated `layoutPositioning` `AUTO` throw?
   - Does `layoutSizingHorizontal` `FIXED` land without a px? The policy calls it allowed-unverified.
 
-**Last verified:** not yet run. Record the date, Figma's version and the result here, then update the `evidence` strings in `instance-write-policy.ts` to match. If a row fails, change that rule or verdict, not the row.
+**Last verified:** 2026-10-23, Figma desktop, protocol v19 plugin: `passed`, 97 of 97 rows. Probes:
+
+- A same-value `x` throws (`relative-transform`), and so does a restated `layoutPositioning` `AUTO` (`stack-positioning`). Inside an instance, even restating these words is refused, so flcm must strip a restatement and never write it.
+- `layoutSizingHorizontal` `FIXED` without a px lands.
+
+If a row fails on a later run, change that rule or verdict, not the row.

@@ -77,7 +77,8 @@ try {
   slot.appendChild(autoFrame("Inherited", "HORIZONTAL", 120, 30));
   const slotBadge = small.createInstance(); slotBadge.name = "SlotBadge"; slot.appendChild(slotBadge);
   card.appendChild(slot);
-  slot.componentPropertyReferences = { slotContentId: declareSlot(card, "Content") };
+  // Binding renames the frame to the property's name, so the property is "Slot" too.
+  slot.componentPropertyReferences = { slotContentId: declareSlot(card, "Slot") };
 
   const inst = card.createInstance(); inst.x = 600;
   const second = card.createInstance(); second.x = 1000;
