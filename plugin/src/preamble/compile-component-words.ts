@@ -236,6 +236,20 @@ export function compileBindings(wn: WriteProps, props: { componentPropertyRefere
   if (Object.keys(refs).length) wn.componentPropertyReferences = refs;
 }
 
+// Figma keeps ONE name for a slot: the frame's name IS the property's name, binding renames the
+// frame, and renaming either side later renames both (verified live). A frame authored under one
+// name and bound to a slot of another would silently lose its name, so the pair is refused instead.
+// Create and insert only: under edit a frame can bind only the slot it already holds, so a `name`
+// there is a rename of the slot itself, which is what Figma does with it.
+export function assertSlotFrameNameAgrees(name: string | undefined, refs: ComponentPropertyBinding | undefined, subject: string): void {
+  const slot = refs?.slot;
+  if (slot === undefined || name === undefined || name === slot) return;
+  throw new Error(
+    subject + ": a slot frame's name IS its property's name — Figma keeps one name for both — so a frame named " + JSON.stringify(name) +
+      " can't be bound to slot " + JSON.stringify(slot) + ". Name the property what the frame should be called, or drop `name` and the frame takes the property's.",
+  );
+}
+
 /**
  * Refuse a tree carrying bindings with no declaring component behind it. A binding names a property
  * that only a component has — through render, or an append landing on a page or a plain frame, the

@@ -25,7 +25,7 @@ import { rejectUnknownKeys, own, oneOf, words, assertEnum } from "./validate.js"
 import { isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
 import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
 import { normalizeEffects } from "./value-sugar.js";
-import { compileBindings, compileComponentPropertyBag, compileOverrideBag } from "./compile-component-words.js";
+import { assertSlotFrameNameAgrees, compileBindings, compileComponentPropertyBag, compileOverrideBag } from "./compile-component-words.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -514,6 +514,7 @@ function compileFrame(props: Accepted<FrameProps>): BuiltNode {
   const wn: BuiltNode = { type: "FRAME" };
   compileNodeLocalProps(wn, props, { type: "FRAME", radius: true, clip: true });
   compileBindings(wn, props, "FRAME");
+  assertSlotFrameNameAgrees(wn.name, wn.componentPropertyReferences, "FRAME");
   wn.layout = buildLayout(props, "FRAME", "FRAME");
   return wn;
 }

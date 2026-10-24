@@ -302,6 +302,19 @@ test("a binding meets its definition on one trimmed spelling", async () => {
   );
 });
 
+// Figma keeps one name for a slot frame and its property; a mismatch would silently lose the frame's.
+test("a slot frame named apart from its property is refused, with zero writes", async () => {
+  const figma = createFigmaMock();
+  await assert.rejects(
+    component(
+      { type: "FRAME", width: 10, height: 10, children: [{ type: "FRAME", name: "Body", componentPropertyReferences: { slot: "Content" } }] },
+      { propertyDefinitions: { Content: { type: "slot" } } },
+    ),
+    /a frame named "Body" can't be bound to slot "Content"/,
+  );
+  assert.equal(figma.currentPage.children.length, 0);
+});
+
 test("what a component call refuses, with zero writes", async () => {
   const { figma, comp } = await chipComponent();
   const before = figma.currentPage.children.length;

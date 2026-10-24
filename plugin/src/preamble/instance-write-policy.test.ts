@@ -52,12 +52,12 @@ async function cardFixture() {
         { type: "INSTANCE", name: "NestedBadge", componentId: badge.id },
         {
           type: "FRAME", name: "Slot", width: 280, height: 80, layout: { mode: "column" },
-          componentPropertyReferences: { slot: "Content" },
+          componentPropertyReferences: { slot: "Slot" },
           children: [{ type: "FRAME", name: "Inherited", width: 120, height: 30, layout: { mode: "row" } }],
         },
       ],
     } as never,
-    { propertyDefinitions: { Content: { type: "slot" } } },
+    { propertyDefinitions: { Slot: { type: "slot" } } },
   );
   const other = await flcm.component({ type: "FRAME", name: "Other", left: 700, width: 50, height: 50 });
   const inst = await live(await flcm.render({ type: "INSTANCE", componentId: card.id, left: 600 }));
