@@ -10,6 +10,7 @@
 // nothing left. An applier can't queue outside a verb, because there is no span to queue into.
 
 import type { WriteLayout } from "./ir.js";
+import type { AuthorizedLayout } from "./instance-write-authorization.js";
 import { holdUnrotatedCorner, settleCentrePivot, type PivotHold } from "./pivot.js";
 
 export type StyleSlot = "fill" | "stroke" | "effect" | "text";
@@ -20,9 +21,9 @@ export interface ApplySpan {
   /** zIndex moves, by parent: applied once the parent holds every child this span places. */
   readonly siblingOrder: Map<any, Map<any, number>>;
   /** Built children whose percent size/position waits on its parent's realized size. */
-  readonly percents: { node: any; layout: WriteLayout; parent: any }[];
+  readonly percents: { node: any; layout: AuthorizedLayout; parent: any }[];
   /** Built nodes with an aspectRatio, locked once every size has landed. */
-  readonly ratios: { node: any; layout: WriteLayout }[];
+  readonly ratios: { node: any; layout: AuthorizedLayout }[];
   /** Turned nodes whose centre pivot waits on their final size and position. */
   readonly pivots: { node: any; layout?: WriteLayout }[];
   /** Each held node's opening state: taken once, before anything in the span can resize it. */

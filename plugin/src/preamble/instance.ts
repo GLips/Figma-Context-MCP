@@ -45,19 +45,21 @@ import { componentPath, definitionId, liveSublayerId } from "@framelink/core";
 
 import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target } from "./ir.js";
 import { ResolvedTargets } from "./target.js";
-import { FontMap } from "./fonts.js";
 import {
   attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent, assertBuiltInteriorLegal,
-  InstancePlan, RenderCtx, BatchLayoutDeltas,
+  InstancePlan, RenderCtx, BatchLayoutDeltas, BecomesContainer,
 } from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
+import { layoutModeOf } from "./layout-mode.js";
 import {
-  EditPlan, EditPlanFailure, InstanceNeeds, compileEditPlan, gateEditPlan, openEditPlanApply,
+  EditPlan, EditPlanFailure, InstanceNeeds, type GateResources, compileEditPlan, gateEditPlan, authorizeEditPlan, preflightEditPlan, openEditPlanApply,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
 import {
   isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
+  instanceContextOf, projectedInstanceContextOf, type InstanceContextFacts,
 } from "./identity.js";
+import { assertInstanceRootLayoutMode } from "./instance-write-authorization.js";
 import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
@@ -91,10 +93,10 @@ interface OverridePlan { path: string; delta: EditDelta | undefined; plan: EditP
 
 /**
  * What the sync planners resolve against: the targets prepare resolved, and — in the gate — the
- * fonts it loaded, so every override plan can prove that load covers it. `fonts` is absent for
+ * fonts and tokens it loaded, so every override plan is proven against them. `gate` is absent for
  * the HINT call from prepare, where there is nothing loaded yet to prove anything about.
  */
-export interface InstancePlanning { targets: ResolvedTargets; fonts?: FontMap }
+export interface InstancePlanning { targets: ResolvedTargets; gate?: GateResources }
 
 // ---- the async half: targets, resolved ahead of the seal ----
 
@@ -209,7 +211,8 @@ function planInstanceNode(wn: BuiltNode, planning: InstancePlanning): { plan: In
   // reads off its target. Judged here, not in the compiler, because that is where it's known.
   if (wn.layout) assertBounds(wn.layout.bounds, component, SUBJECT);
   if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT, component.layoutWrap === "WRAP");
-  const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.fonts);
+  assertInstanceRootLayoutMode(SUBJECT, null, wn.layout?.mode, layoutModeOf(component));
+  const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.gate);
   return {
     plan: {
       component,
@@ -413,7 +416,7 @@ function slotPathsSentence(definition: any): string {
 // retargeting edit's. The sublayer a path names is found INSIDE the resolved component (a sync
 // walk of a subtree prepare already loaded), which is also what makes a path from a sibling
 // variant refuse: it names a real node this component doesn't hold.
-function planDefinitionOverrides(component: any, overrides: Record<string, OverrideDeltaInput>, subject: string, fonts: FontMap | undefined): OverridePlan[] {
+function planDefinitionOverrides(component: any, overrides: Record<string, OverrideDeltaInput>, subject: string, gate: GateResources | undefined): OverridePlan[] {
   const plans: OverridePlan[] = [];
   for (const path of Object.keys(overrides)) {
     const where = subject + ".overrides[" + JSON.stringify(path) + "]";
@@ -427,7 +430,7 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
     }
     // The compile runs against the DEFINITION node: a fresh instance's sublayer is a copy of it
     // (same type, same font, same wrap), and the definition exists before the instance does.
-    plans.push(compileOverride(definition, component, overrides[path], path, where, fonts));
+    plans.push(compileOverride(definition, component, overrides[path], path, where, gate, projectedInstanceContextOf(definition, component)));
   }
   return plans;
 }
@@ -437,18 +440,18 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
 // own delta and compiles as the words it is — a slot's `layout`/`fill` restyle the hole exactly
 // as before.
 // One override, compiled against the sublayer the route chose (the definition node, or the live
-// one). With `fonts` — the gate's call — the compile is the full stage-4 gate, font coverage
-// included; without them — prepare's hint — it is the compile alone.
-function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInput, path: string, where: string, fonts: FontMap | undefined): OverridePlan {
+// one) and preflighted against the instance write policy in `context`, where that sublayer will sit.
+// With `gate` — the gate's call — font coverage and token-bound restatements are judged too;
+// without it — prepare's hint — they are not. Either way nothing is minted: the apply authorizes the live sublayer it finds.
+function compileOverride(
+  sublayer: any, definition: any, delta: OverrideDeltaInput, path: string, where: string, gate: GateResources | undefined, context: InstanceContextFacts,
+): OverridePlan {
   const { rest, slotContent } = splitSlotContent(sublayer, definition, delta, where);
   // An override that only fills (or only restated the read's `type`) has no words to write, and
   // an empty compile would refuse it; the empty plan still runs the existence gate at apply.
   const words = Object.keys(rest).length ? restoreNullWords(rest, where) : undefined;
-  const plan: EditPlan = !words
-    ? { node: sublayer, patch: {} }
-    : fonts
-      ? gateEditPlan(sublayer, words, fonts, where, undefined, { instanceDefinition: definition })
-      : compileEditPlan(sublayer, words, where);
+  const plan: EditPlan = words ? compileEditPlan(sublayer, words, where) : { node: sublayer, patch: {} };
+  if (words) preflightEditPlan(plan, gate, where, context);
   if (!slotContent) return { path, delta: words, plan };
   // The content's roots are judged against the slot as THIS override will leave it (its own
   // layout words projected, the way a batch projects a parent's delta) — a percent under a hug
@@ -542,7 +545,7 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
     // against a moment ago, and the same answer unless this span's own setProperties moved a
     // bound text's fonts, in which case this answer is the right one. Every refusal from here is
     // a rollback, which is the cost of a fact that does not exist before the seal.
-    const editPlan: EditPlan = delta ? gateEditPlan(node, delta, ctx.fonts, where) : { node, patch: {} };
+    const editPlan = delta ? gateEditPlan(node, delta, ctx, where) : authorizeEditPlan({ node, patch: {} }, ctx, where);
     return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan, ctx.span) };
   });
   for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, ctx);
@@ -579,9 +582,9 @@ function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonl
  * with the live ones only existing inside the span), and it tells a batch that any sibling entry
  * aimed inside this instance is about to be writing to a detached node.
  *
- * `becomesLayoutMode` is the container fact AFTER the retarget — the incoming component's auto-layout
- * mode, which is what the root's own layout words must be gated against, not the outgoing one's.
- * `undefined` when nothing retargets, meaning "read it off the live node".
+ * `becomesContainer` is the container fact AFTER the retarget — the incoming component's auto-layout
+ * mode and wrap, which is what the root's own layout words must be gated against, not the outgoing
+ * one's. `undefined` when nothing retargets, meaning "read it off the live node".
  */
 export interface InstanceEditPlan {
   swapTo: any | null;
@@ -601,8 +604,7 @@ export interface InstanceEditPlan {
   /** What the slot content among `overrides` needs loaded — empty when none fills a slot. */
   needs: InstanceNeeds;
   retargets: boolean;
-  becomesLayoutMode: AutoLayoutMixin["layoutMode"] | undefined;
-  becomesLayoutWrap: boolean | undefined;
+  becomesContainer: BecomesContainer | undefined;
   exposed?: boolean;
 }
 
@@ -655,8 +657,8 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
   const retargets = component !== current;
   const swapTo = words.componentId != null && retargets ? component : null;
   const overrides = retargets
-    ? planDefinitionOverrides(component, words.overrides || {}, subject, planning.fonts)
-    : planLiveOverrides(instance, component, words.overrides || {}, subject, planning.fonts);
+    ? planDefinitionOverrides(component, words.overrides || {}, subject, planning.gate)
+    : planLiveOverrides(instance, component, words.overrides || {}, subject, planning.gate);
   return {
     swapTo,
     becomes: component,
@@ -670,8 +672,7 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
     retargets,
     // The same fact create's own gate reads (planInstanceNode above): the RESOLVED component's mode, not
     // the instance's current one, which the retarget is about to replace.
-    becomesLayoutMode: retargets ? component.layoutMode : undefined,
-    becomesLayoutWrap: retargets ? component.layoutWrap === "WRAP" : undefined,
+    becomesContainer: retargets ? { mode: layoutModeOf(component), wrap: component.layoutWrap === "WRAP" } : undefined,
     exposed: words.exposed,
   };
 }
@@ -706,7 +707,7 @@ function assertInstanceStillOf(instance: any, current: any, subject: string): vo
 // carries the live font and the live wrap mode, which is what a text delta's font enrichment and a
 // clamp's bounded-width gate need to read.
 function planLiveOverrides(
-  instance: any, component: any, overrides: Record<string, OverrideDeltaInput>, subject: string, fonts: FontMap | undefined,
+  instance: any, component: any, overrides: Record<string, OverrideDeltaInput>, subject: string, gate: GateResources | undefined,
 ): OverridePlan[] {
   const plans: OverridePlan[] = [];
   for (const path of Object.keys(overrides)) {
@@ -719,7 +720,7 @@ function planLiveOverrides(
           "Paths are component-relative, exactly as flcm.get keys this instance's `overrides` — and each variant has its own; read the instance to see the ones it has.",
       );
     }
-    plans.push(compileOverride(live, component, overrides[path], path, where, fonts));
+    plans.push(compileOverride(live, component, overrides[path], path, where, gate, instanceContextOf(live)));
   }
   return plans;
 }

@@ -28,7 +28,7 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 // (entry seal / success commit / commit-then-undo rollback) is the lock's — each verb is a single
 // enterMutatingVerb expression, so its queue slot is reserved before it can yield.
 
-import { WriteNode, WriteLayout, Target, Handle, RemoveResult } from "./ir.js";
+import { WriteNode, Target, Handle, RemoveResult } from "./ir.js";
 import { resolveTarget, isTargetShaped } from "./target.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
@@ -39,13 +39,14 @@ import {
 import { landTree } from "./land-tree.js";
 import { loadTreeResources, gateTreeResources, loadEditResources, gateEditResources } from "./verb-resources.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
-import { clearKeysDeep, childListClosingInstanceOf, instanceAncestorOf, isComponentDefinition, describeNodeIdentity } from "./identity.js";
+import { clearKeysDeep, instanceContextOf, instanceContextUnder, instanceAncestorOf, isComponentDefinition, describeNodeIdentity } from "./identity.js";
+import { mintAuthorizedLiveLayout, preflightInstanceWrites, type AuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
 import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
-import { compileEditPlan, assertEditPlanLands,
+import { compileEditPlan, preflightEditPlan, authorizeEditPlan,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
@@ -79,15 +80,16 @@ function assertDestinationIsContainer(subject: string, node: any): void {
 // real fix is editing that component (flcm never auto-detaches: detaching churns every id, killing
 // the handles the agent is holding) — with one opening: a SLOT's content is the instance's own,
 // and the list under it is as open as any frame's, however deep. The rule that decides is
-// identity.childListClosingInstanceOf (first SLOT or INSTANCE up the chain wins), and the two
-// roles ask it different questions — this is the whole reason the role is a parameter:
+// identity.instanceContextOf (first SLOT or INSTANCE up the chain wins), and the two roles read
+// different facts of it — this is the whole reason the role is a parameter:
 //
 //   • a DESTINATION counts itself: an INSTANCE destination is closed, a SLOT destination open.
 //   • a SUBJECT starts at its parent. An instance is an ordinary scene node in ITS parent, so
 //     moving or deleting the instance itself is not just legal but routine, and this gate must
 //     not stand in the way of it; the SLOT node itself is a sublayer, so it stays put.
 function assertInstanceChildListUntouched(subject: string, node: any, role: "destination" | "subject"): void {
-  const host = childListClosingInstanceOf(node, role === "destination");
+  const context = instanceContextOf(node);
+  const host = (role === "destination" ? context.childListClosedBy : context.ownWritesLockedBy)?.node as any;
   if (!host) return;
   const what = role === "destination" ? "destination" : "node being moved or removed";
   throw new Error(
@@ -188,9 +190,9 @@ function containerHandle(parent: any): Handle | undefined {
 
 // `noteOverlap`: render's root lands on the page unseen, so it is told when it buried something (root-overlap.ts).
 interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan; noteOverlap: boolean }
-// `words` is the subject's parent-relative intent read BEFORE the reparent — under the OLD parent's
-// axes, the frame of reference the words were written in. Reading it in apply would be too late.
-interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
+// `layout` is the subject's parent-relative intent read BEFORE the reparent — under the OLD parent's
+// axes, the frame of reference the words were written in — authorized where it lands.
+interface PreparedPlacement { kind: "placement"; dest: Destination; layout: AuthorizedLiveLayout }
 
 function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert, span: ApplySpan): AuthoredTree {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
@@ -212,13 +214,14 @@ function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverla
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is
 // a move of a node that was born one instruction ago, and the place-then-resettle ORDER is the part
 // that must not be written twice (resettling before the attach would aim `fill` at the old parent).
-function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement, span: ApplySpan): void {
+function applyPlacement(verb: string, { dest, layout }: PreparedPlacement, span: ApplySpan): void {
+  const node: any = layout.node;
   const fail = beginMutatingApply(verb, node);
   try {
-    attachLiveNode(dest.parent, node, words, dest.place);
+    attachLiveNode(dest.parent, layout, dest.place);
     holdPivot(span, node);
-    resettleMovedNode(node, words, { span });
-    settlePivot(span, node, words);
+    resettleMovedNode(layout, { span });
+    settlePivot(span, node, layout.child.layout);
   } catch (cause) {
     throw fail(cause);
   }
@@ -369,12 +372,15 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       // they mean the old parent's axes exactly as a move's do. No cycle check — the copy did not
       // exist a moment ago, so it can't contain its own destination.
       const edit = props === undefined ? undefined : compileCloneProps(node, props);
-      // Font coverage is checked on the source; placement legality belongs to the destination.
-      if (edit) assertEditPlanLands({ ...edit, patch: { ...edit.patch, layout: undefined } }, loaded.fonts, "flcm.clone");
-      return { node, dest, words: assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone", edit?.patch.layout),
-        edit, resources: gateEditResources(loaded, []), bindings: captureCloneBindings(node) };
+      // Font coverage is checked on the source; placement legality belongs to the destination, and
+      // both halves meet the instance write policy where the copy will sit.
+      const resolved = assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone", edit?.patch.layout);
+      const context = instanceContextUnder(dest.parent, node);
+      preflightInstanceWrites("flcm.clone", { node, patch: {} }, resolved, context, loaded.tokens);
+      if (edit) preflightEditPlan({ ...edit, patch: { ...edit.patch, layout: undefined } }, loaded, "flcm.clone", context);
+      return { node, dest, resolved, edit, resources: gateEditResources(loaded, []), bindings: captureCloneBindings(node) };
     },
-    ({ node, dest, words, edit, resources, bindings }, span) => {
+    ({ node, dest, resolved, edit, resources, bindings }, span) => {
       const fail = beginMutatingApply("clone", node);
       let copy: any;
       const created: CreatedCloneProperties = [];
@@ -386,10 +392,12 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
           throw fail(cause);
         }
         // From here the copy is the subject, and placing it is exactly a move.
-        applyPlacement("clone", { kind: "placement", dest, node: copy, words }, span);
+        const layout = mintAuthorizedLiveLayout("flcm.clone", copy, resolved, instanceContextUnder(dest.parent, copy), resources.tokens);
+        applyPlacement("clone", { kind: "placement", dest, layout }, span);
         try { restoreCloneBindings(copy, bindings, created); } catch (cause) { throw fail(cause); }
         if (edit) {
-          const plan = { ...edit, node: copy };
+          // After the placement: the copy's own words resolve against the parent it now sits in.
+          const plan = authorizeEditPlan({ ...edit, node: copy }, resources, "flcm.clone");
           applyEditPlanWrites(fail, plan, { ...resources, span });
           settleEditPlanSizes(fail, plan);
           settleEditPlanPositions(fail, plan, span);

@@ -3,9 +3,11 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // The aspectRatio word, both halves: what compile can judge from the authored sizes, and the settle
-// that brings a realized box to the ratio and locks it once every size has landed.
+// that brings a realized box to the ratio and locks it once every size has landed. The only home of
+// Figma's lockAspectRatio()/unlockAspectRatio(), so every lock is one the instance write policy judged.
 import type { WriteLayout } from "./ir.js";
-import { resizeWithDiagnostics } from "./sizing-diagnostics.js";
+import { resizeToPlannedSize } from "./sizing-diagnostics.js";
+import type { AuthorizedLayout } from "./instance-write-authorization.js";
 import { pixelRound } from "@framelink/core";
 
 /**
@@ -61,19 +63,20 @@ export function compileAspectRatio(raw: unknown, layout: WriteLayout, subject: s
 }
 
 /**
- * Lock the node's proportions at `wl.aspectRatio` ("none" unlocks). Figma locks whatever ratio the box
- * has, so the box is brought to the ratio first: the driving axis — a "fill" or percent one, else the
- * width — keeps its size and the other follows. Runs once the sizes have landed, so it judges the
- * REALIZED sizing too: an edit or a parent's stretch can leave an axis filling or hugging that
- * compile never saw. Afterwards Figma's lock carries the pair through layout and constraint resizes.
+ * Lock the node's proportions at its planned ratio (an "unlock" plan unlocks). Figma locks whatever
+ * ratio the box has, so the box is brought to the ratio first: the driving axis — a "fill" or percent
+ * one, else the width — keeps its size and the other follows. Runs once the sizes have landed, so it
+ * judges the REALIZED sizing too: an edit or a parent's stretch can leave an axis filling or hugging
+ * that compile never saw. Afterwards Figma's lock carries the pair through layout and constraint resizes.
  */
-export function settleAspectRatio(node: any, wl: WriteLayout): void {
-  const ratio = wl.aspectRatio;
-  if (ratio === undefined) return;
-  if (ratio === "none") {
+export function settleAspectRatio(node: any, layout: AuthorizedLayout): void {
+  const aspect = layout.sizing.aspect;
+  if (!aspect) return;
+  if (aspect.kind === "unlock") {
     node.unlockAspectRatio();
     return;
   }
+  const ratio = aspect.ratio;
   // Figma can't lock an auto-resizing text at all.
   if (node.type === "TEXT" && node.textAutoResize !== "NONE") {
     throw new Error("flcm: aspectRatio needs a fixed box, but this TEXT sizes itself to its text. Give it a fixed width and height, or drop aspectRatio.");
@@ -83,18 +86,29 @@ export function settleAspectRatio(node: any, wl: WriteLayout): void {
   if (hugging) {
     throw new Error("flcm: aspectRatio needs a fixed or filled box, but this " + node.type + " hugs its content on its " + hugging + ". Give it a size, or drop aspectRatio.");
   }
-  const widthFills = node.layoutSizingHorizontal === "FILL" || wl.percentSize?.width != null;
-  const heightFills = node.layoutSizingVertical === "FILL" || wl.percentSize?.height != null;
+  const widthFills = node.layoutSizingHorizontal === "FILL" || layout.sizing.horizontal.resize?.kind === "percent";
+  const heightFills = node.layoutSizingVertical === "FILL" || layout.sizing.vertical.resize?.kind === "percent";
   // resize() would set the follower, and the FILL restore below would undo it — locking fill's box.
   if (widthFills && heightFills) throw bothAxesFillRefusal("flcm");
   // An existing lock is let go first: whether resize() honours it is unverified, and a resize that
   // did would skew the box the new lock captures.
   if (node.targetAspectRatio) node.unlockAspectRatio();
   const before = { horizontal: node.layoutSizingHorizontal, vertical: node.layoutSizingVertical };
-  if (heightFills) resizeWithDiagnostics(node, Math.max(node.height * ratio, 0.01), node.height);
-  else resizeWithDiagnostics(node, node.width, Math.max(node.width / ratio, 0.01));
+  if (heightFills) resizeToPlannedSize(node, layout, { width: Math.max(node.height * ratio, 0.01), height: node.height });
+  else resizeToPlannedSize(node, layout, { width: node.width, height: Math.max(node.width / ratio, 0.01) });
   // resize() pins both axes; a driving "fill" axis must keep filling for the lock to follow it.
   if (before.horizontal === "FILL" && node.layoutSizingHorizontal !== "FILL") node.layoutSizingHorizontal = "FILL";
   if (before.vertical === "FILL" && node.layoutSizingVertical !== "FILL") node.layoutSizingVertical = "FILL";
   node.lockAspectRatio();
+}
+
+/**
+ * A built VECTOR path's ratio: its box is its geometry, so a ratio can only be the one it already
+ * has. A paste-back's own locks again (true); any other is the caller's to report (false).
+ * `_authorized` is the proof the policy saw the node; a built node never lands in a locked tree.
+ */
+export function lockBuiltPathAspectRatio(node: any, _authorized: AuthorizedLayout, ratio: unknown): boolean {
+  if (typeof ratio !== "number" || !aspectRatioAgrees(node.width, node.height, ratio)) return false;
+  node.lockAspectRatio();
+  return true;
 }

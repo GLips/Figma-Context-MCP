@@ -41,10 +41,10 @@ interface ParentedNode {
   parent?: ParentedNode | null;
 }
 
-// The nearest INSTANCE ancestor, or null. Figma restricts what may change on an instance's
-// children — some props can't be overridden, and the tree shape can't change at all — and the fix
-// is always "edit the component it comes from", so the structural gates and the mutating-verb
-// error walk the same chain. Stops at the page: an instance is always inside one.
+// The nearest INSTANCE ancestor, or null, slots ignored. A naming query, not a lock test: it answers
+// "which instance is this node part of" for refusals that name the instance (detach widening,
+// promotion), where slot content counts too. Whether a write may land is instanceContextOf's.
+// Stops at the page: an instance is always inside one.
 export function instanceAncestorOf<T extends ParentedNode>(node: T): T | null {
   for (let p = node.parent; p && p.type !== "PAGE"; p = p.parent) {
     if (p.type === "INSTANCE") return p as T;
@@ -59,8 +59,8 @@ export function isComponentDefinition(node: { type: string }): boolean {
 
 // The component definition a write at `node` would change, or null when there is none — including
 // whenever an INSTANCE comes first, since an instance's sublayers are its component's copies and the
-// definition they belong to is not this one. `countSelf` as in childListClosingInstanceOf: a
-// destination counts itself, a subject starts at its parent.
+// definition they belong to is not this one. `countSelf`: a destination counts itself, a subject
+// starts at its parent.
 export function editableComponentOwnerOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
   for (let p: ParentedNode | null | undefined = countSelf ? node : node.parent; p; p = p.parent) {
     if (p.type === "INSTANCE") return null;
@@ -73,10 +73,8 @@ export function editableComponentOwnerOf<T extends ParentedNode>(node: T, countS
 // walk up, and the first SLOT or INSTANCE met decides — a SLOT means slot content, which an
 // instance leaves open however deep the nesting; an INSTANCE means the component's own tree, which
 // Figma closes to plugins. `countSelf` is the destination question ("may children land IN this
-// node?"): the node itself decides first, so a SLOT destination is open and an INSTANCE destination
-// closed. A subject ("may this node move or go?") starts at its parent — an instance is an ordinary
-// node in ITS parent, and the SLOT node is itself a sublayer whose parent chain meets the instance.
-export function childListClosingInstanceOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
+// node?"); a subject ("may this node move, or take a geometry write?") starts at its parent.
+function closingInstanceOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
   for (let p: ParentedNode | null | undefined = countSelf ? node : node.parent; p && p.type !== "PAGE"; p = p.parent) {
     if (p.type === "SLOT") return null;
     if (p.type === "INSTANCE") return p as T;
@@ -84,8 +82,89 @@ export function childListClosingInstanceOf<T extends ParentedNode>(node: T, coun
   return null;
 }
 
+/** The node an instance context names as the owner of a lock: the instance, or its stand-in. */
+export interface InstanceLockOwner<T = LockOwnerNode> {
+  /** For a projected walk that reaches the definition root, the definition stands in for the instance-to-be. */
+  readonly node: T;
+  readonly projected: boolean;
+}
+
+interface LockOwnerNode { readonly id: string; readonly name: string; readonly type: string }
+
+/**
+ * Where a node sits among instances, as facts every write gate reads (instance-write-authorization.ts,
+ * the structural gates, the pointer error, the resize backstop). Facts rather than one category:
+ * the instance root is open for its own writes but closes its child list, and a SLOT is locked for
+ * its own geometry but opens its child list.
+ */
+export interface InstanceContextFacts<T = LockOwnerNode> {
+  /** "projected": judged against a component definition before the instance exists. */
+  readonly basis: "live" | "projected";
+  /** First SLOT/INSTANCE above the node decides: INSTANCE locks, SLOT opens. */
+  readonly ownWritesLockedBy: InstanceLockOwner<T> | null;
+  /** The same walk counting the node itself. */
+  readonly childListClosedBy: InstanceLockOwner<T> | null;
+  readonly isInstanceRoot: boolean;
+}
+
+function lockOf<T>(node: T | null, projected = false): InstanceLockOwner<T> | null {
+  return node ? { node, projected } : null;
+}
+
+/** The facts for a live node where it stands. */
+export function instanceContextOf<T extends ParentedNode>(node: T): InstanceContextFacts<T> {
+  return {
+    basis: "live",
+    ownWritesLockedBy: lockOf(closingInstanceOf(node, false)),
+    childListClosedBy: lockOf(closingInstanceOf(node, true)),
+    isInstanceRoot: node.type === "INSTANCE",
+  };
+}
+
+/**
+ * The facts a node will have once appended to `parent` (built children, live-tree place, clone).
+ * `parent` may be another node's facts instead: a frame the walk is still assembling sits on the
+ * page until its own parent takes it, so its children inherit where IT is going, not where it is.
+ * (A frame is never a SLOT or an INSTANCE whose list the walk fills, so its lock passes straight down.)
+ */
+export function instanceContextUnder<T extends ParentedNode>(parent: T | InstanceContextFacts<T>, node: { readonly type: string }): InstanceContextFacts<T> {
+  const isInstanceRoot = node.type === "INSTANCE";
+  const lock = "basis" in parent ? parent.ownWritesLockedBy : lockOf(closingInstanceOf(parent, true));
+  return {
+    basis: "basis" in parent ? parent.basis : "live",
+    ownWritesLockedBy: lock,
+    childListClosedBy: isInstanceRoot ? lockOf(node as unknown as T) : lock,
+    isInstanceRoot,
+  };
+}
+
+/**
+ * The facts for a sublayer of a component definition, before the instance exists: what an override
+ * compiled against `sublayer` will meet once it lands on the instance's copy. Walks up to
+ * `definitionRoot`: the first slot hole opens, a nested INSTANCE locks, and reaching the root locks
+ * (the definition standing in for the instance-to-be).
+ */
+export function projectedInstanceContextOf<T extends ParentedNode & { componentPropertyReferences?: Record<string, string> | null }>(
+  sublayer: T, definitionRoot: T,
+): InstanceContextFacts<T> {
+  const walk = (start: T | null | undefined): InstanceLockOwner<T> | null => {
+    for (let p = start; p; p = p.parent as T | null | undefined) {
+      if (p === definitionRoot) return lockOf(definitionRoot, true);
+      if (isSlotHole(p)) return null;
+      if (p.type === "INSTANCE") return lockOf(p);
+    }
+    return lockOf(definitionRoot, true);
+  };
+  return {
+    basis: "projected",
+    ownWritesLockedBy: walk(sublayer.parent as T | null | undefined),
+    childListClosedBy: walk(sublayer),
+    isInstanceRoot: sublayer.type === "INSTANCE",
+  };
+}
+
 // The INSTANCE whose slot holds `node`, or null when no open slot does. The walk is
-// childListClosingInstanceOf's: a SLOT met first answers with the nearest INSTANCE above it.
+// closingInstanceOf's: a SLOT met first answers with the nearest INSTANCE above it.
 export function slotOwnerOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
   let p: ParentedNode | null | undefined = countSelf ? node : node.parent;
   while (p && p.type !== "PAGE" && p.type !== "SLOT" && p.type !== "INSTANCE") p = p.parent;

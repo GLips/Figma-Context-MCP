@@ -14,7 +14,7 @@
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
 import type { Identity, BuiltNode } from "./ir.js";
-import { identityOf, childListClosingInstanceOf } from "./identity.js";
+import { identityOf, instanceContextOf } from "./identity.js";
 
 // Mutating verbs that ran to their success commit this run (the lock records each). The pointer
 // error tells the agent "the N mutating calls before this one committed and stand" instead of making
@@ -45,8 +45,8 @@ export function committedVerbCount(): number {
  */
 export function beginMutatingApply(verb: string, node: SceneNode): (cause: unknown) => Error {
   const identity = identityOf(node);
-  // Only a closed child list earns the edit-the-component note; slot content is the instance's own.
-  const ancestor = childListClosingInstanceOf(node, false);
+  // Only a locked layer earns the edit-the-component note; slot content is the instance's own.
+  const ancestor = instanceContextOf(node).ownWritesLockedBy?.node;
   const instance = ancestor ? { id: ancestor.id, name: ancestor.name } : null;
   return (cause) => mutatingVerbError(verb, identity, cause, instance);
 }

@@ -130,7 +130,9 @@ export type WordValue<K extends keyof typeof WORD_VALUES> = (typeof WORD_VALUES)
 //
 // COMPONENT and COMPONENT_SET take a FRAME's words because their root IS a frame, plus
 // `componentDefinition` — the two words that change what the component DECLARES. SLOT takes the frame
-// surface without them [verified live: layoutMode, gap and fills are settable on an instance's slot].
+// surface without them. The type row is not the instance policy: on an instance's slot Figma ignores
+// a layoutMode change, while gap, padding, fills and fill/hug land and its child list stays open
+// [verified live; instance-write-policy.ts refuses the rest].
 // Annotation support follows https://developers.figma.com/docs/plugins/api/Annotation/, widened by
 // what a live document answers: GROUP and SECTION carry no annotations, but a SLOT does [verified live].
 export const TYPE_WORD_GROUPS = {

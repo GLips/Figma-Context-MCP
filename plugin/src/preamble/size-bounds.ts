@@ -5,6 +5,7 @@
 import { isTokenRef, type WriteLayout } from "./ir.js";
 import { isVariableInput, compileVariableRef, writeBindable, unbindField, type ResolvedTokens } from "./tokens.js";
 import { BOUND_WORDS } from "./vocabulary.js";
+import type { AuthorizedLayout } from "./instance-write-authorization.js";
 
 type Bounds = NonNullable<WriteLayout["bounds"]>;
 type LiveBounds = Partial<Record<typeof BOUND_WORDS[number], number | null>>;
@@ -39,7 +40,10 @@ export function assertBounds(bounds: Bounds | undefined, live: LiveBounds, subje
   }
 }
 
-export function applyBounds(node: any, bounds: Bounds, tokens: ResolvedTokens | undefined): void {
+// Takes the authorized plan, not raw words: inside an instance Figma silently ignores min/max.
+export function applyBounds(node: any, layout: AuthorizedLayout, tokens: ResolvedTokens | undefined): void {
+  const bounds = layout.sizing.bounds;
+  if (!bounds) return;
   // Clear supplied bounds first so moving a valid interval cannot hit a transient contradiction.
   // An omitted bound is never assigned, including on an instance with its own overrides.
   for (const key of BOUND_WORDS) if (bounds[key] !== undefined) { unbindField(node, key); node[key] = null; }

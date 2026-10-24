@@ -5,14 +5,16 @@
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
 import type { WriteNode, LiveRef, WriteLayout, ComponentPropertyBinding } from "./ir.js";
-import { compileEditPlan, assertEditPlanLands } from "./edit-plan.js";
+import { compileEditPlan, preflightEditPlan, authorizeEditPlan } from "./edit-plan.js";
 import type { LoadedLiveTree } from "./verb-resources.js";
 import { applyEditStages } from "./edit-apply.js";
 import { planInstanceEdit } from "./instance.js";
 import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component-properties.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
+import { instanceContextOf, instanceContextUnder, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
+import { assertInstanceRootLayoutMode, mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
+import { layoutModeOf } from "./layout-mode.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
@@ -53,14 +55,18 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     const { ref, node, changes, key, refs, pathData, targets, current, intoNewNode } = entry;
     const at = ref.sourcePath;
     assertNodeStillOnCanvas(node, at);
-    if (childListClosingInstanceOf(node, false)) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
-    if (ref.children?.length && (!("appendChild" in node) || childListClosingInstanceOf(node, true))) throw new Error(at + ".children: this live node's child list cannot be authored.");
+    const context = instanceContextOf(node);
+    if (context.ownWritesLockedBy) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
+    if (ref.children?.length && (!("appendChild" in node) || context.childListClosedBy)) throw new Error(at + ".children: this live node's child list cannot be authored.");
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
-    const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, fonts: resources.fonts }, at) : undefined;
+    const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, gate: resources }, at) : undefined;
     const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at, (field) => projectedBinderValue(field, node, plan, instance, current, at)) : undefined;
-    // Placement validates against the destination. Font coverage and node-local legality still
-    // use the edit gate, with parent-relative words withheld until that destination exists.
-    if (plan) assertEditPlanLands({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources.fonts, at);
+    // Placement validates against the destination. Font coverage, node-local legality and the
+    // instance write policy still run here, with parent-relative words withheld until that
+    // destination exists; the root's direction is judged against the component it will show.
+    if (plan) preflightEditPlan({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources, at, context);
+    const shown = instance?.becomes ?? current;
+    if (node.type === "INSTANCE" && shown) assertInstanceRootLayoutMode(at, node, plan?.patch.layout?.mode, layoutModeOf(shown));
     if (instance) for (const [tree, instancePlan] of instance.needs.plans) (resources.instances as Map<WriteNode, typeof instancePlan>).set(tree, instancePlan);
     const shows = {
       visible: projectedBinderValue("visible", node, plan, instance, current, at) as boolean,
@@ -73,16 +79,19 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
       const fail = beginMutatingApply(at, node);
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
-        const words = assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout);
-        attachLiveNode(parent, node, words, place);
+        const becomes = instance?.becomesContainer;
+        const words = mintAuthorizedLiveLayout(at, node, assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout, becomes), instanceContextUnder(parent, node), resources.tokens);
+        attachLiveNode(parent, words, place);
+        // After the attach: the plan's layout words resolve against the parent the node now sits in.
+        const authorized = plan ? authorizeEditPlan(plan, ctx, at, { becomes }) : undefined;
         if (from) recordLiveMoveIntoNewNode(node, from, parent);
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
         holdPivot(ctx.span, node);
         // Before the node's own writes, so none lands on a property it is leaving (see releaseRewiredBindings).
         if (refs) releaseRewiredBindings(node, Object.keys(refs).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
         applyEditStages([{
-          node, fail, plan, instance, component, subject: at,
-          beforeWrites() { if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData); },
+          node, fail, plan: authorized, instance, component, subject: at,
+          beforeWrites() { if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData, words); },
           afterBinding() {
             if (key !== undefined) writeKey(node, key as string);
             if (refs) {
@@ -90,11 +99,11 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
               ctx.bindings.push({ node, refs });
             }
             if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
-            resettleMovedNode(node, words, ctx);
+            resettleMovedNode(words, ctx);
           },
         }], ctx);
         // A delta's positions settle its pivot; a bare move's is settled here.
-        if (!plan) settlePivot(ctx.span, node, words);
+        if (!plan) settlePivot(ctx.span, node, words.child.layout);
         // Inherited slot content lands as Figma's copy, under a new id.
         ctx.placedIds.set(ref.source, node.id);
         return node;

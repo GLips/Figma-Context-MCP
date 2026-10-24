@@ -47,8 +47,9 @@ import { sceneFigma as figma } from "./scene-access.js";
 //                             annotation categories the batch names (verb-resources.ts, which also
 //                             loads the live trees an edit's slot content names)
 //   4. gateEditPlan           SYNC, before the seal: the node still exists, the compile again on the
-//                             node as it stands now, proof the fonts loaded cover it, and the
-//                             live-parent layout gate — every document-reading decision, made once
+//                             node as it stands now, proof the fonts loaded cover it, the
+//                             live-parent layout gate and the instance write policy — every
+//                             document-reading decision, made once, minted as an AuthorizedEditPlan
 //   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
 //   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then aspectRatio, then the text clamp
 //   5c. settleEditPlanPositions  what CONSUMES it: percent position, last of all
@@ -79,13 +80,18 @@ import { assertLineFillUnrotated } from "./layout-legality.js";
 import { settleAspectRatio } from "./aspect-ratio.js";
 import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 import {
-  applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
-  settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
-  ApplyResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
+  applyPaint, applySceneProps, applyAuthorizedRotation, applyLiveNodeLayout, settleLiveNodePercentSize,
+  settleLiveNodePercentPosition, resolveLiveLayoutDelta, applyTextProps, applyTextClamp,
+  ApplyResources, BatchLayoutDeltas, InstancePlan, BecomesContainer,
 } from "./bridge.js";
+import { instanceContextOf, type InstanceContextFacts } from "./identity.js";
+import {
+  mintAuthorizedEditPlan, preflightInstanceWrites, type AuthorizedEditPlan,
+} from "./instance-write-authorization.js";
 import { toFigmaEffects } from "./effects.js";
 import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotEmpty } from "./validate.js";
 import { liveFontWords, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
+import type { ResolvedTokens } from "./tokens.js";
 import { compileNodeLocalProps, compileNodeLayout } from "./compile-nodes.js";
 import { compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount } from "./compile-text.js";
 import {
@@ -406,40 +412,66 @@ export interface InstanceNeeds {
 }
 
 /**
+ * What prepare loaded that a gate judges a plan against: the fonts its text words need, and the
+ * tokens its bound words name (a variable restates a binding only if it is the bound one).
+ */
+export interface GateResources { fonts: FontMap; tokens: ResolvedTokens }
+
+/** Where a plan's layout words land, when that is not simply the live canvas around its node. */
+export interface EditPlanLanding {
+  /**
+   * Every layout delta the SAME verb is applying, by node id — a batch judges its entries against
+   * the canvas it is creating, not the one it found.
+   */
+  deltas?: BatchLayoutDeltas;
+  /**
+   * The node's own container after an INSTANCE delta swaps or re-variants it: its `layout` words are
+   * legal or not by the incoming component's mode, never the outgoing one's (instance.ts computes it).
+   */
+  becomes?: BecomesContainer;
+}
+
+/**
  * Stage 4 — the delta's every document-reading decision, made in the verb's synchronous gate
  * (mutation-lock.ts) against the node as it stands at the seal: existence (the one live fact every
  * delta depends on, including the ones that read nothing else off the node), the compile itself
  * (font identity, wrap mode, the live clamp), proof that the fonts prepare loaded cover what that
- * compile produced, and the layout words that only mean something against the live tree (a page
- * parent, hug legality, the hug-cycle percent). Zero writes on refusal, and nothing between here
- * and the writes can go stale.
- *
- * `deltas` is every layout delta the SAME verb is applying, by node id — a batch judges its entries
- * against the canvas it is creating, not the one it found.
- *
- * `projection.mode` is the same projection one node deep: an INSTANCE delta that swaps or
- * re-variants takes the INCOMING component's auto-layout mode before its root words land, so its
- * `layout` words are legal or not by that mode, never the outgoing one's (instance.ts computes it).
- * Undefined means "read it off the live node", which is every other delta.
- * `projection.instanceDefinition` marks definition overrides that will land under a new instance.
+ * compile produced, the layout words that only mean something against the live tree (a page
+ * parent, hug legality, the hug-cycle percent), and the instance write policy. Zero writes on
+ * refusal, and nothing between here and the writes can go stale. Authorization mints the plan the
+ * stages consume (AuthorizedEditPlan): stage 5 takes nothing else, so no route writes unjudged words.
  */
-export function gateEditPlan(
-  node: SceneNode, changes: EditDelta, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
-): EditPlan {
+export function gateEditPlan(node: SceneNode, changes: EditDelta, gate: GateResources, subject: string, landing: EditPlanLanding = {}): AuthorizedEditPlan {
   assertNodeStillOnCanvas(node, subject);
-  const plan = compileEditPlan(node, changes, subject);
-  assertEditPlanLands(plan, fonts, subject, deltas, projection);
-  return plan;
+  return authorizeEditPlan(compileEditPlan(node, changes, subject), gate, subject, landing);
 }
 
 /**
  * The second half of stage 4 on its own, for a verb that has to plan a delta's INSTANCE half
  * between the compile and these gates (the root's layout gate reads the container the retarget
- * leaves behind — `projection.mode` comes from that plan).
+ * leaves behind — `landing.becomes` comes from that plan), or that applies a plan it compiled on
+ * another node (a clone's copy).
  */
-export function assertEditPlanLands(
-  plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
-): void {
+export function authorizeEditPlan(plan: EditPlan, gate: GateResources, subject: string, landing: EditPlanLanding = {}): AuthorizedEditPlan {
+  assertEditPlanWordsLand(plan, gate.fonts, subject);
+  const resolved = plan.patch.layout ? resolveLiveLayoutDelta(plan.node, plan.patch.layout, subject, landing.deltas, landing.becomes) : null;
+  return mintAuthorizedEditPlan(subject, plan, resolved, instanceContextOf(plan.node), gate.tokens);
+}
+
+/**
+ * Stage 4 for a plan whose writes land on a node that doesn't exist yet, or not where it sits yet —
+ * a definition's override before its instance is stamped, a clone's props before the copy: the same
+ * refusals, judged in `context`, with nothing minted. Its layout words resolve against the plan
+ * node's own parent. The plan is authorized again on the live node it writes. Without `gate` (a
+ * prepare-time compile) the font proof, and any word only the tokens can judge, wait for that.
+ */
+export function preflightEditPlan(plan: EditPlan, gate: GateResources | undefined, subject: string, context: InstanceContextFacts): void {
+  if (gate) assertEditPlanWordsLand(plan, gate.fonts, subject);
+  const resolved = plan.patch.layout ? resolveLiveLayoutDelta(plan.node, plan.patch.layout, subject) : null;
+  preflightInstanceWrites(subject, plan, resolved, context, gate?.tokens);
+}
+
+function assertEditPlanWordsLand(plan: EditPlan, fonts: FontMap, subject: string): void {
   assertTextEditFontsLoaded(plan.node, plan.patch, fonts, subject);
   // Outside the layout gate on purpose: this rule reads ONE layout word beside one appearance word,
   // and either half can arrive alone (rotating a line that already fills, or filling one that is
@@ -451,7 +483,6 @@ export function assertEditPlanLands(
     plan.patch.rotation ?? live.rotation,
     subject,
   );
-  if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, projection);
 }
 
 /**
@@ -461,33 +492,39 @@ export function assertEditPlanLands(
  */
 export type EditPlanFailure = (cause: unknown) => Error;
 
-export function openEditPlanApply(verb: string, plan: EditPlan, span: ApplySpan): EditPlanFailure {
+export function openEditPlanApply(verb: string, plan: AuthorizedEditPlan, span: ApplySpan): EditPlanFailure {
   const fail = beginMutatingApply(verb, plan.node);
   // Here rather than at stage 5a: an instance retarget runs between the two and can resize the node.
-  holdPivot(span, plan.node);
+  if (pivots(plan)) holdPivot(span, plan.node);
   return fail;
+}
+
+// A layer an instance locks has no transform of its own to re-centre: Figma throws on its x/y.
+function pivots(plan: AuthorizedEditPlan): boolean {
+  return !plan.context.ownWritesLockedBy;
 }
 
 /**
  * Stage 5a — the sealed, commit-free write span for one entry: everything that CHANGES the node.
  * No awaits, by the lock's contract.
  */
-export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resources: ApplyResources): void {
+export function applyEditPlanWrites(fail: EditPlanFailure, plan: AuthorizedEditPlan, resources: ApplyResources): void {
   const { node, patch } = plan;
   try {
     // First, while the transform is still the one the node arrived with (a no-op once open).
-    holdPivot(resources.span, node);
+    if (pivots(plan)) holdPivot(resources.span, node);
     // An instance's overrides land after stage 5c and can resize it, so its pivot waits for the
     // span's settle, which runs after them.
-    if (plan.instanceWords) resources.span.pivots.push({ node, layout: patch.layout });
+    if (plan.instanceWords && pivots(plan)) resources.span.pivots.push({ node, layout: plan.layout?.child.layout });
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
+    applyAuthorizedRotation(node, plan);
     applyAnnotations(node, patch.annotations);
-    // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize), so the
+    // Text BEFORE layout — create's own order (buildText: characters, then applyOwnSizing), so the
     // layout words size the reflowed text rather than the text it replaces.
     // Fills still precede runs (applyPaint above).
     if (node.type === "TEXT") applyTextProps(node as TextNode, patch, resources);
-    if (patch.layout) applyLiveNodeLayout(node, patch.layout, resources);
+    if (plan.layout) applyLiveNodeLayout(plan.layout, resources);
   } catch (cause) {
     throw fail(cause);
   }
@@ -498,10 +535,10 @@ export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resou
  * it may drive, then the clamp that clips against the wrap those sizes produced (the ordering `edit` has always had, and the reason
  * clamp isn't simply last).
  */
-export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: EditPlan): void {
+export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch, layout }: AuthorizedEditPlan): void {
   try {
-    if (patch.layout) settleLiveNodePercentSize(node, patch.layout);
-    if (patch.layout) settleAspectRatio(node, patch.layout);
+    if (layout) settleLiveNodePercentSize(layout);
+    if (layout) settleAspectRatio(node, layout);
     if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
   } catch (cause) {
     throw fail(cause);
@@ -513,10 +550,11 @@ export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: Edit
  * then the centre pivot, which reads the final box. Dead last, so in a
  * batch they measure a canvas where every entry's sizes have already settled.
  */
-export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, instanceWords }: EditPlan, span: ApplySpan): void {
+export function settleEditPlanPositions(fail: EditPlanFailure, plan: AuthorizedEditPlan, span: ApplySpan): void {
+  const { node, layout, instanceWords } = plan;
   try {
-    if (patch.layout) settleLiveNodePercentPosition(node, patch.layout);
-    if (!instanceWords) settlePivot(span, node, patch.layout);
+    if (layout) settleLiveNodePercentPosition(layout);
+    if (!instanceWords && pivots(plan)) settlePivot(span, node, layout?.child.layout);
   } catch (cause) {
     throw fail(cause);
   }

@@ -4,12 +4,14 @@
  */
 // layout-legality — the ONE home for "can this node realize these layout words". Every rule that
 // decides a layout word's legality lives here, and BOTH verbs consult it — create via compile-nodes.ts
-// (buildLayout, render's root check) and the bridge walk, edit via assertLayoutDeltaResolvable —
+// (buildLayout, render's root check) and the bridge walk, edit via resolveLiveLayoutDelta —
 // so the two cannot answer differently (ADR-0003: a word that would do nothing must reject loud,
 // in every verb). Pure and figma-free by charter: rules take the authored WriteLayout plus any
 // live facts as scalar values, because the callers know them from different places — the create walk
 // answers from the authored node (before the node or its parent's sizing modes exist), edit from
 // the live flags. A rule that needs a fact neither side can state this way doesn't belong here.
+// What Figma does with a word inside an INSTANCE is not legality but write policy:
+// instance-write-policy.ts, applied by instance-write-authorization.ts.
 //
 // Convention: `subject` (the rejecting verb's name for the error prefix) is always the LAST
 // parameter. The parent-relative rules judge a built tree's interior in the verb's GATE
@@ -118,7 +120,7 @@ export function foldDesignedSizeForPage(wl: WriteLayout): WriteLayout {
 }
 
 // TEXT height:"fill" is realized by the parent's flow (layoutGrow/STRETCH). Out of flow — a
-// free-form parent, or absolute positioning — it falls to coverChild's resize, which a text node
+// free-form parent, or absolute positioning — it falls to applyCoverSizing's resize, which a text node
 // in WIDTH_AND_HEIGHT ignores: the height silently doesn't stick, so reject instead.
 // Self-triggering (type + words checked here, not at the call sites), so widening the trigger
 // can never happen on one verb and not the other.
@@ -200,12 +202,6 @@ export function assertGridSizing(layout: WriteLayout, live: {
       throw new Error(subject + ": fractional grid tracks require explicit fixed or fill " + fields.dimension + "; a hugging axis cannot become fixed implicitly.");
     }
   }
-}
-
-/** Explicit rectangle dimensions cannot override the closed part of an instance's tree. */
-export function assertInheritedRectangleDimensions(wl: WriteLayout, subject: string): void {
-  if (wl.dimensions?.width === undefined && wl.dimensions?.height === undefined) return;
-  throw new Error(subject + ': explicit width/height cannot resize an inherited rectangle. Edit its component or choose a suitable variant; use width: "fill" or height: "fill" when the auto-layout parent should size it. Nothing was applied.');
 }
 
 /** The `{ row, column }` gap form, as distinct from one (possibly bound) gap for both axes. */

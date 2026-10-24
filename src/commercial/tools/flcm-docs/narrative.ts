@@ -324,7 +324,7 @@ export const EDIT_RULES = `### Rules
 - **Container edits ripple.** \`layout.alignItems: "stretch"\` sets every live child's stretch mark and any other value clears them all, since Figma doesn't record which child stretched because of its container; a child that should keep filling needs its own \`"fill"\`. Changing direction clears both flow marks on every in-flow child.
 - **Layout legality is create's, checked against live facts** before any write. Percents resolve against the live parent.
 - **Text words read the live node.** \`text\` replaces the whole text in its leading run's style, so earlier bold spans and per-range colors are lost; style the new text in the same edit. A partial \`textStyle\` font change keeps the rest of the live font. A text that already mixes fonts has no single base, so a partial font change, or a run without its own \`fontFamily\`, rejects; set \`textStyle.fontFamily\` in the same edit, or give every run its family.
-- **Inside an INSTANCE, edits are overrides.** A property Figma won't let you override rejects, naming the instance; edit the main component instead (flcm never detaches for you).
+- **Inside an INSTANCE, edits are overrides;** *What an instance takes* lists which ones Figma keeps.
 - **No \`x\`/\`y\`.** Position with \`left\`/\`top\` or \`position\`; resize behavior is \`constraints\`.
 - **One undo step, validated first.** The whole delta validates before the first write, a Figma refusal mid-apply rolls the node back, and an empty delta rejects.
 - **Values are absolute**, never relative (\`+10\`), so re-running an edit converges.`;
@@ -432,11 +432,11 @@ ${sample("instanceEdits")}
 - **\`overrides\`** edit the live sublayers \`I<instanceId>;<path>\` (\`find({ within: inst })\` locates them; \`flcm.edit\` on one is the same write), so a text delta resolves against the font that sublayer really has.
 - **\`componentId\`** swaps to a COMPONENT, or a COMPONENT_SET (its default variant unless \`componentProperties\` in the same delta pick one). Figma carries across the overrides it can match; the rest fall back to the new component's values.
 
-An instance root inherits its layout direction from its component. An edit may restate the matching \`layout.mode\`; a different direction is rejected before any writes. With a swap or variant change, the direction must match the incoming component. Edit the component or choose a matching variant to change direction.
-
-Numeric \`width\` and \`height\` edits on inherited rectangles are rejected before any writes, including overrides used to create or retarget an instance. Change the component or choose a suitable variant. Use \`width: "fill"\` or \`height: "fill"\` when the auto-layout parent should size the rectangle. The instance root can still be resized.
-
 **One delta, one order:** swap → properties → root words → overrides; override paths resolve against the incoming component.`;
+
+// Prose half of the reference's "What an instance takes" section; reference.ts prints the rule
+// table under it from instance-write-policy.ts, so the refusals and their fixes are never restated here.
+export const INSTANCE_WRITE_RULES_INTRO = `Inside an INSTANCE, a layer's look is yours to override and its geometry is the component's. Figma silently ignores some geometry writes there and throws on others, so flcm refuses both before writing anything, naming the rule. Restating a value the layer already has is fine, but a number on an axis that hugs or fills is not a restatement: it would fix that size. The instance's own size and position, and the content of its slots, are open; only its direction follows the component. A slot's own direction stays locked, and so do the layers of a nested instance placed in a slot.`;
 
 export const COMPONENTS_DETACH = `### Breaking the link — \`flcm.detach\`
 

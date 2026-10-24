@@ -559,14 +559,20 @@ test("an insert into a component may carry bindings — an existing property, an
   assert.equal(fresh.findOne((n: { name: string }) => n.name === "Extra").type, "SLOT");
 });
 
-test("an instance's SLOT takes the frame surface under edit", async () => {
-  const { inst } = await chipComponent();
-  const slot = inst.findOne((n: { type: string }) => n.type === "SLOT");
+test("an instance's SLOT takes gap, padding and fills; its direction stays the component's", async () => {
+  const { comp } = await chipComponent();
+  await edit(comp.findOne((n: { name: string }) => n.name === "Trailing").id, { layout: { mode: "row" } });
+  const stamped = await render({ type: "INSTANCE", componentId: comp.id, left: 900, top: 900 });
+  const slot = (await figma.getNodeByIdAsync(stamped.id)).findOne((n: { type: string }) => n.type === "SLOT");
   assert.ok(slot);
-  await edit(slot.id, { layout: { mode: "column", gap: 6 }, fill: "#00ff00" });
-  assert.equal(slot.layoutMode, "VERTICAL");
-  assert.equal(slot.itemSpacing, 6);
+  await edit(slot.id, { fill: "#00ff00", clip: true, layout: { gap: 6, padding: 3 } });
   assert.deepEqual(slot.fills[0].color, { r: 0, g: 1, b: 0 });
+  assert.equal(slot.clipsContent, true);
+  assert.equal(slot.itemSpacing, 6);
+  assert.equal(slot.paddingLeft, 3);
+  // The slot node itself is a layer of the instance: Figma ignores a direction change there.
+  await assert.rejects(edit(slot.id, { layout: { mode: "column" } }), /\(instance\.layout-mode-change\)/);
+  assert.equal(slot.layoutMode, "HORIZONTAL");
   // Still a slot, not a text: the words are a frame's, not everything.
   await assert.rejects(edit(slot.id, { text: "nope" }), /`text` is not a SLOT word/);
 });

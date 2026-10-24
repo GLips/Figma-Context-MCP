@@ -3,9 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
-import { childListClosingInstanceOf } from "./identity.js";
+import type { AuthorizedLayout } from "./instance-write-authorization.js";
 // One accumulator per synchronous mutation span. Diagnostics observe final geometry after all
-// entries, overrides and percent sizing settle; they never turn a successful write into a failure.
+// entries, overrides and percent sizing settle; they never turn a successful write into a failure,
+// with one exception: a planned resize Figma ignores on a layer an instance locks (resizeToPlannedSize).
 interface SizingNode {
   id: string;
   name?: string;
@@ -90,12 +91,6 @@ export function retargetSizingDiagnostics(from: SizingNode, to: SizingNode): voi
   for (const miss of misses) if (miss.node === from) miss.node = to;
 }
 
-export function resizeWithDiagnostics(node: SizingNode, width: number, height: number): void {
-  trackSizing(node);
-  node.resize(width, height);
-  requests.set(node.id, { node, width, height });
-}
-
 // The min/max that clamps a requested size, if one does. A clamp is a warning at finish, not a refusal.
 function clampingBound(node: SizingNode, axis: "width" | "height", requested: number): "minWidth" | "maxWidth" | "minHeight" | "maxHeight" | undefined {
   const [min, max] = axis === "width" ? ["minWidth", "maxWidth"] as const : ["minHeight", "maxHeight"] as const;
@@ -103,21 +98,27 @@ function clampingBound(node: SizingNode, axis: "width" | "height", requested: nu
 }
 
 /**
- * Resize for an authored px size, and check it landed (or clamped to a min/max). Live Figma has
- * no-op'd resize() on a nested instance; inside an instance's closed tree a miss throws mid-apply,
- * so the verb rolls back. Elsewhere no miss has been seen, so it only warns. Only `authored` axes
- * are judged: the other axis carries a size a text or hug may legitimately re-measure.
+ * THE resize: every planned resize in the preamble lands through here (px own sizing, percent,
+ * cover, aspect ratio, a path's scale, a vector's kept box), and is read back on the `checks` axes
+ * (both by default). A clamp excuses only the value its min/max allows. On a layer an instance
+ * locks, a miss throws mid-apply and the verb rolls back: the policy let the write through, so the
+ * miss is a gap in it. Anywhere else, the instance root and slot content included, it is a warning.
  */
-export function resizeToAuthoredSize(node: SizingNode, width: number, height: number, authored: { width: boolean; height: boolean }): void {
-  resizeWithDiagnostics(node, width, height);
-  for (const [axis, requested] of [["width", width], ["height", height]] as const) {
-    if (!authored[axis]) continue;
+export function resizeToPlannedSize(
+  node: SizingNode, layout: AuthorizedLayout, size: { width: number; height: number }, checks: { width?: boolean; height?: boolean } = { width: true, height: true },
+): void {
+  trackSizing(node);
+  node.resize(size.width, size.height);
+  requests.set(node.id, { node, width: size.width, height: size.height });
+  for (const axis of ["width", "height"] as const) {
+    if (!checks[axis]) continue;
+    const requested = size[axis];
     // Figma enforces min/max only in auto-layout, so a bound may or may not have clamped.
     const bound = clampingBound(node, axis, requested);
     const actual = node[axis];
     if (Math.abs(actual - requested) <= 0.01 || (bound && Math.abs(actual - node[bound]!) <= 0.01)) continue;
     const message = "requested " + axis + " " + Number(requested.toFixed(2)) + "; Figma realized " + Number(actual.toFixed(2));
-    if (childListClosingInstanceOf(node, false)) throw new Error(message);
+    if (layout.context.ownWritesLockedBy) throw new Error(message + " (instance write policy gap)");
     misses.push({ node, prop: axis, authored: requested, realized: actual, message });
   }
 }

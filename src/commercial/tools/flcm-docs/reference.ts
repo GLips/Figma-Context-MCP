@@ -31,6 +31,8 @@ import {
   PathSchema,
   SvgSchema,
   InstanceSchema,
+  INSTANCE_WRITE_RULES,
+  instanceWordsVerifiedToLand,
   type VerbCategory,
 } from "@framelink/plugin/schema";
 import {
@@ -65,6 +67,7 @@ import {
   COMPONENTS_EDIT_MAIN,
   COMPONENTS_INTRO,
   COMPONENTS_EDIT,
+  INSTANCE_WRITE_RULES_INTRO,
   COMPONENTS_DETACH,
   COMPONENTS_RULES,
 } from "./narrative.js";
@@ -267,6 +270,35 @@ function editExceptions(): string {
   );
 }
 
+// A rule word is code up to its first " (", which starts a plain-prose note.
+const ruleWord = (word: string) => {
+  const note = word.indexOf(" (");
+  return note < 0 ? `\`${word}\`` : `\`${word.slice(0, note)}\`${word.slice(note)}`;
+};
+
+// Printed from the policy the authorization refuses with, so a rule or its fix can't drift from
+// what the plugin enforces.
+function instanceWriteRulesSection(): string {
+  const rows = INSTANCE_WRITE_RULES.map((rule) => {
+    const change =
+      rule.words.map(ruleWord).join(", ") +
+      (rule.scope === "instance-root" ? " on the instance itself" : "");
+    const figma = rule.figma === "ignores" ? "ignores it" : "throws";
+    return `| \`${rule.id}\` | ${cell(change)} | ${figma} | ${cell(rule.remedy)} |`;
+  });
+  return [
+    "### What an instance takes",
+    "",
+    INSTANCE_WRITE_RULES_INTRO,
+    "",
+    "| Rule | Change | Figma | Do instead |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+    "",
+    `Verified to land on any layer inside an instance: ${instanceWordsVerifiedToLand().map(ruleWord).join(", ")}.`,
+  ].join("\n");
+}
+
 function verbTable(): string {
   const rows = VERBS.map((v) => `| \`${v.signature}\` | ${cell(v.builds)} | ${cell(v.args)} |`);
   return ["| Verb | Builds | Arguments |", "| --- | --- | --- |", ...rows].join("\n");
@@ -409,7 +441,7 @@ const SECTIONS: Section[] = [
       `### Using one — \`INSTANCE\`\n\n${COMPONENTS_INTRO}\n\n` +
       // COMPONENTS_RULES is the section's one refusal catalogue; the prose above states each other
       // refusal beside the rule it enforces, so nothing is listed twice.
-      `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
+      `${COMPONENTS_EDIT}\n\n${instanceWriteRulesSection()}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
   {
     id: "recipes",

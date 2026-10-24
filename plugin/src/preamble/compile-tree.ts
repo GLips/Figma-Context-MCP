@@ -165,6 +165,9 @@ export function compileDeltaTrees<T>(delta: T, at: string): T {
   return snapshot;
 }
 
+// A read's bound value: `{ variable, value? }` (core's variableReference).
+const isVariableEcho = (value: unknown): boolean => typeof value === "object" && value !== null && !Array.isArray(value) && "variable" in value;
+
 // Words a read echoes onto an inherited sublayer that are the COMPONENT's, never one instance's: a
 // binding says which component property drives this layer, and no override can carry it (the
 // override gate refuses it by name). Lifting it would turn every round-trip into that refusal.
@@ -192,11 +195,12 @@ function liftInheritedChildEdits(id: unknown, children: unknown, at: string): Re
     if (!child || typeof child !== "object" || !("id" in child) || typeof child.id !== "string" || !prefix || !child.id.startsWith(prefix)) return false;
     const { id: childId, type: childType, children: grandchildren, ...rest } = child as Record<string, unknown>;
     for (const word of ECHO_IDENTITY_WORDS) delete rest[word];
-    // Negative space: a pixel size echoed onto an inherited layer is the size its component and its
-    // parent's layout already give it, not a resize request — and flcm has no route to resize an
-    // inherited rectangle at all. A real sublayer resize is written as an explicit override; the
-    // sizing INTENTS ("fill"/"hug"/"50%") stay, because those are words, not measurements.
-    for (const word of ["width", "height"]) if (typeof rest[word] === "number") delete rest[word];
+    // Negative space: a pixel size echoed onto an inherited layer (a number, or the variable it
+    // binds) is the size its component and its parent's layout already give it, not a resize. If
+    // kept, an echo that differs from what the layer measures where it lands (a filled layer in a
+    // differently sized instance) would meet the policy's refusal of a real resize
+    // (instance.explicit-resize). The sizing INTENTS ("fill"/"hug"/"50%") stay: they are words.
+    for (const word of ["width", "height"]) if (typeof rest[word] === "number" || isVariableEcho(rest[word])) delete rest[word];
     const delta = withoutReadRecords(rest);
     if (Object.keys(delta).length) lifted[(childId as string).slice(prefix.length)] = delta;
     // Slot contents have ordinary live ids and are authored through the matching override, so the

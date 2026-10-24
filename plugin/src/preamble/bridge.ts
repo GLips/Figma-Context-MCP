@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
-import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type ChildLayout } from "./layout-mode.js";
+import { LAYOUT_MODES, CONSTRAINT_H, CONSTRAINT_V, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type ChildLayout, type LayoutMode } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
 import { hasContainerLayout } from "./vocabulary.js";
 import type { LiveTreeNode } from "./live-tree.js";
@@ -11,8 +11,12 @@ import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
 import type { NodeSpec } from "./schema.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
-import { resizeToAuthoredSize, resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
-import { aspectRatioAgrees, settleAspectRatio } from "./aspect-ratio.js";
+import { resizeToPlannedSize, trackSizing } from "./sizing-diagnostics.js";
+import { settleAspectRatio, lockBuiltPathAspectRatio } from "./aspect-ratio.js";
+import {
+  mintAuthorizedBuiltLayout, type AuthorizedLayout, type AuthorizedBuiltLayout, type AuthorizedLiveLayout, type AuthorizedEditPlan,
+} from "./instance-write-authorization.js";
+import { liveNodeSizingFacts, planNodeSizing, builtNodeSizingFacts, type NodeSizingPlan, type ResolvedLiveLayout } from "./sizing-plan.js";
 import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js";
 // bridge — the ONE mutation authority: every property lands on a live Figma node through the appliers
 // here, whether the node was just built (the render walk below) or resolved as a live edit target.
@@ -39,12 +43,12 @@ import { queueStyleLink, settlePivot, type ApplySpan } from "./apply-span.js";
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage, ParentFlowFacts,
-  assertTextFillHeightInFlow, assertLineSizingInFlow, assertLineFillUnrotated, assertInheritedRectangleDimensions,
+  assertTextFillHeightInFlow, assertLineSizingInFlow, assertLineFillUnrotated,
 } from "./layout-legality.js";
 import { toFigmaPaint, imagePaintAdjustments } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, fontDivergences, textStyleFont, FontMap } from "./fonts.js";
-import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
+import { writeKey, identityOf, type InstanceContextFacts } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
 import { unrotatedCornerOf } from "./pivot.js";
@@ -184,7 +188,7 @@ export function mintHandle(node: any): Handle {
 
 // Mint every handle render() returns, AFTER the walk. Timing is the whole point: nothing geometric is
 // settled while the tree is being built — buildFrame re-covers fill/percent/absolute children in the
-// post-applyOwnSize `covers` pass, frames hug their content bottom-up as the walk unwinds, and every node
+// post-applyOwnSizing cover pass, frames hug their content bottom-up as the walk unwinds, and every node
 // is created as a page child and reparented only when it's appended (so mid-walk even "does the parent
 // place this node?" — which decides whether left/top exist at all — answers wrong). Minting once here is
 // what keeps a returned handle from ever carrying a provisional value.
@@ -345,8 +349,9 @@ function applyStyleSlots(node: any, wn: WriteProps, ctx: ApplyResources): void {
   }
 }
 
-function applyContainer(node: any, layout: WriteLayout, tokens: ResolvedTokens | undefined): void {
+function applyContainer(node: any, authorized: AuthorizedLayout, tokens: ResolvedTokens | undefined): void {
   if (!isFrameLike(node)) return;
+  const layout = authorized.child.layout;
   const previous = layoutModeOf(node);
   const next = effectiveLayoutMode(layout, node);
   // Disable wrapping under the old mode before a direction change; only live rows accept the setter.
@@ -365,72 +370,64 @@ function applyContainer(node: any, layout: WriteLayout, tokens: ResolvedTokens |
   }
 }
 
-// Own-axis sizing, applied AFTER children so a `hug` axis measures real content. Maps the IR's
-// sizing/dimensions onto the plugin's primary/counter sizing modes (which axis is which depends on the
-// frame's own direction) and resizes the fixed axes. Direction comes from the LIVE node, not the authored one:
-// at create time applyContainer already set layoutMode so the two agree, and an edit delta naming only
-// sizing carries no mode at all. Presence-preserving per axis — an axis the caller doesn't name keeps
-// its live sizing mode; the fresh-frame hug default is the BUILDER's to inject (see buildFrame).
-function applyOwnSize(f: any, layout: WriteLayout, tokens: ResolvedTokens | undefined): void {
-  if (layout.bounds) { trackSizing(f); applyBounds(f, layout.bounds, tokens); }
-  const sizing = layout.sizing || {};
-  const dims = dimensionsForResize(f, layout.dimensions, tokens);
-  const isAuto = isAutoLayout(f);
-
-  layoutBehavior(f).ownSize(f, sizing);
-
-  // Auto frames resize only their FIXED axes (fill/hug are computed by layout); a non-auto frame honors
-  // any authored dimension — including one carried in from a `get` result without a sizing intent.
-  const fixedW = isAuto ? sizing.horizontal === "fixed" : typeof dims.width === "number";
-  const fixedH = isAuto ? sizing.vertical === "fixed" : typeof dims.height === "number";
-  if (fixedW || fixedH) {
-    const w = fixedW && typeof dims.width === "number" ? dims.width : f.width;
-    const h = fixedH && typeof dims.height === "number" ? dims.height : f.height;
-    resizeToAuthoredSize(f, Math.max(w, 0.01), Math.max(h, 0.01), { width: fixedW && typeof dims.width === "number", height: fixedH && typeof dims.height === "number" });
+// Own-axis sizing, applied AFTER children so a `hug` axis measures real content. Carries out the
+// node's sizing plan (sizing-plan.ts), deciding nothing: the native modes (which axis is primary
+// depends on the node's own direction, read LIVE — applyContainer already set it), a text's
+// auto-resize, then the px resizes the plan names. An axis the plan leaves alone keeps its live mode.
+function applyOwnSizing(node: any, layout: AuthorizedLayout, tokens: ResolvedTokens | undefined): void {
+  const plan = layout.sizing;
+  if (plan.bounds) { trackSizing(node); applyBounds(node, layout, tokens); }
+  const dims = dimensionsForResize(node, plan, tokens);
+  if (plan.role === "container") layoutBehavior(node).ownSize(node, { horizontal: plan.horizontal.native, vertical: plan.vertical.native });
+  // BEFORE the resize, or an auto-resizing text snaps straight back to its content.
+  if (plan.textAutoResize) node.textAutoResize = plan.textAutoResize;
+  const { width, height } = dims;
+  if (width !== undefined || height !== undefined) {
+    // A LINE's height is exactly 0 by Figma contract; the 0.01 floor keeps area nodes off resize(0).
+    resizeToPlannedSize(node, layout, { width: Math.max(width ?? node.width, 0.01), height: plan.isLine ? 0 : Math.max(height ?? node.height, 0.01) },
+      { width: width !== undefined, height: height !== undefined });
   }
-  bindDimensions(f, layout.dimensions, tokens);
+  bindDimensions(node, plan, tokens);
 }
+
+const PLAN_AXES = [["horizontal", "width"], ["vertical", "height"]] as const;
 
 // A bound dimension resizes to its variable's default-mode value first, so hug/fill and the sizing
 // diagnostics see a real number; bindDimensions then hands the size to the variable. A literal
 // dimension drops a standing binding before the resize, or the variable would keep driving it.
-function dimensionsForResize(node: any, dims: WriteLayout["dimensions"], tokens: ResolvedTokens | undefined): { width?: number; height?: number } {
+// Only the plan's px axes: a number echoed beside hug or fill neither resizes nor unbinds.
+function dimensionsForResize(node: any, plan: NodeSizingPlan, tokens: ResolvedTokens | undefined): { width?: number; height?: number } {
   const out: { width?: number; height?: number } = {};
-  for (const dim of ["width", "height"] as const) {
-    const value = dims?.[dim];
-    if (value === undefined) continue;
-    if (isTokenRef(value)) out[dim] = Number(variableLiteral(value, tokens));
-    else { unbindField(node, dim); out[dim] = value; }
+  for (const [axis, dim] of PLAN_AXES) {
+    const resize = plan[axis].resize;
+    if (resize?.kind !== "px") continue;
+    if (isTokenRef(resize.value)) out[dim] = Number(variableLiteral(resize.value, tokens));
+    else { unbindField(node, dim); out[dim] = resize.value; }
   }
   return out;
 }
 
-function bindDimensions(node: any, dims: WriteLayout["dimensions"], tokens: ResolvedTokens | undefined): void {
-  for (const dim of ["width", "height"] as const) {
-    const value = dims?.[dim];
-    if (isTokenRef(value)) writeBindable(node, dim, value, tokens);
+function bindDimensions(node: any, plan: NodeSizingPlan, tokens: ResolvedTokens | undefined): void {
+  for (const [axis, dim] of PLAN_AXES) {
+    const resize = plan[axis].resize;
+    if (resize?.kind === "px" && isTokenRef(resize.value)) writeBindable(node, dim, resize.value, tokens);
   }
 }
 
-// Resize a child to the parent's box on its w/h:'fill' axes, instead of letting fill collapse to ~0.
-// Serves two callers where layoutGrow/STRETCH can't do the sizing: an ABSOLUTE child (out of the flow, so
-// fill is the natural full-bleed cover / scrim), and any child of a FREE-FORM parent (no auto-layout to
-// grow against). Run once at append (against the parent's provisional hug size) and again after
-// applyOwnSize gives the parent its final size.
-function coverChild(parent: any, child: any, layout: WriteLayout): void {
-  const s = layout.sizing || {};
-  if (s.horizontal !== "fill" && s.vertical !== "fill") return;
-  layoutBehavior(child).ownSize(child, {
-    horizontal: s.horizontal === "fill" ? "fixed" : undefined,
-    vertical: s.vertical === "fill" ? "fixed" : undefined,
-  });
-  const cw = s.horizontal === "fill" ? parent.width : child.width;
-  const ch = s.vertical === "fill" ? parent.height : child.height;
-  // A LINE's height is exactly 0 by Figma contract — resize throws on anything else [verified,
-  // plugin-typings 1.133] — so the 0.01 floor (there to keep degenerate fills from the resize(0)
-  // throw on area nodes) must not touch it: w:"fill" on a line is a legal full-width rule. Vertical
-  // fill on a line can't be authored (LineSchema has no height word), so no rule is needed for it.
-  resizeWithDiagnostics(child, Math.max(cw, 0.01), child.type === "LINE" ? 0 : Math.max(ch, 0.01));
+// Resize a child to the parent's box on the axes its plan covers, instead of letting fill collapse to
+// ~0: an ABSOLUTE child (out of the flow, so fill is the natural full-bleed cover / scrim), and any
+// child of a FREE-FORM parent (no auto-layout to grow against). Run once at append (against the
+// parent's provisional hug size) and again after the parent has its final size.
+function applyCoverSizing(parent: any, child: any, layout: AuthorizedLayout): void {
+  const plan = layout.sizing;
+  const width = plan.horizontal.resize?.kind === "cover", height = plan.vertical.resize?.kind === "cover";
+  if (!width && !height) return;
+  layoutBehavior(child).ownSize(child, { horizontal: width ? "fixed" : undefined, vertical: height ? "fixed" : undefined });
+  // A LINE keeps height 0 [verified, plugin-typings 1.133: resize throws on anything else].
+  resizeToPlannedSize(child, layout, {
+    width: Math.max(width ? parent.width : child.width, 0.01),
+    height: plan.isLine ? 0 : Math.max(height ? parent.height : child.height, 0.01),
+  }, { width, height: height && !plan.isLine });
 }
 
 // Lift an out-of-flow child (author `left`/`top`, or `position: "absolute"`) out of an auto-layout
@@ -448,14 +445,6 @@ function applyChildPosition(parent: any, child: any, layout: WriteLayout): void 
   if (typeof layout.left === "number") child.x = layout.left;
   if (typeof layout.top === "number") child.y = layout.top;
 }
-
-// Figma's per-axis constraint enum keyed by the author's directional `constraints` (ir.ts ConstraintX/ConstraintY). Two maps
-// because the axis-neutral words (center/stretch/scale) sit alongside axis-specific edges (left/right on x,
-// top/bottom on y). This terse→enum mapping is the bridge's to own, like the container policy’s alignment maps.
-// "none" → MIN: clearing a constraint restores Figma's default (near-edge). The auto-derived constraint
-// create chose isn't stored anywhere live, so the default is the stated inverse, not a recovery.
-const CONSTRAINT_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
-const CONSTRAINT_V: Record<string, string> = { top: "MIN", center: "CENTER", bottom: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
 
 // Derive one axis's Figma constraint from the child's ORIGINAL size/position intent, so a resized free-form
 // parent reflows it sensibly: fill→STRETCH (grows with the parent), a percent size→SCALE (scales
@@ -502,39 +491,6 @@ function applyConstraintsDelta(child: any, explicit: NonNullable<WriteLayout["co
     horizontal: explicit.x != null ? CONSTRAINT_H[explicit.x] : cur.horizontal,
     vertical: explicit.y != null ? CONSTRAINT_V[explicit.y] : cur.vertical,
   };
-}
-
-// THE sizing home for leaf nodes (no own auto-layout) — create's builders and edit's delta path
-// both land here, so the per-kind rules can't fork: TEXT's auto-resize handshake and LINE's zero
-// height. Generic shapes (and TEXT, once its auto-resize is set) resize only the named dims,
-// floored at Figma's 0.01.
-function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | undefined): void {
-  if (layout.bounds) { trackSizing(node); applyBounds(node, layout.bounds, tokens); }
-  const sizing = layout.sizing || {};
-  const dims = dimensionsForResize(node, layout.dimensions, tokens);
-  if (node.type === "TEXT") {
-    // textAutoResize IS a text's sizing: NONE holds a fixed box, HEIGHT wraps at a fixed width
-    // and grows the height, WIDTH_AND_HEIGHT grows both. It must be set BEFORE the resize below,
-    // or an auto-resizing text snaps straight back to its content. A fixed height (a number, or a
-    // percent — the compile writes "fixed" beside both) fixes the whole box.
-    if (sizing.vertical === "fixed") node.textAutoResize = "NONE";
-    else if (sizing.horizontal === "hug") node.textAutoResize = "WIDTH_AND_HEIGHT";
-    // A controlled width wraps. Only a width-hugging text needs switching: a fixed box keeps its
-    // height when only the width is named.
-    else if ((sizing.horizontal === "fixed" || sizing.horizontal === "fill") && node.textAutoResize === "WIDTH_AND_HEIGHT") node.textAutoResize = "HEIGHT";
-    // height:"hug" undoes a fixed or flow-filled height (Figma pins a vertically filled text to
-    // NONE; the parent policy's clearFill has just lifted the fill), so the height follows the
-    // content under whatever width rule the text keeps. On a text that already hugs it is a no-op.
-    if (sizing.vertical === "hug" && (node.textAutoResize === "NONE" || node.textAutoResize === "TRUNCATE")) node.textAutoResize = "HEIGHT";
-  }
-  if (node.type === "LINE") {
-    if (typeof dims.width === "number") resizeToAuthoredSize(node, Math.max(dims.width, 0.01), 0, { width: true, height: false });
-  } else if (typeof dims.width === "number" || typeof dims.height === "number") {
-    resizeToAuthoredSize(node, Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
-                Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01),
-                { width: typeof dims.width === "number", height: typeof dims.height === "number" });
-  }
-  bindDimensions(node, layout.dimensions, tokens);
 }
 
 // (The layout legality rules — percent-hug cycle, page-parent fill/percent, TEXT fill-height,
@@ -593,27 +549,25 @@ function pctOf(pct: number, parentDim: number): number {
 // realized size, through the deferred settleApplySpan pass above (an edit's live node settles through
 // settleLiveNodePercentSize/Position instead). Parameter order matches the sibling child-appliers
 // (parent, child, layout).
-function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): void {
-  resolvePercentSize(parent, child, layout);
-  resolvePercentPosition(parent, child, layout);
+function resolvePercentLayout(parent: any, child: any, layout: AuthorizedLayout): void {
+  settlePercentSizing(parent, child, layout);
+  resolvePercentPosition(parent, child, layout.child.layout);
 }
 
-// The SIZE half — it PRODUCES geometry, so it runs before anything that measures.
-function resolvePercentSize(parent: any, child: any, layout: WriteLayout): void {
-  if (layout.percentSize) {
-    assertPercentResolvable({ ...layout, position: child.layoutPositioning === "ABSOLUTE" ? "absolute" : layout.position }, parentHugFacts(parent), "flcm");
-    const ps = layout.percentSize;
-    const w = ps.width != null ? pctOf(ps.width, parent.width) : child.width;
-    const h = ps.height != null ? pctOf(ps.height, parent.height) : child.height;
-    // A text node ignores a resize on any axis it auto-sizes — it would just keep hugging its content.
-    // Mirror applyLeafSize's handshake so the percent lands instead of silently dropping (ADR-0003
-    // silent-wrong): a percent height fixes the box; a percent width alone wraps, height auto-fitting.
-    if (child.type === "TEXT") {
-      if (ps.height != null) child.textAutoResize = "NONE";
-      else if (ps.width != null && child.textAutoResize === "WIDTH_AND_HEIGHT") child.textAutoResize = "HEIGHT";
-    }
-    resizeWithDiagnostics(child, Math.max(w, 0.01), Math.max(h, 0.01));
-  }
+// The SIZE half — it PRODUCES geometry, so it runs before anything that measures. The plan's text
+// auto-resize lands again first: a text ignores a resize on any axis it auto-sizes.
+function settlePercentSizing(parent: any, child: any, layout: AuthorizedLayout): void {
+  const { horizontal, vertical, textAutoResize } = layout.sizing;
+  const width = horizontal.resize?.kind === "percent" ? horizontal.resize.percent : undefined;
+  const height = vertical.resize?.kind === "percent" ? vertical.resize.percent : undefined;
+  if (width === undefined && height === undefined) return;
+  const words = layout.child.layout;
+  assertPercentResolvable({ ...words, position: child.layoutPositioning === "ABSOLUTE" ? "absolute" : words.position }, parentHugFacts(parent), "flcm");
+  if (textAutoResize) child.textAutoResize = textAutoResize;
+  resizeToPlannedSize(child, layout, {
+    width: Math.max(width !== undefined ? pctOf(width, parent.width) : child.width, 0.01),
+    height: Math.max(height !== undefined ? pctOf(height, parent.height) : child.height, 0.01),
+  }, { width: width !== undefined, height: height !== undefined });
 }
 
 // The POSITION half — it CONSUMES geometry (the parent's realized size), so it runs last of everything.
@@ -626,19 +580,20 @@ function resolvePercentPosition(parent: any, child: any, layout: WriteLayout): v
   if (pp.y != null || layout.top != null) child.y = pp.y != null ? pctOf(pp.y, parent.height) : layout.top!;
 }
 
-// Apply a layout delta to a LIVE node the way the create walk applies a fresh child — the SAME
-// appliers in the same roles, re-run against the live parent. Order matters and mirrors buildFrame's
-// walk: container words first (they may change the node's own direction, which own-size mapping
-// reads), then position (in/out of flow decides which appliers govern the node), flow fills and
-// their unset inverses, own/leaf sizing, cover, constraints. The percent tail is
+// Apply an authorized layout delta to a LIVE node the way the create walk applies a fresh child —
+// the SAME appliers in the same roles, re-run against the live parent. Order matters and mirrors
+// buildFrame's walk: container words first (they may change the node's own direction, which
+// own-size mapping reads), then position (in/out of flow decides which appliers govern the node),
+// flow fills and their unset inverses, own sizing, cover, constraints. The percent tail is
 // settleLiveNodePercentSize/Position, deliberately NOT called here — both measure, so the caller
 // owns when they run (see those functions).
-export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources: { span: ApplySpan; tokens?: ResolvedTokens }): void {
-  const context = childLayout(layoutModeOf(node.parent), wl, wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE"), "flcm.edit");
-  wl = context.layout;
+export function applyLiveNodeLayout(layout: AuthorizedLiveLayout, resources: { span: ApplySpan; tokens?: ResolvedTokens }): void {
+  const node: any = layout.node;
+  const context = layout.child;
+  const wl = context.layout;
   if (wl.sizing || wl.bounds || wl.percentSize) trackSizing(node);
   const parent = node.parent;
-  applyContainer(node, wl, resources.tokens);
+  applyContainer(node, layout, resources.tokens);
   if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
   const parentIsAuto = isAutoLayout(parent);
   // Un-fill BEFORE the position write, and regardless of the child's CURRENT positioning: an axis
@@ -654,9 +609,8 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources: { spa
   if (inFlowAuto) {
     layoutBehavior(parent).fill(parent, node, context, false); // crossStretch is the container's own alignItems edit, never a child's
   }
-  if (isAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl, resources.tokens);
-  else applyLeafSize(node, wl, resources.tokens);
-  if (!inFlowAuto) coverChild(parent, node, wl);
+  applyOwnSizing(node, layout, resources.tokens);
+  if (!inFlowAuto) applyCoverSizing(parent, node, layout);
   if (wl.constraints) applyConstraintsDelta(node, wl.constraints);
 }
 
@@ -671,12 +625,14 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources: { spa
  * is what lets a batch interleave the text clamp (also a producer) between them. `flcm.edit` calls
  * the pair in order and sees exactly the behavior it always had.
  */
-export function settleLiveNodePercentSize(node: any, wl: WriteLayout): void {
-  if (node.parent && wl.percentSize) resolvePercentSize(node.parent, node, wl);
+export function settleLiveNodePercentSize(layout: AuthorizedLiveLayout): void {
+  const node: any = layout.node;
+  if (node.parent) settlePercentSizing(node.parent, node, layout);
 }
 
-export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void {
-  if (node.parent && wl.percentPos) resolvePercentPosition(node.parent, node, wl);
+export function settleLiveNodePercentPosition(layout: AuthorizedLiveLayout): void {
+  const node: any = layout.node;
+  if (node.parent && layout.child.layout.percentPos) resolvePercentPosition(node.parent, node, layout.child.layout);
 }
 
 // The live-parent facts assertPercentResolvable needs (create computes them from the authored
@@ -758,7 +714,7 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
     if (!parentIsAuto) return false; // hug is meaningless off auto-layout
     // The live effective reading holds unless the batch invalidates what produced it — either the
     // parent's own direction moved (so each raw mode governs a different axis now) or its fill
-    // stopped being honored. Then read the raw modes, exactly as applyOwnSize will.
+    // stopped being honored. Then read the raw modes, exactly as applyOwnSizing will.
     if (!establishesDirection && fillSurvives) return isWidth ? live.hugW : live.hugH;
     // Fill is realized from ABOVE, so where it survives it still isn't a hug (the same case
     // parentHugFacts reads effective sizing for).
@@ -787,7 +743,7 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
 //                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
 function assertLayoutLandsUnderParent(
   parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: AutoLayoutMixin["layoutMode"] | undefined, isOutOfFlow: boolean, subject: string, nodeLocalValidated = false, liveWrap = false,
-): void {
+): ChildLayout {
   const context = childLayout(parent.mode, wl, isOutOfFlow, subject);
   wl = context.layout;
   if (parent.isPage) {
@@ -799,62 +755,40 @@ function assertLayoutLandsUnderParent(
   if (wl.percentSize) {
     assertPercentResolvable({ ...wl, position: isOutOfFlow ? "absolute" : wl.position }, parent, subject);
   }
+  return context;
 }
 
 // ---- The three verb-facing spellings of the gate. Each derives the facts itself, so a caller
 // never assembles them (two adjacent booleans a call site could swap) and never needs the
 // primitives above. ----
 
+// What an INSTANCE's own container becomes when the same call retargets it first: a swap or a
+// variant change re-points the instance before its root words land.
+export interface BecomesContainer { readonly mode: LayoutMode; readonly wrap: boolean }
+
 // Edit: the destination is where the node already sits. `subject` names the calling verb the way
 // the other two spellings take it — `edit` and `editMany` compile through one pipeline, and an
 // entry rejected inside a batch must say which verb the agent actually called. `deltas` is every
 // layout delta THIS verb is applying, keyed by node id, so the ancestors this node is judged
 // against are the ones the call is creating (see projectedParentLayoutFacts); a lone `edit` passes
-// none and is judged against the live canvas. `projection.mode` is the node's OWN container mode
-// after this same call — an INSTANCE the delta swaps or re-variants takes the incoming component's
-// auto-layout mode before its root words land, so reading the live mode would both refuse a gap the
-// swap makes legal and accept one it makes meaningless. Undefined for every other delta, which has
-// no way to change its own mode mid-call.
-export interface EditLayoutProjection {
-  mode?: AutoLayoutMixin["layoutMode"];
-  wrap?: boolean;
-  /** Overrides compiled against a definition will land inside an instance of this component. */
-  instanceDefinition?: SceneNode;
-}
-
-export function assertLayoutDeltaResolvable(
-  node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
-): void {
+// none and is judged against the live canvas. `becomes` is the node's OWN container after a
+// retarget in the same call: its `layout` words are legal or not by the incoming component's mode,
+// never the outgoing one's. Returns the words resolved against that parent, for the authorization.
+export function resolveLiveLayoutDelta(node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, becomes?: BecomesContainer): ResolvedLiveLayout {
   assertBounds(wl.bounds, node, subject);
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
   const parent = projectedParentLayoutFacts(node.parent, deltas);
-  const mode = projection?.mode === undefined ? node.layoutMode : projection.mode;
-  if (node.type === "RECTANGLE") {
-    let owner: any = null;
-    for (let parent = node.parent; parent && parent.type !== "PAGE"; parent = parent.parent) {
-      // Open slot content is outside this inherited-rectangle rule. A nested instance inside
-      // that content still supplies its own inherited rectangle children.
-      if (isSlotHole(parent)) break;
-      if (parent.type === "INSTANCE" || parent === projection?.instanceDefinition) { owner = parent; break; }
-    }
-    if (owner) assertInheritedRectangleDimensions(wl, subject + ": " + describeNodeIdentity(node) + " under " + describeNodeIdentity(owner));
-  }
-  if (node.type === "INSTANCE" && wl.mode !== undefined) {
-    const requested = LAYOUT_MODES[wl.mode].native;
-    if (requested !== mode) {
-      throw new Error(subject + ": an instance root inherits its layout direction from its component; layout.mode " +
-        JSON.stringify(wl.mode) + " does not match the resulting component's " + mode + " direction. Change the component or choose a matching variant instead. Nothing was applied.");
-    }
-  }
+  const mode = becomes ? becomes.mode.native : node.layoutMode;
   assertGridSizing(wl, { layoutMode: mode, layoutSizingHorizontal: node.layoutSizingHorizontal, layoutSizingVertical: node.layoutSizingVertical, gridColumnSizes: node.gridColumnSizes, gridRowSizes: node.gridRowSizes }, subject);
-  const isContainer = mode;
-  assertLayoutLandsUnderParent(parent, node.type, wl, isContainer, outOfFlow, subject, false, projection?.wrap ?? node.layoutWrap === "WRAP");
+  const child = assertLayoutLandsUnderParent(parent, node.type, wl, mode, outOfFlow, subject, false, becomes ? becomes.wrap : node.layoutWrap === "WRAP");
+  return { child, sizingFacts: liveNodeSizingFacts(node, becomes?.mode) };
 }
 
 // A structural verb placing a LIVE node: ask whether the words it already wears stay legal under
-// `destination`, and hand them back — they're also what the post-move re-aim replays, and reading
-// them twice would risk reading them AFTER the reparent, when they no longer mean the old axes.
-export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string, overrides?: WriteLayout): WriteLayout {
+// `destination`, and hand them back resolved there — they're also what the post-move re-aim
+// replays, and reading them twice would risk reading them AFTER the reparent, when they no longer
+// mean the old axes. `becomes` as for resolveLiveLayoutDelta: a placed instance its delta retargets.
+export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string, overrides?: WriteLayout, becomes?: BecomesContainer): ResolvedLiveLayout {
   const facts = liveParentLayoutFacts(destination);
   const live = liveParentRelativeWords(node);
   const wl: WriteLayout = { ...live, ...overrides };
@@ -862,8 +796,8 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
   if (live.dimensions || overrides?.dimensions) wl.dimensions = { ...live.dimensions, ...overrides?.dimensions };
   rederiveCarriedFill(node, wl, overrides, placementKind(facts.mode, wl.position === "absolute"));
   assertBounds(wl.bounds, node, subject);
-  assertLayoutLandsUnderParent(facts, node.type, wl, node.layoutMode, wl.position === "absolute", subject);
-  return wl;
+  const child = assertLayoutLandsUnderParent(facts, node.type, wl, becomes ? becomes.mode.native : node.layoutMode, wl.position === "absolute", subject);
+  return { child, sizingFacts: liveNodeSizingFacts(node, becomes?.mode) };
 }
 
 // A carried `fill` meant a share of its old layout. Where the node lands may read fill as the
@@ -887,7 +821,7 @@ export function foldBuiltRootForDestination(destination: any, wn: BuiltNode): vo
 
 // A structural verb placing a compiled node: only its ROOT meets the destination — the interior children
 // are checked against their own authored parents inside the build walk, exactly as at create.
-// `deltas` is the same projection a batch hands assertLayoutDeltaResolvable: a slot's content is
+// `deltas` is the same projection a batch hands resolveLiveLayoutDelta: a slot's content is
 // judged against the slot as the SAME override's own layout words will leave it, not as it stands.
 export function assertBuiltRootLandsUnderParent(destination: any, wn: BuiltNode, subject: string, deltas?: BatchLayoutDeltas): void {
   // Instance planning validates node-local words against the resolved component/selected variant,
@@ -919,8 +853,9 @@ function liveParentRelativeWords(node: any): WriteLayout {
 // sits, the node keeps the px it has. NOT lifted, as the parent policy doesn't lift it on a
 // direction flip: the hug-beats-stretch primaryAxisSizingMode pin, indistinguishable from an
 // authored fixed size once written.
-export function attachLiveNode(parent: any, node: any, wl: WriteLayout, place: (node: any) => void): void {
-  growImplicitGridRows(parent, wl);
+export function attachLiveNode(parent: any, layout: AuthorizedLiveLayout, place: (node: any) => void): void {
+  const node: any = layout.node;
+  growImplicitGridRows(parent, layout.child.layout);
   node.layoutGrow = 0;
   if (node.layoutAlign === "STRETCH") node.layoutAlign = "INHERIT";
   place(node);
@@ -928,14 +863,14 @@ export function attachLiveNode(parent: any, node: any, wl: WriteLayout, place: (
 
 // Settle a node attachLiveNode just placed: re-apply its parent-relative intent against the new
 // parent through the create/edit appliers.
-export function resettleMovedNode(node: any, wl: WriteLayout, resources: { span: ApplySpan; tokens?: ResolvedTokens }): void {
-  applyLiveNodeLayout(node, wl, resources);
-  settleLiveNodePercentSize(node, wl);
-  settleLiveNodePercentPosition(node, wl);
+export function resettleMovedNode(layout: AuthorizedLiveLayout, resources: { span: ApplySpan; tokens?: ResolvedTokens }): void {
+  applyLiveNodeLayout(layout, resources);
+  settleLiveNodePercentSize(layout);
+  settleLiveNodePercentPosition(layout);
 }
 
 /** One positioned child waiting on its parent's final size — cover its "fill" axes, then constrain it. */
-interface PositionedChildSettlement { child: any; layout: WriteLayout }
+interface PositionedChildSettlement { child: any; layout: AuthorizedLayout }
 
 // The parent-side facts a compiled child is settled against. The flow facts are ParentFlowFacts (the
 // percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
@@ -946,6 +881,8 @@ interface AttachParentFacts extends ParentFlowFacts {
   crossStretch: boolean;
   widthIsBounded: boolean;
   subject: string; // the verb name the shared legality rules prefix their rejections with
+  // Where a parent the walk is still assembling will sit: it is a page child until its own parent takes it.
+  context?: InstanceContextFacts;
 }
 
 // The same facts read off a LIVE destination, for the structural insert verbs. `crossStretch` is
@@ -959,16 +896,19 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
 }
 
 // The flow facts a built FRAME's children are judged against, from its AUTHORED words alone — the
-// frame's own sizing modes don't exist until applyOwnSize runs after the children (see
+// frame's own sizing modes don't exist until applyOwnSizing runs after the children (see
 // assertPercentResolvable's contract). Pure, so the gate can judge the interior before the seal.
 function childFlowFactsOf(wn: BuiltNode): ParentFlowFacts & { crossStretch: boolean } {
   const layout = wn.layout || {};
-  const mode = effectiveLayoutMode(layout);
-  const sizing = behaviorForMode(mode).defaultSizing(layout);
+  // Placement kind is the frame's own parent's question; hug reads the same either way.
+  return childFlowFactsFromPlan(planNodeSizing({ kind: "free", layout }, builtNodeSizingFacts(wn)), layout);
+}
+
+function childFlowFactsFromPlan(plan: NodeSizingPlan, layout: WriteLayout): ParentFlowFacts & { crossStretch: boolean } {
   return {
-    mode,
-    hugW: !sizing.horizontal || sizing.horizontal === "hug",
-    hugH: !sizing.vertical || sizing.vertical === "hug",
+    mode: plan.ownMode,
+    hugW: plan.horizontal.native === "hug",
+    hugH: plan.vertical.native === "hug",
     crossStretch: layout.alignItems === "stretch",
   };
 }
@@ -1030,8 +970,9 @@ export function attachBuiltChild(
   const words: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
   const context = legalChildLayout(wn, words, facts);
   const cl = context.layout;
-  const child = buildNode(wn, ctx, facts.widthIsBounded);
-  if (defaultTextFill) child.textAutoResize = "HEIGHT";
+  // The text-fill default rides the sizing plan: a fill width on a fresh text plans its HEIGHT handshake.
+  const layout = authorizeBuiltChild(parent, wn, context, facts, ctx);
+  const child = buildNode(wn, ctx, layout, facts.widthIsBounded);
   // BEFORE the attach: Figma auto-places the child the moment it lands, and a grid with no free
   // cell left grows a FIXED row of its own.
   growImplicitGridRows(parent, cl);
@@ -1039,17 +980,17 @@ export function attachBuiltChild(
   layoutBehavior(parent).place(parent, child, context);
   queueSiblingOrder(ctx.span, parent, child, cl.zIndex);
   if (cl.percentSize || cl.percentPos) {
-    ctx.span.percents.push({ node: child, layout: cl, parent });
+    ctx.span.percents.push({ node: child, layout, parent });
   }
   if (cl.position === "absolute") applyChildPosition(parent, child, cl);
   if (context.kind === "free") {
-    coverChild(parent, child, cl);
+    applyCoverSizing(parent, child, layout);
     // A constraint is how the child reflows when the parent's box CHANGES, so writing it before the
     // parent has its final size makes Figma reflow the child by that difference — a STRETCH child
     // authored 200 wide under a still-provisional frame comes out 200 + the frame's growth. A caller
     // that will size the parent afterwards takes the marks in its own post-size pass; one attaching
     // into an already-sized live parent has no delta coming and writes them here.
-    if (settleAfterParentSize) settleAfterParentSize.push({ child, layout: cl });
+    if (settleAfterParentSize) settleAfterParentSize.push({ child, layout });
     else applyConstraints(child, wn.layout);
   } else {
     layoutBehavior(parent).fill(parent, child, context, facts.crossStretch);
@@ -1063,24 +1004,39 @@ export function attachBuiltChild(
   return child;
 }
 
-function buildFrame(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded = false): any {
+// A parent the walk is still assembling sits on the page until its own parent takes it, so its
+// lock comes from the facts it hands down, never from where it sits now.
+function authorizeBuiltChild(parent: any, wn: BuiltNode, child: ChildLayout, facts: AttachParentFacts, ctx: RenderCtx): AuthorizedBuiltLayout {
+  const componentMode = wn.type === "INSTANCE" ? layoutModeOf(ctx.instances.get(wn)?.component) : undefined;
+  try {
+    return mintAuthorizedBuiltLayout(facts.subject, wn, child, facts.context ?? parent, componentMode);
+  } catch (cause) {
+    if (!wn.sourcePath) throw cause;
+    throw new NodeBuildError(wn, wn.sourcePath, cause, { flcmRefusal: true });
+  }
+}
+
+function buildFrame(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout, enclosingWidthBounded = false): any {
   const f = figma.createFrame();
   figma.currentPage.appendChild(f); // enter the doc; reparented when appended to a parent frame
   // CSS default overflow is VISIBLE; Figma's createFrame() defaults clipsContent = true. Default it off so
   // authored overflow (escaping shadows, a knob past its track, a badge past a corner) isn't silently
   // clipped — a silent divergence from the CSS mental model. applyPaint re-applies an explicit `clip`.
   f.clipsContent = false;
-  const layout = wn.layout || {};
+  const words = layout.child.layout;
   applyContainer(f, layout, ctx.tokens);
   if (!wn.fills) f.fills = []; // omitted fill -> transparent, not a surprise white box
   applyPaint(f, wn, ctx);
 
-  const flow = childFlowFactsOf(wn);
-  const authoredSizing = behaviorForMode(flow.mode).defaultSizing(layout);
+  const flow = childFlowFactsFromPlan(layout.sizing, words);
+  const width = layout.sizing.horizontal;
+  // Fixed in px bounds the width outright; filled or a percent, only as far as the enclosing frame does.
+  const fillsOrPercent = width.fill !== undefined || width.resize?.kind === "cover" || width.resize?.kind === "percent";
   const facts: AttachParentFacts = {
     ...flow,
-    widthIsBounded: flow.mode.kind === "free" || (authoredSizing.horizontal === "fixed" && !layout.percentSize?.width) || ((authoredSizing.horizontal === "fill" || layout.percentSize?.width !== undefined) && enclosingWidthBounded),
+    widthIsBounded: flow.mode.kind === "free" || (width.native === "fixed" && width.resize?.kind !== "percent") || (fillsOrPercent && enclosingWidthBounded),
     subject: "flcm",
+    context: layout.context,
   };
   // Every positioned child (absolute, or any child of a free-form parent) settles only once the frame
   // has its FINAL size: a w/h:"fill" must be re-resized against it, and a constraint must not be
@@ -1092,12 +1048,11 @@ function buildFrame(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded = false
     attachBuiltChild(f, rawChild, ctx, facts, (c) => f.appendChild(c), settlements);
   }
 
-  // Creation default: a fresh auto-layout frame HUGS both axes (CSS fit-content). Like the
-  // transparent-fill default above, it's the builder's to inject — the applier itself never turns
-  // key-absence into a write, so an edit delta omitting an axis leaves it alone.
-  applyOwnSize(f, { ...layout, sizing: { horizontal: authoredSizing.horizontal || "hug", vertical: authoredSizing.vertical || "hug" } }, ctx.tokens);
+  // A fresh auto-layout frame HUGS every axis it leaves unnamed (CSS fit-content): the sizing plan
+  // carries that creation default (builtNodeSizingFacts), so an edit omitting an axis leaves it alone.
+  applyOwnSizing(f, layout, ctx.tokens);
   // Settle every positioned child now that the frame has its final size (at append it was hug-sized).
-  for (const s of settlements) { coverChild(f, s.child, s.layout); applyConstraints(s.child, s.layout); }
+  for (const s of settlements) { applyCoverSizing(f, s.child, s.layout); applyConstraints(s.child, s.layout.child.layout); }
   return f;
 }
 
@@ -1107,7 +1062,7 @@ function buildFrame(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded = false
 // Order: properties before overrides, since a property can swap a nested instance or hide a
 // sublayer and the override paths were resolved against the tree the properties produce. The
 // child-side words (position, fill, constraints) are attachBuiltChild's, after the caller places the node.
-function buildInstance(wn: BuiltNode, ctx: RenderCtx): any {
+function buildInstance(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const plan = ctx.instances.get(wn);
   if (!plan) throw new Error("flcm: an INSTANCE node reached the build walk without a resolved plan. This is an internal error; report it.");
   const inst = plan.component.createInstance();
@@ -1115,8 +1070,8 @@ function buildInstance(wn: BuiltNode, ctx: RenderCtx): any {
   if (Object.keys(plan.properties).length) inst.setProperties(plan.properties);
   applyPaint(inst, wn, ctx);
   if (wn.layout) {
-    applyContainer(inst, wn.layout, ctx.tokens);
-    applyOwnSize(inst, wn.layout, ctx.tokens);
+    applyContainer(inst, layout, ctx.tokens);
+    applyOwnSizing(inst, layout, ctx.tokens);
   }
   if (wn.exposed !== undefined) ctx.exposures.push({ node: inst, value: wn.exposed });
   plan.applyOverrides(inst, ctx);
@@ -1268,7 +1223,7 @@ export function applyTextClamp(t: any, maxLines: WriteProps["maxLines"]): void {
   t.maxLines = maxLines;
 }
 
-function buildText(wn: BuiltNode, ctx: RenderCtx): any {
+function buildText(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const t = figma.createText();
   figma.currentPage.appendChild(t);
   // The creation default is the builder's: a fresh text ALWAYS ends up with a written base font —
@@ -1278,7 +1233,7 @@ function buildText(wn: BuiltNode, ctx: RenderCtx): any {
   // An omitted fill keeps createText's seeded black — the text default, unlike a shape's transparent one.
   applyPaint(t, wn, ctx);
   applyTextProps(t, { ...wn, text: wn.text == null ? "" : wn.text }, ctx);
-  applyLeafSize(t, wn.layout || {}, ctx.tokens);
+  applyOwnSizing(t, layout, ctx.tokens);
   // TEXT guarantees a bounded width when maxLines is set (the handshake above gave it a
   // wrap), so the truncation always has real lines to bite.
   applyTextClamp(t, wn.maxLines);
@@ -1286,33 +1241,33 @@ function buildText(wn: BuiltNode, ctx: RenderCtx): any {
 }
 
 
-function buildShape(node: any, wn: BuiltNode, ctx: RenderCtx): any {
+function buildShape(node: any, wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   figma.currentPage.appendChild(node);
   if (!wn.fills) node.fills = []; // omitted fill -> transparent
   applyPaint(node, wn, ctx);
-  applyLeafSize(node, wn.layout || {}, ctx.tokens);
+  applyOwnSizing(node, layout, ctx.tokens);
   return node;
 }
 
-function buildLine(wn: BuiltNode, ctx: RenderCtx): any {
+function buildLine(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const l = figma.createLine();
   figma.currentPage.appendChild(l);
   // An omitted stroke keeps createLine's seeded black; the weight's creation default is 1.
   applyPaint(l, { ...wn, strokeWeight: wn.strokeWeight ?? 1 }, ctx);
-  applyLeafSize(l, wn.layout || {}, ctx.tokens);
+  applyOwnSizing(l, layout, ctx.tokens);
   return l;
 }
 
 // A VECTOR WriteNode carries one WriteVectorSource (ir.ts), and each arm drives a different plugin call:
 // svg → createNodeFromSvg (a FRAME of vectors); path → createVector + vectorPaths (one themeable vector).
 // Both fail loud on unparseable input rather than leaving a silent empty node.
-function buildVector(wn: BuiltNode, ctx: RenderCtx): any {
+function buildVector(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const source = wn.vector;
   if (!source) throw new Error("flcm: a VECTOR node carries no geometry (compileSvg/compilePath guarantee one).");
-  return source.kind === "svg" ? buildSvg(wn, source.markup, ctx) : buildPath(wn, source, ctx);
+  return source.kind === "svg" ? buildSvg(wn, source.markup, ctx, layout) : buildPath(wn, source, ctx, layout);
 }
 
-function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx): any {
+function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx, layout: AuthorizedLayout): any {
   let frame: any;
   try {
     frame = figma.createNodeFromSvg(markup);
@@ -1325,10 +1280,10 @@ function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx): any {
   // createFrame path); this frame never traverses it, so clear it here too (CSS overflow is visible by
   // default). See buildFrame for the rationale.
   frame.clipsContent = false;
-  // BEFORE applyLeafSize: Figma applies a child's constraints during the parent's resize, so art that
+  // BEFORE applyOwnSizing: Figma applies a child's constraints during the parent's resize, so art that
   // gets SCALE only afterwards is art the authored width/height already stranded at its import size.
   themeImportedArt(frame, wn, ctx);
-  applyLeafSize(frame, wn.layout || {}, ctx.tokens);
+  applyOwnSizing(frame, layout, ctx.tokens);
   if (wn.opacity !== undefined) writeBindable(frame, "opacity", wn.opacity, ctx.tokens);
   return frame;
 }
@@ -1354,13 +1309,13 @@ function themeImportedArt(frame: any, wn: BuiltNode, ctx: RenderCtx): void {
 }
 
 /** Geometry edits preserve the live vector's box unless the spec also names a new size. */
-export function applyVectorPath(node: VectorNode, paths: VectorPaths): void {
+export function applyVectorPath(node: VectorNode, paths: VectorPaths, layout: AuthorizedLayout): void {
   const { width, height } = node;
   node.vectorPaths = paths;
-  node.resize(width, height);
+  resizeToPlannedSize(node as SceneNode as any, layout, { width, height });
 }
 
-function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }, ctx: RenderCtx): any {
+function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const v: any = figma.createVector();
   figma.currentPage.appendChild(v);
   if (!wn.fills) v.fills = []; // omitted fill -> transparent, like the other primitives (no surprise default)
@@ -1376,12 +1331,12 @@ function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }
     throw new Error('VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + (e && e.message ? e.message : String(e)));
   }
   applyPaint(v, wn, ctx);
-  applyLeafSize(v, wn.layout || {}, ctx.tokens);
-  // AFTER the paths (which set the natural box) and after applyLeafSize (whose min/max bounds should
+  applyOwnSizing(v, layout, ctx.tokens);
+  // AFTER the paths (which set the natural box) and after applyOwnSizing (whose min/max bounds should
   // clamp the scaled size, and be reported when they do). resize, not rescale: strokeWidth/effects are
   // authored in the same breath and mean the number the author wrote, not that number times `scale`.
   if (source.scale !== undefined) {
-    resizeWithDiagnostics(v, Math.max(v.width * source.scale, 0.01), Math.max(v.height * source.scale, 0.01));
+    resizeToPlannedSize(v, layout, { width: Math.max(v.width * source.scale, 0.01), height: Math.max(v.height * source.scale, 0.01) });
   }
   return v;
 }
@@ -1389,21 +1344,22 @@ function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }
 // The createable allow-list AND the dispatch in one table — `Record<WriteType, …>` makes TS reject any
 // createable type that lacks a builder (or a builder for a non-createable type), so the two can't drift.
 // A type outside the table falls through to the loud error in buildNode.
-const BUILDERS: Record<WriteType, (wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?: boolean) => any> = {
-  FRAME: (wn, ctx, bounded) => buildFrame(wn, ctx, bounded),
-  TEXT: (wn, ctx) => buildText(wn, ctx),
-  RECTANGLE: (wn, ctx) => buildShape(figma.createRectangle(), wn, ctx),
-  ELLIPSE: (wn, ctx) => buildShape(figma.createEllipse(), wn, ctx),
-  LINE: (wn, ctx) => buildLine(wn, ctx),
-  VECTOR: (wn, ctx) => buildVector(wn, ctx),
-  INSTANCE: (wn, ctx) => buildInstance(wn, ctx),
+const BUILDERS: Record<WriteType, (wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout, enclosingWidthBounded?: boolean) => any> = {
+  FRAME: (wn, ctx, layout, bounded) => buildFrame(wn, ctx, layout, bounded),
+  TEXT: (wn, ctx, layout) => buildText(wn, ctx, layout),
+  RECTANGLE: (wn, ctx, layout) => buildShape(figma.createRectangle(), wn, ctx, layout),
+  ELLIPSE: (wn, ctx, layout) => buildShape(figma.createEllipse(), wn, ctx, layout),
+  LINE: (wn, ctx, layout) => buildLine(wn, ctx, layout),
+  VECTOR: (wn, ctx, layout) => buildVector(wn, ctx, layout),
+  INSTANCE: (wn, ctx, layout) => buildInstance(wn, ctx, layout),
 };
 
 // Build one node and its subtree. Percent size/position is NOT resolved here — the node is built at a
 // provisional size and attachBuiltChild records it on the span for the post-walk settleApplySpan pass (which
-// needs the fully-assembled tree to read realized parent sizes). Returns the live node.
-export function buildNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
-  try { return buildCompiledNode(wn, ctx, enclosingWidthBounded); }
+// needs the fully-assembled tree to read realized parent sizes). Returns the live node. `layout` is the
+// node's words authorized where it will land (attachBuiltChild mints it before building).
+export function buildNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuiltLayout, enclosingWidthBounded?: boolean): any {
+  try { return buildCompiledNode(wn, ctx, layout, enclosingWidthBounded); }
   catch (cause) {
     // Innermost wins: the deepest node that failed is the one the verb error should name. A nested
     // verb error (slot content, a placed live child) already names it, so it passes through too.
@@ -1412,12 +1368,12 @@ export function buildNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?:
   }
 }
 
-function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
+function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuiltLayout, enclosingWidthBounded?: boolean): any {
   const build = own(BUILDERS, wn.type);
   if (!build) {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
-  const node = build(wn, ctx, enclosingWidthBounded);
+  const node = build(wn, ctx, layout, enclosingWidthBounded);
   if (wn.source) ctx.placedIds.set(wn.source, node.id);
   for (const prop of ["width", "height"] as const) {
     const authored = wn.ignoredSize?.[prop];
@@ -1432,14 +1388,14 @@ function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?
   if (lockedPath !== undefined) {
     // A path's box is its geometry, so a ratio can only be the one it already has: a paste-back's
     // own locks again, any other is ignored like width/height.
-    if (typeof lockedPath === "number" && aspectRatioAgrees(node.width, node.height, lockedPath)) node.lockAspectRatio();
-    else warnings.add({
+    if (!lockBuiltPathAspectRatio(node, layout, lockedPath)) warnings.add({
       id: node.id, prop: "aspectRatio", authored: lockedPath, realized: pixelRound(node.width / node.height),
       message: "A VECTOR path is bare geometry; aspectRatio was ignored. Its proportions are the path's own.",
     });
   }
-  if (wn.layout?.aspectRatio !== undefined) ctx.span.ratios.push({ node, layout: wn.layout });
+  if (layout.sizing.aspect) ctx.span.ratios.push({ node, layout });
   applySceneProps(node, wn);
+  applyAuthorizedRotation(node, layout);
   if (wn.rotation) ctx.span.pivots.push({ node });
   applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);
@@ -1455,21 +1411,24 @@ function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, enclosingWidthBounded?
   return node;
 }
 
-// The props every SceneNode carries (name/blendMode/rotation/visible/locked), applied once after the
-// node is built and sized — never per-builder. Create reaches this through buildNode; edit drives it
+// The props every SceneNode carries (name/blendMode/visible/locked), applied once after the node is
+// built and sized — never per-builder. Create reaches this through buildNode; edit drives it
 // directly on a resolved target (this is the applier a GROUP/INSTANCE edit lands through — the
-// non-createable subset is mostly these words).
-export function applySceneProps(node: any, wn: WriteProps): void {
+// non-createable subset is mostly these words). Rotation is a transform the instance policy judges,
+// so it lands through applyAuthorizedRotation instead, even when `wn` still carries it.
+export function applySceneProps(node: any, wn: Omit<WriteProps, "rotation">): void {
   if (typeof wn.name === "string") node.name = wn.name;
   // The value is already the Figma enum (parseBlendMode mapped the CSS spelling at the boundary).
   // The `in` guard: a SliceNode has no blendMode (no MinimalBlendMixin).
   if (typeof wn.blendMode === "string" && "blendMode" in node) node.blendMode = wn.blendMode;
-  // The canonical (authored) rotation is CSS clockwise-positive, but Figma's raw `node.rotation` is
-  // COUNTERclockwise-positive, so NEGATE on write: the read side negates Figma→CSS on emit
-  // (figma-mcp), and a read value re-authored verbatim must not flip. Omitted at 0.
-  // This native setter turns about the top-left; the apply span pivots it to the centre after
-  // (pivot.ts, settlePivot).
-  if (typeof wn.rotation === "number" && "rotation" in node) node.rotation = -wn.rotation;
   if (typeof wn.visible === "boolean") node.visible = wn.visible;
   if (typeof wn.locked === "boolean") node.locked = wn.locked;
+}
+
+// The one rotation write. The canonical (authored) rotation is CSS clockwise-positive, but Figma's
+// raw `node.rotation` is COUNTERclockwise-positive, so NEGATE on write: the read side negates on
+// emit, and a read value re-authored verbatim must not flip. This native setter turns about the
+// top-left; the apply span pivots it to the centre after (pivot.ts, settlePivot).
+export function applyAuthorizedRotation(node: any, authorized: AuthorizedEditPlan | AuthorizedBuiltLayout): void {
+  if (typeof authorized.rotation === "number" && "rotation" in node) node.rotation = -authorized.rotation;
 }

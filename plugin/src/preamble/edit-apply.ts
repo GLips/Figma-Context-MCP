@@ -19,7 +19,8 @@
 // a layer is what this delta makes it before it is wired to a property.
 
 import type { RenderCtx } from "./bridge.js";
-import { applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, type EditPlan, type EditPlanFailure } from "./edit-plan.js";
+import { applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, type EditPlanFailure } from "./edit-plan.js";
+import type { AuthorizedEditPlan } from "./instance-write-authorization.js";
 import { applyInstanceRetarget, applyInstanceOverrides, type InstanceEditPlan } from "./instance.js";
 import {
   applyBindingRelease, applyComponentDefinitionEdit, applyBoundDefaults, applyComponentBindingEdit, type ComponentEditPlan, type AddedDefinition,
@@ -31,7 +32,7 @@ export interface EditApplyEntry {
   /** Opened before the batch's first write: it snapshots the identity a failure names. */
   fail: EditPlanFailure;
   /** Absent for a live node a tree only moves (or only re-paths). */
-  plan?: EditPlan;
+  plan?: AuthorizedEditPlan;
   instance?: InstanceEditPlan;
   component?: ComponentEditPlan;
   /** How the overrides' slot content names this entry in a refusal. */

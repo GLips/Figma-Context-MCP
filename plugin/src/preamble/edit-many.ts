@@ -35,10 +35,11 @@ import { mintHandle, settleApplySpan, beginRenderWalk, BatchLayoutDeltas } from 
 import { showValue } from "./validate.js";
 import { createStandingState } from "./standing-state.js";
 import {
-  EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, assertEditPlanLands, openEditPlanApply,
+  EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, authorizeEditPlan, openEditPlanApply,
 } from "./edit-plan.js";
 import { loadEditResources, gateEditResources } from "./verb-resources.js";
 import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan, InstancePlanning } from "./instance.js";
+import type { AuthorizedEditPlan } from "./instance-write-authorization.js";
 import { applyEditStages } from "./edit-apply.js";
 import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
@@ -612,19 +613,19 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       const ledger = createBatchLedger(batch.length);
       forEachLiveEntry(ledger, batch.length, (i) => assertNodeStillOnCanvas(nodes[i] as SceneNode, SUBJECT));
       const compiled = compileEntries(ledger, nodes, batch);
-      const instances = planEntryInstances(ledger, compiled, currents, { targets, fonts: loaded.fonts });
+      const instances = planEntryInstances(ledger, compiled, currents, { targets, gate: loaded });
       const components = planEntryComponents(ledger, compiled, instances, mains);
       assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
       assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
       const deltas = layoutDeltasByNodeId(compiled);
+      const authorized: AuthorizedEditPlan[] = [];
       forEachLiveEntry(ledger, batch.length, (i) => {
-        const instance = instances[i];
         // The root's layout gate reads the container the entry LEAVES BEHIND (a swap re-points the
         // instance before its own layout words land).
-        assertEditPlanLands(compiled[i] as EditPlan, loaded.fonts, SUBJECT, deltas, instance ? { mode: instance.becomesLayoutMode, wrap: instance.becomesLayoutWrap } : undefined);
+        authorized[i] = authorizeEditPlan(compiled[i] as EditPlan, loaded, SUBJECT, { deltas, becomes: instances[i]?.becomesContainer });
       });
       ledger.rejectIfAny();
-      const plans = compiled as EditPlan[];
+      const plans = authorized;
       return { plans, instances, components, resources: gateEditResources(loaded, instances.flatMap((instance) => (instance ? [instance.needs] : []))) };
     },
     // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.

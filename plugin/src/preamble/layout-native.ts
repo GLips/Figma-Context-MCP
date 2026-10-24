@@ -17,12 +17,10 @@ interface LayoutBehavior {
   clearFill(parent: any, child: any, layout: WriteLayout): void;
   clearChildren(parent: any): void;
   place(parent: any, child: any, context: ChildLayout): void;
-  defaultSizing(layout: WriteLayout): NonNullable<WriteLayout["sizing"]>;
 }
 const noWrite = () => {};
 const JUSTIFY = { start: "MIN", center: "CENTER", end: "MAX", between: "SPACE_BETWEEN" } as const;
 const ALIGN = { start: "MIN", center: "CENTER", end: "MAX", baseline: "BASELINE" } as const;
-const hugDefault = (layout: WriteLayout) => ({ horizontal: "hug", vertical: "hug", ...layout.sizing } as const);
 
 function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavior {
   function restoreCrossHug(child: any): void {
@@ -80,7 +78,6 @@ function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavi
       }
     },
     place: noWrite,
-    defaultSizing: hugDefault,
   };
 }
 
@@ -176,7 +173,6 @@ const GRID: LayoutBehavior = {
     if (layout.justifySelf) child.gridChildHorizontalAlign = layout.justifySelf;
     if (context.align) child.gridChildVerticalAlign = context.align;
   },
-  defaultSizing: hugDefault,
 };
 const FREE: LayoutBehavior = {
   rawHugs: () => false,
@@ -185,7 +181,6 @@ const FREE: LayoutBehavior = {
     // Parked flow marks cannot become active merely because a free-form parent gains a direction.
     for (const child of parent.children || []) { child.layoutGrow = 0; if (child.layoutAlign === "STRETCH") child.layoutAlign = "INHERIT"; }
   },
-  defaultSizing: hugDefault,
 };
 const BEHAVIORS: Record<LayoutMode["word"], LayoutBehavior> = { none: FREE, row: flowBehavior(LAYOUT_MODES.row), column: flowBehavior(LAYOUT_MODES.column), grid: GRID };
 export function behaviorForMode(mode: LayoutMode): LayoutBehavior { return BEHAVIORS[mode.word]; }

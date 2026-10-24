@@ -39,6 +39,13 @@ export function placementKind(mode: LayoutMode, absolute: boolean): ChildLayout[
 export function fillReading(kind: ChildLayout["kind"]): "layout-share" | "parent-box" {
   return kind === "free" ? "parent-box" : "layout-share";
 }
+// Figma's per-axis constraint enum keyed by the author's directional `constraints` (ir.ts ConstraintX/ConstraintY).
+// Two maps because the axis-neutral words (center/stretch/scale) sit alongside axis-specific edges.
+// "none" → MIN: clearing a constraint restores Figma's default (near-edge). Here, not in the bridge,
+// because the instance write policy compares a live constraint against a word without importing the bridge.
+export const CONSTRAINT_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
+export const CONSTRAINT_V: Record<string, string> = { top: "MIN", center: "CENTER", bottom: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
+
 export type ChildLayout =
   | { kind: "free"; layout: WriteLayout }
   | { kind: "flow"; mode: Extract<LayoutMode, { kind: "flow" }>; layout: WriteLayout }

@@ -13,7 +13,7 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, settleApplySpan, beginRenderWalk } from "./bridge.js";
 import {
-  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, assertEditPlanLands, openEditPlanApply,
+  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, authorizeEditPlan, openEditPlanApply,
 } from "./edit-plan.js";
 import { loadEditResources, gateEditResources } from "./verb-resources.js";
 import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan } from "./instance.js";
@@ -60,17 +60,17 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     // Gate — every decision that reads the document, made against it as it stands at the seal:
     // the compile, the instance and component halves, and the root's own layout gate, which reads
     // the container this delta LEAVES BEHIND (a swap re-points the instance before its layout
-    // words land — `becomesLayoutMode`).
+    // words land — `becomesContainer`).
     ({ node, targets, current, loaded, restated, main }) => {
       assertNodeStillOnCanvas(node, SUBJECT);
       const plan = restated ? restatedEditPlan(node) : compileEditPlan(node, changes, SUBJECT);
-      const planning = { targets, fonts: loaded.fonts };
+      const planning = { targets, gate: loaded };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
       const component: ComponentEditPlan | undefined = plan.componentWords
         ? planComponentEdit(node, plan.componentWords, SUBJECT, (field) => projectedBinderValue(field, node, plan, instance, main, SUBJECT))
         : undefined;
-      assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? { mode: instance.becomesLayoutMode, wrap: instance.becomesLayoutWrap } : undefined);
-      return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
+      const authorized = authorizeEditPlan(plan, loaded, SUBJECT, { becomes: instance?.becomesContainer });
+      return { plan: authorized, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },
     // Apply — the sealed span: all writes, no awaits.
     ({ plan, instance, component, resources }, span) => {

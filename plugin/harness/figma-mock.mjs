@@ -416,14 +416,20 @@ class Node {
   // Figma reflows a constrained child when the parent's box changes, and a STRETCH child holds BOTH
   // its margins — so it grows by the parent's delta on that axis. That is what makes the order of
   // "set constraints" and "size the parent" load-bearing at create time: a STRETCH mark written
-  // while the parent is still at its provisional size inflates the child by the difference.
-  // MIN/MAX/CENTER/SCALE stay inert: they move or rescale a child, which nothing here reads.
+  // while the parent is still at its provisional size inflates the child by the difference. A
+  // free-form MAX child keeps its far margin and a CENTER one its offset from the middle, so they
+  // move by the delta (or half of it). SCALE stays inert: nothing here reads a rescale.
   _reflowConstrainedChildren(before) {
     const dw = this.width - before.w, dh = this.height - before.h;
+    const free = !this.layoutMode || this.layoutMode === "NONE";
+    const shift = (pin, delta) => (pin === "MAX" ? delta : pin === "CENTER" ? delta / 2 : 0);
     for (const child of this.children) {
       const pinned = child.constraints || {};
       if (dw && pinned.horizontal === "STRETCH" && child._fixedW != null) child._fixedW = Math.max(child._fixedW + dw, 0.01);
       if (dh && pinned.vertical === "STRETCH" && child._fixedH != null) child._fixedH = Math.max(child._fixedH + dh, 0.01);
+      if (!free && child.layoutPositioning !== "ABSOLUTE") continue;
+      if (dw) child._x = (child._x ?? 0) + shift(pinned.horizontal, dw);
+      if (dh) child._y = (child._y ?? 0) + shift(pinned.vertical, dh);
     }
   }
   _bounded(value, axis) {
