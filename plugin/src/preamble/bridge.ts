@@ -3,15 +3,18 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
-import { LAYOUT_MODES, CONSTRAINT_H, CONSTRAINT_V, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type ChildLayout, type LayoutMode } from "./layout-mode.js";
+import { LAYOUT_MODES, CONSTRAINT_H, CONSTRAINT_V, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type Axis, type ChildLayout, type LayoutMode } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
 import { hasContainerLayout } from "./vocabulary.js";
 import type { LiveTreeNode } from "./live-tree.js";
+import type { LiveTreeLanding } from "./edit-apply.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
+import type { OverridePlan } from "./instance.js";
 import type { NodeSpec } from "./schema.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
 import { resizeToPlannedSize, trackSizing } from "./sizing-diagnostics.js";
+import { concedeRealization } from "./obligation.js";
 import { settleAspectRatio, lockBuiltPathAspectRatio } from "./aspect-ratio.js";
 import {
   mintAuthorizedBuiltLayout, type AuthorizedLayout, type AuthorizedBuiltLayout, type AuthorizedLiveLayout, type AuthorizedEditPlan,
@@ -66,6 +69,13 @@ export interface RenderResources {
   tokens: ResolvedTokens;
   // Instance plans are keyed by the private IR node that the build walk consumes.
   instances: InstancePlans;
+  /** The schedule of the live nodes the walk places, made at the gate; absent when it places none. */
+  liveLanding?: LiveTreeLanding;
+  /**
+   * Record what a node the walk built owes once it sits under `parent`, and the fill a parent's
+   * `alignItems: "stretch"` gave it (a closure: obligations are an upper tier's).
+   */
+  recordBuiltWords(wn: BuiltNode, node: SceneNode, parent: BaseNode, stretched?: BuiltStretch): void;
 }
 
 /** The resources inside the sealed span: what the gate resolved, plus the span the appliers defer into. */
@@ -87,6 +97,8 @@ export interface InstancePlan {
   component: any;
   properties: Record<string, string | boolean>;
   applyOverrides: (instance: any, ctx: RenderCtx) => void;
+  /** What applyOverrides writes, for the obligations each override's words owe. */
+  overrides: readonly OverridePlan[];
 }
 
 // Keys detect duplicate addresses; binding records connect compiled property references to the
@@ -581,37 +593,67 @@ function resolvePercentPosition(parent: any, child: any, layout: WriteLayout): v
 }
 
 // Apply an authorized layout delta to a LIVE node the way the create walk applies a fresh child —
-// the SAME appliers in the same roles, re-run against the live parent. Order matters and mirrors
-// buildFrame's walk: container words first (they may change the node's own direction, which
-// own-size mapping reads), then position (in/out of flow decides which appliers govern the node),
-// flow fills and their unset inverses, own sizing, cover, constraints. The percent tail is
-// settleLiveNodePercentSize/Position, deliberately NOT called here — both measure, so the caller
-// owns when they run (see those functions).
-export function applyLiveNodeLayout(layout: AuthorizedLiveLayout, resources: { span: ApplySpan; tokens?: ResolvedTokens }): void {
+// the SAME appliers in the same roles, re-run against the live parent. One applier per write point
+// (operation-schedule.ts), so an edit can decide each one where it lands; applyLiveNodeLayout is
+// their order: container words first (they may change the node's own direction, which own-size
+// mapping reads), then placement (in/out of flow decides which appliers govern the node), own
+// sizing, cover, constraints. The percent tail is settleLiveNodePercentSize/Position, deliberately
+// NOT called here — both measure, so the caller owns when they run (see those functions).
+type LiveLayoutResources = { span: ApplySpan; tokens?: ResolvedTokens };
+
+/** Start the sizing diagnostics for a node whose layout words can resize it, before anything does. */
+export function trackLiveSizing(layout: AuthorizedLiveLayout): void {
+  const wl = layout.child.layout;
+  if (wl.sizing || wl.bounds || wl.percentSize) trackSizing(layout.node as any);
+}
+
+export function applyLiveContainer(layout: AuthorizedLiveLayout, resources: LiveLayoutResources): void {
+  trackLiveSizing(layout);
+  applyContainer(layout.node, layout, resources.tokens);
+}
+
+export function applyLivePlacement(layout: AuthorizedLiveLayout, resources: LiveLayoutResources): void {
   const node: any = layout.node;
+  const parent = node.parent;
+  if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
+  trackLiveSizing(layout);
   const context = layout.child;
   const wl = context.layout;
-  if (wl.sizing || wl.bounds || wl.percentSize) trackSizing(node);
-  const parent = node.parent;
-  applyContainer(node, layout, resources.tokens);
-  if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
-  const parentIsAuto = isAutoLayout(parent);
   // Un-fill BEFORE the position write, and regardless of the child's CURRENT positioning: an axis
   // the delta re-sizes to fixed/hug must lose the grow/stretch mark fill installed there, even when
   // the mark sits parked and inert on an absolute child — otherwise `width: 80` on it (or
   // `{ position: "none", width: 80 }` in one delta) leaves the mark to resurrect the fill the delta
   // explicitly replaced. Clearing an inert mark is free; the parent policy touches only named axes.
-  if (parentIsAuto) layoutBehavior(parent).clearFill(parent, node, wl);
+  if (isAutoLayout(parent)) layoutBehavior(parent).clearFill(parent, node, wl);
   applyChildPosition(parent, node, wl);
   layoutBehavior(parent).place(parent, node, context);
   queueSiblingOrder(resources.span, parent, node, wl.zIndex);
-  const inFlowAuto = context.kind !== "free";
-  if (inFlowAuto) {
-    layoutBehavior(parent).fill(parent, node, context, false); // crossStretch is the container's own alignItems edit, never a child's
-  }
-  applyOwnSizing(node, layout, resources.tokens);
-  if (!inFlowAuto) applyCoverSizing(parent, node, layout);
-  if (wl.constraints) applyConstraintsDelta(node, wl.constraints);
+  // crossStretch is the container's own alignItems edit, never a child's.
+  if (context.kind !== "free") layoutBehavior(parent).fill(parent, node, context, false);
+}
+
+export function applyLiveOwnSizing(layout: AuthorizedLiveLayout, resources: LiveLayoutResources): void {
+  if (!layout.node.parent) return;
+  trackLiveSizing(layout);
+  applyOwnSizing(layout.node, layout, resources.tokens);
+}
+
+export function applyLiveCover(layout: AuthorizedLiveLayout): void {
+  const node: any = layout.node;
+  if (node.parent && layout.child.kind === "free") applyCoverSizing(node.parent, node, layout);
+}
+
+export function applyLiveConstraints(layout: AuthorizedLiveLayout): void {
+  const wl = layout.child.layout;
+  if (layout.node.parent && wl.constraints) applyConstraintsDelta(layout.node, wl.constraints);
+}
+
+export function applyLiveNodeLayout(layout: AuthorizedLiveLayout, resources: LiveLayoutResources): void {
+  applyLiveContainer(layout, resources);
+  applyLivePlacement(layout, resources);
+  applyLiveOwnSizing(layout, resources);
+  applyLiveCover(layout);
+  applyLiveConstraints(layout);
 }
 
 /**
@@ -788,29 +830,49 @@ export function resolveLiveLayoutDelta(node: any, wl: WriteLayout, subject: stri
 // `destination`, and hand them back resolved there — they're also what the post-move re-aim
 // replays, and reading them twice would risk reading them AFTER the reparent, when they no longer
 // mean the old axes. `becomes` as for resolveLiveLayoutDelta: a placed instance its delta retargets.
-export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string, overrides?: WriteLayout, becomes?: BecomesContainer): ResolvedLiveLayout {
+// `carried` names the axes whose "fill" in `overrides` is the one the node already wears (carriedFillAxes).
+export function assertLiveNodeLandsUnderParent(
+  node: any, destination: any, subject: string, overrides?: WriteLayout, becomes?: BecomesContainer, carried: ReadonlySet<Axis> = NO_CARRIED_AXES,
+): ResolvedLiveLayout {
   const facts = liveParentLayoutFacts(destination);
   const live = liveParentRelativeWords(node);
   const wl: WriteLayout = { ...live, ...overrides };
   if (live.sizing || overrides?.sizing) wl.sizing = { ...live.sizing, ...overrides?.sizing };
   if (live.dimensions || overrides?.dimensions) wl.dimensions = { ...live.dimensions, ...overrides?.dimensions };
-  rederiveCarriedFill(node, wl, overrides, placementKind(facts.mode, wl.position === "absolute"));
+  rederiveCarriedFill(node, wl, overrides, carried, placementKind(facts.mode, wl.position === "absolute"));
   assertBounds(wl.bounds, node, subject);
   const child = assertLayoutLandsUnderParent(facts, node.type, wl, becomes ? becomes.mode.native : node.layoutMode, wl.position === "absolute", subject);
   return { child, sizingFacts: liveNodeSizingFacts(node, becomes?.mode) };
 }
 
+const NO_CARRIED_AXES: ReadonlySet<Axis> = new Set();
+
 // A carried `fill` meant a share of its old layout. Where the node lands may read fill as the
 // whole parent box instead — free-form, the page, absolute — and a 480×102 tile came out 480×2600;
-// there it keeps the px it has now. Between layouts (row, column, grid) it is re-aimed instead.
-// A fill this call writes is read fresh wherever the node lands.
-function rederiveCarriedFill(node: any, wl: WriteLayout, overrides: WriteLayout | undefined, landing: ChildLayout["kind"]): void {
+// there it keeps the px it has now, the one realization its "fill" word accepts (conceded here, so
+// the call's write point and finalizer hold it to that px). Between layouts (row, column, grid) it
+// is re-aimed instead. A fill this call writes over another sizing is read fresh wherever it lands.
+function rederiveCarriedFill(node: any, wl: WriteLayout, overrides: WriteLayout | undefined, carried: ReadonlySet<Axis>, landing: ChildLayout["kind"]): void {
   if (fillReading(landing) === fillReading(placementKind(layoutModeOf(node.parent), node.layoutPositioning === "ABSOLUTE"))) return;
   for (const [axis, dim] of [["horizontal", "width"], ["vertical", "height"]] as const) {
-    if (wl.sizing?.[axis] !== "fill" || overrides?.sizing?.[axis] !== undefined) continue;
+    if (wl.sizing?.[axis] !== "fill" || (overrides?.sizing?.[axis] !== undefined && !carried.has(axis))) continue;
     wl.sizing[axis] = "fixed";
     wl.dimensions = { ...wl.dimensions, [dim]: node[dim] };
+    concedeRealization(node, { kind: "carried-fill", axis: dim, realized: node[dim] });
   }
+}
+
+/**
+ * The axes on which `delta` says the "fill" the live node already wears: the fill its read printed,
+ * so a pasted read moves the node with its fill carried (rederiveCarriedFill) rather than covering
+ * where it lands. A fill typed over an axis the node doesn't fill is the author's, and covers.
+ */
+export function carriedFillAxes(node: any, delta: { width?: unknown; height?: unknown }): ReadonlySet<Axis> {
+  const worn = liveParentRelativeWords(node).sizing;
+  const carried = new Set<Axis>();
+  if (delta.width === "fill" && worn?.horizontal === "fill") carried.add("horizontal");
+  if (delta.height === "fill" && worn?.vertical === "fill") carried.add("vertical");
+  return carried;
 }
 
 // A compiled root bound for `destination`: on a page, a read root's fill axes take their designed px
@@ -869,6 +931,9 @@ export function resettleMovedNode(layout: AuthorizedLiveLayout, resources: { spa
   settleLiveNodePercentPosition(layout);
 }
 
+/** The axis a built parent's stretch filled a child along, and that parent's call site. */
+export interface BuiltStretch { axis: Axis; by: string }
+
 /** One positioned child waiting on its parent's final size — cover its "fill" axes, then constrain it. */
 interface PositionedChildSettlement { child: any; layout: AuthorizedLayout }
 
@@ -879,6 +944,8 @@ interface PositionedChildSettlement { child: any; layout: AuthorizedLayout }
 // passes false and says so in its docs: the marks are re-synthesized by editing the container.
 interface AttachParentFacts extends ParentFlowFacts {
   crossStretch: boolean;
+  /** The call site of the built parent whose stretch `crossStretch` states. */
+  stretchedBy?: string;
   widthIsBounded: boolean;
   subject: string; // the verb name the shared legality rules prefix their rejections with
   // Where a parent the walk is still assembling will sit: it is a page child until its own parent takes it.
@@ -983,6 +1050,7 @@ export function attachBuiltChild(
     ctx.span.percents.push({ node: child, layout, parent });
   }
   if (cl.position === "absolute") applyChildPosition(parent, child, cl);
+  let stretched: BuiltStretch | undefined;
   if (context.kind === "free") {
     applyCoverSizing(parent, child, layout);
     // A constraint is how the child reflows when the parent's box CHANGES, so writing it before the
@@ -993,7 +1061,8 @@ export function attachBuiltChild(
     if (settleAfterParentSize) settleAfterParentSize.push({ child, layout });
     else applyConstraints(child, wn.layout);
   } else {
-    layoutBehavior(parent).fill(parent, child, context, facts.crossStretch);
+    const axis = layoutBehavior(parent).fill(parent, child, context, facts.crossStretch);
+    if (axis) stretched = { axis, by: facts.stretchedBy ?? facts.subject };
     // An explicit constraint is STORED even in flow — constraints are inert on an in-flow auto-layout
     // child, but they govern the moment it leaves the flow, and edit's applyConstraintsDelta writes
     // the word unconditionally. applyConstraintsDelta, NOT applyConstraints: in flow, fill rides
@@ -1001,6 +1070,7 @@ export function attachBuiltChild(
     // constraint the author never spoke — and one the same word through edit would leave at the default.
     if (cl.constraints) applyConstraintsDelta(child, cl.constraints);
   }
+  ctx.recordBuiltWords(wn, child, parent, stretched);
   return child;
 }
 
@@ -1036,6 +1106,7 @@ function buildFrame(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout, enc
     ...flow,
     widthIsBounded: flow.mode.kind === "free" || (width.native === "fixed" && width.resize?.kind !== "percent") || (fillsOrPercent && enclosingWidthBounded),
     subject: "flcm",
+    stretchedBy: wn.sourcePath,
     context: layout.context,
   };
   // Every positioned child (absolute, or any child of a free-form parent) settles only once the frame

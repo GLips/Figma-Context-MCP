@@ -11,17 +11,17 @@ import { sublayerPrefix } from "@framelink/core";
 // EVERY failing entry, so the agent fixes the whole batch in one pass. One undo step is the
 // secondary purchase: the user steps back over the nudge they asked for, not over nine of them.
 //
-// It is orchestration over edit-plan.ts's staged pipeline (see that module's header for the stages and
-// why their order is the contract). Nothing here compiles or applies a delta itself: a second
-// application path is exactly what invariant 1 forbids — it lands through the same stage-major
-// driver as edit (edit-apply.ts). Three things ARE this module's own, and each is a consequence of
-// the set being the unit rather than the entry:
+// It is orchestration over edit-plan.ts's write phases. Nothing here compiles or applies a delta
+// itself: a second application path is exactly what invariant 1 forbids — it lands through the same
+// driver as edit (edit-apply.ts), which orders every phase of every entry by what it depends on, so
+// a parent's resize lands before the left of a child pinned to its far edge whatever the array
+// order. Every entry owes every word it states, and the call rolls back if any didn't land. Two
+// things ARE this module's own, and each is a consequence of the set being the unit rather than the entry:
 //
 //   • the LEDGER — a failure is recorded against its entry and the batch keeps going, so one
 //     rejection names every offender ACROSS stages, not just the ones that failed together
-//   • the apply ORDER — ancestors before descendants (see applyOrderShallowestFirst)
 //   • the PROJECTION — an entry whose parent this same batch is editing is judged against the
-//     parent the batch will produce, not the one on the canvas (see parentDeltasByNodeId)
+//     parent the batch will produce, not the one on the canvas (see layoutDeltasByNodeId)
 //
 // It takes the mutation lock ONCE, via a single enterMutatingVerb expression, and drives the
 // commit-free internal appliers — never the public `edit`, which would shatter the batch into one
@@ -31,16 +31,23 @@ import { Handle } from "./ir.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./target.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { mintHandle, settleApplySpan, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
+import { mintHandle, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
+import { liveSublayerId } from "@framelink/core";
 import { showValue } from "./validate.js";
-import { createStandingState } from "./standing-state.js";
+import { EditPlan, rejectNonDeltaWords, compileEditPlan, authorizeEditPlan } from "./edit-plan.js";
+import { obligationsInCall, recordObligations } from "./obligation.js";
 import {
-  EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, authorizeEditPlan, openEditPlanApply,
-} from "./edit-plan.js";
+  deriveDriftObligations, deriveEditObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf,
+} from "./obligation-derivation.js";
 import { loadEditResources, gateEditResources } from "./verb-resources.js";
-import { resolveInstanceEditTargets, planInstanceEdit, InstanceEditPlan, InstancePlanning } from "./instance.js";
+import {
+  resolveInstanceEditTargets, planInstanceEdit, overrideRealizeOnlyChecks, instanceGeometryWrites, withoutRetargetHeldChecks, instanceStillShows, InstanceEditPlan, InstancePlanning,
+} from "./instance.js";
+import { resolveInstanceMains, provenInstanceMains, definitionsEditedAt } from "./operation-schedule.js";
+import { assertNoContradictoryWords, captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES, ReadDriftError } from "./call-obligations.js";
+import { geometryWritesOf } from "./geometry-dependency.js";
 import type { AuthorizedEditPlan } from "./instance-write-authorization.js";
-import { applyEditStages } from "./edit-apply.js";
+import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./edit-apply.js";
 import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
   ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, PropertyBinder, ExistingPropertyBinding,
@@ -58,8 +65,7 @@ const SUBJECT = "flcm.editMany";
  * an ordinary edit delta through edit's own gate, so the two verbs cannot grow apart — there is no
  * per-entry allow-list here to fall out of step with the edit vocabulary.
  */
-// `restated`: every authored word equals the node's standing state, so the entry writes nothing.
-interface BatchEntry { id: string; changes: EditDelta; restated?: boolean }
+interface BatchEntry { id: string; changes: EditDelta }
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -87,20 +93,28 @@ interface BatchLedger {
 function createBatchLedger(total: number): BatchLedger {
   const failures: (string | undefined)[] = [];
   let count = 0;
+  let drifted = 0;
   return {
     record(index, err) {
       if (failures[index] !== undefined) return;
-      failures[index] = messageOf(err);
+      // The line already names its entry: a gate check that spoke as `flcm.editMany[i]` says it once.
+      const own = SUBJECT + "[" + index + "]: ";
+      const message = messageOf(err);
+      failures[index] = message.startsWith(own) ? message.slice(own.length) : message;
       count++;
+      if (err instanceof ReadDriftError) drifted++;
     },
     failed(index) {
       return failures[index] !== undefined;
     },
     rejectIfAny() {
       if (!count) return;
+      const remedy = drifted === count ? "Read those layers again and re-run it."
+        : drifted ? "Fix every entry below, read again the layers that changed while it loaded, and re-run it."
+        : "Fix every entry below and re-run it.";
       throw new Error(
         SUBJECT + ": " + count + " of " + total + " entries were rejected, so NOTHING was applied — " +
-          "the batch is all-or-nothing. Fix every entry below and re-run it.\n" + collapseFailures(failures, total).join("\n"),
+          "the batch is all-or-nothing. " + remedy + "\n" + collapseFailures(failures, total).join("\n"),
       );
     },
   };
@@ -208,26 +222,6 @@ async function resolveEntryNodes(ledger: BatchLedger, batch: readonly BatchEntry
     }),
   );
   return nodes;
-}
-
-// Each entry's words against its node as it stands (standing-state.ts), so a value copied out of a
-// read changes nothing. Judged across the batch, so an entry under a parent another entry re-flows
-// keeps its parent-relative words, which the read measured against the old flow.
-async function dropRestatedWords(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: BatchEntry[]): Promise<void> {
-  const standing = createStandingState();
-  const depth = (node: BaseNode): number => node.parent ? 1 + depth(node.parent) : 0;
-  // Outermost first: one subtree read then covers every entry nested inside it.
-  const outermostFirst = batch.map((_, i) => i).filter(i => !ledger.failed(i)).sort((a, b) => depth(nodes[a]!) - depth(nodes[b]!));
-  for (const i of outermostFirst) {
-    try { await standing.load(nodes[i] as SceneNode); } catch (err) { ledger.record(i, err); }
-  }
-  const live: number[] = [];
-  forEachLiveEntry(ledger, batch.length, (i) => { live.push(i); });
-  const changed = standing.changesInCall(live.map(i => ({ node: nodes[i] as SceneNode, words: batch[i].changes, parent: (nodes[i] as SceneNode).parent?.id })));
-  live.forEach((i, at) => {
-    const authored = batch[i].changes;
-    batch[i] = { ...batch[i], changes: changed[at] as EditDelta, restated: Object.keys(authored).length > 0 && Object.keys(changed[at]).length === 0 };
-  });
 }
 
 // Two entries naming one node is refused, never merged. Last-wins would silently drop a delta the
@@ -402,7 +396,7 @@ function settleEntryBoundDefaults(
  * A batch that both re-declares a component's properties and NAMES one of them from another entry
  * is refused, naming both entries.
  *
- * Every other cross-entry dependency in a batch has a defined answer (see applyOrderShallowestFirst
+ * Every other cross-entry dependency in a batch has a defined answer (the schedule, edit-apply.ts,
  * and the parent projection). This one doesn't: the naming entry resolved a NAME against the
  * definitions on the canvas, and the definition entry may be renaming or deleting exactly that
  * property — so the batch would either wire a layer to a property that is about to move or refuse a
@@ -513,8 +507,8 @@ function isInsideInstance(node: SceneNode, host: SceneNode): boolean {
  * Every entry's layout delta, by node id — so an entry can be judged against the ancestors the
  * batch is about to produce rather than the ones on the canvas.
  *
- * This is what makes "order doesn't matter" true on the VALIDATION side; applyOrderShallowestFirst
- * is only the apply side of the same promise. Without it the gates answer from the pre-batch canvas
+ * This is what makes "order doesn't matter" true on the VALIDATION side; the schedule is the apply
+ * side of the same promise. Without it the gates answer from the pre-batch canvas
  * in both directions: a child set to `"fill"` under a parent the batch turns into a row is refused
  * though it would have worked, and — worse, because this surface is fail-loud — a child set to
  * `"fill"` under a parent the batch turns FREE-FORM is accepted and then silently never honored.
@@ -525,36 +519,14 @@ function layoutDeltasByNodeId(plans: readonly (EditPlan | undefined)[]): BatchLa
   return byId;
 }
 
-// Every entry's compile, in ONE synchronous turn, so all of them see a single canvas instant
-// rather than one instant per entry. Prepare runs it for the hint, the gate for real.
+// Every entry's compile of its whole delta, in ONE synchronous turn, so all of them see a single
+// canvas instant rather than one instant per entry. Prepare runs it for the hint, the gate for real.
 function compileEntries(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: readonly BatchEntry[]): (EditPlan | undefined)[] {
   const compiled: (EditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, batch.length, (i) => {
-    compiled[i] = batch[i].restated ? restatedEditPlan(nodes[i] as SceneNode) : compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
+    compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
   });
   return compiled;
-}
-
-// ---- apply ----
-
-/**
- * Entry indices ordered ancestors-first, ties broken by the caller's own order.
- *
- * Invariant 3 — the applier owns application order, and in a batch that ordering spans the whole
- * set: a batch that makes a parent auto-layout and sets its child to `fill` must succeed in either
- * array order. Depth is what decides it, because every cross-entry dependency in a props-only batch
- * points the same way: a child's `fill`/`hug`/`N%` resolves against a parent whose layout mode and
- * size the batch may also be changing, and never the reverse.
- *
- * Read at the top of the sealed span: a node's depth is a live fact.
- */
-function applyOrderShallowestFirst(plans: readonly EditPlan[]): number[] {
-  const depths = plans.map((plan) => {
-    let depth = 0;
-    for (let p = plan.node.parent as BaseNode | null; p; p = p.parent) depth++;
-    return depth;
-  });
-  return plans.map((_, i) => i).sort((a, b) => depths[a] - depths[b] || a - b);
 }
 
 /**
@@ -583,7 +555,6 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       forEachLiveEntry(ledger, raw.length, (i) => { batch[i] = compileBatchEntry(raw[i], i); });
       const nodes = await resolveEntryNodes(ledger, batch);
       assertOneEntryPerNode(ledger, nodes);
-      await dropRestatedWords(ledger, nodes, batch);
       // The HINT compiles: what each entry needs loaded if the document stays as it is. Every
       // decision they make is made again in the gate, against the document at the seal.
       const hints = compileEntries(ledger, nodes, batch);
@@ -598,18 +569,28 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       const plans = hints as EditPlan[]; // dense: rejectIfAny threw unless every stage filled its slot
       // The override deltas ride the SAME load — each is a text/image edit of one sublayer, and the
       // batch owes one round trip however many of them there are.
+      let dependencies = NO_READ_DEPENDENCIES;
       const loaded = await loadEditResources(
         [...plans, ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : []))],
         instances.flatMap((instance) => (instance ? [instance.needs] : [])),
+        (tokens) => {
+          dependencies = captureReadDependencies(plans.flatMap((plan, i) => deriveDriftObligations(plan, instances[i], tokens, liveObligationSite(plan.node), SUBJECT + "[" + i + "]")));
+        },
       );
-      return { batch, nodes, targets, currents, mains, loaded };
+      // What each entry's layer and override paths inherit from: the order a main component's edit
+      // and an instance layer restating its old value land in.
+      const inherited = await resolveInstanceMains(plans.flatMap((plan, i) => [
+        plan.node,
+        ...(instances[i]?.overrides ?? []).map((o) => ({ id: liveSublayerId(plan.node.id, o.path), type: o.plan.node.type })),
+      ]));
+      return { batch, nodes, targets, currents, mains, loaded, dependencies, inherited };
     },
     // Gate — every decision that reads the document, for every entry, against the document as it
     // stands at the seal. The batch is what makes this load-bearing: entry 0's node was resolved
     // before every later entry's resolution and the whole batch's font/image round trip, and the
     // user has the document open across all of it. The ledger runs here too, so one rejection
     // still names every failing entry.
-    ({ batch, nodes, targets, currents, mains, loaded }) => {
+    ({ batch, nodes, targets, currents, mains, loaded, dependencies, inherited }) => {
       const ledger = createBatchLedger(batch.length);
       forEachLiveEntry(ledger, batch.length, (i) => assertNodeStillOnCanvas(nodes[i] as SceneNode, SUBJECT));
       const compiled = compileEntries(ledger, nodes, batch);
@@ -626,26 +607,50 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       });
       ledger.rejectIfAny();
       const plans = authorized;
-      return { plans, instances, components, resources: gateEditResources(loaded, instances.flatMap((instance) => (instance ? [instance.needs] : []))) };
-    },
-    // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.
-    ({ plans, instances, components, resources }, span) => {
-      // Every entry's failure builder BEFORE the first write of the batch: it snapshots the
-      // identity the error will name, and entry 0's rename must not be what entry 0's own later
-      // stage reports (see openEditPlanApply).
-      const entries = plans.map((plan, i) => ({
-        node: plan.node, fail: openEditPlanApply("editMany (entry " + i + ")", plan, span), plan, instance: instances[i], component: components[i],
-        subject: "editMany (entry " + i + ")",
+      // Every geometry write in the batch: what a realize-only measure in any entry can wait on.
+      const writes = compiled.flatMap((plan, i) => [
+        ...geometryWritesOf(plan!.node, plan!.patch),
+        ...(instances[i] ? instanceGeometryWrites(plan!.node, plan!.patch, instances[i]!) : []),
+      ]);
+      // Every main component an entry edits: what an instance layer elsewhere in the batch inherits.
+      const mainsNow = provenInstanceMains(inherited, instanceStillShows);
+      const defines = new Set(compiled.flatMap((plan) => [...definitionsEditedAt(plan!.node)]));
+      // Every entry's whole delta is owed, judged against the parents the batch leaves behind.
+      forEachLiveEntry(ledger, batch.length, (i) => {
+        const plan = compiled[i]!;
+        const parent = plan.node.parent;
+        const site = liveObligationSite(plan.node, parent ? deltas[parent.id] : undefined);
+        const subject = SUBJECT + "[" + i + "]";
+        const owed = obligationsOnTarget(deriveEditObligations(plan, instances[i], loaded, site), { node: plan.node }, subject);
+        recordObligations(owed);
+        gateCallObligations({
+          obligations: owed,
+          dependencies,
+          checks: [
+            ...withoutRetargetHeldChecks(realizeOnlyChecksOf(plan, plans[i].realizeOnly, loaded, site, subject, plans[i].context), instances[i]),
+            ...(instances[i] ? overrideRealizeOnlyChecks(instances[i]!.overrides, loaded, subject) : []),
+          ],
+          writes,
+          projection: deltas,
+          defines,
+          mains: mainsNow,
+        }, subject);
+      });
+      ledger.rejectIfAny();
+      assertNoContradictoryWords(obligationsInCall(), SUBJECT);
+      const entries: EditApplyEntry[] = plans.map((plan, i) => ({
+        node: plan.node, plan, instance: instances[i], component: components[i], subject: "editMany (entry " + i + ")", tag: "[" + i + "]",
       }));
-      // Ancestors first, each stage across the WHOLE batch (edit-apply.ts): within one entry the
-      // stages order producers before consumers; across entries only the batch can. ONE walk for
-      // the batch's slot content (see beginRenderWalk): a key is unique across the set as it is
-      // across a render, and every entry's content settles its percents together.
-      applyEditStages(applyOrderShallowestFirst(plans).map((i) => entries[i]), beginRenderWalk({ ...resources, span }));
-      settleApplySpan(span);
-      // Handles are minted only once every write has landed: a hug parent reflows when a child in
-      // the same batch changes, so geometry read mid-batch would be a number about to move.
-      return plans.map((plan) => mintHandle(plan.node));
+      // Per operation across the whole batch, against every entry's recorded words (edit-apply.ts).
+      const schedule = scheduleEditEntries(entries, SUBJECT, { mains: mainsNow });
+      return { entries, schedule, resources: gateEditResources(loaded, instances.flatMap((instance) => (instance ? [instance.needs] : [])), SUBJECT) };
+    },
+    // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set. ONE walk
+    // for the batch's slot content (see beginRenderWalk): a key is unique across the set as it is
+    // across a render, and every entry's content settles its percents together.
+    ({ entries, schedule, resources }, span) => {
+      runEditOperations(entries, schedule, beginRenderWalk({ ...resources, span }));
+      return () => entries.map((entry) => mintHandle(entry.node));
     },
   );
 }

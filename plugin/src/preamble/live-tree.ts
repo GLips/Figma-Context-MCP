@@ -4,18 +4,31 @@
  */
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
+//
+// A tree's live nodes are scheduled together at the gate, like an editMany batch (edit-apply.ts
+// scheduleLiveTree): the walk attaches each node and lands its attach-time words, and its geometry
+// and children land in the order the whole tree's dependencies give.
+import { liveSublayerId } from "@framelink/core";
 import type { WriteNode, LiveRef, WriteLayout, ComponentPropertyBinding } from "./ir.js";
-import { compileEditPlan, preflightEditPlan, authorizeEditPlan } from "./edit-plan.js";
+import { compileEditPlan, preflightEditPlan, authorizeEditPlan, withoutContainerWords } from "./edit-plan.js";
+import { recordObligations } from "./obligation.js";
+import {
+  deriveEditObligations, deriveLiveEntryObligations, deriveParentageObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf,
+} from "./obligation-derivation.js";
+import { gateCallObligations } from "./call-obligations.js";
+import { realizeAtWritePoint } from "./write-point.js";
 import type { LoadedLiveTree } from "./verb-resources.js";
-import { applyEditStages } from "./edit-apply.js";
-import { planInstanceEdit } from "./instance.js";
+import { scheduleLiveTree, landAttachedLiveNode, type EditEntryShape, type LiveTreeLanding } from "./edit-apply.js";
+import { childTreeNodes } from "./compile-tree.js";
+import { provenInstanceMains, definitionsEditedAt, type OperationRef } from "./operation-schedule.js";
+import { planInstanceEdit, overrideRealizeOnlyChecks, instanceGeometryWrites, withoutRetargetHeldChecks, instanceStillShows } from "./instance.js";
 import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component-properties.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { instanceContextOf, instanceContextUnder, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
 import { assertInstanceRootLayoutMode, mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { layoutModeOf } from "./layout-mode.js";
-import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
+import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath, carriedFillAxes } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
 import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
@@ -36,6 +49,15 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
   );
 }
 
+// The live nodes a tree places under a parent other than the one they sit in: under a node it
+// builds, or a live parent or destination that isn't theirs. Slot content's parent is a sublayer
+// the walk resolves, so it is never counted as moved here.
+function collectMovedLiveNodes(wn: WriteNode, parent: BaseNode | "built" | undefined, live: LoadedLiveTree, out: Set<WriteNode>): void {
+  const node = wn.liveId === undefined ? undefined : live.entries.get(wn)?.node;
+  if (node && parent !== undefined && (parent === "built" || parent !== node.parent)) out.add(wn);
+  for (const child of wn.children ?? []) collectMovedLiveNodes(child, node ?? "built", live, out);
+}
+
 /** A live node as the gate resolved it — the one authority for what the call makes of it. */
 export interface LiveTreeNode {
   node: SceneNode;
@@ -46,25 +68,61 @@ export interface LiveTreeNode {
   refs?: ComponentPropertyBinding;
   /** What it shows once its words land — the value a property default is judged by (component.ts). */
   shows: { visible: boolean; text?: string };
+  /** Attach it under `parent` and land its attach-time words. */
   place(parent: BaseNode & ChildrenMixin, place: (node: SceneNode) => void, ctx: RenderCtx): SceneNode;
 }
 
-export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): Map<LiveRef, LiveTreeNode> {
-  const plans = new Map<LiveRef, LiveTreeNode>();
-  for (const entry of live.entries.values()) {
-    const { ref, node, changes, key, refs, pathData, targets, current, intoNewNode } = entry;
+/** Every live node of `trees`, gated, and the schedule their writes land in. */
+export interface GatedLiveTrees {
+  nodes: Map<LiveRef, LiveTreeNode>;
+  landing: LiveTreeLanding;
+}
+
+/**
+ * Gate every live node `trees` name against the document at the seal, and schedule their
+ * operations across all of them. `subject` prefixes a refusal of words that depend on each other in
+ * a cycle; every refusal here leaves zero writes. `destination` is where a tree's root lands, when
+ * the verb places it.
+ */
+export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: RenderResources, subject: string, destination?: BaseNode): GatedLiveTrees {
+  const entries = trees.flatMap((live) => [...live.entries.values()].map((entry) => ({ entry, dependencies: live.dependencies })));
+  const moved = new Set<WriteNode>();
+  for (const live of trees) collectMovedLiveNodes(live.tree, destination, live, moved);
+  const indexOf = new Map<WriteNode, number>(entries.map(({ entry }, i) => [entry.ref, i]));
+  const attachedBy: (OperationRef | undefined)[] = entries.map(() => undefined);
+  // The operation that attaches each live node: its nearest live ancestor's children, or the slot
+  // content of that ancestor's override path. A node with none is attached by the walk itself.
+  const attachUnder = (trees: readonly WriteNode[], by: OperationRef) => {
+    for (const wn of trees) {
+      const i = indexOf.get(wn);
+      if (i === undefined) attachUnder(childTreeNodes(wn), by);
+      else attachedBy[i] = by;
+    }
+  };
+  const mains = provenInstanceMains(new Map(trees.flatMap((live) => [...live.mains])), instanceStillShows);
+  // Every main component a live node's words edit: what an instance layer elsewhere in the trees inherits.
+  const defines = new Set(entries.flatMap(({ entry }) => [...definitionsEditedAt(entry.node)]));
+  const nodes = new Map<LiveRef, LiveTreeNode>();
+  const shapes: EditEntryShape[] = [];
+  const holder: { landing?: LiveTreeLanding } = {};
+  entries.forEach(({ entry, dependencies }, index) => {
+    const { ref, node, key, refs, pathData, targets, current, intoNewNode } = entry;
+    const { changes } = entry;
+    const carried = moved.has(ref) ? carriedFillAxes(node, changes) : undefined;
     const at = ref.sourcePath;
     assertNodeStillOnCanvas(node, at);
     const context = instanceContextOf(node);
     if (context.ownWritesLockedBy) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
     if (ref.children?.length && (!("appendChild" in node) || context.childListClosedBy)) throw new Error(at + ".children: this live node's child list cannot be authored.");
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
-    const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, gate: resources }, at) : undefined;
+    const planning = { targets, gate: resources };
+    const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, at) : undefined;
     const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at, (field) => projectedBinderValue(field, node, plan, instance, current, at)) : undefined;
     // Placement validates against the destination. Font coverage, node-local legality and the
     // instance write policy still run here, with parent-relative words withheld until that
     // destination exists; the root's direction is judged against the component it will show.
-    if (plan) preflightEditPlan({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources, at, context);
+    const local = plan && { ...plan, patch: { ...plan.patch, layout: undefined } };
+    const realizeOnly = local ? preflightEditPlan(local, resources, at, context).realizeOnly : undefined;
     const shown = instance?.becomes ?? current;
     if (node.type === "INSTANCE" && shown) assertInstanceRootLayoutMode(at, node, plan?.patch.layout?.mode, layoutModeOf(shown));
     if (instance) for (const [tree, instancePlan] of instance.needs.plans) (resources.instances as Map<WriteNode, typeof instancePlan>).set(tree, instancePlan);
@@ -72,7 +130,29 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
       visible: projectedBinderValue("visible", node, plan, instance, current, at) as boolean,
       text: node.type === "TEXT" ? projectedBinderValue("text", node, plan, instance, current, at) as string : undefined,
     };
-    plans.set(ref, { node, component: instance?.becomes ?? current, layout: plan?.patch.layout, refs, shows, place(parent, place, ctx) {
+    const owed = obligationsOnTarget([
+      ...(plan ? deriveEditObligations(plan, instance, resources, liveObligationSite(node)) : []),
+      ...deriveLiveEntryObligations(key as string | undefined, pathData, refs),
+    ], { node }, at);
+    gateCallObligations({
+      obligations: owed,
+      dependencies,
+      checks: [
+        ...(local && realizeOnly ? withoutRetargetHeldChecks(realizeOnlyChecksOf(local, realizeOnly, resources, liveObligationSite(node), at, context), instance) : []),
+        ...(instance ? overrideRealizeOnlyChecks(instance.overrides, resources, at) : []),
+      ],
+      writes: instance && plan ? instanceGeometryWrites(node, plan.patch, instance) : [],
+      defines,
+      mains,
+    }, at);
+    attachUnder(ref.children ?? [], { entry: index, layer: node.id, phase: "after-binding" });
+    for (const o of instance?.overrides ?? []) if (o.slotContent) attachUnder(o.slotContent, { entry: index, layer: liveSublayerId(node.id, o.path), phase: "slot-content" });
+    const vector = pathData !== undefined && node.type === "VECTOR";
+    shapes.push({
+      node, patch: plan?.patch, unwritten: new Set(realizeOnly?.keys() ?? []), instance, component, vectorPath: vector, afterBinding: true, tag: at, obligations: owed,
+      turned: !!plan && !plan.instanceWords && !!((node as { rotation?: number }).rotation || plan.patch.rotation),
+    });
+    nodes.set(ref, { node, component: instance?.becomes ?? current, layout: plan?.patch.layout, refs, shows, place(parent, place, ctx) {
       assertInheritedSlotContentStays(at, node, parent);
       // Inherited slot content lands as Figma's copy, leaving the original where it was: not a move.
       const from = intoNewNode && !isInheritedSlotContent(node) ? node.parent : null;
@@ -80,35 +160,54 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
         const becomes = instance?.becomesContainer;
-        const words = mintAuthorizedLiveLayout(at, node, assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout, becomes), instanceContextUnder(parent, node), resources.tokens);
+        const placement = plan?.patch.layout && withoutContainerWords(plan.patch.layout);
+        const words = mintAuthorizedLiveLayout(at, node, assertLiveNodeLandsUnderParent(node, parent, at, placement, becomes, carried), instanceContextUnder(parent, node));
         attachLiveNode(parent, words, place);
+        // Recorded once it sits where it lands: what its words oblige reads that parent.
+        recordObligations(obligationsOnTarget([
+          ...(plan ? deriveEditObligations(plan, instance, ctx, liveObligationSite(node)) : []),
+          ...deriveLiveEntryObligations(key as string | undefined, pathData, refs),
+          ...deriveParentageObligations(parent),
+        ], { node }, at));
         // After the attach: the plan's layout words resolve against the parent the node now sits in.
         const authorized = plan ? authorizeEditPlan(plan, ctx, at, { becomes }) : undefined;
         if (from) recordLiveMoveIntoNewNode(node, from, parent);
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
         holdPivot(ctx.span, node);
         // Before the node's own writes, so none lands on a property it is leaving (see releaseRewiredBindings).
-        if (refs) releaseRewiredBindings(node, Object.keys(refs).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
-        applyEditStages([{
-          node, fail, plan: authorized, instance, component, subject: at,
-          beforeWrites() { if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData, words); },
+        // Only the fields whose binding doesn't hold now: one that holds is not rewritten.
+        if (refs) {
+          const rebinds = realizeAtWritePoint(node, Object.keys(refs).map((field) => `word:binding:${field}` as const)).writes;
+          releaseRewiredBindings(node, Object.keys(refs).filter((field) => rebinds.has(`word:binding:${field}`)).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
+        }
+        landAttachedLiveNode(holder.landing!, index, {
+          node, fail, plan: authorized, instance, component, subject: at, tag: at,
+          vectorPath: !vector ? undefined : () => {
+            const at = realizeAtWritePoint(node, ["prop:vector"]);
+            if (!at.writes.size) return;
+            applyVectorPath(node, pathData!, words);
+            at.landed();
+          },
           afterBinding() {
-            if (key !== undefined) writeKey(node, key as string);
+            const keyed = key === undefined ? undefined : realizeAtWritePoint(node, ["prop:key"]);
+            if (keyed?.writes.size) { writeKey(node, key as string); keyed.landed(); }
             if (refs) {
               if (!ctx.bindings) throw new Error(at + ": componentPropertyReferences has no declaring component.");
               ctx.bindings.push({ node, refs });
             }
             if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
             resettleMovedNode(words, ctx);
+            // A delta's positions settle its pivot; a bare move's is settled here.
+            if (!plan) settlePivot(ctx.span, node, words.child.layout);
           },
-        }], ctx);
-        // A delta's positions settle its pivot; a bare move's is settled here.
-        if (!plan) settlePivot(ctx.span, node, words.child.layout);
-        // Inherited slot content lands as Figma's copy, under a new id.
+        }, ctx);
+        // Inherited slot content lands as Figma's copy, which the node now reads as (scene-access.ts).
         ctx.placedIds.set(ref.source, node.id);
         return node;
       } catch (cause) { throw fail(cause); }
     } });
-  }
-  return plans;
+  });
+  // After every node is gated: an ancestor's slot paths are known only once its instance half is planned.
+  holder.landing = scheduleLiveTree(shapes.map((shape, i) => ({ ...shape, attachedBy: attachedBy[i] })), subject, mains);
+  return { nodes, landing: holder.landing };
 }

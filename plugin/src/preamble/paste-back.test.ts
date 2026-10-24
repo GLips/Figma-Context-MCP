@@ -8,7 +8,7 @@
 // one, it has no declaring component and the paste is refused.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createFigmaMock, seedVariables } from "../../harness/figma-mock.mjs";
+import { createFigmaMock, seedStyle, seedVariables } from "../../harness/figma-mock.mjs";
 import { safeSerialize } from "../serialize.js";
 import { projectForEgress } from "./egress.js";
 import { stableStringify } from "@framelink/core";
@@ -142,4 +142,54 @@ test("a run-styled text's base style restates only beside its own runs", async (
   assert.equal((await live(text)).fontName, figma.mixed);
   await flcm.edit(text, { textStyle: { fontFamily: textStyle.fontFamily, fontWeight: textStyle.fontWeight } });
   assert.deepEqual((await live(text)).fontName, { family: "Inter", style: "Regular" });
+});
+
+// No word is skipped on a pre-call comparison: each lands at its write point, and the finalizer
+// checks it after. So a paste must leave bindings, style ids, annotations and run fonts exactly.
+test("a pasted read changes nothing semantic, and a deliberate change lands without disturbing the rest", async () => {
+  const figma = createFigmaMock();
+  seedVariables({ collection: "Brand", variables: [
+    { name: "color/brand", type: "COLOR", values: { Default: { r: 0, g: 0, b: 1, a: 1 } } },
+    { name: "size/card", type: "FLOAT", values: { Default: 240 } },
+  ] });
+  seedStyle({ type: "PAINT", name: "Surface", paints: [{ type: "SOLID", color: { r: 0, g: 1, b: 0 }, opacity: 1, visible: true, blendMode: "NORMAL" }] });
+  const comp = await flcm.component(
+    {
+      type: "FRAME", fill: { variable: "color/brand" }, width: { variable: "size/card" }, height: 120,
+      children: [
+        { type: "TEXT", text: ["Hello ", ["World", { fontWeight: 700 }], " again"], textStyle: { fontSize: 14 } },
+        { type: "RECTANGLE", width: 20, height: 20, fill: { style: "Surface" }, annotations: [{ text: "Note", category: "Agent" }] },
+        { type: "RECTANGLE", width: 12, height: 12, componentPropertyReferences: { visible: "Icon" } },
+      ],
+    },
+    { name: "Card", propertyDefinitions: { Icon: { type: "boolean" } } },
+  );
+  const card = await figma.getNodeByIdAsync(comp.id!) as any;
+  const [title, swatch, icon] = card.children;
+  const segments = () => title.getStyledTextSegments(["fontName", "fills"]).map((s: any) => [s.characters, s.fontName.style, s.fills[0].color]);
+  const live = () => ({
+    bound: [card.boundVariables, card.fills[0].boundVariables],
+    style: swatch.fillStyleId,
+    annotations: swatch.annotations,
+    references: icon.componentPropertyReferences,
+  });
+  const state = async () => stableStringify({ read: (await flcm.get(comp)).node, live: live(), segments: segments() });
+  const before = await state();
+  const read = (await flcm.get(comp)).node as any;
+  const words = ({ id: _id, type: _type, children: _children, readOnlySource: _source, ...rest }: any) => rest;
+  for (const child of read.children) await flcm.edit(child.id, words(child));
+  await flcm.editMany(read.children.map((child: any) => ({ id: child.id, ...words(child) })));
+  await flcm.render(read);
+  assert.equal(await state(), before);
+
+  const untouched = stableStringify(live());
+  const [head, [word, style], tail] = read.children[0].text;
+  await flcm.editMany([{ id: title.id, text: [head, [word, { ...style, color: "#ff0000" }], tail], textStyle: read.children[0].textStyle }]);
+  assert.deepEqual(segments(), [["Hello ", "Regular", { r: 0, g: 0, b: 0 }], ["World", "Bold", { r: 1, g: 0, b: 0 }], [" again", "Regular", { r: 0, g: 0, b: 0 }]]);
+  assert.equal(stableStringify(live()), untouched);
+
+  // A literal is a deliberate value, so it unbinds even where it equals the variable's.
+  await flcm.edit(card.id, { width: 240 });
+  assert.equal(card.boundVariables.width, undefined);
+  assert.equal(card.width, 240);
 });

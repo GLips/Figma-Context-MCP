@@ -4,6 +4,7 @@
  */
 import { warnings } from "./warnings.js";
 import type { AuthorizedLayout } from "./instance-write-authorization.js";
+import { concedeRealization } from "./obligation.js";
 // One accumulator per synchronous mutation span. Diagnostics observe final geometry after all
 // entries, overrides and percent sizing settle; they never turn a successful write into a failure,
 // with one exception: a planned resize Figma ignores on a layer an instance locks (resizeToPlannedSize).
@@ -116,10 +117,13 @@ export function resizeToPlannedSize(
     // Figma enforces min/max only in auto-layout, so a bound may or may not have clamped.
     const bound = clampingBound(node, axis, requested);
     const actual = node[axis];
-    if (Math.abs(actual - requested) <= 0.01 || (bound && Math.abs(actual - node[bound]!) <= 0.01)) continue;
+    if (Math.abs(actual - requested) <= 0.01) continue;
+    if (bound && Math.abs(actual - node[bound]!) <= 0.01) continue;
     const message = "requested " + axis + " " + Number(requested.toFixed(2)) + "; Figma realized " + Number(actual.toFixed(2));
     if (layout.context.ownWritesLockedBy) throw new Error(message + " (instance write policy gap)");
     misses.push({ node, prop: axis, authored: requested, realized: actual, message });
+    // The miss stays a warning; the finalizer accepts this value, and fails only if it moves again.
+    concedeRealization(node, { kind: "write-time-resize-miss", axis, realized: actual });
   }
 }
 // Project each child's own corners into the container's coordinates. Absolute transforms avoid
@@ -143,6 +147,21 @@ function overflow(container: SizingNode, child: SizingNode): { axis: "x" | "y"; 
     yExcess = Math.max(yExcess, -cy, cy - container.height);
   }
   return xExcess >= yExcess ? { axis: "x", amount: xExcess } : { axis: "y", amount: yExcess };
+}
+
+/**
+ * Accept every clamp the call's last resize of a node ended in. Measured once all writes have
+ * landed, before the finalizer observes: a built node is sized before it is attached, and Figma
+ * clamps to min/max only once it sits in auto-layout. The clamp is the warning finish reports.
+ */
+export function concedeSizeBoundClamps(): void {
+  for (const { node, ...size } of requests.values()) {
+    if (!onCanvas(node)) continue;
+    for (const axis of ["width", "height"] as const) {
+      const bound = clampingBound(node, axis, size[axis]);
+      if (bound && Math.abs(node[axis] - node[bound]!) <= 0.01) concedeRealization(node, { kind: "size-bound-clamp", axis, realized: node[axis] });
+    }
+  }
 }
 
 export function finishSizingDiagnostics(verb: string): void {

@@ -10,21 +10,25 @@
 
 import { requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import type { WriteNode, LiveRef, ComponentPropertyBinding } from "./ir.js";
-import { gateLiveTree, type LiveTreeNode } from "./live-tree.js";
+import { gateLiveTrees } from "./live-tree.js";
 import { loadFontsForTree, loadFontsForTextEdits, type EditFontNeed, type FontMap } from "./fonts.js";
 import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens, NO_TOKENS, type ResolvedTokens } from "./tokens.js";
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
-import { assertBuiltInteriorLegal, type InstancePlan, type RenderResources } from "./bridge.js";
+import { assertBuiltInteriorLegal, type InstancePlan, type InstancePlans, type RenderResources } from "./bridge.js";
 import { fetchImagesForTrees } from "./image-prefetch.js";
 import { resolveInstanceTreeTargets, planInstanceTree, resolveInstanceEditTargets, planInstanceEdit } from "./instance.js";
 import { compileEditPlan, type EditPlan, type InstanceNeeds } from "./edit-plan.js";
 import { resolveTarget, createResolvedTargets, type ResolvedTargets } from "./target.js";
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
-import { createStandingState } from "./standing-state.js";
+import { captureReadDependencies, NO_READ_DEPENDENCIES, type ReadDependencies } from "./call-obligations.js";
+import { deriveBuiltNodeObligations, deriveBuiltStretchObligations, deriveDriftObligations, deriveLiveEntryObligations, liveObligationSite, obligationsOnTarget } from "./obligation-derivation.js";
+import { recordObligations } from "./obligation.js";
 import { compileBindingBag } from "./compile-component-words.js";
 import { bindableFieldsOf } from "./vocabulary.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import type { EditDelta } from "./schema.js";
+import { resolveInstanceMains, type InstanceMains } from "./operation-schedule.js";
+import { liveSublayerId } from "@framelink/core";
 
 /** What a tree's prepare loaded, for its gate to finish: the resources, plus the targets its instances name. */
 export interface LoadedTreeResources extends LoadedResources {
@@ -106,12 +110,26 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
  * compileOverride); the tree's own texts need no such proof, since their fonts are authored, not
  * live. The plans the build walk consumes are these, never prepare's.
  */
-export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, exposure: ExposureContext = {}): RenderResources {
+export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, subject: string, exposure: ExposureContext = {}): RenderResources {
   assertExposureTree(tree, exposure);
   assertBuiltInteriorLegal(tree);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, gate: loaded });
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances: needs.plans, live: new Map() };
-  return { ...resources, live: gateLiveTree(loaded.live, resources) };
+  return gatedRenderResources(loaded, needs.plans, [loaded.live], subject, exposure.destination);
+}
+
+// The apply span's resources: what prepare loaded, the instance plans, the live nodes of `trees`
+// gated with their schedule made, and how the walk records what each node it builds owes.
+function gatedRenderResources(loaded: LoadedResources, instances: InstancePlans, trees: readonly LoadedLiveTree[], subject: string, destination?: BaseNode): RenderResources {
+  const gate = { fonts: loaded.fonts, tokens: loaded.tokens };
+  const resources: RenderResources = {
+    ...gate, images: loaded.images, instances, live: new Map(),
+    recordBuiltWords: (wn, node, parent, stretched) => {
+      recordObligations(obligationsOnTarget(deriveBuiltNodeObligations(wn, node, gate, parent, instances.get(wn)), { node }, wn.sourcePath ?? subject));
+      if (stretched) recordObligations(obligationsOnTarget(deriveBuiltStretchObligations(stretched.axis), { node }, stretched.by));
+    },
+  };
+  const { nodes, landing } = gateLiveTrees(trees, resources, subject, destination);
+  return nodes.size ? { ...resources, live: nodes, liveLanding: landing } : resources;
 }
 
 /**
@@ -123,8 +141,14 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, 
  * as it is. `needs` is every INSTANCE entry's slot content: the one way a delta BUILDS nodes, so
  * the one way an edit's resources carry tree fonts at all. The instance PLANS are not here: those
  * are the gate's to make, against the document at the seal (instance.ts planInstanceEdit).
+ *
+ * `beforeLoads` runs once the tokens resolve and before the fonts and images: where a verb reads
+ * what its words depend on (call-obligations.ts captureReadDependencies). The token lookups before
+ * it are a window the drift check doesn't cover.
  */
-export async function loadEditResources(plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = []): Promise<LoadedResources> {
+export async function loadEditResources(
+  plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = [], beforeLoads?: (tokens: ResolvedTokens) => void,
+): Promise<LoadedResources> {
   const trees: WriteNode[] = [];
   const fontNeeds: EditFontNeed[] = [];
   for (const need of needs) {
@@ -141,6 +165,7 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
     await resolveTokenRefs(collectTokenRefs([...[...plans, ...fontNeeds].map((p) => p.patch), ...trees])),
     ...liveTrees.map((live) => live.loaded.tokens),
   );
+  beforeLoads?.(tokens);
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
   const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees, tokens);
   const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
@@ -163,13 +188,10 @@ export interface LoadedResources {
  * The apply span's resources: what stage 3 loaded, plus the instance plans the gate made for the
  * slot content this verb builds — every entry's, merged, since a batch walks its content once.
  */
-export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
+export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[], subject: string): RenderResources {
   const instances = new Map<WriteNode, InstancePlan>();
   for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  const live = new Map<LiveRef, LiveTreeNode>();
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances, live };
-  for (const tree of loaded.liveTrees ?? []) for (const [ref, node] of gateLiveTree(tree, resources)) live.set(ref, node);
-  return resources;
+  return gatedRenderResources(loaded, instances, loaded.liveTrees ?? [], subject);
 }
 
 function assertSceneNode(node: BaseNode): asserts node is SceneNode {
@@ -185,8 +207,6 @@ export function liveChildrenOfNewNodes(trees: readonly WriteNode[]): Set<WriteNo
 
 export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOfNewNodes([tree])): Promise<LoadedLiveTree> {
   const entries = new Map<LiveRef, LoadedLiveEntry>();
-  const standing = createStandingState();
-  const parentOf = new Map(treeNodes(tree).flatMap(parent => childTreeNodes(parent).map(child => [child, parent] as const)));
   const live: { ref: LiveRef; node: SceneNode }[] = [];
   for (const ref of treeNodes(tree)) {
     if (ref.liveId === undefined) continue;
@@ -195,28 +215,13 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       assertSceneNode(node);
       if (ref.authoring.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
       if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) throw new Error("type " + ref.source.type + " does not match live " + node.type + ".");
-      // Pre-order, so a live root's one read covers every live descendant pasted with it. A node
-      // stating no words (a bare { id } move) has nothing to compare and costs no read.
-      if (Object.keys(ref.authoring).length) await standing.load(node);
       live.push({ ref, node });
     } catch (cause) { throw new Error(ref.sourcePath + ": " + (cause instanceof Error ? cause.message : String(cause))); }
   }
-  // A new parent has no live id; its source path keys its children as siblings all the same.
-  const parentKey = (wn: WriteNode): string | undefined => {
-    const parent = parentOf.get(wn);
-    return parent && (parent.liveId ?? parent.sourcePath);
-  };
-  const changed = standing.changesInCall(
-    live.map(({ ref, node }) => ({ node, words: ref.authoring, parent: parentKey(ref) })),
-    treeNodes(tree).flatMap(wn => {
-      const parent = parentKey(wn);
-      return wn.liveId === undefined && wn.layout?.zIndex !== undefined && parent ? [parent] : [];
-    }),
-  );
-  for (const [i, { ref, node }] of live.entries()) {
+  for (const { ref, node } of live) {
     const at = ref.sourcePath;
     try {
-      const { key, d, vectorPaths, componentPropertyReferences, ...delta } = changed[i];
+      const { key, d, vectorPaths, componentPropertyReferences, ...delta } = ref.authoring;
       const refs = componentPropertyReferences === undefined ? undefined : compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
       let pathData: VectorPaths | undefined;
       if (d !== undefined) {
@@ -238,13 +243,31 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
     } catch (cause) { throw new Error(at + ": " + (cause instanceof Error ? cause.message : String(cause))); }
   }
   const prepared = [...entries.values()];
-  const loaded = prepared.length ? await loadEditResources(prepared.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), prepared.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
-  return { entries, loaded };
+  let dependencies = NO_READ_DEPENDENCIES;
+  const capture = (tokens: ResolvedTokens) => {
+    dependencies = captureReadDependencies(prepared.flatMap((e) => [
+      ...(e.hint ? deriveDriftObligations(e.hint, e.instance, tokens, liveObligationSite(e.node), e.ref.sourcePath) : []),
+      ...obligationsOnTarget(deriveLiveEntryObligations(e.key as string | undefined, e.pathData, e.refs), { node: e.node }, e.ref.sourcePath),
+    ]));
+  };
+  const loaded = prepared.length
+    ? await loadEditResources(prepared.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), prepared.flatMap(e => e.instance ? [e.instance.needs] : []), capture)
+    : { fonts: {}, images: {}, tokens: NO_TOKENS };
+  // What each live node and override path inherits from, so the tree orders a main component's
+  // edit before the layers that show it, through nested instances too (operation-schedule.ts).
+  const mains = await resolveInstanceMains(prepared.flatMap((e) => [
+    e.node,
+    ...(e.instance?.overrides ?? []).map((o) => ({ id: liveSublayerId(e.node.id, o.path), type: o.plan.node.type })),
+  ]));
+  return { tree, entries, loaded, dependencies, mains };
 }
 
 /** One live node a tree names, resolved in prepare: the node, its words split by who resolves them, and the hint plans. */
 export interface LoadedLiveEntry {
-  ref: LiveRef; node: SceneNode; changes: EditDelta; key: unknown; pathData?: VectorPaths;
+  ref: LiveRef; node: SceneNode;
+  /** Every edit word it states. */
+  changes: EditDelta;
+  key: unknown; pathData?: VectorPaths;
   /** The binding bag the author stated, compiled against the live node's type. */
   refs?: ComponentPropertyBinding;
   hint: EditPlan | undefined;
@@ -255,7 +278,12 @@ export interface LoadedLiveEntry {
 }
 
 export interface LoadedLiveTree {
+  tree: WriteNode;
   loaded: LoadedResources;
   entries: ReadonlyMap<LiveRef, LoadedLiveEntry>;
+  /** What prepare read of every entry's words before the loads, for the gate's drift check. */
+  dependencies: ReadDependencies;
+  /** Each instance's main component its live nodes and override paths sit in, as prepare resolved it. */
+  mains: InstanceMains;
 }
 

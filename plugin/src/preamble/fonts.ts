@@ -36,6 +36,10 @@ import type { Bindable, StyleRef, VariableRef } from "./ir.js";
 // covers the text it is about to reflow.
 const loadedFonts = new Set<string>();
 
+// Live fonts this run tried and Figma could not load (not installed here, or a missing shared font).
+// A text in one still reads, and an edit that leaves it alone still lands; only a rewrite refuses.
+const unavailableFonts = new Set<string>();
+
 function fontLabel(font: { family: string; style: string }): string {
   return font.family + "\u0000" + font.style;
 }
@@ -54,6 +58,7 @@ function useRunCaches(): void {
   if (host === cachesFor.host && current === cachesFor.figma) return;
   cachesFor = { host, figma: current };
   loadedFonts.clear();
+  unavailableFonts.clear();
   fontLoads.clear();
   availableFonts = null;
 }
@@ -224,7 +229,8 @@ export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], buil
   if (!reflowing.length && !built.length) return {};
   const live: FontName[] = [];
   for (const { node } of reflowing) live.push(...liveFontsOf(node as TextNode));
-  await Promise.all(live.map(loadFont));
+  // A pasted-back text keeps a font this machine lacks; the gate refuses only a write that needs it.
+  await Promise.all(live.map((font) => loadFont(font).catch(() => { unavailableFonts.add(fontLabel(font)); })));
   const authored = reflowing.filter(
     ({ patch }) => patch.textStyle?.style || namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
   );
@@ -255,7 +261,8 @@ export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fo
   const t = node as TextNode;
   const who = JSON.stringify(t.name) + " (id " + JSON.stringify(t.id) + ")";
   for (const font of liveFontsOf(t)) {
-    if (loadedFonts.has(fontLabel(font))) continue;
+    // Only a write needs it, and whether one is due is decided where it would land (assertTextFontsAvailable).
+    if (loadedFonts.has(fontLabel(font)) || unavailableFonts.has(fontLabel(font))) continue;
     throw new Error(
       subject + ": the font of " + who + " changed to " + font.family + " " + font.style +
         " while this call was loading fonts and images, so the delta was resolved against a node that no longer exists in that state. Nothing was applied — re-run the call.",
@@ -274,6 +281,15 @@ export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fo
       subject + ": " + who + " needs " + (isTokenRef(need.family) ? "its bound family" : need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
         "), which this call did not load — the text's font changed while the call was loading fonts and images. Nothing was applied — re-run the call.",
     );
+  }
+}
+
+/** At a text write point: every live font the rewrite reflows must be one this machine has. */
+export function assertTextFontsAvailable(node: TextNode, patch: WriteProps, subject: string): void {
+  if (!textEditReflows(patch)) return;
+  for (const font of liveFontsOf(node)) {
+    if (!unavailableFonts.has(fontLabel(font))) continue;
+    throw new Error(subject + ": the font " + font.family + " " + font.style + " isn't available here, so this text can't be rewritten — " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") uses it. Install the font, or set textStyle.fontFamily to one this file has.");
   }
 }
 
@@ -338,6 +354,15 @@ function collectText(wn: WriteChild, needs: FontNeed[], styles: StyleRef[]): voi
 // load pass already collected from the same tree, so a miss falls back to the default.
 export function resolveFont(fonts: FontMap, family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic = false): { family: string; style: string } {
   return fonts[key(family, weight, italic)] || { family: DEFAULT_FAMILY, style: "Regular" };
+}
+
+/**
+ * Whether `font` is the face the authored words name exactly: the family, the weight its style
+ * label reads as, and the slant. A text in a face this machine lacks keeps it, so a word restating
+ * that face is held even though resolving the words here would pick a substitute.
+ */
+export function fontHonoursWords(font: { family: string; style: string }, family: string, weight: number | string | undefined, italic: boolean): boolean {
+  return font.family === family && styleWeight(font.style) === wantWeight(weight) && isItalic(font.style) === italic;
 }
 
 /** One authored font word the loaded font does not honour, in WarningRecord's prop/authored/realized shape. */

@@ -259,13 +259,16 @@ export function assertSlotFrameNameAgrees(name: string | undefined, refs: Compon
  */
 export function assertNoComponentPropertyBindings(tree: WriteChild, subject: string): void {
   if (!tree || typeof tree !== "object") return;
-  if (tree.liveId !== undefined ? tree.authoring.componentPropertyReferences : tree.componentPropertyReferences) {
-    throw new Error(
-      subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
-        "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
-        "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use INSTANCE.",
-    );
-  }
+  if (tree.liveId !== undefined ? tree.authoring.componentPropertyReferences : tree.componentPropertyReferences) throw noDeclaringComponentError(subject);
   for (const child of tree.children || []) assertNoComponentPropertyBindings(child, subject);
+}
+
+/** The refusal of a binding with no declaring component behind it. */
+export function noDeclaringComponentError(subject: string): Error {
+  return new Error(
+    subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
+      "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
+      "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use INSTANCE.",
+  );
 }
 

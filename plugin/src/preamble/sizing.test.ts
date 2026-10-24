@@ -313,3 +313,21 @@ test("a resize Figma ignores outside an instance warns instead of failing", asyn
   await edit(built, { height: 48 });
   assert.match(warnings().join("\n"), /flcm\.edit: requested height 48; Figma realized 60/);
 });
+
+// A built node is sized before its words are recorded; the clamp and the miss still excuse them.
+test("a node render builds keeps its clamp and resize-miss warnings instead of rolling back", async () => {
+  const clamped = await render({ type: "FRAME", layout: { mode: "row" }, children: [{ type: "RECTANGLE", name: "C", width: 50, height: 10, minWidth: 100 }] });
+  assert.equal((await figma.getNodeByIdAsync(clamped.children![0].id)).width, 100);
+  assert.match(warnings().join("\n"), /size constrained by minWidth 100/);
+  diagnostics.discardFrom(0);
+  const create = figma.createRectangle.bind(figma);
+  figma.createRectangle = () => {
+    const rect = create();
+    const resize = rect.resize.bind(rect);
+    rect.resize = (width: number, height: number) => resize(Math.min(width, 30), height);
+    return rect;
+  };
+  const missed = await render({ type: "FRAME", width: 100, height: 100, children: [{ type: "RECTANGLE", width: 50, height: 10 }] });
+  assert.equal((await figma.getNodeByIdAsync(missed.children![0].id)).width, 30);
+  assert.match(warnings().join("\n"), /requested width 50; Figma realized 30/);
+});

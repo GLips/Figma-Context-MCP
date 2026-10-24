@@ -31,13 +31,17 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { WriteNode, Target, Handle, RemoveResult } from "./ir.js";
 import { resolveTarget, isTargetShaped } from "./target.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
-import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
+import { enterMutatingVerb, compensatedMutationFailure, type VerbResultBuilder } from "./mutation-lock.js";
 import {
-  settleApplySpan, mintHandle, beginRenderWalk, RenderResources,
+  mintHandle, beginRenderWalk, RenderResources,
   assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
 } from "./bridge.js";
 import { landTree } from "./land-tree.js";
 import { loadTreeResources, gateTreeResources, loadEditResources, gateEditResources } from "./verb-resources.js";
+import { recordObligations } from "./obligation.js";
+import { deriveDriftObligations, deriveEditPlanObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf } from "./obligation-derivation.js";
+import { captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
+import { layoutModeOf } from "./layout-mode.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, instanceContextOf, instanceContextUnder, instanceAncestorOf, isComponentDefinition, describeNodeIdentity } from "./identity.js";
 import { mintAuthorizedLiveLayout, preflightInstanceWrites, type AuthorizedLiveLayout } from "./instance-write-authorization.js";
@@ -46,8 +50,8 @@ import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type Cre
 import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
-import { compileEditPlan, preflightEditPlan, authorizeEditPlan,
-  applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
+import { compileEditPlan, emptyEditPlan, preflightEditPlan, authorizeEditPlan } from "./edit-plan.js";
+import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./edit-apply.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
 import { showValue } from "./validate.js";
@@ -189,12 +193,12 @@ function containerHandle(parent: any): Handle | undefined {
 }
 
 // `noteOverlap`: render's root lands on the page unseen, so it is told when it buried something (root-overlap.ts).
-interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan; noteOverlap: boolean }
+interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan[]; noteOverlap: boolean }
 // `layout` is the subject's parent-relative intent read BEFORE the reparent — under the OLD parent's
 // axes, the frame of reference the words were written in — authorized where it lands.
 interface PreparedPlacement { kind: "placement"; dest: Destination; layout: AuthorizedLiveLayout }
 
-function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert, span: ApplySpan): AuthoredTree {
+function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverlap }: PreparedInsert, span: ApplySpan): VerbResultBuilder<AuthoredTree> {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
   const ctx = beginRenderWalk({ ...resources, span }, { bindings: !!bindings });
@@ -208,7 +212,7 @@ function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverla
   } catch (cause) {
     throw fail(cause);
   }
-  return placedTreeOf(tree.source!, ctx.placedIds);
+  return () => placedTreeOf(tree.source!, ctx.placedIds);
 }
 
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is
@@ -260,7 +264,7 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, subject);
     }
-    const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
+    const resources = gateTreeResources(tree, loaded, subject, { destination: dest.parent });
     for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
     if (tree.liveId !== undefined) {
       // Also checked as each live node is placed; here it refuses the common case before the seal.
@@ -311,7 +315,7 @@ export function remove(target: Target): Promise<RemoveResult> {
       } catch (cause) {
         throw fail(cause);
       }
-      return { removedId, from: containerHandle(from) };
+      return () => ({ removedId, from: containerHandle(from) });
     },
   );
 }
@@ -352,12 +356,16 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       const pages = createLoadedPages();
       const node: any = await resolveTarget(target);
       const hint = props === undefined ? undefined : compileCloneProps(node, props);
-      const loaded = await loadEditResources(hint ? [hint] : []);
+      let dependencies = NO_READ_DEPENDENCIES;
+      // Read off the original: the copy is made from it at the seal, so a change to it under the loads is the copy's too.
+      const loaded = await loadEditResources(hint ? [hint] : [], [], (tokens) => {
+        if (hint) dependencies = captureReadDependencies(deriveDriftObligations(hint, undefined, tokens, liveObligationSite(node), "flcm.clone"));
+      });
       const anchorNode = destination != null ? await resolveAnchor(destination, "end", pages) : undefined;
       if (!anchorNode) await loadPageForWrite(node.parent, pages);
-      return { node, anchorNode, pages, loaded };
+      return { node, anchorNode, pages, loaded, dependencies };
     },
-    ({ node, anchorNode, pages, loaded }) => {
+    ({ node, anchorNode, pages, loaded, dependencies }) => {
       assertNodeStillOnCanvas(node, "flcm.clone");
       const dest = anchorNode !== undefined ? destinationOf("flcm.clone", anchorNode, "end", pages) : endOf(node.parent);
       if (!dest.parent) {
@@ -376,11 +384,20 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       // both halves meet the instance write policy where the copy will sit.
       const resolved = assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone", edit?.patch.layout);
       const context = instanceContextUnder(dest.parent, node);
-      preflightInstanceWrites("flcm.clone", { node, patch: {} }, resolved, context, loaded.tokens);
-      if (edit) preflightEditPlan({ ...edit, patch: { ...edit.patch, layout: undefined } }, loaded, "flcm.clone", context);
-      return { node, dest, resolved, edit, resources: gateEditResources(loaded, []), bindings: captureCloneBindings(node) };
+      const placed = preflightInstanceWrites("flcm.clone", emptyEditPlan(node), resolved, context);
+      const local = edit && preflightEditPlan({ ...edit, patch: { ...edit.patch, layout: undefined } }, loaded, "flcm.clone", context);
+      // Derived here, against the destination the copy will sit in; recorded once the copy exists.
+      const site = { instance: context, parentMode: layoutModeOf(dest.parent), onPage: dest.parent.type === "PAGE" };
+      const owed = edit ? deriveEditPlanObligations(edit, loaded, site) : [];
+      // The original stands in for the copy: until the apply makes it, they are the same layer.
+      gateCallObligations({
+        obligations: edit ? obligationsOnTarget(deriveEditPlanObligations(edit, loaded, liveObligationSite(node)), { node }, "flcm.clone") : [],
+        dependencies,
+        checks: edit ? realizeOnlyChecksOf(edit, new Map([...placed.realizeOnly, ...(local?.realizeOnly ?? [])]), loaded, site, "flcm.clone", context) : [],
+      }, "flcm.clone");
+      return { node, dest, resolved, edit, owed, resources: gateEditResources(loaded, [], "flcm.clone"), bindings: captureCloneBindings(node) };
     },
-    ({ node, dest, resolved, edit, resources, bindings }, span) => {
+    ({ node, dest, resolved, edit, owed, resources, bindings }, span) => {
       const fail = beginMutatingApply("clone", node);
       let copy: any;
       const created: CreatedCloneProperties = [];
@@ -391,20 +408,21 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
         } catch (cause) {
           throw fail(cause);
         }
+        recordObligations(obligationsOnTarget(owed, { node: copy }, "flcm.clone"));
         // From here the copy is the subject, and placing it is exactly a move.
-        const layout = mintAuthorizedLiveLayout("flcm.clone", copy, resolved, instanceContextUnder(dest.parent, copy), resources.tokens);
+        const layout = mintAuthorizedLiveLayout("flcm.clone", copy, resolved, instanceContextUnder(dest.parent, copy));
         applyPlacement("clone", { kind: "placement", dest, layout }, span);
         try { restoreCloneBindings(copy, bindings, created); } catch (cause) { throw fail(cause); }
         if (edit) {
           // After the placement: the copy's own words resolve against the parent it now sits in.
           const plan = authorizeEditPlan({ ...edit, node: copy }, resources, "flcm.clone");
-          applyEditPlanWrites(fail, plan, { ...resources, span });
-          settleEditPlanSizes(fail, plan);
-          settleEditPlanPositions(fail, plan, span);
+          // The clone's failure, which names the original: the copy is not the layer the agent named.
+          const entry: EditApplyEntry = { node: copy, plan, subject: "clone", tag: "flcm.clone", fail };
+          runEditOperations([entry], scheduleEditEntries([entry], "flcm.clone"), beginRenderWalk({ ...resources, span }));
         }
-        // Before the handle reads the copy's geometry, and inside the cleanup's reach.
-        settleApplySpan(span);
-        return mintHandle(copy);
+        // The cleanup reaches only this span. A failure after it (the lock's settle, a style link,
+        // the finalizer) takes the ordinary rollback, which undoes the copy with the rest.
+        return () => mintHandle(copy);
       } catch (cause) {
         if (!copy) throw cause;
         try { removeFailedClone(copy, created); }
@@ -461,7 +479,7 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
     }
-    const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
+    const resources = gateTreeResources(tree, loaded, "flcm.replace", { destination: dest.parent });
     for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
     // The original leaves unless the replacement keeps it, and its descendants leave with it unless kept.
     const removes = (layer: any): boolean => {
@@ -473,13 +491,13 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     };
     return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes), noteOverlap: false };
   }, (prepared, span) => {
-    const result = applyInsert("replace", prepared, span);
+    const build = applyInsert("replace", prepared, span);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
       const fail = beginMutatingApply("replace", prepared.original);
       recordVerbRemovedNode(prepared.original);
       try { prepared.original.remove(); } catch (cause) { throw fail(cause); }
     }
-    return result;
+    return build;
   });
 }
 
@@ -527,7 +545,8 @@ export function detach(target: Target): Promise<Handle> {
     (node) => {
       const fail = beginMutatingApply("detach", node);
       try {
-        return mintHandle(node.detachInstance());
+        const frame = node.detachInstance();
+        return () => mintHandle(frame);
       } catch (cause) {
         throw fail(cause);
       }

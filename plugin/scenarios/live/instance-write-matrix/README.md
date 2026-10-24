@@ -17,13 +17,13 @@ It then writes each word straight through the raw Plugin API to a live instance 
 - `rows` are assertions. Each one names the rule it is evidence for: `rule: null` marks an `"allowed"` verdict. Each row also has `expect` (`ignored`, `throws` or `lands`), `got`, and `passed`. `before`/`after` show the read value, and `message` is Figma's error.
 - `failed` lists the rows that did not pass, and `status` is `passed` only when there are none. Rows run in order on one instance, so an unexpected `lands` can change the layers seen by later rows. Read the first failure first.
 - `probes` are open questions. They are recorded, never asserted:
-  - Does a same-value `x` throw? flcm strips restatements, so it never writes one.
+  - Does a same-value `x` throw? flcm skips a word the layer already holds, so it never writes one.
   - Does a restated `layoutPositioning` `AUTO` throw?
   - Does `layoutSizingHorizontal` `FIXED` land without a px? The policy calls it allowed-unverified.
 
 **Last verified:** 2026-10-23, Figma desktop, protocol v19 plugin: `passed`, 97 of 97 rows. Probes:
 
-- A same-value `x` throws (`relative-transform`), and so does a restated `layoutPositioning` `AUTO` (`stack-positioning`). Inside an instance, even restating these words is refused, so flcm must strip a restatement and never write it.
+- A same-value `x` throws (`relative-transform`), and so does a restated `layoutPositioning` `AUTO` (`stack-positioning`). Inside an instance, even restating these words throws, so flcm never writes one: a word the layer already holds when flcm reaches it is skipped, and one it can't come to hold refuses the call.
 - `layoutSizingHorizontal` `FIXED` without a px lands.
 
 If a row fails on a later run, change that rule or verdict, not the row.

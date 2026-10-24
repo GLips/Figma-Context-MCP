@@ -22,7 +22,6 @@ import { warnings as diagnostics } from "./warnings.js";
 import { mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { resizeToPlannedSize } from "./sizing-diagnostics.js";
 import { liveNodeSizingFacts } from "./sizing-plan.js";
-import { NO_TOKENS } from "./tokens.js";
 import { instanceContextOf } from "./identity.js";
 
 let figma = createFigmaMock();
@@ -227,7 +226,8 @@ test("fill and hug land on a locked layer, where an explicit resize would not", 
   assert.equal(row.layoutSizingVertical, "HUG");
 });
 
-// Figma throws on a locked layer's transform; a restated one is stripped, so it is never written.
+// Figma throws on a locked layer's transform, so rotation there is never written: one that already
+// holds lands the rest of the call, a different one refuses before any write.
 test("a rotation on a locked layer refuses before any write; restating its rotation lands the rest", async () => {
   const fx = await cardFixture();
   const rowRect = layerOf(fx.inst, "RowRect");
@@ -345,7 +345,7 @@ test("a resize Figma ignores on an instance root is a warning, not a failure", a
 test("a planned resize Figma ignores on a locked layer throws as a policy gap", async () => {
   const fx = await cardFixture();
   const rowRect = layerOf(fx.inst, "RowRect");
-  const layout = mintAuthorizedLiveLayout("test", rowRect, { child: { kind: "free", layout: {} }, sizingFacts: liveNodeSizingFacts(rowRect) }, instanceContextOf(rowRect), NO_TOKENS);
+  const layout = mintAuthorizedLiveLayout("test", rowRect, { child: { kind: "free", layout: {} }, sizingFacts: liveNodeSizingFacts(rowRect) }, instanceContextOf(rowRect));
   rowRect.resize = () => {};
   assert.throws(() => resizeToPlannedSize(rowRect, layout, { width: 30, height: 24 }), /requested width 30; Figma realized 24 \(instance write policy gap\)/);
 });

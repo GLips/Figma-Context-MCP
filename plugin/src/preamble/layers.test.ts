@@ -17,15 +17,14 @@ import * as esbuild from "esbuild";
 const TIERS: readonly (readonly string[])[] = [
   // The bundle entry and the agent-facing surface.
   ["sandbox", "runtime"],
-  // The mutating verbs. read.ts is the read pipeline as well as the read verbs, and standing state
-  // reads through it, so it stays library.
+  // The mutating verbs. read.ts is the read pipeline as well as the read verbs, so it stays library.
   ["structure", "component", "edit", "edit-many", "page", "design-tokens"],
   // The one entry every mutating verb takes: serialize, seal, settle, commit.
   ["mutation-lock"],
   // What a verb loads before its seal, and where a tree's nodes land.
   ["verb-resources", "land-tree", "live-tree"],
   // The stages a gated edit lands in, and the plans they consume. No stage loads resources itself.
-  ["edit-apply", "component-edit", "clone-bindings", "standing-state", "instance", "edit-plan", "component-properties"],
+  ["edit-apply", "component-edit", "clone-bindings", "obligation-derivation", "instance", "edit-plan", "component-properties"],
 ];
 
 const tierOf = new Map(TIERS.flatMap((names, i) => names.map((name) => [name, i] as const)));

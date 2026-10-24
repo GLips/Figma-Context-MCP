@@ -5,11 +5,11 @@
 import { warnings } from "./warnings.js";
 import { registerResult } from "./egress.js";
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
-import { beginSizingDiagnostics, finishSizingDiagnostics, retargetSizingDiagnostics } from "./sizing-diagnostics.js";
+import { beginSizingDiagnostics, concedeSizeBoundClamps, finishSizingDiagnostics, retargetSizingDiagnostics } from "./sizing-diagnostics.js";
 import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDiagnostics } from "./moved-out-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
 // editMany, the component verbs, and the structural verbs. Three jobs, one place — serialize verbs,
-// enforce cancellation, own the undo scaffold (the seal/commit/rollback shape lives on
+// enforce cancellation, own the undo scaffold (the seal/finalize/commit/rollback shape lives on
 // enterMutatingVerb, exactly once, never per verb):
 //
 //   • Serialize mutating verbs WITHIN a run — the WHOLE verb, preparation included. Agent code can
@@ -41,6 +41,8 @@ import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
 import { settleApplySpan } from "./bridge.js";
 import { recordCommittedVerb } from "./verb-error.js";
+import { beginObligationLedger, retargetObligationNode } from "./obligation.js";
+import { finalizeMutatingCall } from "./call-finalizer.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -117,7 +119,7 @@ function refuseIfCancelled(verb: string): void {
 }
 
 /**
- * Run one mutating verb under the lock, in three phases that share the verb's single queue slot.
+ * Run one mutating verb under the lock, in four phases that share the verb's single queue slot.
  * The rule that splits them is FRESHNESS: nothing decides anything about the document until there
  * is no await left between the decision and the write.
  *
@@ -130,30 +132,36 @@ function refuseIfCancelled(verb: string): void {
  *   from a live property is what lands. A throw exits with ZERO undo calls. The one thing prepare
  *   can leave behind is a file-scoped annotation category, which Figma keeps out of the undo stack
  *   entirely; a failure removes those by hand (removeFailedAnnotationCategories), which is why the
- *   cleanup wraps all three phases.
+ *   cleanup wraps every phase.
  *
- *   gate — SYNCHRONOUS, run immediately before the entry seal: every legality decision that reads
- *   the document (a parent's layout mode, a text's live font and wrap, a component's definitions,
- *   an instance ancestor, a destination's child list) is made here, against the document as it
- *   stands at this instant, and the plans that apply will write are built here from the fresh
- *   answers. A throw exits like a prepare throw: zero undo calls, no stamp, nothing to roll back.
- *   No await can sit between a gate's read and apply's write, so a stale check is impossible by
- *   construction — which is why no verb re-checks anything. The one decision apply makes for itself
- *   is about what does not exist before the seal: a sublayer this span's own retarget produces
- *   (instance.ts applyOverridePlans). A refusal there is a rollback, the price of that fact.
+ *   gate — SYNCHRONOUS, run immediately before the entry seal: it decides admission (a parent's
+ *   layout mode, a text's live font and wrap, a component's definitions, an instance ancestor, a
+ *   destination's child list) against the document as it stands at this instant, builds the plans
+ *   apply will write, and records the call's obligations (obligation.ts) into the ledger the lock
+ *   opens just before it. A throw exits like a prepare throw: zero undo calls, no stamp.
  *
  *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold. It receives the verb's
- *   ApplySpan (apply-span.ts), which the lock settles after apply returns:
- *     entry seal → stamp → apply → settle span → style links → success commit   (exactly one undo step)
- *     entry seal → stamp → apply or a link throws → commit + trigger (seal the partial writes, pop that step)
+ *   ApplySpan (apply-span.ts) and writes the plans. Each field is decided at its write point
+ *   (write-point.ts): a word the node already holds there is skipped, and the rest is re-authorized
+ *   against the node as it stands then. It returns a BUILDER for the verb's result, not the result:
+ *   a handle measures geometry, and the geometry is final only after the finalizer.
  *
- * gate and apply are SYNCHRONOUS BY TYPE: neither can suspend, so nothing can interleave between a
- * gate's read, the seal, and apply's writes. Anything a verb wants to await belongs in prepare.
+ *   finalize — after apply, the span's settle and the style links: observe every obligation, and
+ *   fail the call if any authored word didn't land as asked (call-finalizer.ts). Only then is the
+ *   result built, and nothing awaits between the check and the commit.
+ *
+ *     entry seal → stamp → apply → settle span → style links → finalize → build → success commit   (one undo step)
+ *     entry seal → stamp → any of those throws → commit + trigger (seal the partial writes, pop that step)
+ *
+ * gate and apply are SYNCHRONOUS BY TYPE, and so is the builder: none can suspend, so nothing can
+ * interleave between a gate's read, the seal, and apply's writes. Anything a verb wants to await
+ * belongs in prepare.
  *
  * The ONE await inside the sealed span is flushStyleLinks: linking a style is async-only under
  * dynamic-page (the sync setters throw). It writes only links apply decided, onto nodes already
  * holding the style's values. While it suspends, a human edit or un-awaited agent figma.* writes
- * can land inside this verb's undo step — the price of the link.
+ * can land inside this verb's undo step — the price of the link. The finalizer runs after it, so a
+ * write there that undoes an authored word fails the call rather than being reported as success.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
  * the last COMMITTED step and swallows uncommitted trailing writes with it (hand-verified
@@ -174,6 +182,9 @@ function refuseIfCancelled(verb: string): void {
 // land on an unfinished gate or the success commit run mid-writes. Resolving to `never` makes that
 // a compile error (pinned by a @ts-expect-error test).
 type SyncOnly<T> = T extends PromiseLike<unknown> ? never : T;
+
+/** What apply hands back: builds the verb's result once the finalizer has verified the call. */
+export type VerbResultBuilder<T> = () => SyncOnly<T>;
 
 // The seal alone does not bound the rollback. figma.commitUndo() with nothing written since the
 // last commit mints NO step (live-verified 2026-09-09: seal → category creation, which is outside
@@ -198,6 +209,7 @@ export function retargetReplacedNode(span: ApplySpan, from: any, to: any): void 
   retargetSpanNode(span, from, to);
   retargetSizingDiagnostics(from, to);
   retargetMovedOutDiagnostics(from, to);
+  retargetObligationNode(from, to);
   warnings.retargetNode(from.id, to.id, verbWarningCheckpoint);
 }
 
@@ -220,7 +232,7 @@ export function enterMutatingVerb<P, G, T>(
   verb: string,
   prepare: () => Promise<P>,
   gate: (prepared: P) => SyncOnly<G>,
-  apply: (gated: G, span: ApplySpan) => SyncOnly<T>,
+  apply: (gated: G, span: ApplySpan) => SyncOnly<VerbResultBuilder<T>>,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
     refuseIfRunFinished("flcm." + verb);
@@ -240,6 +252,7 @@ export function enterMutatingVerb<P, G, T>(
       refuseIfCancelled(verb);
       refuseIfDevMode(verb);
       invalidateSceneAccess();
+      beginObligationLedger();
       const gated = gate(prepared);
       figma.commitUndo();
       // Outside the rollback-protected block on purpose: a stamp that fails to write has put
@@ -253,11 +266,15 @@ export function enterMutatingVerb<P, G, T>(
         beginMovedOutDiagnostics();
         // One span per verb, so a failed verb's queue can never land on the next verb's behalf.
         const span = openApplySpan();
-        const result = apply(gated, span);
+        const build = apply(gated, span);
         // The backstop: whatever geometry the verb didn't settle itself, before any style links.
         settleApplySpan(span);
         traceVerb("verb-applied", verb);
         await flushStyleLinks(span);
+        // No await from here to the commit: what the finalizer verified is what the result reports.
+        concedeSizeBoundClamps();
+        finalizeMutatingCall(verb);
+        const result = build();
         figma.commitUndo();
         recordCommittedVerb();
         finishSizingDiagnostics(verb);

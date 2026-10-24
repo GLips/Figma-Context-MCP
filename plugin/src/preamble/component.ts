@@ -40,10 +40,12 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
 import { landTree } from "./land-tree.js";
 import { loadTreeResources, gateTreeResources, type LoadedTreeResources } from "./verb-resources.js";
-import { enterMutatingVerb, retargetReplacedNode } from "./mutation-lock.js";
+import { enterMutatingVerb, retargetReplacedNode, type VerbResultBuilder } from "./mutation-lock.js";
 import type { ApplySpan } from "./apply-span.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
+import { recordObligations, supersedeObligations } from "./obligation.js";
+import { deriveDeclarationObligations, obligationsOnTarget } from "./obligation-derivation.js";
 import { instanceAncestorOf, editableComponentOwnerOf, isComponentDefinition, variantSetOf, readKey, writeKey, describeNodeIdentity } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 
@@ -348,7 +350,7 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     assertSlotsAreBound(bound, prepared.definitions);
     return { tree, loaded, bound, options: prepared };
   }, (prepared): GatedBuiltComponent => {
-    const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
+    const resources = gateTreeResources(prepared.tree, prepared.loaded, SUBJECT, { componentRoot: true });
     const live = prepared.tree.liveId !== undefined ? resources.live.get(prepared.tree)! : undefined;
     if (live) assertPromotable(live.node);
     // A live root converts where it stands; a built one lands on the page as flcm.render's would.
@@ -361,7 +363,7 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
   }, applyBuiltComponent);
 }
 
-function applyBuiltComponent({ tree, parent, place, resources, definitions, options }: GatedBuiltComponent, span: ApplySpan): AuthoredTree {
+function applyBuiltComponent({ tree, parent, place, resources, definitions, options }: GatedBuiltComponent, span: ApplySpan): VerbResultBuilder<AuthoredTree> {
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
@@ -384,8 +386,11 @@ function applyBuiltComponent({ tree, parent, place, resources, definitions, opti
     // Figma moves the same child nodes into the component.
     if (key) writeKey(comp, key);
     declareProperties(comp, definitions, ctx.bindings!, options);
+    // options.name names the component over the name its root was built or edited with.
+    if (options.name != null) supersedeObligations(comp, "name");
+    recordObligations(obligationsOnTarget(deriveDeclarationObligations(options, definitions), { node: comp }, SUBJECT));
     applyExposures(ctx.exposures);
-    return { ...placedTreeOf(tree.source!, ctx.placedIds), id: comp.id, type: "COMPONENT" } as AuthoredTree;
+    return () => ({ ...placedTreeOf(tree.source!, ctx.placedIds), id: comp.id, type: "COMPONENT" }) as AuthoredTree;
   } catch (cause) {
     throw fail(cause);
   }
@@ -590,7 +595,8 @@ export function variants(entries: VariantEntryInput[], options: VariantsOptions)
         const set: any = figma.combineAsVariants(members.map((m) => m.node), parent, index);
         set.name = opts.name;
         if (opts.description != null) set.description = opts.description;
-        return mintHandle(set);
+        recordObligations(obligationsOnTarget(deriveDeclarationObligations(opts), { node: set }, VARIANTS_SUBJECT));
+        return () => mintHandle(set);
       } catch (cause) {
         throw fail(cause);
       }

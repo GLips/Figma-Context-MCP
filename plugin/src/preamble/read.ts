@@ -92,23 +92,6 @@ function sceneView(node: PageNode | SceneNode): SceneNodeLike {
   return node;
 }
 
-/**
- * What a live node and its subtree already are, in every spelling a read of them hands out: the
- * in-sandbox read, and the egress projection a previous call's output carried. Keyed by id. A word
- * pasted back equal to either states no change (live-tree.ts), whichever call the paste came from.
- */
-export async function readStandingState(node: SceneNode): Promise<Map<string, SimplifiedNode[]>> {
-  const full = await simplifyLive(node, new Set(), undefined, true);
-  const standing = new Map<string, SimplifiedNode[]>();
-  const index = (read: SimplifiedNode): void => {
-    standing.set(read.id, [...(standing.get(read.id) ?? []), read]);
-    for (const child of read.children ?? []) index(child);
-  };
-  full.nodes.forEach(index);
-  project(full).nodes.forEach(read => index(projectNames(read)));
-  return standing;
-}
-
 // A skipped node must never read as absent: the agent is told what Figma listed but couldn't read.
 function reportUnreadable(verb: string, unreadable: UnreadableSink): void {
   if (!unreadable.size) return;

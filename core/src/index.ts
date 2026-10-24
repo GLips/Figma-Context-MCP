@@ -67,6 +67,9 @@ export type { SimplifiedFill } from "./transformers/style.js";
 // flcm.designTokens lists a style's paints, effects or text style exactly as a read of a node
 // carrying that style would spell them.
 export { foldPaintStack } from "./transformers/style.js";
+// One paint as a read spells it: the plugin's write verification compares a paint it asked for with
+// the one the canvas holds at exactly the read's precision.
+export { parsePaint } from "./transformers/style.js";
 export { formatSolidColor } from "./transformers/style/color.js";
 export { simplifyEffectStack } from "./transformers/effects.js";
 export type { SimplifiedEffects } from "./transformers/effects.js";

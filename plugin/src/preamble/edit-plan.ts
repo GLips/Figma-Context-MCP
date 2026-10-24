@@ -36,41 +36,45 @@ import { sceneFigma as figma } from "./scene-access.js";
 // sealed apply span can mint a step. The lock serializes whole verbs, so a run racing its own edits
 // still has each edit's gate read the canvas exactly as that edit will find it.
 //
-// The pipeline is FIVE NAMED STAGES because `editMany` drives the same ones N times over one queue
-// slot (invariant 4: a batch verb takes the lock once and rides the internal appliers, never the
-// public verb). Their ORDER is the contract, not their bodies:
+// The pipeline is NAMED STAGES because `editMany` drives the same ones N times over one queue slot
+// (invariant 4: a batch verb takes the lock once and rides the internal appliers, never the public
+// verb). Their ORDER is the contract, not their bodies:
 //
 //   1. rejectNonDeltaWords    pure — no document read at all, so it can run for every entry first
 //   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode).
 //                             Prepare runs it for the resource hint; the gate runs it for real.
-//   3. loadEditResources      the verb's ONLY awaits: one font load, one image request, and the
-//                             annotation categories the batch names (verb-resources.ts, which also
-//                             loads the live trees an edit's slot content names)
+//   3. loadEditResources      the verb's ONLY awaits, for every authored word: one font load, one
+//                             image request, and the annotation categories the batch names
+//                             (verb-resources.ts, which also loads the live trees slot content names)
 //   4. gateEditPlan           SYNC, before the seal: the node still exists, the compile again on the
 //                             node as it stands now, proof the fonts loaded cover it, the
 //                             live-parent layout gate and the instance write policy — every
 //                             document-reading decision, made once, minted as an AuthorizedEditPlan
-//   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
-//   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then aspectRatio, then the text clamp
-//   5c. settleEditPlanPositions  what CONSUMES it: percent position, last of all
+//   5. applyEditPlanPhase     the sealed, commit-free span, one phase at a time: appearance, text,
+//                             container, placement, own size, cover, constraints, then what still
+//                             PRODUCES geometry (percent size, aspect ratio, clamp), then what
+//                             CONSUMES it (percent position, pivot)
 //
-// 5a/5b/5c are one span, split only so a BATCH can run each across every entry before starting the
-// next: a size read while another entry still has writes to land is a number about to move.
+// Every phase is a write point (write-point.ts): the words it serves are observed as the canvas
+// stands then, after every earlier write in the call, and a word the canvas already holds isn't
+// written. A pasted read therefore writes nothing, and the finalizer still checks each word. The
+// phases are separate so the call's schedule (edit-apply.ts) can order them across every entry and
+// layer: a size read while another write it depends on is still to land is a number about to move.
 //
-// An INSTANCE delta adds no stage here. Its three component words are split off by stage 2 and left
+// An INSTANCE delta adds no phase here. Its three component words are split off by stage 2 and left
 // RAW on the plan (`instanceWords`); the verb resolves their targets in prepare and plans them in
-// its gate through instance.ts, and BRACKETS the stages above with the result — the retarget
-// before 5a, the overrides after 5c (see edit-apply.ts). They bracket rather than join because a swap or
-// a variant change replaces the very sublayers the override paths name.
+// its gate through instance.ts, and the schedule lands the result around these phases — the
+// retarget before them, each override path's own phases after the retarget (see edit-apply.ts).
+// They stay apart because a swap or a variant change replaces the very sublayers the paths name.
 //
-// A COMPONENT delta is split the same way (`componentWords` → component-edit.ts) and brackets the
-// same stages: the DEFINITION words (`description`, `propertyDefinitions`) land before 5a, so a
-// rename and a recolor of the same component are one undo step, and a sublayer's BINDING
-// (`componentPropertyReferences`) lands right after 5a — the layer is what this delta makes it
-// before it is wired to a property.
+// A COMPONENT delta is split the same way (`componentWords` → component-edit.ts): the DEFINITION
+// words (`description`, `propertyDefinitions`) land before the appearance, so a rename and a
+// recolor of the same component are one undo step, and a sublayer's BINDING
+// (`componentPropertyReferences`) lands after the constraints — the layer is what this delta makes
+// it before it is wired to a property.
 
 import {
-  WriteNode, WriteProps, WriteTextStyle, InstanceEditWords, ComponentEditWords,
+  WriteNode, WriteProps, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
   ComponentPropertyBindingEdit, namesFontIdentity,
 } from "./ir.js";
 import { applyAnnotations } from "./annotation-categories.js";
@@ -80,17 +84,21 @@ import { assertLineFillUnrotated } from "./layout-legality.js";
 import { settleAspectRatio } from "./aspect-ratio.js";
 import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 import {
-  applyPaint, applySceneProps, applyAuthorizedRotation, applyLiveNodeLayout, settleLiveNodePercentSize,
-  settleLiveNodePercentPosition, resolveLiveLayoutDelta, applyTextProps, applyTextClamp,
-  ApplyResources, BatchLayoutDeltas, InstancePlan, BecomesContainer,
+  applyPaint, applySceneProps, applyAuthorizedRotation, applyLiveContainer, applyLivePlacement, applyLiveOwnSizing, applyLiveCover,
+  applyLiveConstraints, trackLiveSizing, settleLiveNodePercentSize, settleLiveNodePercentPosition, resolveLiveLayoutDelta, applyTextProps,
+  applyTextClamp, ApplyResources, BatchLayoutDeltas, InstancePlan, BecomesContainer,
 } from "./bridge.js";
 import { instanceContextOf, type InstanceContextFacts } from "./identity.js";
 import {
-  mintAuthorizedEditPlan, preflightInstanceWrites, type AuthorizedEditPlan,
+  mintAuthorizedEditPlan, mintAuthorizedWriteSubset, preflightInstanceWrites,
+  type AuthorizedEditPlan, type AuthorizedLiveLayout, type InstanceWriteClassification,
 } from "./instance-write-authorization.js";
+import { realizeAtWritePoint, type WrittenTogether } from "./write-point.js";
+import type { PatchFieldKey } from "./obligation.js";
+import type { EditOperationPhase } from "./operation-schedule.js";
 import { toFigmaEffects } from "./effects.js";
 import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst, assertDeltaNotEmpty } from "./validate.js";
-import { liveFontWords, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
+import { liveFontWords, assertTextEditFontsLoaded, assertTextFontsAvailable, EditFontNeed, FontMap } from "./fonts.js";
 import type { ResolvedTokens } from "./tokens.js";
 import { compileNodeLocalProps, compileNodeLayout } from "./compile-nodes.js";
 import { compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount } from "./compile-text.js";
@@ -99,6 +107,7 @@ import {
 } from "./compile-component-words.js";
 import { compileSwapTarget } from "./target.js";
 import type { EditDelta } from "./schema.js";
+import { wordPathsOf } from "./authored-words.js";
 import { EDIT_WORDS, WORD_GROUPS, editWordsOf } from "./vocabulary.js";
 
 const EDIT_KEYS: ReadonlySet<string> = EDIT_WORDS;
@@ -341,17 +350,17 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
   assertRunColorsBesideFillStyle(patch, subject);
 }
 
-// ---- The staged pipeline. `edit` drives it once; `editMany` drives each stage across the whole
+// ---- The pipeline. `edit` drives it once; `editMany` drives each gate stage across the whole
 // batch (edit-many.ts), which is what keeps every entry's gates reading the canvas at the same
-// moment. Everything below is preamble-internal — the IIFE bundle exports only the public verbs. ----
+// moment, and the call's schedule orders the phases. Everything below is preamble-internal — the IIFE bundle exports only the public verbs. ----
 
 /**
  * One entry's compiled, ready-to-apply delta.
  *
  * `instanceWords` is the INSTANCE half, still RAW: the compile is sync and document-local, and the
  * words name targets that have to be resolved async. The verb resolves those in prepare and plans
- * the half in its gate (instance.ts), and the apply span brackets the node-local stages with the
- * result — retarget before 5a, overrides after 5c.
+ * the half in its gate (instance.ts), and the schedule lands the result around the node-local
+ * phases — the retarget before them, the overrides after the retarget.
  */
 export interface EditPlan {
   node: SceneNode;
@@ -359,12 +368,15 @@ export interface EditPlan {
   instanceWords?: InstanceEditWords;
   /** The COMPONENT half, still RAW — planned by component-edit.ts in the verb's gate. */
   componentWords?: ComponentEditWords;
+  /** The delta as the agent wrote it, before the prelude: what the plan compiled from. */
+  delta: EditDelta;
+  /** Every word path `delta` states (authored-words.ts): where each obligation the plan owes was authored. */
+  authored: ReadonlySet<string>;
 }
 
-// A delta whose every word restates the node's standing state (standing-state.ts): no change, so it
-// plans no write. Only an authored delta reaches this, so the empty-delta refusal still catches `{}`.
-export function restatedEditPlan(node: SceneNode): EditPlan {
-  return { node, patch: {} };
+/** A plan with no words: a sublayer an override only fills. */
+export function emptyEditPlan(node: SceneNode): EditPlan {
+  return { node, patch: {}, delta: {}, authored: new Set() };
 }
 
 /**
@@ -373,8 +385,8 @@ export function restatedEditPlan(node: SceneNode): EditPlan {
  * the resource hint. A refusal here is the same refusal either way — from prepare it just arrives
  * before the round trip, against the document as it stood then.
  */
-export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
-  changes = acceptAuthoringProps<EditDelta>(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
+export function compileEditPlan(node: SceneNode, delta: EditDelta, subject: string): EditPlan {
+  const changes = acceptAuthoringProps<EditDelta>(delta, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
   // A delta of ONLY read-only words (`{ type }`) folds to nothing — same refusal as an empty object,
   // now that the prelude has run.
   assertDeltaNotEmpty(changes, EDIT_KEYS, subject);
@@ -391,7 +403,7 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
   if (!instanceWords && !componentWords && Object.keys(patch).length === 0) {
     throw new Error(subject + ": the delta compiled to nothing — every value was null, undefined, or an empty object. Pass a real value, or omit the prop.");
   }
-  const plan: EditPlan = { node, patch };
+  const plan: EditPlan = { node, patch, delta, authored: wordPathsOf(delta) };
   if (instanceWords) plan.instanceWords = instanceWords;
   if (componentWords) plan.componentWords = componentWords;
   return plan;
@@ -411,10 +423,7 @@ export interface InstanceNeeds {
   slotContentTrees: WriteNode[];
 }
 
-/**
- * What prepare loaded that a gate judges a plan against: the fonts its text words need, and the
- * tokens its bound words name (a variable restates a binding only if it is the bound one).
- */
+/** What prepare loaded that a gate judges a plan against: the fonts its text words need, and the tokens its bound words name. */
 export interface GateResources { fonts: FontMap; tokens: ResolvedTokens }
 
 /** Where a plan's layout words land, when that is not simply the live canvas around its node. */
@@ -438,8 +447,8 @@ export interface EditPlanLanding {
  * (font identity, wrap mode, the live clamp), proof that the fonts prepare loaded cover what that
  * compile produced, the layout words that only mean something against the live tree (a page
  * parent, hug legality, the hug-cycle percent), and the instance write policy. Zero writes on
- * refusal, and nothing between here and the writes can go stale. Authorization mints the plan the
- * stages consume (AuthorizedEditPlan): stage 5 takes nothing else, so no route writes unjudged words.
+ * refusal. Authorization mints the plan the stages consume (AuthorizedEditPlan): stage 5 takes
+ * nothing else, so no route writes unjudged words.
  */
 export function gateEditPlan(node: SceneNode, changes: EditDelta, gate: GateResources, subject: string, landing: EditPlanLanding = {}): AuthorizedEditPlan {
   assertNodeStillOnCanvas(node, subject);
@@ -455,7 +464,7 @@ export function gateEditPlan(node: SceneNode, changes: EditDelta, gate: GateReso
 export function authorizeEditPlan(plan: EditPlan, gate: GateResources, subject: string, landing: EditPlanLanding = {}): AuthorizedEditPlan {
   assertEditPlanWordsLand(plan, gate.fonts, subject);
   const resolved = plan.patch.layout ? resolveLiveLayoutDelta(plan.node, plan.patch.layout, subject, landing.deltas, landing.becomes) : null;
-  return mintAuthorizedEditPlan(subject, plan, resolved, instanceContextOf(plan.node), gate.tokens);
+  return mintAuthorizedEditPlan(subject, plan, resolved, instanceContextOf(plan.node), landing);
 }
 
 /**
@@ -463,12 +472,13 @@ export function authorizeEditPlan(plan: EditPlan, gate: GateResources, subject: 
  * a definition's override before its instance is stamped, a clone's props before the copy: the same
  * refusals, judged in `context`, with nothing minted. Its layout words resolve against the plan
  * node's own parent. The plan is authorized again on the live node it writes. Without `gate` (a
- * prepare-time compile) the font proof, and any word only the tokens can judge, wait for that.
+ * prepare-time compile) the font proof waits for that. Returns what the policy made of the plan,
+ * for the gate's realize-only check (call-obligations.ts).
  */
-export function preflightEditPlan(plan: EditPlan, gate: GateResources | undefined, subject: string, context: InstanceContextFacts): void {
+export function preflightEditPlan(plan: EditPlan, gate: GateResources | undefined, subject: string, context: InstanceContextFacts): InstanceWriteClassification {
   if (gate) assertEditPlanWordsLand(plan, gate.fonts, subject);
   const resolved = plan.patch.layout ? resolveLiveLayoutDelta(plan.node, plan.patch.layout, subject) : null;
-  preflightInstanceWrites(subject, plan, resolved, context, gate?.tokens);
+  return preflightInstanceWrites(subject, plan, resolved, context);
 }
 
 function assertEditPlanWordsLand(plan: EditPlan, fonts: FontMap, subject: string): void {
@@ -486,15 +496,15 @@ function assertEditPlanWordsLand(plan: EditPlan, fonts: FontMap, subject: string
 }
 
 /**
- * The failure builder for one entry's apply, obtained ONCE for all three stages. The identity is
- * snapshotted here (see beginMutatingApply) and stage 5a may rename the node, so re-opening the
- * span per stage would report a name the rollback is about to erase.
+ * The failure builder for one entry's apply, obtained ONCE for all its stages. The identity is
+ * snapshotted here (see beginMutatingApply) and the appearance stage may rename the node, so
+ * re-opening the span per stage would report a name the rollback is about to erase.
  */
 export type EditPlanFailure = (cause: unknown) => Error;
 
 export function openEditPlanApply(verb: string, plan: AuthorizedEditPlan, span: ApplySpan): EditPlanFailure {
   const fail = beginMutatingApply(verb, plan.node);
-  // Here rather than at stage 5a: an instance retarget runs between the two and can resize the node.
+  // Here rather than at the first write: an instance retarget runs between the two and can resize the node.
   if (pivots(plan)) holdPivot(span, plan.node);
   return fail;
 }
@@ -504,58 +514,212 @@ function pivots(plan: AuthorizedEditPlan): boolean {
   return !plan.context.ownWritesLockedBy;
 }
 
+// ---- Write points. Each phase below is one or more of them: the fields it would write, observed
+// now (write-point.ts), and only the ones an unrealized word still needs, re-authorized against the
+// node as it stands (mintAuthorizedWriteSubset) before the applier sees them. ----
+
+const APPEARANCE_PROPS: readonly (keyof WriteProps)[] = [
+  "annotations", "name", "visible", "locked", "blendMode", "opacity", "fills", "strokes", "strokeWeight", "strokeAlign",
+  "borderRadius", "effects", "styles", "clip", "rotation",
+];
+// A run-styled text's base paint is part of the text write: runs land over it, never under.
+const TEXT_PAINT_PROPS: readonly (keyof WriteProps)[] = ["fills", "styles"];
+const TEXT_PROPS: readonly (keyof WriteProps)[] = ["textStyle", "text", "runs"];
+const CONTAINER_LAYOUT: readonly (keyof WriteLayout)[] = ["mode", "wrap", "gap", "padding", "justifyContent", "alignItems", "gridTemplateColumns", "gridTemplateRows"];
+const PLACEMENT_LAYOUT: readonly (keyof WriteLayout)[] = ["position", "left", "top", "gridColumn", "gridRow", "justifySelf", "alignSelf"];
+const AXIS_FIELDS: readonly PatchFieldKey[] = ["axis:horizontal", "axis:vertical"];
+const AXIS_PARTS = { horizontal: "width", vertical: "height" } as const;
+const SIZE_BAGS = ["dimensions", "percentSize", "designedSize"] as const;
+
 /**
- * Stage 5a — the sealed, commit-free write span for one entry: everything that CHANGES the node.
- * No awaits, by the lock's contract.
+ * `layout` without its container words: what a placed node re-applies where it lands. Its own
+ * container is the edit phases' to write, at their own write point.
  */
-export function applyEditPlanWrites(fail: EditPlanFailure, plan: AuthorizedEditPlan, resources: ApplyResources): void {
-  const { node, patch } = plan;
+export function withoutContainerWords(layout: WriteLayout): WriteLayout {
+  const out: WriteLayout = { ...layout };
+  for (const key of CONTAINER_LAYOUT) delete out[key];
+  return out;
+}
+
+const props = (keys: readonly (keyof WriteProps)[]): PatchFieldKey[] => keys.map((key) => `prop:${key}` as const);
+const layoutKeys = (keys: readonly (keyof WriteLayout)[]): PatchFieldKey[] => keys.map((key) => `layout:${key}` as const);
+
+// The fields a plan writes at all: the compiled words, as authored (a stretch alias is still
+// `alignSelf` here, resolving to an axis only with the subset), minus the realize-only ones.
+function writableFieldsOf(plan: AuthorizedEditPlan): Set<PatchFieldKey> {
+  const out = new Set<PatchFieldKey>();
+  const source = plan.source.patch;
+  for (const key of Object.keys(source) as (keyof WriteProps)[]) if (key !== "layout" && source[key] !== undefined) out.add(`prop:${key}`);
+  const wl = source.layout ?? {};
+  for (const key of Object.keys(wl) as (keyof WriteLayout)[]) {
+    if (wl[key] === undefined) continue;
+    if (key === "sizing") for (const axis of Object.keys(wl.sizing!) as ("horizontal" | "vertical")[]) { if (wl.sizing![axis] !== undefined) out.add(`axis:${axis}`); }
+    else if ((SIZE_BAGS as readonly string[]).includes(key)) for (const axis of ["horizontal", "vertical"] as const) { if ((wl[key] as Record<string, unknown>)[AXIS_PARTS[axis]] !== undefined) out.add(`axis:${axis}`); }
+    else out.add(`layout:${key}`);
+  }
+  for (const key of plan.realizeOnly.keys()) out.delete(key);
+  return out;
+}
+
+// The compiled plan's words at `fields`: the props, and the layout words with each axis's parts.
+function patchAt(source: WriteProps, fields: ReadonlySet<PatchFieldKey>): WriteProps {
+  const out: WriteProps = {};
+  for (const key of Object.keys(source) as (keyof WriteProps)[]) {
+    if (key !== "layout" && fields.has(`prop:${key}`)) (out as Record<string, unknown>)[key] = source[key];
+  }
+  const wl = source.layout;
+  if (!wl) return out;
+  const layout: WriteLayout = {};
+  for (const key of Object.keys(wl) as (keyof WriteLayout)[]) {
+    if (key === "sizing" || (SIZE_BAGS as readonly string[]).includes(key)) continue;
+    if (fields.has(`layout:${key}`)) (layout as Record<string, unknown>)[key] = wl[key];
+  }
+  for (const axis of ["horizontal", "vertical"] as const) {
+    if (!fields.has(`axis:${axis}`)) continue;
+    if (wl.sizing?.[axis] !== undefined) layout.sizing = { ...layout.sizing, [axis]: wl.sizing[axis] };
+    for (const bag of SIZE_BAGS) {
+      const part = (wl[bag] as Record<string, unknown> | undefined)?.[AXIS_PARTS[axis]];
+      if (part !== undefined) (layout as Record<string, unknown>)[bag] = { ...(layout[bag] as object | undefined), [AXIS_PARTS[axis]]: part };
+    }
+  }
+  if (Object.keys(layout).length) out.layout = layout;
+  return out;
+}
+
+interface WritePointOptions {
+  together?: readonly WrittenTogether[];
+  /** Fields the applier reads beside the ones it writes (applyChildPosition needs the position). */
+  context?: readonly PatchFieldKey[];
+  /** Fields written whenever present, held or not: a zIndex, which the sibling order settles across the whole parent. */
+  always?: readonly PatchFieldKey[];
+}
+
+/**
+ * One write point of `plan`: null when none of `fields` is due now, else the due ones re-authorized
+ * on the node as it stands, and the call that records them as written once the applier ran.
+ */
+function writePoint(plan: AuthorizedEditPlan, fields: readonly PatchFieldKey[], options: WritePointOptions = {}): { plan: AuthorizedEditPlan; landed(): void } | null {
+  const writable = writableFieldsOf(plan);
+  const present = fields.filter((field) => writable.has(field));
+  const always = (options.always ?? []).filter((field) => writable.has(field));
+  if (!present.length && !always.length) return null;
+  const decision = realizeAtWritePoint(plan.node, present, options.together);
+  if (!decision.writes.size && !always.length) return null;
+  const at = new Set([...decision.writes, ...always]);
+  for (const field of options.context ?? []) if (writable.has(field)) at.add(field);
+  const patch = patchAt(plan.source.patch, at);
+  const resolved = patch.layout ? resolveLiveLayoutDelta(plan.node, patch.layout, plan.subject, plan.landing.deltas, plan.landing.becomes) : null;
+  return { plan: mintAuthorizedWriteSubset(plan, patch, resolved), landed: decision.landed };
+}
+
+function runsOnText(plan: AuthorizedEditPlan): boolean {
+  return plan.node.type === "TEXT" && !!plan.source.patch.runs;
+}
+
+/** Snapshot the sizes `plan`'s layout tree measures, before the call's first write lands (sizing-diagnostics). */
+export function trackEditPlanSizing(plan: AuthorizedEditPlan): void {
+  if (plan.layout) trackLiveSizing(plan.layout);
+}
+
+// The phases an edit plan's own writes land in, in order on its node (operation-schedule.ts).
+export const EDIT_PLAN_PHASES = [
+  "appearance", "text", "container", "placement", "own-size", "cover", "constraints", "percent-size", "aspect-ratio", "text-clamp", "percent-position",
+] as const satisfies readonly EditOperationPhase[];
+export type EditPlanPhase = (typeof EDIT_PLAN_PHASES)[number];
+
+/**
+ * One phase of `plan`'s writes, as a write point: what the phase would write, observed now, and only
+ * what an unrealized word still needs is written. Sealed and commit-free; no awaits, by the lock's
+ * contract. A throw is reported through `fail`, which names the node as it stood before the call.
+ */
+export function applyEditPlanPhase(fail: EditPlanFailure, plan: AuthorizedEditPlan, phase: EditPlanPhase, resources: ApplyResources): void {
   try {
+    EDIT_PLAN_PHASE_APPLIERS[phase](plan, resources);
+  } catch (cause) {
+    throw fail(cause);
+  }
+}
+
+const EDIT_PLAN_PHASE_APPLIERS: { readonly [P in EditPlanPhase]: (plan: AuthorizedEditPlan, resources: ApplyResources) => void } = {
+  // Paint, effects, the scene props, rotation, annotations.
+  appearance(plan, resources) {
+    const { node } = plan;
     // First, while the transform is still the one the node arrived with (a no-op once open).
     if (pivots(plan)) holdPivot(resources.span, node);
-    // An instance's overrides land after stage 5c and can resize it, so its pivot waits for the
-    // span's settle, which runs after them.
+    // An instance's overrides land after its own words and can resize it, so its pivot waits for
+    // the span's settle, which runs after them.
     if (plan.instanceWords && pivots(plan)) resources.span.pivots.push({ node, layout: plan.layout?.child.layout });
-    applyPaint(node, patch, resources);
-    applySceneProps(node, patch);
-    applyAuthorizedRotation(node, plan);
-    applyAnnotations(node, patch.annotations);
-    // Text BEFORE layout — create's own order (buildText: characters, then applyOwnSizing), so the
-    // layout words size the reflowed text rather than the text it replaces.
-    // Fills still precede runs (applyPaint above).
-    if (node.type === "TEXT") applyTextProps(node as TextNode, patch, resources);
-    if (plan.layout) applyLiveNodeLayout(plan.layout, resources);
-  } catch (cause) {
-    throw fail(cause);
-  }
-}
+    const fields = runsOnText(plan) ? APPEARANCE_PROPS.filter((key) => !TEXT_PAINT_PROPS.includes(key)) : APPEARANCE_PROPS;
+    const at = writePoint(plan, props(fields));
+    if (!at) return;
+    applyPaint(node, at.plan.patch, resources);
+    applySceneProps(node, at.plan.patch);
+    applyAuthorizedRotation(node, at.plan);
+    applyAnnotations(node, at.plan.patch.annotations);
+    at.landed();
+  },
+  // Before layout, create's own order (buildText: characters, then applyOwnSizing), so the layout
+  // words size the reflowed text rather than the text it replaces. Runs over a base style are one
+  // write: a base word written without its runs would flatten them.
+  text(plan, resources) {
+    if (plan.node.type !== "TEXT") return;
+    const node = plan.node as TextNode;
+    const composite = runsOnText(plan);
+    const fields = props(composite ? [...TEXT_PAINT_PROPS, ...TEXT_PROPS] : TEXT_PROPS);
+    const at = writePoint(plan, fields, { together: composite ? [{ when: fields, write: fields }] : [] });
+    if (!at) return;
+    assertTextFontsAvailable(node, at.plan.patch, plan.subject);
+    // The base paint before the runs, which land over it.
+    if (composite) applyPaint(node, at.plan.patch, resources);
+    applyTextProps(node, at.plan.patch, resources);
+    at.landed();
+  },
+  container(plan, resources) {
+    const container = layoutKeys(CONTAINER_LAYOUT);
+    // A new mode re-reads every container word, so they land with it.
+    // The axes ride along unwritten: a grid's fractional tracks are legal only beside a bounded width.
+    landLayout(plan, container, (layout) => applyLiveContainer(layout, resources), { together: [{ when: ["layout:mode"], write: container }], context: AXIS_FIELDS });
+  },
+  placement(plan, resources) {
+    landLayout(plan, [...layoutKeys(PLACEMENT_LAYOUT), ...AXIS_FIELDS], (layout) => applyLivePlacement(layout, resources), { context: ["layout:position"], always: ["layout:zIndex"] });
+  },
+  "own-size"(plan, resources) {
+    landLayout(plan, ["layout:bounds", ...AXIS_FIELDS], (layout) => applyLiveOwnSizing(layout, resources));
+  },
+  cover(plan) {
+    landLayout(plan, AXIS_FIELDS, applyLiveCover);
+  },
+  constraints(plan) {
+    landLayout(plan, ["layout:constraints"], applyLiveConstraints);
+  },
+  // What still PRODUCES geometry after the writes: the percent size, then the aspectRatio it may
+  // drive, then the clamp that clips against the wrap those sizes produced.
+  "percent-size"(plan) {
+    landLayout(plan, AXIS_FIELDS, settleLiveNodePercentSize);
+  },
+  "aspect-ratio"(plan) {
+    // The axes ride along unwritten: which one drives the ratio is a fact of how each is sized.
+    landLayout(plan, ["layout:aspectRatio"], (layout) => settleAspectRatio(plan.node, layout), { context: AXIS_FIELDS });
+  },
+  "text-clamp"(plan) {
+    if (plan.node.type !== "TEXT") return;
+    const at = writePoint(plan, ["prop:maxLines"]);
+    if (!at) return;
+    applyTextClamp(plan.node as TextNode, at.plan.patch.maxLines);
+    at.landed();
+  },
+  // What CONSUMES geometry: percent position, which reads the parent's realized size, then the
+  // centre pivot, which reads the final box.
+  "percent-position"(plan, resources) {
+    landLayout(plan, ["layout:percentPos"], settleLiveNodePercentPosition, { context: ["layout:position"] });
+    if (!plan.instanceWords && pivots(plan)) settlePivot(resources.span, plan.node, plan.layout?.child.layout);
+  },
+};
 
-/**
- * Stage 5b — what still PRODUCES geometry after the writes: the percent SIZE, then the aspectRatio
- * it may drive, then the clamp that clips against the wrap those sizes produced (the ordering `edit` has always had, and the reason
- * clamp isn't simply last).
- */
-export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch, layout }: AuthorizedEditPlan): void {
-  try {
-    if (layout) settleLiveNodePercentSize(layout);
-    if (layout) settleAspectRatio(node, layout);
-    if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
-  } catch (cause) {
-    throw fail(cause);
-  }
-}
-
-/**
- * Stage 5c — what CONSUMES geometry: percent position, which reads the parent's realized size,
- * then the centre pivot, which reads the final box. Dead last, so in a
- * batch they measure a canvas where every entry's sizes have already settled.
- */
-export function settleEditPlanPositions(fail: EditPlanFailure, plan: AuthorizedEditPlan, span: ApplySpan): void {
-  const { node, layout, instanceWords } = plan;
-  try {
-    if (layout) settleLiveNodePercentPosition(layout);
-    if (!instanceWords && pivots(plan)) settlePivot(span, node, layout?.child.layout);
-  } catch (cause) {
-    throw fail(cause);
-  }
+function landLayout(plan: AuthorizedEditPlan, fields: readonly PatchFieldKey[], apply: (layout: AuthorizedLiveLayout) => void, options?: WritePointOptions): void {
+  if (!plan.layout) return;
+  const at = writePoint(plan, fields, options);
+  if (!at?.plan.layout) return;
+  apply(at.plan.layout);
+  at.landed();
 }

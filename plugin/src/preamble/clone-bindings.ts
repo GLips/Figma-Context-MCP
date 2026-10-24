@@ -5,7 +5,7 @@
 // Native variant-member cloning drops bindings before placement. Capture ownership and structural
 // paths before that boundary; definition display names are never used as identity.
 import { definitionOwnerOf, isComponentDefinition } from "./identity.js";
-import { bareName } from "./instance.js";
+import { bareName } from "./component-properties.js";
 
 type Path = number[];
 type Definition = { type: string; defaultValue: string | boolean; preferredValues?: readonly any[] };

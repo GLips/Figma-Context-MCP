@@ -90,17 +90,20 @@ export function removeFailedAnnotationCategories(cause: unknown): unknown {
   return cause;
 }
 
+/** The id a category name resolved to in this call's prepare. */
+export function annotationCategoryId(category: string): string {
+  const id = resolvedCategories.get(category);
+  if (!id) throw new Error(`flcm.annotations: unresolved category ${JSON.stringify(category)}.`);
+  return id;
+}
+
 export function applyAnnotations(node: SceneNode, annotations: readonly WriteAnnotation[] | undefined): void {
   if (annotations === undefined) return;
   if (!("annotations" in node)) throw new Error(`flcm.annotations: ${node.type} cannot carry annotations.`);
   node.annotations = annotations.map(({ text, category, properties }) => {
     const out: { labelMarkdown?: string; categoryId?: string; properties?: AnnotationProperty[] } = {};
     if (text !== undefined) out.labelMarkdown = text;
-    if (category !== undefined) {
-      const id = resolvedCategories.get(category);
-      if (!id) throw new Error(`flcm.annotations: unresolved category ${JSON.stringify(category)}.`);
-      out.categoryId = id;
-    }
+    if (category !== undefined) out.categoryId = annotationCategoryId(category);
     if (properties !== undefined) out.properties = properties.map((type) => ({ type }));
     return out;
   });

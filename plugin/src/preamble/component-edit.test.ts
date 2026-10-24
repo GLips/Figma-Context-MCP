@@ -559,6 +559,21 @@ test("an insert into a component may carry bindings — an existing property, an
   assert.equal(fresh.findOne((n: { name: string }) => n.name === "Extra").type, "SLOT");
 });
 
+// A binding is to one component's property: the same name in another component is another property.
+test("a bound layer moved into another component with a same-named property is bound to that component's", async () => {
+  const bound = (name: string) => component(
+    { type: "FRAME", name, width: 100, height: 100, children: [{ type: "RECTANGLE", name: name + " dot", width: 10, height: 10, componentPropertyReferences: { visible: "Show" } }] },
+    { propertyDefinitions: { Show: { type: "boolean" } } },
+  );
+  const from = await figma.getNodeByIdAsync((await bound("From")).id);
+  const to = await figma.getNodeByIdAsync((await bound("To")).id);
+  const dot = from.children[0];
+  await append(to.id, { id: dot.id, componentPropertyReferences: { visible: "Show" } } as never);
+  assert.equal(dot.parent, to);
+  assert.equal(dot.componentPropertyReferences.visible, fullName(to, "Show"));
+  assert.notEqual(fullName(to, "Show"), fullName(from, "Show"));
+});
+
 test("an instance's SLOT takes gap, padding and fills; its direction stays the component's", async () => {
   const { comp } = await chipComponent();
   await edit(comp.findOne((n: { name: string }) => n.name === "Trailing").id, { layout: { mode: "row" } });

@@ -15,7 +15,9 @@
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { enterMutatingVerb, mutationQueueIdle } from "./mutation-lock.js";
+import { enterMutatingVerb, mutationQueueIdle, retargetReplacedNode } from "./mutation-lock.js";
+import { recordObligations, type Obligation } from "./obligation.js";
+import { UnrealizedWordsError } from "./call-finalizer.js";
 import { committedVerbCount } from "./verb-error.js";
 import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
@@ -73,6 +75,7 @@ test("verbs serialize WHOLE: a queued verb's preparation never starts before the
     },
     () => {
       events.push("a:apply");
+      return () => undefined;
     },
   );
   const queued = enterMutatingVerb(
@@ -85,6 +88,7 @@ test("verbs serialize WHOLE: a queued verb's preparation never starts before the
     },
     () => {
       events.push("b:apply");
+      return () => undefined;
     },
   );
   await Promise.all([slow, queued]);
@@ -98,14 +102,14 @@ test("a sibling of a rejected verb is still outstanding until the queue drains",
   let caught: string | null = null;
   try {
     await Promise.all([
-      enterMutatingVerb("edit", async () => { throw new Error("Input must be a valid number"); }, noGate, () => {}),
+      enterMutatingVerb("edit", async () => { throw new Error("Input must be a valid number"); }, noGate, () => () => undefined),
       // Its slot was reserved synchronously, but its prepare suspends the way a real render's font
       // and image loads do — so it cannot possibly have landed when the batch rejects.
       enterMutatingVerb(
         "render",
         async () => { await new Promise((r) => setTimeout(r, 5)); },
         noGate,
-        () => { landed.push("survivor"); },
+        () => { landed.push("survivor"); return () => undefined; },
       ),
     ]);
   } catch (err) {
@@ -124,7 +128,7 @@ test("a runtime whose run has already replied refuses to write, and says so as a
   installRunFinished(() => true);
   let ran = false;
   await assert.rejects(
-    enterMutatingVerb("render", async () => { ran = true; }, noGate, () => { ran = true; }),
+    enterMutatingVerb("render", async () => { ran = true; }, noGate, () => { ran = true; return () => undefined; }),
     /already finished and replied/,
   );
   assert.equal(ran, false);
@@ -136,23 +140,22 @@ test("gate and apply are synchronous BY TYPE: an async one is a compile error, n
   // an async apply would return at its first await, letting the success commit run mid-writes;
   // an async gate would let the seal land on a decision not yet made.
   const rejectedByCompiler = () =>
+    // @ts-expect-error — an async apply returns a Promise, never a result builder
+    enterMutatingVerb("edit", noPrep, noGate, async () => () => 42);
+  const asyncBuilderRejectedByCompiler = () =>
     // @ts-expect-error — T infers to Promise<number>, which SyncOnly resolves to never
-    enterMutatingVerb("edit", noPrep, noGate, async () => 42);
+    enterMutatingVerb("edit", noPrep, noGate, () => async () => 42);
   const gateRejectedByCompiler = () =>
     // @ts-expect-error — G infers to Promise<number>, which SyncOnly resolves to never
-    enterMutatingVerb(
-      "edit",
-      noPrep,
-      async () => 42,
-      () => 1,
-    );
+    enterMutatingVerb("edit", noPrep, async () => 42, () => () => 1);
   void rejectedByCompiler;
+  void asyncBuilderRejectedByCompiler;
   void gateRejectedByCompiler;
 });
 
 test("a successful verb is one sealed step: entry seal, then success commit — no trigger", async () => {
   const before = committedVerbCount();
-  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => 42), 42);
+  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => () => 42), 42);
   assert.deepEqual(figma.undoLog, ["commit", "commit"]);
   assert.equal(committedVerbCount(), before + 1);
 });
@@ -160,10 +163,10 @@ test("a successful verb is one sealed step: entry seal, then success commit — 
 test("every sealed step carries the stamp write, and a stamp that fails to write never triggers a rollback", async () => {
   const stamp = (): string => figma.root.getPluginData("flcm/undo-step");
   const first = stamp();
-  await enterMutatingVerb("edit", noPrep, noGate, () => 1);
+  await enterMutatingVerb("edit", noPrep, noGate, () => () => 1);
   const second = stamp();
   assert.notEqual(second, first);
-  await enterMutatingVerb("edit", noPrep, noGate, () => 2);
+  await enterMutatingVerb("edit", noPrep, noGate, () => () => 2);
   assert.notEqual(stamp(), second);
   // A stamp failure means the step is EMPTY of this verb's writes — a triggerUndo would pop the
   // previous verb's step, the one thing the stamp exists to prevent.
@@ -199,7 +202,7 @@ test("a preparation reject leaves ZERO undo residue — no seal, no rollback, ch
   );
   assert.deepEqual(figma.undoLog, []);
   assert.equal(committedVerbCount(), before);
-  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => "next"), "next");
+  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => () => "next"), "next");
 });
 
 test("a GATE refusal is a prepare refusal's twin: zero undo calls, no stamp, apply never runs", async () => {
@@ -223,7 +226,7 @@ test("a GATE refusal is a prepare refusal's twin: zero undo calls, no stamp, app
   assert.deepEqual(figma.undoLog, []);
   assert.equal(figma.root.getPluginData("flcm/undo-step"), stamp);
   assert.equal(committedVerbCount(), before);
-  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => "next"), "next");
+  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => () => "next"), "next");
 });
 
 test("a failed APPLY seals its partial writes and pops exactly that step (commit-then-undo)", async () => {
@@ -240,7 +243,46 @@ test("a failed APPLY seals its partial writes and pops exactly that step (commit
   // A rolled-back verb never counts as committed — the pointer error reports only verbs that stand.
   assert.equal(committedVerbCount(), before);
   // And the chain isn't poisoned: the next verb runs.
-  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => "next"), "next");
+  assert.equal(await enterMutatingVerb("edit", noPrep, noGate, () => () => "next"), "next");
+});
+
+// The lock-level half of the finalizer contract; the verbs' own obligations are pinned through them.
+const opacityObligation = (node: SceneNode, literal: number): Obligation => ({
+  kind: "opacity", request: { literal }, target: { node }, source: { subject: "flcm.edit", path: "opacity" },
+  writePoint: "appearance", carries: [{ prop: "opacity" }], writability: "writable", concessions: [],
+});
+
+test("a word undone after the awaited style link rolls the call back before any result is built", async () => {
+  const node = figma.createRectangle();
+  figma.currentPage.appendChild(node);
+  await enterMutatingVerb("edit", noPrep, noGate, () => { node.name = "Kept"; return () => undefined; });
+  // A write landing during the link's await — a human's, or an un-awaited agent write.
+  node.setFillStyleIdAsync = async () => { node.opacity = 0.2; };
+  let built = false;
+  await assert.rejects(
+    enterMutatingVerb("edit", noPrep, () => recordObligations([opacityObligation(node, 0.5)]), (_gated, span) => {
+      node.opacity = 0.5;
+      span.styleLinks.push({ node, slot: "fill", styleId: "S:brand" });
+      return () => { built = true; return "handle"; };
+    }),
+    (err: unknown) => err instanceof UnrealizedWordsError && /didn't realize 1 of its words.*opacity: asked 0\.5, ended 0\.2/s.test(err.message),
+  );
+  assert.equal(built, false);
+  // The earlier verb's step is sealed before this one's; the trigger pops only this call's writes.
+  assert.deepEqual(figma.undoLog, ["commit", "commit", "commit", "commit", "trigger"]);
+  assert.equal(node.name, "Kept");
+});
+
+test("an obligation follows a node the call replaced, as every per-call accumulator does", async () => {
+  const frame = figma.createFrame();
+  figma.currentPage.appendChild(frame);
+  const result = await enterMutatingVerb("component", noPrep, () => recordObligations([opacityObligation(frame, 0.5)]), (_gated, span) => {
+    frame.opacity = 0.5;
+    const comp = figma.createComponentFromNode(frame);
+    retargetReplacedNode(span, frame, comp);
+    return () => comp.opacity;
+  });
+  assert.equal(result, 0.5);
 });
 
 test("a cancelled run is refused at the lock, before preparation or any undo call", async () => {
@@ -255,6 +297,7 @@ test("a cancelled run is refused at the lock, before preparation or any undo cal
       noGate,
       () => {
         ran = true;
+        return () => undefined;
       },
     ),
     /cancelled by the server/,
@@ -280,6 +323,7 @@ test("cancellation arriving DURING preparation refuses before the seal — no zo
       noGate,
       () => {
         applied = true;
+        return () => undefined;
       },
     ),
     /cancelled by the server/,
@@ -295,9 +339,9 @@ test("cancellation arriving mid-apply lets it finish but refuses the queued next
   // inside it: the running verb completes and commits, the queued one is refused at its turn.
   const first = enterMutatingVerb("render", noPrep, noGate, () => {
     cancelled = true;
-    return "done";
+    return () => "done";
   });
-  const second = enterMutatingVerb("render", noPrep, noGate, () => "ran");
+  const second = enterMutatingVerb("render", noPrep, noGate, () => () => "ran");
   assert.equal(await first, "done");
   await assert.rejects(second, /cancelled by the server/);
 });

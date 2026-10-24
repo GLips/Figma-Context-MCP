@@ -18,7 +18,7 @@ export function assertExposureTarget(node: SceneNode, subject: string): void {
 export function assertExposureTree(tree: WriteNode, context: ExposureContext = {}): void {
   function visit(node: WriteNode, owner: boolean): void {
     // A live node's `exposed` is an edit word, judged against the live node (assertExposureTarget);
-    // its authored children can't sit in an instance's own list (gateLiveTree refuses that).
+    // its authored children can't sit in an instance's own list (gateLiveTrees refuses that).
     if (node.liveId !== undefined) {
       for (const child of node.children || []) visit(child, owner);
       return;

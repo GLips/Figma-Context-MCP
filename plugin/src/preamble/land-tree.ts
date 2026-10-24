@@ -7,6 +7,7 @@
 
 import { attachBuiltChild, liveParentAttachFacts, settleApplySpan, type RenderCtx } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
+import { landPlacedLiveOperations } from "./edit-apply.js";
 import type { WriteNode } from "./ir.js";
 
 /**
@@ -23,8 +24,12 @@ import type { WriteNode } from "./ir.js";
  */
 export function landTree(parent: any, place: (node: any) => void, tree: WriteNode, ctx: RenderCtx, subject: string, noteOverlap: boolean): any {
   const root = attachBuiltChild(parent, tree, ctx, liveParentAttachFacts(parent, subject), place);
+  // The live nodes the walk placed land their geometry and children in the tree's schedule.
+  landPlacedLiveOperations(ctx);
   settleApplySpan(ctx.span);
   if (noteOverlap) {
+    // Printed now, from the settled geometry, so it can outlive a call the finalizer later rolls
+    // back: the console line is advisory, and the verb's rejection says nothing landed.
     const overlap = describeRootOverlap(root);
     if (overlap) console.log(overlap);
   }

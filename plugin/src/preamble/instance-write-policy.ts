@@ -92,6 +92,15 @@ export const INSTANCE_WRITE_RULES: readonly InstanceWriteRule[] = [
   },
 ];
 
+const RULE_BY_ID = new Map<InstanceWriteRuleId, InstanceWriteRule>(INSTANCE_WRITE_RULES.map((rule) => [rule.id, rule]));
+
+/** What Figma does with a word the rule covers, why, and what to do instead: one wording for the gate's refusal and the finalizer's. */
+export function describeInstanceWriteRule(id: InstanceWriteRuleId): string {
+  const rule = RULE_BY_ID.get(id)!;
+  return "Figma " + (rule.figma === "ignores" ? "silently ignores this" : "throws on this") +
+    (rule.scope === "instance-root" ? " on an instance" : " inside an instance") + " — " + rule.reason + " (" + id + "). Instead, " + rule.remedy;
+}
+
 /** What a write word does inside an instance's locked tree. */
 export type InstanceWriteVerdict =
   /** Lands: the live matrix wrote it and read it back. */
@@ -99,7 +108,7 @@ export type InstanceWriteVerdict =
   /** Default-allowed within flcm's validated vocabulary; not yet in the live matrix. */
   | { readonly kind: "allowed-unverified"; readonly word: string }
   | { readonly kind: "rule"; readonly rule: InstanceWriteRuleId }
-  /** Judged per axis from the node's sizing plan: an explicit resize refuses, fill and hug land. */
+  /** Judged per axis from the node's sizing plan: an explicit resize must already hold, fill and hug land. */
   | { readonly kind: "by-sizing-plan" }
   /** Not a canvas write of its own; another module decides it. */
   | { readonly kind: "not-a-write"; readonly decidedBy: string };

@@ -11,10 +11,30 @@ import { textOfRuns, type WriteNode, type BuiltNode, type LiveRef, type Componen
 import type { BoundLiveNode, InstancePlans, RenderResources } from "./bridge.js";
 import { describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
+import { realizeAtWritePoint } from "./write-point.js";
 import { defaultValueHint } from "./compile-component-words.js";
 import { BINDABLE_FIELDS, wordsOf, type BindableField, type WordValue } from "./vocabulary.js";
 
 const DEFINITION_KEYS = wordsOf(["propertyDefinition"]);
+
+/** Figma files a property under `Label#12:3`; the bare name is what an author writes and reads. */
+export const bareName = (full: string): string => {
+  const hash = full.lastIndexOf("#");
+  return hash === -1 ? full : full.slice(0, hash);
+};
+
+/**
+ * Every definition an authored name could mean: the exact full name if it is one, else every
+ * definition sharing that bare name. Zero, one, or (legally, since the suffix is the identity) more.
+ *
+ * Split from resolvePropertyName because an EDIT of `propertyDefinitions` forks on the count rather
+ * than refusing it — a name that matches nothing ADDS a property, where every other caller is
+ * addressing one that must already exist.
+ */
+export function matchPropertyNames(authored: string, definitions: Record<string, any>): string[] {
+  if (own(definitions, authored) !== undefined) return [authored];
+  return Object.keys(definitions).filter((full) => bareName(full) === authored);
+}
 
 export const quoted = (names: readonly string[]): string => names.map((n) => JSON.stringify(n)).join(", ");
 
@@ -212,10 +232,15 @@ function authoredTextOf(wn: BuiltNode): string | undefined {
  */
 export function writeBindingReferences(bound: readonly BoundLiveNode[], suffixed: Record<string, string>): void {
   for (const { node, refs } of bound) {
+    // A write point per node: a field already referencing the property is not written again.
+    const at = realizeAtWritePoint(node, Object.keys(refs).map((field) => `word:binding:${field}` as const));
+    const fields = Object.keys(refs).filter((field) => at.writes.has(`word:binding:${field}`));
+    if (!fields.length) continue;
     const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
-    for (const field of Object.keys(refs)) {
+    for (const field of fields) {
       wire[BINDING_FIELD_WIRE_KEYS[field].wire] = suffixed[(refs as Record<string, string>)[field]];
     }
     node.componentPropertyReferences = wire;
+    at.landed();
   }
 }

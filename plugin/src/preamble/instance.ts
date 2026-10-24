@@ -43,7 +43,7 @@ import { componentPath, definitionId, liveSublayerId } from "@framelink/core";
 // so slot content lands exactly as appended content does; afterwards the structural verbs treat
 // it as the ordinary tree it is (structure.ts's gate knows a SLOT's child list is open).
 
-import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target } from "./ir.js";
+import { WriteNode, BuiltNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, type WriteProps } from "./ir.js";
 import { ResolvedTargets } from "./target.js";
 import {
   attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent, assertBuiltInteriorLegal,
@@ -52,16 +52,25 @@ import {
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import { layoutModeOf } from "./layout-mode.js";
 import {
-  EditPlan, EditPlanFailure, InstanceNeeds, type GateResources, compileEditPlan, gateEditPlan, authorizeEditPlan, preflightEditPlan, openEditPlanApply,
-  applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
+  EditPlan, EditPlanFailure, InstanceNeeds, type GateResources, compileEditPlan, emptyEditPlan, gateEditPlan, authorizeEditPlan, preflightEditPlan, openEditPlanApply,
+  applyEditPlanPhase, trackEditPlanSizing, EDIT_PLAN_PHASES, type EditPlanPhase,
 } from "./edit-plan.js";
 import {
   isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
   instanceContextOf, projectedInstanceContextOf, type InstanceContextFacts,
 } from "./identity.js";
-import { assertInstanceRootLayoutMode } from "./instance-write-authorization.js";
+import { assertInstanceRootLayoutMode, type AuthorizedEditPlan, type RealizeOnlyFields } from "./instance-write-authorization.js";
+import { gateCallObligations, type RealizeOnlyCheck } from "./call-obligations.js";
+import { geometryWritesAt, geometryWritesOf, writePointGeometryReads, type GeometryEffect } from "./geometry-dependency.js";
+import {
+  definitionsEditedAt, definitionsInheritedBy, scheduleEditOperations, type EditOperation, type EditOperationPhase, type InstanceMains, type OperationRef,
+} from "./operation-schedule.js";
+import { realizeOnlyChecksOf } from "./obligation-derivation.js";
+import type { Obligation } from "./obligation.js";
+import { realizeAtWritePoint } from "./write-point.js";
 import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
 import { own } from "./validate.js";
+import { bareName, matchPropertyNames } from "./component-properties.js";
 import type { EditDelta } from "./schema.js";
 
 const SUBJECT = "INSTANCE";
@@ -85,11 +94,18 @@ const NULL_RESTORE: Record<string, unknown> = {
  * (undefined when the override only fills a slot), the plan compiled from them against the sublayer
  * the route chose (an empty patch for a fill-only override — the existence gate still runs on it),
  * and, at a SLOT's path, the content the override states: the nodes to build there, in order.
+ * `realizeOnly` is what the instance write policy made of its words in `context`, where that
+ * sublayer sits: words it owes and never writes.
  *
  * `delta` rides along because the plan is compiled AGAIN inside the sealed span, against the live
- * sublayer as it stands after this call's own retarget (applyOverridePlans).
+ * sublayer as it stands after this call's own retarget (beginOverrideApply).
  */
-interface OverridePlan { path: string; delta: EditDelta | undefined; plan: EditPlan; slotContent?: WriteNode[] }
+export interface OverridePlan {
+  path: string; delta: EditDelta | undefined; plan: EditPlan; slotContent?: WriteNode[];
+  realizeOnly: RealizeOnlyFields; context: InstanceContextFacts;
+}
+
+const NO_REALIZE_ONLY: RealizeOnlyFields = new Map();
 
 /**
  * What the sync planners resolve against: the targets prepare resolved, and — in the gate — the
@@ -213,13 +229,16 @@ function planInstanceNode(wn: BuiltNode, planning: InstancePlanning): { plan: In
   if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT, component.layoutWrap === "WRAP");
   assertInstanceRootLayoutMode(SUBJECT, null, wn.layout?.mode, layoutModeOf(component));
   const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.gate);
+  // The instance is sized by its own words before its overrides land, so a realize-only measure can wait on them.
+  if (planning.gate) gateCallObligations({ checks: overrideRealizeOnlyChecks(overrides, planning.gate, SUBJECT), writes: geometryWritesOf(component, { layout: wn.layout }) }, SUBJECT);
   return {
     plan: {
       component,
       // A create stamps the exact variant (`component` above), so the variant axes are not restated
       // as property writes — only the non-variant values are.
       properties,
-      applyOverrides: (instance, ctx) => applyOverridePlans(instance, overrides, ctx, "render"),
+      applyOverrides: (instance, ctx) => applyOverridePlans(instance, overrides, component, ctx, "render"),
+      overrides,
     },
     overrides,
   };
@@ -258,25 +277,6 @@ function resolveComponentNode(node: any, subject: string): ResolvedComponent {
   throw new Error(subject + ": " + who + " is not a component — only a COMPONENT (or a COMPONENT_SET, whose variant the `componentProperties` pick) can be instantiated.");
 }
 
-
-/** Figma files a property under `Label#12:3`; the bare name is what an author writes and reads. */
-export const bareName = (full: string): string => {
-  const hash = full.lastIndexOf("#");
-  return hash === -1 ? full : full.slice(0, hash);
-};
-
-/**
- * Every definition an authored name could mean: the exact full name if it is one, else every
- * definition sharing that bare name. Zero, one, or (legally, since the suffix is the identity) more.
- *
- * Split from resolvePropertyName because an EDIT of `propertyDefinitions` forks on the count rather
- * than refusing it — a name that matches nothing ADDS a property, where every other caller is
- * addressing one that must already exist.
- */
-export function matchPropertyNames(authored: string, definitions: Record<string, any>): string[] {
-  if (own(definitions, authored) !== undefined) return [authored];
-  return Object.keys(definitions).filter((full) => bareName(full) === authored);
-}
 
 // An authored name resolves to Figma's suffixed one: exact first, else the ONE definition whose
 // bare name matches. Two definitions sharing a bare name (legal in Figma — the suffix is the
@@ -441,8 +441,8 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
 // as before.
 // One override, compiled against the sublayer the route chose (the definition node, or the live
 // one) and preflighted against the instance write policy in `context`, where that sublayer will sit.
-// With `gate` — the gate's call — font coverage and token-bound restatements are judged too;
-// without it — prepare's hint — they are not. Either way nothing is minted: the apply authorizes the live sublayer it finds.
+// With `gate` — the gate's call — font coverage is judged too; without it — prepare's hint — it
+// is not. Either way nothing is minted: the apply authorizes the live sublayer it finds.
 function compileOverride(
   sublayer: any, definition: any, delta: OverrideDeltaInput, path: string, where: string, gate: GateResources | undefined, context: InstanceContextFacts,
 ): OverridePlan {
@@ -450,9 +450,9 @@ function compileOverride(
   // An override that only fills (or only restated the read's `type`) has no words to write, and
   // an empty compile would refuse it; the empty plan still runs the existence gate at apply.
   const words = Object.keys(rest).length ? restoreNullWords(rest, where) : undefined;
-  const plan: EditPlan = words ? compileEditPlan(sublayer, words, where) : { node: sublayer, patch: {} };
-  if (words) preflightEditPlan(plan, gate, where, context);
-  if (!slotContent) return { path, delta: words, plan };
+  const plan: EditPlan = words ? compileEditPlan(sublayer, words, where) : emptyEditPlan(sublayer);
+  const realizeOnly = words ? preflightEditPlan(plan, gate, where, context).realizeOnly : NO_REALIZE_ONLY;
+  if (!slotContent) return { path, delta: words, plan, realizeOnly, context };
   // The content's roots are judged against the slot as THIS override will leave it (its own
   // layout words projected, the way a batch projects a parent's delta) — a percent under a hug
   // slot, or a fill-height text in its flow, refuses here with zero writes, not from the span.
@@ -462,7 +462,7 @@ function compileOverride(
     if (content.liveId === undefined) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
     assertBuiltInteriorLegal(content);
   }
-  return { path, delta: words, plan, slotContent };
+  return { path, delta: words, plan, slotContent, realizeOnly, context };
 }
 
 // The fill word, taken off the delta and judged against the one authority on what a slot is
@@ -510,22 +510,99 @@ function restoreNullWords(delta: OverrideDeltaInput, where: string): EditDelta {
   return out as EditDelta;
 }
 
-// The sealed apply for one instance's overrides, in edit's own stage order across the WHOLE set
-// (writes, then sizes, then positions — a size read while a sibling's writes are still landing is
-// a number about to move). The live sublayer is found by the composite id the path predicts —
-// re-acquired HERE, not trusted from the gate, because a swap or a variant write earlier in the
-// same span replaced the tree the paths named. `verb` is what the span reports as — a batch spells
-// its entry into it, so an override that fails names which entry's it was.
-//
-// THE ORDER a slot fill takes among those stages, decided here and nowhere else: 5a writes for
-// every sublayer first — a slot's own `layout`/`fill` words land before its content, so the
-// content attaches under the mode it will live in — then each slot's content replaced (a child
-// list change belongs after the writes and BEFORE the sizes: a hug slot must measure its new
-// content), then 5b sizes, then 5c positions. The content's own percents ride the
-// walk context's pending list, settled by the verb once the whole span has landed.
-function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: RenderCtx, verb: string): void {
+// An override's words land on a sublayer its instance locks, under that sublayer's own parent.
+function overrideSite(plan: EditPlan, context: InstanceContextFacts) {
+  const parent = plan.node.parent;
+  return {
+    instance: { ownWritesLockedBy: context.ownWritesLockedBy, isInstanceRoot: false },
+    parentMode: layoutModeOf(parent && "layoutMode" in parent ? (parent as { layoutMode?: string }) : undefined),
+    onPage: false,
+  };
+}
+
+/** Every override's realize-only words, as checks against the sublayer each was compiled on. */
+export function overrideRealizeOnlyChecks(overrides: readonly OverridePlan[], gate: GateResources, subject: string): RealizeOnlyCheck[] {
+  return overrides.flatMap((o) => realizeOnlyChecksOf(o.plan, o.realizeOnly, gate, overrideSite(o.plan, o.context), subject, o.context));
+}
+
+/**
+ * `checks` on an instance root, minus its direction when the delta retargets it: the gate compared
+ * that word to the incoming component's already, and the retarget is what makes it hold.
+ */
+export function withoutRetargetHeldChecks(checks: readonly RealizeOnlyCheck[], plan: InstanceEditPlan | undefined): RealizeOnlyCheck[] {
+  return plan?.retargets ? checks.filter((check) => check.rule !== "instance.root-layout-mode") : [...checks];
+}
+
+/**
+ * What an instance delta does to the box its override sublayers measure against: the root's own size
+ * words, and a retarget's change of size. Projected overrides measure against the incoming
+ * component's definition, so the writes are named on it.
+ */
+export function instanceGeometryWrites(node: SceneNode, rootPatch: WriteProps, plan: InstanceEditPlan): GeometryEffect[] {
+  if (!plan.retargets) return geometryWritesOf(node, rootPatch);
+  const component = plan.becomes;
+  const writes = geometryWritesOf(component, rootPatch);
+  if (Math.abs(node.width - component.width) > 0.01) writes.push({ node: component, aspect: "size-h" });
+  if (Math.abs(node.height - component.height) > 0.01) writes.push({ node: component, aspect: "size-v" });
+  return writes;
+}
+
+/** One phase of one override path's writes, as the call's scheduler orders it. */
+export interface OverrideOperation extends EditOperation {
+  readonly override: OverridePlan;
+}
+
+/** What an instance's override operations inherit and wait on, beyond their own sublayers. */
+export interface OverrideOperationContext {
+  /** The instance's entry in the call. Its retarget, which replaces the tree the paths name, lands first. */
+  readonly entry: number;
+  /** How a cycle refusal tags the instance's words (`[2]`, a tree path). */
+  readonly tag: string;
+  /** The component the instance shows once the call's own retarget lands. */
+  readonly becomes: { readonly id: string };
+  readonly mains: InstanceMains;
+  /** The operation that puts the instance where it lands, when another entry's does (a live tree's child). */
+  readonly attachedBy?: OperationRef;
+  /** The words the paths owe, where the gate schedules before recording them. */
+  readonly obligations?: readonly Obligation[];
+}
+
+/**
+ * Every override's writes as operations, one per phase per path, in the order a path lands them:
+ * edit's own phases on the sublayer, and a slot's content between the constraints and the sizes (a
+ * hug slot must measure its new content). A path compiled against the definition (a create, a
+ * retarget) has no live sublayer yet, so it names no geometry and keeps only the phase order.
+ */
+export function overrideOperationsOf(instance: SceneNode, overrides: readonly OverridePlan[], at: OverrideOperationContext): OverrideOperation[] {
+  const defines = definitionsEditedAt(instance);
+  return overrides.flatMap((override) => {
+    const layer = liveSublayerId(instance.id, override.path);
+    const live = override.context.basis === "live";
+    const sublayer = override.plan.node;
+    const inherits = definitionsInheritedBy(layer, sublayer.type === "INSTANCE", at.mains).add(at.becomes.id);
+    const unwritten = new Set(override.realizeOnly.keys());
+    const phases: EditOperationPhase[] = [...EDIT_PLAN_PHASES];
+    if (override.slotContent) phases.splice(phases.indexOf("percent-size"), 0, "slot-content");
+    return phases.map((phase) => ({
+      entry: at.entry, phase, layer, defines, inherits, override, waitsFor: [{ entry: at.entry, layer: instance.id, phase: "retarget" as const }, ...(at.attachedBy ? [at.attachedBy] : [])],
+      writes: !live ? [] : phase === "slot-content" ? [{ node: sublayer, aspect: "flow" as const }] : geometryWritesAt(sublayer, override.plan.patch, phase, unwritten),
+      reads: live ? writePointGeometryReads(sublayer, phase, at.obligations) : [],
+      label: at.tag + " overrides[" + JSON.stringify(override.path) + "] (" + phase + ")",
+    }));
+  });
+}
+
+/**
+ * The sealed apply of `instance`'s override operations, one at a time in the order the call's
+ * schedule gives. A path's live sublayer is found by the composite id the path predicts, the first
+ * time one of its operations runs: re-acquired then, not trusted from the gate, because a swap or a
+ * variant write earlier in the same span replaced the tree the paths named. `verb` is what the span
+ * reports as — a batch spells its entry into it, so an override that fails names which entry's it was.
+ */
+export function beginOverrideApply(instance: any, ctx: RenderCtx, verb: string): (operation: OverrideOperation) => void {
   const subject = "flcm." + verb;
-  const live = overrides.map(({ path, delta, slotContent }) => {
+  const acquired = new Map<OverridePlan, { editPlan: AuthorizedEditPlan; fail: EditPlanFailure }>();
+  const acquire = ({ path, delta, slotContent }: OverridePlan) => {
     const where = subject + ".overrides[" + JSON.stringify(path) + "]";
     const liveId = liveSublayerId(instance.id, path);
     const node = instance.findOne((n: any) => n.id === liveId);
@@ -542,16 +619,29 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
     // Compiled HERE, against the sublayer the span actually holds — a create's fresh copy, or the
     // tree a retarget just produced — so the words land on what is there, not on the definition
     // node the gate could see. For a non-retargeting edit this is the same node the gate compiled
-    // against a moment ago, and the same answer unless this span's own setProperties moved a
-    // bound text's fonts, in which case this answer is the right one. Every refusal from here is
-    // a rollback, which is the cost of a fact that does not exist before the seal.
-    const editPlan = delta ? gateEditPlan(node, delta, ctx, where) : authorizeEditPlan({ node, patch: {} }, ctx, where);
-    return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan, ctx.span) };
-  });
-  for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, ctx);
-  for (const { editPlan, slotContent, fail } of live) if (slotContent) placeSlotContent(fail, editPlan.node, slotContent, ctx, subject);
-  for (const { editPlan, fail } of live) settleEditPlanSizes(fail, editPlan);
-  for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan, ctx.span);
+    // against, and the same answer unless this span's own setProperties moved a bound text's
+    // fonts, in which case this answer is the right one. Every refusal from here is a rollback,
+    // which is the cost of a fact that does not exist before the seal. A realize-only word that
+    // doesn't hold is the finalizer's to name, once every write in the call has landed.
+    const editPlan = delta ? gateEditPlan(node, delta, ctx, where) : authorizeEditPlan(emptyEditPlan(node), ctx, where);
+    trackEditPlanSizing(editPlan);
+    return { editPlan, fail: openEditPlanApply(verb, editPlan, ctx.span) };
+  };
+  return (operation) => {
+    const { override } = operation;
+    let landing = acquired.get(override);
+    if (!landing) acquired.set(override, (landing = acquire(override)));
+    if (operation.phase === "slot-content") placeSlotContent(landing.fail, landing.editPlan.node, override.slotContent!, ctx, subject);
+    else applyEditPlanPhase(landing.fail, landing.editPlan, operation.phase as EditPlanPhase, ctx);
+  };
+}
+
+// A created instance's overrides: their own schedule, since nothing else in the walk writes the sublayers.
+function applyOverridePlans(instance: any, overrides: OverridePlan[], component: { id: string }, ctx: RenderCtx, verb: string): void {
+  if (!overrides.length) return;
+  const operations = overrideOperationsOf(instance, overrides, { entry: 0, tag: "flcm." + verb, becomes: component, mains: new Map() });
+  const land = beginOverrideApply(instance, ctx, verb);
+  for (const operation of scheduleEditOperations(operations, "flcm." + verb)) land(operation);
 }
 
 // Replace a live SLOT's content: every current child goes — the definition's placeholder sublayers
@@ -574,7 +664,7 @@ function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonl
  * One instance delta's component half, resolved. `swapTo` is the component to `swapComponent` to
  * (null when this delta leaves the instance pointing where it points, including when it names the
  * component it already has); `properties` are ready for setProperties; `overrides` are compiled
- * per sublayer. The verb applies them AROUND the node-local stages — see edit-apply.ts.
+ * per sublayer. The call's schedule lands them around the node-local phases — see edit-apply.ts.
  *
  * `retargets` is the fact the rest of the pipeline turns on: this delta REPLACES the sublayer tree
  * (a swap, or a variant change Figma re-points through). It decides which sublayers the override
@@ -688,13 +778,18 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
 // components passes. There is nothing to override on one, and its property writes are gated
 // against the component the delta names.
 function assertInstanceStillOf(instance: any, current: any, subject: string): void {
-  const live: string[] = instance.children.map((c: any) => c.id);
-  const expected: string[] = current.children.map((c: any) => liveSublayerId(instance.id, componentPath(c.id)));
-  if (live.length === expected.length && live.every((id, i) => id === expected[i])) return;
+  if (instanceStillShows(instance, current)) return;
   throw new Error(
     subject + ": the main component of " + describeNodeIdentity(instance) + " changed while this call was resolving targets and loading resources (it was " +
       describeNodeIdentity(current) + "), so the delta was planned against a component the instance no longer has. Nothing was applied — re-read the instance and re-run the call.",
   );
+}
+
+/** Whether `instance`'s sublayers are still `component`'s, prefixed: the sync proof of a main component prepare resolved. */
+export function instanceStillShows(instance: any, component: any): boolean {
+  const live: string[] = instance.children.map((c: any) => c.id);
+  const expected: string[] = component.children.map((c: any) => liveSublayerId(instance.id, componentPath(c.id)));
+  return live.length === expected.length && live.every((id, i) => id === expected[i]);
 }
 
 // An edit's override paths, resolved against the tree the delta leaves alone.
@@ -734,19 +829,18 @@ export function applyInstanceRetarget(fail: EditPlanFailure, node: SceneNode, pl
   const instance: any = node;
   try {
     if (plan.swapTo) instance.swapComponent(plan.swapTo);
-    if (plan.exposed !== undefined) instance.isExposedInstance = plan.exposed;
-    if (Object.keys(plan.properties).length) instance.setProperties(plan.properties);
+    // A value the instance already shows is not set again, since setting it pins it as an override
+    // where it was inherited.
+    const names = Object.keys(plan.properties);
+    const at = realizeAtWritePoint(node, [
+      ...(plan.exposed === undefined ? [] : ["word:exposed" as const]), ...names.map((name) => `word:property:${name}` as const),
+    ]);
+    if (plan.exposed !== undefined && at.writes.has("word:exposed")) instance.isExposedInstance = plan.exposed;
+    const properties = Object.fromEntries(names.filter((name) => at.writes.has(`word:property:${name}`)).map((name) => [name, plan.properties[name]]));
+    if (Object.keys(properties).length) instance.setProperties(properties);
+    at.landed();
   } catch (cause) {
     throw fail(cause);
   }
 }
 
-/**
- * The second half: every override, on sublayers re-acquired after the retarget. `verb` is what the
- * span reports as, the same spelling the entry's own failure builder was opened with. `ctx` is the
- * verb's build walk (bridge.beginRenderWalk) — shared across a batch's entries.
- */
-export function applyInstanceOverrides(node: SceneNode, plan: InstanceEditPlan, ctx: RenderCtx, verb: string): void {
-  if (!plan.overrides.length) return;
-  applyOverridePlans(node as any, plan.overrides, ctx, verb);
-}

@@ -6,7 +6,7 @@
 // the REAL preamble fragments (plugin/src/preamble/) in pure Node, no plugin and no WS port.
 //
 // It models: node creation, auto-parenting, auto-layout sizing (hug/fixed/fill with the cross-axis
-// rule), fills/strokes/opacity, fontName/loadFontAsync/figma.mixed, getNodeByIdAsync, pluginData,
+// rule, a wrapping row's line breaks, an aspect lock carried through fill and constraint resizes), fills/strokes/opacity, fontName/loadFontAsync/figma.mixed, getNodeByIdAsync, pluginData,
 // createComponentFromNode -> createInstance with COMPOSITE-ID sublayers (I<inst>;<mainChild>), and
 // findAll/findAllWithCriteria. It deliberately does NOT model real font metrics or rendering — text
 // size is a crude char-count estimate — so pixel-exact layout still needs a live check (see README).
@@ -17,6 +17,7 @@ const nextId = (p) => (p || "") + ++__id + ":" + __id;
 const registry = new Map(); // id -> node, for getNodeByIdAsync / composite-id resolution
 const MIXED = Symbol("figma.mixed");
 const __measuring = new Set(); // (node,dim) keys in-flight, to break the fill<->hug sizing recursion
+const __settling = new Set(); // frames mid-reflow, so a reflow reading its own children's boxes doesn't re-enter it
 
 const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p);
 
@@ -360,23 +361,32 @@ class Node {
     const r = (this.rotation * Math.PI) / 180;
     return [[Math.cos(r), Math.sin(r), this.x], [-Math.sin(r), Math.cos(r), this.y]];
   }
-  get x() { return this._gridOffset("w"); }
+  get x() { this.parent?._settleConstraintReflow?.(); return this._gridOffset("w"); }
   set x(v) { this._x = v; }
-  get y() { return this._gridOffset("h"); }
+  get y() { this.parent?._settleConstraintReflow?.(); return this._gridOffset("h"); }
   set y(v) { this._y = v; }
+  // Live Figma lays a parent out on every write, so a box change made before a constraint is
+  // written reflows under the constraint the child held then: settle it before the new one lands.
+  get constraints() { return this._constraints; }
+  set constraints(v) { this.parent?._settleConstraintReflow?.(); this._constraints = v; }
 
   _appendChild(child) {
     assertChildListOpen(this, true, "appendChild");
     if (child.parent) assertChildListOpen(child, false, "appendChild");
+    this._settleConstraintReflow();
+    child.parent?._settleConstraintReflow?.();
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
     const entering = child.parent !== this;
     child.parent = this;
     if (entering) this._autoPlaceGrid(child);
     this.children.push(child);
+    this._recordConstraintBasis();
   }
   _insertChild(index, child) {
     assertChildListOpen(this, true, "insertChild");
     if (child.parent) assertChildListOpen(child, false, "insertChild");
+    this._settleConstraintReflow();
+    child.parent?._settleConstraintReflow?.();
     // Live Figma interprets same-parent indices against the pre-removal child array.
     // Grid ordering only moves toward earlier indices, where removal cannot change the target.
     const had = child.parent === this ? this.children.indexOf(child) : -1;
@@ -386,6 +396,7 @@ class Node {
     if (entering) this._autoPlaceGrid(child);
     const idx = had !== -1 && had < index ? index - 1 : index;
     this.children.splice(idx, 0, child);
+    this._recordConstraintBasis();
   }
   // Duplicate this node and its subtree, parented under the current page — [verified,
   // plugin-typings 1.133: "Duplicates the node. By default, the duplicate will be parented under
@@ -399,12 +410,25 @@ class Node {
     return copy;
   }
   resize(w, h) {
+    if (this.children) this._settleConstraintReflow();
     const before = this.children ? { w: this.width, h: this.height } : null;
     this._fixedW = this._bounded(w, "Width");
     this._fixedH = this._bounded(h, "Height");
     if (before) this._reflowConstrainedChildren(before);
     // Like the live API: resize ignores a lock and re-locks at the new ratio.
     if (this.targetAspectRatio) this.targetAspectRatio = { x: this.width, y: this.height };
+  }
+  // A parent's reflow resizing a STRETCH or SCALE child: the child's own constrained children follow
+  // in turn, so a resize cascades down every level that follows its parent's box.
+  // A locked layer keeps its proportions through it: the axis the constraint left alone follows.
+  _reflowResize(w, h) {
+    const lock = this.targetAspectRatio;
+    if (lock && w != null && h == null) h = w * lock.y / lock.x;
+    else if (lock && h != null && w == null) w = h * lock.x / lock.y;
+    const before = this.children ? { w: this._sizeOf("w"), h: this._sizeOf("h") } : null;
+    if (w != null && this._fixedW != null) this._fixedW = Math.max(w, 0.01);
+    if (h != null && this._fixedH != null) this._fixedH = Math.max(h, 0.01);
+    if (before) this._reflowConstrainedChildren(before);
   }
   // The live lock records the box's current proportions; an auto-resizing text refuses it.
   lockAspectRatio() {
@@ -417,19 +441,48 @@ class Node {
   // its margins — so it grows by the parent's delta on that axis. That is what makes the order of
   // "set constraints" and "size the parent" load-bearing at create time: a STRETCH mark written
   // while the parent is still at its provisional size inflates the child by the difference. A
-  // free-form MAX child keeps its far margin and a CENTER one its offset from the middle, so they
-  // move by the delta (or half of it). SCALE stays inert: nothing here reads a rescale.
+  // MAX child keeps its far margin and a CENTER one its offset from the middle, so they move by the
+  // delta (or half of it); a SCALE child keeps its proportions, size and offset alike. Only a
+  // free-form parent's children and an auto-layout parent's absolute ones reflow: an in-flow child
+  // follows fill/hug instead.
   _reflowConstrainedChildren(before) {
-    const dw = this.width - before.w, dh = this.height - before.h;
+    const w = this.width, h = this.height;
+    // Before any child moves: a child's own reflow reads its geometry, which settles this frame.
+    this._constraintBasis = { w, h };
+    const dw = w - before.w, dh = h - before.h;
     const free = !this.layoutMode || this.layoutMode === "NONE";
     const shift = (pin, delta) => (pin === "MAX" ? delta : pin === "CENTER" ? delta / 2 : 0);
+    const rw = before.w ? w / before.w : 1, rh = before.h ? h / before.h : 1;
     for (const child of this.children) {
-      const pinned = child.constraints || {};
-      if (dw && pinned.horizontal === "STRETCH" && child._fixedW != null) child._fixedW = Math.max(child._fixedW + dw, 0.01);
-      if (dh && pinned.vertical === "STRETCH" && child._fixedH != null) child._fixedH = Math.max(child._fixedH + dh, 0.01);
       if (!free && child.layoutPositioning !== "ABSOLUTE") continue;
-      if (dw) child._x = (child._x ?? 0) + shift(pinned.horizontal, dw);
-      if (dh) child._y = (child._y ?? 0) + shift(pinned.vertical, dh);
+      const pinned = child.constraints || {};
+      const size = (pin, delta, ratio, fixed) => (fixed == null ? null : pin === "STRETCH" ? fixed + delta : pin === "SCALE" ? fixed * ratio : null);
+      const nw = dw ? size(pinned.horizontal, dw, rw, child._fixedW) : null;
+      const nh = dh ? size(pinned.vertical, dh, rh, child._fixedH) : null;
+      if (nw != null || nh != null) child._reflowResize(nw, nh);
+      if (dw) child._x = pinned.horizontal === "SCALE" ? (child._x ?? 0) * rw : (child._x ?? 0) + shift(pinned.horizontal, dw);
+      if (dh) child._y = pinned.vertical === "SCALE" ? (child._y ?? 0) * rh : (child._y ?? 0) + shift(pinned.vertical, dh);
+    }
+  }
+  // The box this frame's constrained children were last laid out against. Live Figma reflows them
+  // whenever the box changes, however it changed: a HUG row a child grew from 100 to 200 moved its
+  // MAX-constrained absolute child from x 80 to 180 [verified live, fig-144]. resize() reflows at
+  // once; any other change (a child's resize, padding, a fill parent's resize) reflows here, the
+  // first time anything reads a child's geometry, against the box as it now measures.
+  _recordConstraintBasis() {
+    if (this.children) this._constraintBasis = { w: this._sizeOf("w"), h: this._sizeOf("h") };
+  }
+  _settleConstraintReflow() {
+    if (!this.children || this.type === "PAGE" || __settling.has(this)) return;
+    __settling.add(this);
+    try {
+      this.parent?._settleConstraintReflow?.();
+      const before = this._constraintBasis;
+      const w = this._sizeOf("w"), h = this._sizeOf("h");
+      if (!before) this._constraintBasis = { w, h };
+      else if (Math.abs(w - before.w) > 1e-9 || Math.abs(h - before.h) > 1e-9) this._reflowConstrainedChildren(before);
+    } finally {
+      __settling.delete(this);
     }
   }
   _bounded(value, axis) {
@@ -790,8 +843,8 @@ class Node {
   }
 
   // --- sizing: width/height as getters so reads during a run reflect current state ---
-  get width() { return this._bounded(this._sizeOf("w"), "Width"); }
-  get height() { return this._bounded(this._sizeOf("h"), "Height"); }
+  get width() { this.parent?._settleConstraintReflow?.(); return this._bounded(this._sizeOf("w"), "Width"); }
+  get height() { this.parent?._settleConstraintReflow?.(); return this._bounded(this._sizeOf("h"), "Height"); }
 
   // The sizing resolver is mutually recursive (child fills against parent, parent hugs from children),
   // and a w:'fill' text inside a w:'fill' row can drive it in a cycle. Guard re-entry per (node,dim):
@@ -809,6 +862,10 @@ class Node {
     if (this.parent && this.parent._isAuto) {
       const f = this.parent._fillSizeFor(this, dim);
       if (f != null) return Math.max(f, 0.01);
+      // A locked layer filling the other axis keeps its proportions on this one (targetAspectRatio).
+      const lock = this.targetAspectRatio;
+      const across = lock ? this.parent._fillSizeFor(this, dim === "w" ? "h" : "w") : null;
+      if (across != null) return Math.max(dim === "h" ? across * lock.y / lock.x : across * lock.x / lock.y, 0.01);
     }
     if (this.layoutMode === "GRID") {
       if (this._layoutSizing(dim) === "HUG") return this._gridTracks(dim).reduce((a, b) => a + b, 0) + (dim === "w" ? this._padW() + this.gridColumnGap * (this.gridColumnCount - 1) : this._padH() + this.gridRowGap * (this.gridRowCount - 1));
@@ -841,6 +898,25 @@ class Node {
       for (const k of flow) sum += k._sizeOf(dim);
       sum += Math.max(0, flow.length - 1) * (this.itemSpacing || 0);
       return sum + pad;
+    }
+    // A wrapping row breaks its children into lines at its own width; it hugs the lines' total height.
+    if (isRow && this._layoutWrap === "WRAP") {
+      const room = this._sizeOf("w") - this._padW();
+      const lines = [];
+      let used = 0;
+      for (const k of flow) {
+        const w = k._sizeOf("w");
+        const line = lines[lines.length - 1];
+        if (line && used + (this.itemSpacing || 0) + w <= room + 1e-9) {
+          used += (this.itemSpacing || 0) + w;
+          line.push(k);
+        } else {
+          lines.push([k]);
+          used = w;
+        }
+      }
+      const tallest = lines.map((line) => Math.max(...line.map((k) => k._sizeOf("h"))));
+      return tallest.reduce((a, b) => a + b, 0) + Math.max(0, lines.length - 1) * (this.counterAxisSpacing || 0) + pad;
     }
     let mx = 0;
     for (const k of flow) mx = Math.max(mx, k._sizeOf(dim));
@@ -1203,18 +1279,22 @@ function writeBoundProperty(instance, full, def, value) {
 // stand-in for Figma's real per-field override bit — enough for the fact under test (a component
 // edit reaches its instances) without pretending to model override resolution.
 //
-// x/y are deliberately absent: an instance's position is its own, never the component's. So is
-// `componentPropertyReferences`, which is re-pointed explicitly by the definition-editing calls above.
+// x/y mirror only below the root: an instance's own position is its own, but a sublayer sits where
+// its definition layer does (an instance can't move it). `componentPropertyReferences` never
+// mirrors; the definition-editing calls above re-point it explicitly.
 const MIRRORED_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "_layoutGrow", "_layoutAlign", "layoutPositioning", "_strokeWeights", "strokeAlign",
   "_corners", "opacity", "visible", "rotation", "_characters", "fontSize", "textAutoResize",
   "fills", "strokes", "effects", "clipsContent", "_fixedW", "_fixedH"];
 
+const MIRRORED_SUBLAYER_FIELDS = ["_x", "_y"];
+
 function trackInstanceNode(mainNode, instanceNode) {
   if (!mainNode._mirrors) {
     mainNode._mirrors = [];
     for (const field of MIRRORED_FIELDS) installFieldMirror(mainNode, field);
+    if (mainNode.type !== "COMPONENT") for (const field of MIRRORED_SUBLAYER_FIELDS) installFieldMirror(mainNode, field);
   }
   mainNode._mirrors.push(instanceNode);
 }

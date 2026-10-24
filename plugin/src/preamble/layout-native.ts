@@ -13,7 +13,8 @@ interface LayoutBehavior {
   rawHugs(node: any, axis: Axis): boolean;
   container(node: any, layout: WriteLayout, previous: LayoutMode, tokens: ResolvedTokens | undefined): void;
   ownSize(node: any, sizing: NonNullable<WriteLayout["sizing"]>): void;
-  fill(parent: any, child: any, context: ChildLayout, crossStretch: boolean): void;
+  /** Returns the axis a container's stretch filled, which that container word owes. */
+  fill(parent: any, child: any, context: ChildLayout, crossStretch: boolean): Axis | undefined;
   clearFill(parent: any, child: any, layout: WriteLayout): void;
   clearChildren(parent: any): void;
   place(parent: any, child: any, context: ChildLayout): void;
@@ -64,7 +65,9 @@ function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavi
     fill(_parent, child, context, crossStretch) {
       const s = context.layout.sizing || {};
       for (const axis of [mode.main, mode.cross]) if (s[axis] === "fill") stretch(child, axis);
-      if (crossStretch && s[mode.cross] !== "fixed" && s[mode.cross] !== "fill") stretch(child, mode.cross);
+      if (!crossStretch || s[mode.cross] === "fixed" || s[mode.cross] === "fill") return undefined;
+      stretch(child, mode.cross);
+      return mode.cross;
     },
     clearFill(_parent, child, layout) {
       const s = layout.sizing || {};
@@ -154,6 +157,7 @@ const GRID: LayoutBehavior = {
   ownSize: gridOwnSize,
   fill(_parent, child, context) {
     for (const axis of ["horizontal", "vertical"] as const) if (context.layout.sizing?.[axis] === "fill") fillAxis(child, axis);
+    return undefined;
   },
   clearFill(_parent, child, layout) { gridOwnSize(child, layout.sizing || {}); },
   clearChildren(parent) {
@@ -176,7 +180,7 @@ const GRID: LayoutBehavior = {
 };
 const FREE: LayoutBehavior = {
   rawHugs: () => false,
-  container: noWrite, ownSize: noWrite, fill: noWrite, clearFill: noWrite, place: noWrite,
+  container: noWrite, ownSize: noWrite, fill: () => undefined, clearFill: noWrite, place: noWrite,
   clearChildren(parent) {
     // Parked flow marks cannot become active merely because a free-form parent gains a direction.
     for (const child of parent.children || []) { child.layoutGrow = 0; if (child.layoutAlign === "STRETCH") child.layoutAlign = "INHERIT"; }
