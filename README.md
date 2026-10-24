@@ -123,6 +123,7 @@ The server sends usage telemetry to PostHog: one event per tool call, with its d
 
 - **Reads are anonymous.** Read events carry a per-process random ID, never your identity, file keys, node IDs, or design content.
 - **Writes name the Figma user.** Events from write-path tools (`figma_execute_code`, `get_screenshot`) carry the Figma user ID of the plugin owner, the Figma user signed in to the plugin that ran the code. Writes are metered per user, so we need it to tell usage apart. Neither authored code nor returned content is ever sent.
+- **Agents may say what they're doing.** While telemetry is on, each tool takes an optional `userGoal`: one line from the agent on what the user is trying to get done. It is sent with the call's event, scrubbed of credentials and Figma file and node IDs, so we can see what Framelink is used for. For `figma_execute_code` and `get_screenshot`, the `intent` the plugin panel shows is sent instead. With telemetry off, the param isn't offered.
 - **Failures are sent as codes.** Expected failures, such as a 403, a rate limit, a rejected argument, or a denied grant, go out as a category, status and field name, never as the error text.
 - **Unexpected errors go to error tracking.** The error message and stack frames are scrubbed of credentials, your home directory, and Figma file and node IDs. Response bodies are replaced with a fingerprint of who answered.
 

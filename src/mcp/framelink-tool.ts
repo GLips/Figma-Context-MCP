@@ -229,8 +229,10 @@ function statedIntent(value: unknown): string | undefined {
  */
 function withUserGoalParam(input: ToolInput): ToolInput {
   const isV4 = (schema: object) => "_zod" in schema;
-  const v4Field = () => z.string().optional().describe(USER_GOAL_DESCRIPTION);
-  const v3Field = () => z3.string().optional().describe(USER_GOAL_DESCRIPTION);
+  // `.catch`: an analytics-only param must never fail the user's real call, so a goal of the wrong
+  // type is dropped instead of rejected. The advertised schema still says string.
+  const v4Field = () => z.string().optional().catch(undefined).describe(USER_GOAL_DESCRIPTION);
+  const v3Field = () => z3.string().optional().catch(undefined).describe(USER_GOAL_DESCRIPTION);
   if (input instanceof z.ZodObject) return input.extend({ [USER_GOAL_PARAM]: v4Field() });
   if (input instanceof z3.ZodObject) return input.extend({ [USER_GOAL_PARAM]: v3Field() });
   const fields = Object.values(input as Record<string, object>);

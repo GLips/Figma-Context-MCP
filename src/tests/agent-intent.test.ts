@@ -82,7 +82,10 @@ describe("agent intent", () => {
       userGoal: "  Build the pricing page from figma.com/design/abc123XYZ/Pricing  ",
     });
     await call("get_figma_data", { fileKey: "abc123" });
+    // A goal of the wrong type is dropped, never a reason to refuse the call.
+    const malformed = await call("get_figma_data", { fileKey: "abc123", userGoal: 42 });
     await close();
+    expect(JSON.stringify(malformed.content)).not.toMatch(/Invalid userGoal/);
 
     const [intentEvent, ...more] = sent("$mcp_tool_call");
     expect(more).toEqual([]);
@@ -96,7 +99,8 @@ describe("agent intent", () => {
     expect(intent).not.toContain("abc123XYZ");
 
     const toolCalls = sent("tool_called");
-    expect(toolCalls.map(({ properties }) => properties.has_intent)).toEqual([true, false]);
+    expect(toolCalls.map(({ properties }) => properties.has_intent)).toEqual([true, false, false]);
+    expect(toolCalls[2].properties.error_phase).not.toBe("validate");
     expect(JSON.stringify(toolCalls)).not.toContain("pricing");
   });
 });

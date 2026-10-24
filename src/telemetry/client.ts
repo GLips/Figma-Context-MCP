@@ -113,7 +113,12 @@ function truncateForTelemetry(message: string): string {
  * throwing would mask the tool's real return value (or its original error). Swallow silently; no
  * logging because telemetry is supposed to be invisible.
  */
-export function captureEvent(event: string, properties: Record<string, unknown>): void {
+export function captureEvent(
+  event: string,
+  properties: Record<string, unknown>,
+  /** Per-property length caps, applied after redaction so a secret straddling the cut can't survive. */
+  maxLengths: Readonly<Record<string, number>> = {},
+): void {
   if (state.kind === "off") return;
   const { client, sessionId, commonProps, redactionSecrets } = state;
 
@@ -123,7 +128,9 @@ export function captureEvent(event: string, properties: Record<string, unknown>)
   const processed: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(properties))
     processed[key] =
-      typeof value === "string" ? redactTelemetryString(value, redactionSecrets) : value;
+      typeof value === "string"
+        ? redactTelemetryString(value, redactionSecrets).slice(0, maxLengths[key])
+        : value;
 
   try {
     client.capture({

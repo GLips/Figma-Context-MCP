@@ -68,16 +68,20 @@ function captureMcpIntent(
   isError: boolean,
   context: ToolCallContext,
 ): void {
-  captureEvent("$mcp_tool_call", {
-    $mcp_tool_name: tool,
+  captureEvent(
+    "$mcp_tool_call",
+    {
+      $mcp_tool_name: tool,
+      $mcp_intent: intent,
+      $mcp_intent_source: "context_parameter",
+      $mcp_is_error: isError,
+      $mcp_duration_ms: durationMs,
+      $mcp_client_name: context.clientInfo?.name,
+      $mcp_client_version: context.clientInfo?.version,
+    },
     // Clipped where PostHog's digest clips, so a rambling agent can't pay for an oversized event.
-    $mcp_intent: intent.slice(0, MAX_INTENT_LENGTH),
-    $mcp_intent_source: "context_parameter",
-    $mcp_is_error: isError,
-    $mcp_duration_ms: durationMs,
-    $mcp_client_name: context.clientInfo?.name,
-    $mcp_client_version: context.clientInfo?.version,
-  });
+    { $mcp_intent: MAX_INTENT_LENGTH },
+  );
 }
 
 /** For a caller with nothing to add to the read's own event: the `fetch` command. */
