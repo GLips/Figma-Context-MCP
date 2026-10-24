@@ -30,7 +30,6 @@ export function registerFeedbackWatchTool(
       description: watchFigmaFeedbackTool.description,
       inputSchema: watchFigmaFeedbackTool.parameters,
       unknownParams: "fail-loud",
-      agentIntent: "user-goal",
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       handler: (
         params: WatchFigmaFeedbackParams,

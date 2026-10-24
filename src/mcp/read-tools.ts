@@ -95,7 +95,6 @@ export function registerReadTools(
       description: getFigmaDataTool.description,
       inputSchema: getFigmaDataTool.parametersSchema,
       unknownParams: "strip",
-      agentIntent: "user-goal",
       annotations: READ_ANNOTATIONS,
       handler: (
         params: GetFigmaDataParams,
@@ -122,7 +121,6 @@ export function registerReadTools(
       description: getFigmaCommentsTool.description,
       inputSchema: getFigmaCommentsTool.parameters,
       unknownParams: "strip",
-      agentIntent: "user-goal",
       annotations: READ_ANNOTATIONS,
       handler: (
         params: GetFigmaCommentsParams,
@@ -147,7 +145,6 @@ export function registerReadTools(
         description: downloadFigmaImagesTool.getDescription(images.imageDir),
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         unknownParams: "strip",
-        agentIntent: "user-goal",
         annotations: DISK_DOWNLOAD_ANNOTATIONS,
         handler: (
           params: DownloadImagesParams,
@@ -174,7 +171,6 @@ export function registerReadTools(
         description: downloadFigmaImagesTool.refusedDescription,
         inputSchema: {},
         unknownParams: "strip",
-        agentIntent: "user-goal",
         annotations: READ_ANNOTATIONS,
         handler: async (_params: object, _call: FramelinkToolCall<DownloadImagesOutcome>) =>
           downloadFigmaImagesTool.refusedReply(),
@@ -190,7 +186,6 @@ export function registerReadTools(
         description: downloadFigmaImageDestinationTool.getDescription(images.retentionDays),
         inputSchema: downloadFigmaImageDestinationTool.parametersSchema,
         unknownParams: "strip",
-        agentIntent: "user-goal",
         // Exports into the host's own storage: nothing of the user's changes.
         annotations: READ_ANNOTATIONS,
         handler: (

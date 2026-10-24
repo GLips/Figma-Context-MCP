@@ -50,7 +50,11 @@ async function connectedServer() {
   };
   const server = createServer(
     { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd(), plugin: runtime },
-    { transport: "stdio", extensions: [codeModeExtension(runtime, { codeMode: false })] },
+    {
+      transport: "stdio",
+      askUserGoal: true,
+      extensions: [codeModeExtension(runtime, { codeMode: false })],
+    },
   );
   const client = new Client({ name: "code-mode-telemetry-test", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
@@ -70,14 +74,18 @@ afterEach(() => vi.mocked(telemetry.captureToolCall).mockClear());
 describe("code-mode tool telemetry", () => {
   it("attributes an executed run to its Plugin Owner, without the code or its result", async () => {
     const { call, close } = await connectedServer();
-    await call("figma_execute_code", { intent: "Test run", code: "return 'secret authored code'" });
+    await call("figma_execute_code", {
+      intent: "Test run",
+      userGoal: "Build the pricing page",
+      code: "return 'secret authored code'",
+    });
     await close();
 
     const [event] = reported();
     expect(event).toMatchObject({
       tool: "figma_execute_code",
-      // The call intent the agent already writes for the panel; no separate userGoal is asked.
-      intent: "Test run",
+      // The user's goal, not the panel's per-step intent.
+      intent: "Build the pricing page",
       isError: false,
       properties: {
         figma_user_id: TEST_PLUGIN_OWNER.figmaUserId,

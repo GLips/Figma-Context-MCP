@@ -35,22 +35,12 @@ type ParamsOf<Input extends ToolInput> = Input extends ZodRawShapeCompat
     ? SchemaOutput<Input>
     : never;
 
-/**
- * Where a call's intent — the agent's own words for what the call is for — comes from. `user-goal`:
- * on a server that asks (`askAgentsForUserGoal`), the tool gains an optional `userGoal` param, read
- * and stripped here before the handler runs. `own-param`: the tool already takes a stated intent of
- * its own and reports it with `call.recordIntent`, so asking again would only cost the agent tokens.
- */
-export type AgentIntentSource = "user-goal" | "own-param";
-
 /** One call's handle on its own observation. */
 export interface FramelinkToolCall<Facts> {
   /** The tool-specific facts this call's observation carries; the last recorded wins. */
   record(facts: Facts): void;
   /** The arguments failed a check the schema can't express; the handler still answers the agent. */
   reject(rejection: ParamRejection): void;
-  /** An `own-param` tool's stated intent, once it has parsed one. */
-  recordIntent(intent: string): void;
 }
 
 /**
@@ -75,7 +65,6 @@ export interface FramelinkToolDef<Name extends string, Input extends ToolInput, 
   description: string;
   inputSchema: Input;
   unknownParams: Input extends z.ZodRawShape ? UnknownParamPolicy : "strip";
-  agentIntent: AgentIntentSource;
   annotations?: ToolAnnotations;
   handler: (
     params: ParamsOf<Input>,
@@ -95,13 +84,17 @@ const USER_GOAL_DESCRIPTION =
   '"Build the pricing page from this design". Sent with anonymous usage analytics to show what ' +
   "Framelink is used for; never include secrets or personal details.";
 
-// Servers whose `user-goal` tools advertise the param; see askAgentsForUserGoal.
+// Servers whose tools advertise the param; see askAgentsForUserGoal.
 const userGoalServers = new WeakSet<McpServer>();
 
 /**
- * Makes every `user-goal` tool registered on `server` from now on take an optional `userGoal`. A
- * composition asks only when something records the answer (telemetry on): otherwise the param is
- * tokens in every tool list for nothing. Must run before the tools are registered.
+ * Makes every tool registered on `server` from now on take an optional `userGoal`, read and stripped
+ * before the handler runs. A composition asks only when something records the answer (telemetry
+ * on): otherwise the param is tokens in every tool list for nothing. Must run before the tools are
+ * registered.
+ *
+ * Not the write tools' `intent`: that names this one step for the human watching the plugin panel;
+ * the goal is the user's whole aim, which is what intent analytics groups by.
  */
 export function askAgentsForUserGoal(server: McpServer): void {
   userGoalServers.add(server);
@@ -130,12 +123,12 @@ export function registerFramelinkTool<Name extends string, Input extends ToolInp
     report({ tool: def.name, kind: "rejected", durationMs: 0, rejection }),
   );
 
-  const asksUserGoal = def.agentIntent === "user-goal" && userGoalServers.has(server);
+  const asksUserGoal = userGoalServers.has(server);
 
   const run = async (args: Record<string, unknown>, extra: ToolExtra): Promise<CallToolResult> => {
     const startedAt = Date.now();
     const { [USER_GOAL_PARAM]: userGoal, ...params } = args;
-    let intent = asksUserGoal ? statedIntent(userGoal) : undefined;
+    const intent = asksUserGoal ? statedIntent(userGoal) : undefined;
     let facts: Facts | undefined;
     let rejection: ParamRejection | undefined;
     const call: FramelinkToolCall<Facts> = {
@@ -144,9 +137,6 @@ export function registerFramelinkTool<Name extends string, Input extends ToolInp
       },
       reject: (rejected) => {
         rejection = rejected;
-      },
-      recordIntent: (stated) => {
-        intent = statedIntent(stated);
       },
     };
     let result: CallToolResult;

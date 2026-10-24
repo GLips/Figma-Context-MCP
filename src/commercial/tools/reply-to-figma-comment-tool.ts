@@ -109,7 +109,6 @@ export function commentReplyExtension(): ServerExtension {
           description: REPLY_TO_FIGMA_COMMENT_DESCRIPTION,
           inputSchema: parameters,
           unknownParams: "fail-loud",
-          agentIntent: "user-goal",
           // Adds a reply and sets a reaction; never edits or deletes a comment. Posting twice posts twice.
           annotations: {
             readOnlyHint: false,
