@@ -43,6 +43,7 @@ import { settleApplySpan } from "./bridge.js";
 import { recordCommittedVerb } from "./verb-error.js";
 import { beginObligationLedger, retargetObligationNode } from "./obligation.js";
 import { finalizeMutatingCall, type VerifiedStyleLinks } from "./call-finalizer.js";
+import { describeNodeIdentity } from "./identity.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -216,12 +217,21 @@ export function retargetReplacedNode(span: ApplySpan, from: any, to: any): void 
   warnings.retargetNode(from.id, to.id, verbWarningCheckpoint);
 }
 
-async function linkVerifiedStyles(links: VerifiedStyleLinks): Promise<void> {
-  for (const { node, slot, styleId } of links) {
-    if (slot === "fill") await node.setFillStyleIdAsync(styleId);
-    else if (slot === "stroke") await node.setStrokeStyleIdAsync(styleId);
-    else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
-    else await node.setTextStyleIdAsync(styleId);
+async function linkVerifiedStyles(verb: string, links: VerifiedStyleLinks): Promise<void> {
+  // Named before the first await: a node deleted in Figma meanwhile throws on every read but id.
+  const subjects = links.map((link) => describeNodeIdentity(link.node));
+  for (const [i, { node, slot, styleId, styleName }] of links.entries()) {
+    try {
+      if (slot === "fill") await node.setFillStyleIdAsync(styleId);
+      else if (slot === "stroke") await node.setStrokeStyleIdAsync(styleId);
+      else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
+      else await node.setTextStyleIdAsync(styleId);
+    } catch (err) {
+      throw new Error(
+        "flcm." + verb + " couldn't link the " + slot + " style " + JSON.stringify(styleName) + " (id " + JSON.stringify(styleId) + ") to " +
+          subjects[i] + ": " + (err instanceof Error ? err.message : String(err)),
+      );
+    }
   }
 }
 
@@ -237,11 +247,11 @@ function stampUndoStep(): string {
  * links joined its undo step, and Figma then undid none of it. Its writes are still on the canvas.
  */
 export class UnrolledVerbError extends Error {
-  constructor(verb: string, cause: unknown) {
+  constructor(cause: unknown) {
     super(
-      "flcm." + verb + " failed after it wrote, and rolling it back didn't work: an edit made in Figma while it linked styles " +
-        "joined its undo step, so its writes are still on the canvas. Undo in Figma reverts them together with that edit. " +
-        "The failure: " + (cause instanceof Error ? cause.message : String(cause)),
+      (cause instanceof Error ? cause.message : String(cause)).replace(/\.?$/, ".") +
+        " The file was edited in Figma while this call ran, so the call wasn't rolled back: its writes are still on the canvas. " +
+        "Read these nodes again before you retry.",
     );
   }
 }
@@ -291,7 +301,7 @@ export function enterMutatingVerb<P, G, T>(
         // Before the await on purpose: a failure here rolls back over writes nothing else has touched.
         concedeSizeBoundClamps();
         const verified = finalizeMutatingCall(verb, span.styleLinks);
-        await linkVerifiedStyles(verified);
+        await linkVerifiedStyles(verb, verified);
         const result = build();
         figma.commitUndo();
         recordCommittedVerb();
@@ -307,7 +317,7 @@ export function enterMutatingVerb<P, G, T>(
         if (err instanceof Error && compensatedFailures.has(err)) throw err;
         figma.triggerUndo();
         // The stamp is this step's first write, so it reverts only if the whole step did.
-        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) throw new UnrolledVerbError(verb, err);
+        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) throw new UnrolledVerbError(err);
         throw err;
       }
     } catch (err) {

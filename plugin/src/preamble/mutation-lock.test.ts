@@ -262,7 +262,7 @@ test("a word that didn't land fails before the style links are awaited, so nothi
   await assert.rejects(
     enterMutatingVerb("edit", noPrep, () => recordObligations([opacityObligation(node, 0.5)]), (_gated, span) => {
       node.opacity = 0.5;
-      span.styleLinks.push({ node, slot: "fill", styleId: "S:brand" });
+      span.styleLinks.push({ node, slot: "fill", styleId: "S:brand", styleName: "Brand" });
       // A later write in the same call undoes the word.
       node.opacity = 0.2;
       return () => { built = true; return "handle"; };
@@ -276,8 +276,9 @@ test("a word that didn't land fails before the style links are awaited, so nothi
   assert.equal(node.name, "Kept");
 });
 
-test("a link that fails after an edit joined the call's undo step says the call's writes remain", async () => {
+test("a link that fails after an edit joined the call's undo step names the link and says the call's writes remain", async () => {
   const node = figma.createRectangle();
+  node.name = "Card";
   figma.currentPage.appendChild(node);
   node.setFillStyleIdAsync = async () => {
     figma.undoStepMerged = true;
@@ -286,10 +287,12 @@ test("a link that fails after an edit joined the call's undo step says the call'
   await assert.rejects(
     enterMutatingVerb("edit", noPrep, noGate, (_gated, span) => {
       node.opacity = 0.5;
-      span.styleLinks.push({ node, slot: "fill", styleId: "S:brand" });
+      span.styleLinks.push({ node, slot: "fill", styleId: "S:brand", styleName: "Brand" });
       return () => undefined;
     }),
-    (err: unknown) => err instanceof UnrolledVerbError && /writes are still on the canvas.*style not found/s.test(err.message),
+    (err: unknown) =>
+      err instanceof UnrolledVerbError &&
+      /^flcm\.edit couldn't link the fill style "Brand" \(id "S:brand"\) to RECTANGLE "Card" \(id "[^"]+"\): style not found\. .*writes are still on the canvas/s.test(err.message),
   );
 });
 

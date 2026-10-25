@@ -349,15 +349,15 @@ function applyStyleSlots(node: any, wn: WriteProps, ctx: ApplyResources): void {
   if (styles.fill) {
     node.fills = (styleFor(styles.fill, ctx.tokens) as PaintStyle).paints;
     if ("setPluginData" in node) node.setPluginData("flcm/image", ""); // a style's paints carry no flcm image source
-    queueStyleLink(ctx.span, node, "fill", styleFor(styles.fill, ctx.tokens).id);
+    queueStyleLink(ctx.span, node, "fill", styleFor(styles.fill, ctx.tokens));
   }
   if (styles.stroke) {
     node.strokes = (styleFor(styles.stroke, ctx.tokens) as PaintStyle).paints;
-    queueStyleLink(ctx.span, node, "stroke", styleFor(styles.stroke, ctx.tokens).id);
+    queueStyleLink(ctx.span, node, "stroke", styleFor(styles.stroke, ctx.tokens));
   }
   if (styles.effect && "effects" in node) {
     node.effects = (styleFor(styles.effect, ctx.tokens) as EffectStyle).effects;
-    queueStyleLink(ctx.span, node, "effect", styleFor(styles.effect, ctx.tokens).id);
+    queueStyleLink(ctx.span, node, "effect", styleFor(styles.effect, ctx.tokens));
   }
 }
 
@@ -1262,7 +1262,7 @@ export function applyTextProps(t: any, wn: WriteProps, ctx: ApplyResources): voi
   // characters because Figma refuses a zero-width range, and an empty text has nothing to link.
   if (ts.hyperlink && t.characters.length) t.setRangeHyperlink(0, t.characters.length, { type: "URL", value: ts.hyperlink });
   if (wn.runs) applyRuns(t, wn.runs, paintSitesOf(wn), ctx);
-  if (textStyle) queueStyleLink(ctx.span, t, "text", textStyle.id);
+  if (textStyle) queueStyleLink(ctx.span, t, "text", textStyle);
 }
 
 // What a text style sets, written now so the text measures styled inside the sealed span; the lock's

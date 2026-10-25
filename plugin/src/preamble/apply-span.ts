@@ -17,7 +17,7 @@ export type StyleSlot = "fill" | "stroke" | "effect" | "text";
 
 export interface ApplySpan {
   /** Style links, landed in order by the lock after apply: linking is async-only under dynamic-page. */
-  readonly styleLinks: { node: any; slot: StyleSlot; styleId: string }[];
+  readonly styleLinks: { node: any; slot: StyleSlot; styleId: string; styleName: string }[];
   /** zIndex moves, by parent: applied once the parent holds every child this span places. */
   readonly siblingOrder: Map<any, Map<any, number>>;
   /** Built children whose percent size/position waits on its parent's realized size. */
@@ -35,8 +35,8 @@ export function openApplySpan(): ApplySpan {
 }
 
 /** Queue a style link. The caller has already written the style's values. */
-export function queueStyleLink(span: ApplySpan, node: any, slot: StyleSlot, styleId: string): void {
-  span.styleLinks.push({ node, slot, styleId });
+export function queueStyleLink(span: ApplySpan, node: any, slot: StyleSlot, style: { id: string; name: string }): void {
+  span.styleLinks.push({ node, slot, styleId: style.id, styleName: style.name });
 }
 
 /**
