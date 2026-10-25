@@ -13,7 +13,8 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { find, findOne, get, selection } from "./read.js";
 import { render } from "./structure.js";
 import { warnings } from "./warnings.js";
-import type { FlcmError } from "./flcm-error.js";
+import { FlcmError } from "./flcm-error.js";
+import * as flcm from "./runtime.js";
 
 test("find returns matching nodes as slim handles with in-context sizing intent", async () => {
   createFigmaMock();
@@ -210,12 +211,6 @@ test("an async predicate filters by what it resolves to, and can call flcm per c
     whites.map((h) => h.key),
     ["white"],
   );
-  await assert.rejects(
-    find({ type: "RECTANGLE" }, async () => {
-      throw new Error("predicate broke");
-    }),
-    /predicate broke/,
-  );
 });
 
 test("a predicate-only find (no query facets) materializes every rendered candidate", async () => {
@@ -334,4 +329,24 @@ test("an explicitly undefined or null within refuses, naming it; an omitted one 
         err.kind === "authoring" && err.path === "within" && err.reason.includes("got " + String(within)));
     }
   }
+});
+
+// The predicate is the agent's own code: what it throws is the agent's to see as thrown, never
+// prefixed with the verb or blamed on Figma, while a verb it calls still names itself.
+test("a predicate's own throw reaches the agent unchanged through flcm.find, an Error or a primitive", async () => {
+  createFigmaMock();
+  await render({ type: "FRAME", children: [{ type: "RECTANGLE", key: "chip", width: 10, height: 10 }] });
+
+  const own = new Error("predicate broke");
+  await assert.rejects(flcm.find({ type: "RECTANGLE" }, () => { throw own; }), (err: unknown) => err === own && own.message === "predicate broke");
+  await assert.rejects(flcm.find({ type: "RECTANGLE" }, async () => { throw "nope"; }), (err: unknown) => err === "nope");
+  await assert.rejects(flcm.findOne({ type: "RECTANGLE" }, () => { throw own; }), (err: unknown) => err === own);
+});
+
+test("a verb that fails inside a predicate keeps its own call name, not the outer find's", async () => {
+  createFigmaMock();
+  await render({ type: "FRAME", children: [{ type: "RECTANGLE", key: "chip", width: 10, height: 10 }] });
+
+  await assert.rejects(flcm.find({ type: "RECTANGLE" }, () => flcm.get("no-such-node")), (err: unknown) =>
+    err instanceof FlcmError && err.call === "flcm.get" && err.message.startsWith("flcm.get: "));
 });

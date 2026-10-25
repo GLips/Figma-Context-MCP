@@ -38,7 +38,7 @@ const EFFECTS_INPUT_KEYS = keySet(WORD_GROUPS.effects, NESTED_WORDS.cssEffects);
 
 function gradient(a: GradientSugar | "linear" | "radial", b?: GradientStopInput[], c?: number): WritePaint {
   // Only the object form carries author-supplied keys to check; the positional form builds a closed bag.
-  if (a && typeof a === "object") rejectUnknownKeys(a, GRADIENT_KEYS, "flcm.gradient");
+  if (a && typeof a === "object") rejectUnknownKeys(a, GRADIENT_KEYS, "flcm.gradient", { reference: "values" });
   const sugar: GradientSugar = a && typeof a === "object" ? a : { type: a, stops: b, angle: c };
   const stops = gradientStops(sugar.stops);
   const type = sugar.type || "linear";
@@ -90,7 +90,7 @@ function image(url: unknown, opts: ImageOpts = {}): WritePaint {
     );
   }
   opts = opts ?? {};
-  rejectUnknownKeys(opts, IMAGE_KEYS, "opts");
+  rejectUnknownKeys(opts, IMAGE_KEYS, "opts", { reference: "values" });
   const scaleMode = opts.scaleMode != null ? opts.scaleMode : "FILL";
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {
     throw new FlcmError("authoring", "must be one of " + words(IMAGE_SCALE_MODES) + " — got " + JSON.stringify(scaleMode) + ".", { path: "opts.scaleMode" });
@@ -112,7 +112,7 @@ function effects(sugar: EffectsSugar): WriteEffect[] {
       "expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur?, progressiveBackgroundBlur? } — got " + JSON.stringify(sugar) + ".",
     );
   }
-  rejectUnknownKeys(sugar, EFFECTS_KEYS, "flcm.effects");
+  rejectUnknownKeys(sugar, EFFECTS_KEYS, "flcm.effects", { reference: "values" });
   const out: WriteEffect[] = [];
   if (sugar.shadow !== undefined) out.push(...sugarShadows(sugar.shadow));
   if (sugar.blur !== undefined) out.push(layerBlurFromCssPx(blurRadius(sugar.blur)));
@@ -209,7 +209,7 @@ function blurRadius(b: BlurSugar): number {
 export function normalizeEffects(v: EffectsInput, at: string): WriteEffect[] {
   if (Array.isArray(v)) return v;
   if (!v || typeof v !== "object") throw new FlcmError("authoring", 'must be an object like { boxShadow: "0px 4px 8px rgba(0,0,0,0.25)" } or { shadow, blur }, flcm.effects(…), or "none" — got ' + JSON.stringify(v) + ".", { path: at });
-  rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, at);
+  rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, at, { reference: "values" });
   const bag = v as Record<string, unknown>;
   const css: Record<string, unknown> = {};
   const sugar: Record<string, unknown> = {};

@@ -13,6 +13,7 @@
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
 import type { CapabilityHandler, ChannelRunContext } from "./bridge.js";
+import { CapabilityFailure } from "./channel-failure.js";
 import { imageSourceKind, type ImageUploadStore } from "./image-intake.js";
 import { fetchAndProcessImage } from "./images.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
@@ -106,9 +107,10 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
     // below counts distinct urls no matter what was sent.
     const distinct = Array.from(new Set(urls));
     if (distinct.length > MAX_IMAGES_PER_REQUEST) {
-      throw new Error(
-        `flcm.image: ${distinct.length} distinct image urls requested at once, over the ` +
-          `${MAX_IMAGES_PER_REQUEST} cap — split the build across calls.`,
+      throw new CapabilityFailure(
+        "authoring",
+        `this call uses ${distinct.length} distinct images, over the ${MAX_IMAGES_PER_REQUEST} one ` +
+          "call can load. Split the build across calls.",
       );
     }
     // Null-prototype: the keys are attacker-chosen source strings, and local paths made ordinary
@@ -120,9 +122,10 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
       bytes[url] = base64;
       replyChars += base64.length;
       if (replyChars > MAX_REPLY_CHARS) {
-        throw new Error(
-          `flcm.image: the requested images total over ${Math.round(MAX_REPLY_CHARS / (1024 * 1024))}MiB ` +
-            `of encoded bytes in one request — use fewer or smaller images.`,
+        throw new CapabilityFailure(
+          "authoring",
+          `this call's images total over ${Math.round(MAX_REPLY_CHARS / (1024 * 1024))}MiB once ` +
+            "encoded, more than one call can load. Use fewer or smaller images, or split the build across calls.",
         );
       }
     };
@@ -194,17 +197,18 @@ export function createImageSourceFetcher({
     if (kind === "url") return fetchAndProcessImage(source, signal);
     if (kind === "path") {
       if (!run.readLocalImage)
-        throw new Error(
-          `flcm.image could not load ${JSON.stringify(source)}: this run may not read local ` +
-            "files. Pass an https url instead",
+        throw new CapabilityFailure(
+          "authoring",
+          `the image ${JSON.stringify(source)} is a local file path, and this run may not read ` +
+            "local files. Pass an https url instead.",
         );
       return run.readLocalImage(source, signal);
     }
     if (!uploads) {
-      throw new Error(
-        "flcm.image could not load an upload handle: handles only work on the MCP server that " +
-          "issued them, not in an execute run. Pass the file's path instead, " +
-          "with --asset-root set to a directory that holds it",
+      throw new CapabilityFailure(
+        "authoring",
+        "an upload handle only works on the MCP server that issued it, not in an execute run. " +
+          "Pass the file's path instead, with --asset-root set to a directory that holds it.",
       );
     }
     try {
@@ -218,8 +222,9 @@ export function createImageSourceFetcher({
           ? ""
           : `. This server takes uploads on port ${port}; if the handle came from another server, ` +
             `run \`npx ${CLI_NAME} upload <file> --port ${port}\` for one this server can use`;
-      throw new Error(
-        `flcm.image could not load an upload handle: ${(err as Error).message}${retry}`,
+      throw new CapabilityFailure(
+        "authoring",
+        `the upload handle could not be used: ${(err as Error).message}${retry}.`,
       );
     }
   };

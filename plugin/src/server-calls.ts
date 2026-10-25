@@ -74,8 +74,9 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       // that can't be updated in step with a new capability, so it must not flatten the server's error
       // to prose: a future capability ships a structured failure and a preamble that reads `.detail`.
       // `message` stays a string only because throwing a non-Error in the sandbox loses the stack.
-      // A plain Error, not an FlcmError: the failure is the capability's own, and it carries no kind.
-      // eslint-disable-next-line no-restricted-syntax -- the platform's failure, deliberately kindless
+      // A plain Error, not an FlcmError: whose failure it is (its kind) is the capability's to say, on
+      // `detail`, and the server-shipped preamble reads it there (host.ts serverCall).
+      // eslint-disable-next-line no-restricted-syntax -- the capability's failure; its kind rides on detail
       const error = new Error(
         typeof msg.error === "string"
           ? msg.error

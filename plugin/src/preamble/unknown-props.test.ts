@@ -9,28 +9,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { render, gradient, image, effects, find } from "./runtime.js";
+import { render, edit, gradient, image, effects, find } from "./runtime.js";
 import { compileTree } from "./compile-tree.js";
 
 createFigmaMock();
 
-test("verbs reject an unknown top-level prop, naming it, the verb, and the node type's vocabulary", async () => {
+test("verbs reject an unknown top-level prop, naming it, the verb, and where the node type's props are listed", async () => {
   await assert.rejects(
     render({ type: "FRAME", background: "#fff" } as never),
-    /flcm\.render: FRAME at spec: unknown prop "background" — a FRAME takes only /,
+    /flcm\.render: FRAME at spec: unknown prop "background" — every prop a FRAME takes is in the "props" section of the flcm reference\./,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "hi", textTransform: "upper" } as never),
-    /spec: unknown prop "textTransform" — a TEXT takes only /,
+    /spec: unknown prop "textTransform" — every prop a TEXT takes/,
   );
   await assert.rejects(
     render({ type: "RECTANGLE", radius: 4 } as never),
-    /spec: unknown prop "radius" — a RECTANGLE takes only /,
+    /spec: unknown prop "radius" — did you mean "borderRadius"\? Every prop a RECTANGLE takes/,
   );
-  await assert.rejects(render({ type: "LINE", height: 10 }), /spec: unknown prop "height" — a LINE takes only /);
+  await assert.rejects(render({ type: "LINE", height: 10 }), /spec: unknown prop "height" — every prop a LINE takes/);
   await assert.rejects(
     render({ type: "VECTOR", d: "M0 0 L1 1", borderRadius: 2 }),
-    /spec: unknown prop "borderRadius" — a VECTOR takes only /,
+    /spec: unknown prop "borderRadius" — every prop a VECTOR takes/,
   );
   assert.throws(
     () => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never),
@@ -62,7 +62,7 @@ test("a non-object where a props/query object belongs names THAT mistake, not th
 test("nested authoring objects reject unknown keys with a path-threaded error", async () => {
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "row", flexWrap: "nowrap" } as never }),
-    /spec\.layout: unknown prop "flexWrap" — a FRAME's layout takes only /,
+    /spec\.layout: unknown prop "flexWrap" — did you mean "wrap"\? Every prop a FRAME's layout takes is in the "props" section/,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "hi", textStyle: { fontVarient: "small-caps" } as never }),
@@ -76,8 +76,8 @@ test("nested authoring objects reject unknown keys with a path-threaded error", 
 
 test("an svg VECTOR's layout typo rejects exactly like a RECTANGLE's", () => {
   const layout = { alignSelff: "stretch" };
-  assert.throws(() => compileTree({ type: "RECTANGLE", layout }, "flcm.render"), /flcm\.render\.layout: unknown prop "alignSelff" — a RECTANGLE's layout/);
-  assert.throws(() => compileTree({ type: "VECTOR", svg: "<svg></svg>", layout }, "flcm.render"), /flcm\.render\.layout: unknown prop "alignSelff" — a VECTOR's layout/);
+  assert.throws(() => compileTree({ type: "RECTANGLE", layout }, "flcm.render"), /flcm\.render\.layout: unknown prop "alignSelff" — did you mean "alignSelf"\? Every prop a RECTANGLE's layout takes/);
+  assert.throws(() => compileTree({ type: "VECTOR", svg: "<svg></svg>", layout }, "flcm.render"), /flcm\.render\.layout: unknown prop "alignSelff" — did you mean "alignSelf"\? Every prop a VECTOR's layout takes/);
 });
 
 test("a run delta rejects an unknown key, naming the run index", async () => {
@@ -108,7 +108,7 @@ test("the CSS effects bag rejects unknown keys", async () => {
 test("plural offenders are all named", async () => {
   await assert.rejects(
     render({ type: "FRAME", foo: 1, bar: 2 } as never),
-    /spec: unknown props "foo", "bar" — a FRAME takes only /,
+    /spec: unknown props "foo", "bar" — every prop a FRAME takes/,
   );
 });
 
@@ -154,4 +154,32 @@ test("known props on every node type render", async () => {
   );
   assert.doesNotThrow(() => image("https://x/y.png", { scaleMode: "FIT", placeholder: true }));
   assert.doesNotThrow(() => effects({ shadow: true, blur: 4, glass: true }));
+});
+
+// A long vocabulary dumped into an error buries the one word the agent needed, so the refusal names
+// the closest word and points at the reference section that lists the rest.
+test("a misspelled prop gets its closest word, not the whole vocabulary, at create and at edit", async () => {
+  // An edit's words are judged before its target resolves, so its refusal can't yet say "a FRAME".
+  const misspelled = (err: Error) => {
+    assert.match(err.message, /unknown prop "fil" — did you mean "fill"\? Every prop (a FRAME takes|here) is in the "props" section of the flcm reference\./);
+    assert.doesNotMatch(err.message, /"stroke"/);
+    return true;
+  };
+  await assert.rejects(render({ type: "FRAME", fil: "#fff" } as never), misspelled);
+  await render({ type: "FRAME", key: "typo" });
+  await assert.rejects(edit("typo", { fil: "#fff" } as never), misspelled);
+});
+
+test("a short closed set is listed in full, since it is the whole answer", () => {
+  assert.throws(
+    () => gradient({ type: "linear", stops: ["#000", "#fff"], angel: 90 } as never),
+    /flcm\.gradient: unknown prop "angel" — did you mean "angle"\? The props here are "type", "stops", "angle", "at"\./,
+  );
+});
+
+test("a word another node type takes refuses at edit in the same shape as at create", async () => {
+  await render({ type: "RECTANGLE", key: "box" });
+  const refusal = /unknown prop "fontSize" — every prop a RECTANGLE takes is in the "props" section of the flcm reference\./;
+  await assert.rejects(edit("box", { fontSize: 12 } as never), refusal);
+  await assert.rejects(render({ type: "RECTANGLE", fontSize: 12 } as never), refusal);
 });

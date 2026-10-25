@@ -189,7 +189,7 @@ test("read-artifact and malformed run inputs fail loud", async () => {
   await assert.rejects(render({ type: "TEXT", text: ["{ts1}bold{/ts1}"] }), /spec\.text\[0\]: this text carries style-reference tokens/);
   await assert.rejects(
     render({ type: "TEXT", characters: "hi" } as never),
-    /unknown prop "characters" — a TEXT takes only/,
+    /unknown prop "characters" — every prop a TEXT takes is in the "props" section/,
   );
   // Malformed runs.
   await assert.rejects(render({ type: "TEXT", text: [] }), /non-empty/);

@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { RUN_INACTIVITY_DEADLINE_MS, type HostTraceStage, type NativeOperation, type TraceOperation } from "../protocol.js";
+import { FLCM_ERROR_KINDS, RUN_INACTIVITY_DEADLINE_MS, type FlcmErrorKind, type HostTraceStage, type NativeOperation, type TraceOperation } from "../protocol.js";
 import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, describeFailure } from "./flcm-error.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
 // Why it's named and typed rather than a pair of loose free identifiers: once the flcm runtime ships
@@ -167,10 +167,30 @@ export function refuseIfRunFinished(): void {
   );
 }
 
-/** Every server call: refused from a finished runtime, and bracketed for the deadline clock. */
-function serverCall(host: FlcmHost, capability: string, payload: unknown): Promise<unknown> {
+/**
+ * Every server call: refused from a finished runtime, bracketed for the deadline clock, and failing
+ * only with an FlcmError, so no verb mistakes the server's failure for Figma's.
+ */
+async function serverCall(host: FlcmHost, capability: string, payload: unknown): Promise<unknown> {
   refuseIfRunFinished();
-  return withServerCall(() => host.callServer(capability, payload));
+  try {
+    return await withServerCall(() => host.callServer(capability, payload));
+  } catch (failure) {
+    if (failure instanceof FlcmError) throw failure;
+    const reason = failure == null ? "the server's work for this call failed without saying why." : describeFailure(failure);
+    throw new FlcmError(capabilityFailureKind(failure), reason);
+  }
+}
+
+/**
+ * Whose failure a capability's rejection is: the `kind` the server named on it, which the installed
+ * host forwards untouched on `detail` (server-calls.ts). A failure that names none is the server's
+ * bug, since every capability decides whose failure it raised.
+ */
+function capabilityFailureKind(failure: unknown): FlcmErrorKind {
+  const detail = (failure as { detail?: unknown } | null)?.detail;
+  const kind = detail !== null && typeof detail === "object" ? (detail as { kind?: unknown }).kind : undefined;
+  return FLCM_ERROR_KINDS.find((known) => known === kind) ?? "internal";
 }
 
 /** Diagnostics must not change the result or rejection of a native operation. */

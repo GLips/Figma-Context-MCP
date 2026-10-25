@@ -6,7 +6,8 @@
 // needs to know WHY something failed branches on `kind`, never on message text: a reworded sentence
 // must not change who gets blamed. Anything thrown that is NOT an FlcmError came from Figma or the
 // platform, and that is decided by type alone: asFlcmError wraps it as a FigmaRefusalError, the one
-// type that means Figma itself threw (isFigmaRefusal).
+// type that means Figma itself threw (isFigmaRefusal). The agent's own code is the exception: flcm
+// calls it only through callAgentCode, which marks what it throws as the agent's.
 //
 // Where a failure happened lives in fields, not in text someone has to slice back off: `call` is
 // the public verb the agent called ("flcm.edit"), `path` the spec path inside it, `node` the layer
@@ -26,8 +27,12 @@
  *   concurrent-edit  the file was edited in Figma (by a person or another plugin) while this call ran
  *   run-ended        the run was cancelled or already replied, or this plugin can't run it, so nothing more starts
  *   internal         flcm's own bug: the call was fine and flcm got it wrong
+ *
+ * The list lives in protocol.ts (FLCM_ERROR_KINDS), since a server capability's failure names one.
  */
-export type FlcmErrorKind = "authoring" | "figma" | "concurrent-edit" | "run-ended" | "internal";
+import type { FlcmErrorKind } from "../protocol.js";
+
+export type { FlcmErrorKind };
 
 /** A layer an error concerns, in the fields a `find` hit carries so the agent re-targets without re-reading. */
 export interface FlcmErrorNode {
@@ -208,13 +213,33 @@ function framesOf(stack: string | undefined): string[] {
   return (stack ?? "").split("\n").filter((line) => /^\s+at /.test(line));
 }
 
+// What the agent's own code threw, on its way out through flcm: only callAgentCode makes one and
+// only publicVerb opens it, so flcm's own failures are told apart by type, not guessed. Not an
+// Error, and holding any value, since `throw "x"` is legal.
+class AgentCodeThrow {
+  constructor(readonly thrown: unknown) {}
+}
+
+/**
+ * The one way flcm calls a function the agent handed it (find's predicate). Whatever it throws or
+ * rejects with — a value of its own, or a verb it called — reaches the agent as thrown, not as a
+ * failure of the verb that called it.
+ */
+export async function callAgentCode<A extends unknown[], R>(fn: (...args: A) => R, ...args: A): Promise<Awaited<R>> {
+  try {
+    return await fn(...args);
+  } catch (thrown) {
+    throw new AgentCodeThrow(thrown);
+  }
+}
+
 /**
  * Wrap a public verb so every failure it raises names it and points at the agent's line, not at
  * flcm's insides. The one writer of `call`; the innermost verb wins. Calls `verb` synchronously: a mutating verb reserves its lock slot
  * at call time, and an await here would break the invocation order that guarantees.
  *
- * Only an FlcmError is touched. Anything else came from the agent's own code (a find predicate) or
- * from Figma outside any call flcm wraps, and is reported as thrown.
+ * What the agent's own code threw (callAgentCode) leaves as thrown. Anything else that isn't an
+ * FlcmError came from Figma or the platform during the verb's own work: a FigmaRefusalError.
  */
 export function publicVerb<F extends (...args: never[]) => unknown>(call: string, verb: F): F {
   return function (this: unknown, ...args: Parameters<F>) {
@@ -222,12 +247,14 @@ export function publicVerb<F extends (...args: never[]) => unknown>(call: string
     // frame is this wrapper.
     const callerFrames = framesOf(new Error().stack).slice(1).join("\n");
     const fail = (cause: unknown): unknown => {
+      if (cause instanceof AgentCodeThrow) return cause.thrown;
+      const error = asFlcmError(cause);
       // A verb called inside another (from a find predicate) already named itself and its line.
-      if (!(cause instanceof FlcmError) || cause.call !== undefined) return cause;
-      (cause as WritableFlcmFields).call = call;
-      cause.message = composeMessage(cause);
-      cause.stack = callerFrames;
-      return cause;
+      if (error.call !== undefined) return error;
+      (error as WritableFlcmFields).call = call;
+      error.message = composeMessage(error);
+      error.stack = callerFrames;
+      return error;
     };
     let result: unknown;
     try {

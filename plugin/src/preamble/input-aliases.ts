@@ -99,9 +99,11 @@ export function normalizeInputAliases(bag: Bag, path: string, type?: string): Ba
     const inner = nested !== null && typeof nested === "object" && !Array.isArray(nested) ? nested as Bag : undefined;
     const sources = rule.group && inner ? [out, inner] : [out];
     if (!sources.some(source => rule.keys.some(key => Object.prototype.hasOwnProperty.call(source, key)))) continue;
+    // An alias for another node type stays unfolded, so the closed-set gate refuses it as a word this
+    // type doesn't take, in the same words as any other.
+    if (type && rule.types && !rule.types.includes(type)) continue;
     const label = rule.keys.join("/");
     const site: AliasSite = { path: path + "." + rule.path.join("."), keys: rule.keys, canonical: rule.path.join(".") };
-    if (type && rule.types && !rule.types.includes(type)) throw new FlcmError("authoring", label + " is not supported on a " + type + ". Drop it.", { path });
     if (leaf && nested !== undefined && !inner) throw new FlcmError("authoring", "must be an object when " + label + " is set — got " + JSON.stringify(nested) + ".", { path: path + "." + root });
     const target = leaf ? { ...inner } : out;
     const values = rule.keys.map(key => {

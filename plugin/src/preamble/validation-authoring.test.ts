@@ -36,7 +36,7 @@ test("aliases normalize compilers and edits without changing canonical output", 
     render({ type: "TEXT", text: "x", fontSize: 12, textStyle: { fontSize: 13 } }),
     /textStyle\.fontSize: fontSize and textStyle\.fontSize give different values/,
   );
-  await assert.rejects(edit(node.id, { fontSize: 12 }), /fontSize is not supported/);
+  await assert.rejects(edit(node.id, { fontSize: 12 }), /unknown prop "fontSize" — every prop a FRAME takes is in the "props" section/);
 });
 
 test("native grid aliases compose across scopes and normalize through every write verb", async () => {

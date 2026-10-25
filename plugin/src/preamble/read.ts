@@ -14,7 +14,7 @@ import { type UnreadableSink, type SceneNodeLike, type SceneTokenResolver } from
 import { readSceneDesign, type CommentCounts } from "./scene-read.js";
 import { rejectUnknownKeys, showValue } from "./validate.js";
 import { registerRead } from "./egress.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, callAgentCode } from "./flcm-error.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
@@ -245,7 +245,7 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   const read = readHits(hits, index, unreadable);
   // Awaited because an async predicate's Promise is always truthy. Batched, so a predicate that calls flcm
   // per candidate doesn't open thousands of reads at once.
-  const verdicts = await mapInBatches(read, ([, simplified]) => predicate(simplified));
+  const verdicts = await mapInBatches(read, ([, simplified]) => callAgentCode(predicate, simplified));
   return read.filter((_, i) => verdicts[i]).map(([hit, simplified]) => projectSlim(hit, simplified, categories));
 }
 
@@ -280,7 +280,7 @@ function rejectStringQuery(query: unknown, verb: string): void {
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   invalidateSceneAccess();
   rejectStringQuery(query, "flcm.find");
-  rejectUnknownKeys(query, FIND_KEY_SET, "the query", "query key", FIND_PREDICATE_HINT);
+  rejectUnknownKeys(query, FIND_KEY_SET, "the query", { noun: "query key", hint: FIND_PREDICATE_HINT, reference: "reads" });
   if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new FlcmError("authoring", "must be true or false — got " + showValue(query.hasAnnotations) + ".", { path: "hasAnnotations" });
   for (const key of ["type", "key"] as const) {
     if (query[key] !== undefined && typeof query[key] !== "string") throw new FlcmError("authoring", "must be a string — got " + showValue(query[key]) + ".", { path: key });

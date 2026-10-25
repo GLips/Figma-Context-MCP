@@ -226,14 +226,14 @@ test("the component words are INSTANCE-only — every other type rejects them by
   });
   await assert.rejects(
     edit("card", { componentProperties: { Size: "Large" } }),
-    /a FRAME has no `componentProperties`/,
+    /unknown prop "componentProperties" — every prop a FRAME takes is in the "props" section/,
   );
   await assert.rejects(
     edit("card", { overrides: { "1:2": { fill: "#000" } } }),
-    /a FRAME has no `overrides`/,
+    /unknown prop "overrides" — every prop a FRAME takes is in the "props" section/,
   );
-  await assert.rejects(edit("card", { componentId: "1:2" }), /a FRAME has no `componentId`/);
-  await assert.rejects(edit("t", { componentId: "1:2" }), /a TEXT has no `componentId`/);
+  await assert.rejects(edit("card", { componentId: "1:2" }), /unknown prop "componentId" — every prop a FRAME takes/);
+  await assert.rejects(edit("t", { componentId: "1:2" }), /unknown prop "componentId" — every prop a TEXT takes/);
   assert.equal((await figma.getNodeByIdAsync(specNode(out, "card").id)).width, 100);
 });
 

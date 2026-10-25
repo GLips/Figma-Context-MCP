@@ -501,6 +501,15 @@ export type ServerOneWay =
   | { type: "CHANNEL_RESPONSE"; id: string; ok: true; payload: unknown }
   | { type: "CHANNEL_RESPONSE"; id: string; ok: false; error: unknown };
 
+/**
+ * Whose failure an flcm error is (the preamble's FlcmErrorKind, described in flcm-error.ts). Listed
+ * here because a server capability names one on its failure's `kind` field and the preamble reads
+ * it back. Both ship from the server, so a new kind needs no protocol bump; the plugin host only
+ * carries the field.
+ */
+export const FLCM_ERROR_KINDS = ["authoring", "figma", "concurrent-edit", "run-ended", "internal"] as const;
+export type FlcmErrorKind = (typeof FLCM_ERROR_KINDS)[number];
+
 export type ServerFrame = (ServerRequest & { id: string }) | ServerOneWay;
 
 /**

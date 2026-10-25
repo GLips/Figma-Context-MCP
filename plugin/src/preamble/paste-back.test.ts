@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock, seedStyle, seedVariables } from "../../harness/figma-mock.mjs";
-import { safeSerialize } from "../serialize.js";
+import { serializeForWire } from "../serialize.js";
 import { projectForEgress } from "./egress.js";
 import { stableStringify } from "@framelink/core";
 import * as flcm from "./runtime.js";
@@ -48,18 +48,20 @@ async function chipOnHolder() {
     definitions: (await live(comp)).componentPropertyDefinitions,
     references: (await live(comp)).children.map((child: any) => child.componentPropertyReferences),
   });
-  return { comp, inst, holder, live, state, wire: (value: unknown) => JSON.parse(JSON.stringify(safeSerialize(projectForEgress(value, "result")))) };
+  return { comp, inst, holder, live, state, wire: async (value: unknown) => JSON.parse(JSON.stringify(
+    await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node),
+  )) };
 }
 
 test("a component, an instance and a slot pasted back from their own reads are no-ops", async () => {
   const { comp, inst, holder, live, state, wire } = await chipOnHolder();
   const slot = (await live(comp)).children[2];
   const before = await state();
-  for (const paste of [(read: unknown) => read, wire]) {
+  for (const paste of [async (read: unknown) => read, wire]) {
     // Each is its parent's last child, so appending it there again is placing it where it is.
-    await flcm.insertBefore(inst, paste((await flcm.get(comp)).node) as any);
-    await flcm.append(comp, paste((await flcm.get(slot.id)).node) as any);
-    await flcm.append(holder, paste((await flcm.get(inst)).node) as any);
+    await flcm.insertBefore(inst, await paste((await flcm.get(comp)).node) as any);
+    await flcm.append(comp, await paste((await flcm.get(slot.id)).node) as any);
+    await flcm.append(holder, await paste((await flcm.get(inst)).node) as any);
     assert.equal(await state(), before);
   }
 });

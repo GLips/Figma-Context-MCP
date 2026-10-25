@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock, seedVariables, seedStyle } from "../../harness/figma-mock.mjs";
-import { safeSerialize } from "../serialize.js";
+import { serializeForWire } from "../serialize.js";
 import { projectForEgress } from "./egress.js";
 import * as flcm from "./runtime.js";
 import { TOKEN_ENTRY_MARK } from "./token-mark.js";
@@ -13,7 +13,8 @@ import { TOKEN_ENTRY_MARK } from "./token-mark.js";
 function setup() {
   const figma = createFigmaMock();
   (globalThis as any).__flcmHost = { runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false };
-  return { figma, wire: (value: unknown) => safeSerialize(projectForEgress(value, "result")) as any };
+  return { figma, wire: async (value: unknown) =>
+    (await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node)) as any };
 }
 
 test("read objects project wherever returned or logged; authored lookalikes and extracted path strings remain whole", async () => {
@@ -22,19 +23,19 @@ test("read objects project wherever returned or logged; authored lookalikes and 
   const read = await flcm.get(authored);
   assert.equal(read.node.type, "VECTOR");
   assert.equal(read.node.d, "M0 0 L8 0 L0 8 Z");
-  const out = wire({ nested: [read], child: read.node, own: authored, path: read.node.d });
+  const out = await wire({ nested: [read], child: read.node, own: authored, path: read.node.d });
   assert.equal(out.nested[0].node.type, "IMAGE-SVG");
   assert.equal(out.child.type, "IMAGE-SVG");
   assert.equal(out.own.type, "VECTOR");
   assert.equal(out.own.d, authored.d);
   assert.equal(out.path, read.node.d);
-  assert.deepEqual(wire(read.node).elided, { d: JSON.stringify(read.node.d).length });
+  assert.deepEqual((await wire(read.node)).elided, { d: JSON.stringify(read.node.d).length });
   read.node.d = "M0 0 L20 20";
-  assert.equal(wire(read).node.d, read.node.d);
-  assert.equal(wire(read).node.type, "VECTOR");
+  assert.equal((await wire(read)).node.d, read.node.d);
+  assert.equal((await wire(read)).node.type, "VECTOR");
   const replacement = await flcm.get(authored);
   replacement.node = { id: "computed", type: "VECTOR", d: "mine" };
-  assert.equal(wire(replacement).node.d, "mine");
+  assert.equal((await wire(replacement)).node.d, "mine");
 });
 
 test("VECTOR reads can move/edit or create a copy, including multiple paths and winding rules", async () => {
@@ -93,7 +94,7 @@ test("a paint style reads as a style reference in the authoring field, id only w
   live.fillStyleId = "missing-style";
   const { node } = await flcm.get(original);
   assert.deepEqual(node.fill, { style: { id: "missing-style" }, value: "#123456" });
-  assert.deepEqual(wire(node).fill, { style: { id: "missing-style" }, value: "#123456" });
+  assert.deepEqual((await wire(node)).fill, { style: { id: "missing-style" }, value: "#123456" });
 });
 
 test("inherited instance echoes survive verb copies and JSON round-trips without source metadata", async () => {
@@ -139,7 +140,7 @@ test("warnings are stripped from placement specs and edit deltas", async () => {
   const edited = await flcm.edit(r, { opacity: 0.5, warnings: [diagnostic] } as any);
   assert.equal(edited.warnings, undefined);
   assert.equal((await figma.getNodeByIdAsync(r.id)).opacity, 0.5);
-  assert.equal(wire(edited).warnings, undefined);
+  assert.equal((await wire(edited)).warnings, undefined);
 });
 
 test("designTokens entries leave the run marked by identity, wherever they're returned, and stay plain in the script", async () => {
@@ -157,7 +158,7 @@ test("designTokens entries leave the run marked by identity, wherever they're re
   const [brand, space] = tokens.variables;
   assert.equal(TOKEN_ENTRY_MARK in brand, false);
 
-  const out = wire({ all: tokens, kept: tokens.variables.filter((v) => v === space), found: brand, copy: { ...brand } });
+  const out = await wire({ all: tokens, kept: tokens.variables.filter((v) => v === space), found: brand, copy: { ...brand } });
   assert.deepEqual(out.all.variables.map((v: any) => v[TOKEN_ENTRY_MARK]), ["variable", "variable"]);
   assert.equal(out.all.styles[0][TOKEN_ENTRY_MARK], "style");
   assert.equal(out.kept[0][TOKEN_ENTRY_MARK], "variable");
@@ -168,7 +169,7 @@ test("designTokens entries leave the run marked by identity, wherever they're re
 
   // Still the same object after an in-place edit, so still marked, carrying the edit.
   (space as any).uses = 3;
-  const edited = wire(space);
+  const edited = await wire(space);
   assert.equal(edited[TOKEN_ENTRY_MARK], "variable");
   assert.equal(edited.uses, 3);
 });

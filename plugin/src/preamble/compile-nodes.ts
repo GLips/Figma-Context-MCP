@@ -63,7 +63,7 @@ function padEdges(pad: PadInput, at: string): Edges<Bindable> {
   if (pad == null || typeof pad !== "object" || Array.isArray(pad)) {
     throw new FlcmError("authoring", 'must be a number, a CSS box shorthand string ("12px 16px"), { variable }, or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".", { path: at });
   }
-  rejectUnknownKeys(pad, PAD_KEYS, at);
+  rejectUnknownKeys(pad, PAD_KEYS, at, { reference: "props" });
   const edge = (v: unknown, name: string): Bindable | undefined => {
     if (v == null) return undefined;
     // Rides length(), like every other metric: a number or "Npx", and anything else fails loud there.
@@ -194,7 +194,7 @@ function parseConstraints(raw: unknown, at: string): { x?: ConstraintX; y?: Cons
     throw new FlcmError("authoring", 'must be an object like { x, y } or "none" — got ' + JSON.stringify(raw) + ".", { path: at });
   }
   const r = raw as { x?: string; y?: string };
-  rejectUnknownKeys(r, CONSTRAINT_KEYS, at);
+  rejectUnknownKeys(r, CONSTRAINT_KEYS, at, { reference: "props" });
   const out: { x?: ConstraintX; y?: ConstraintY } = {};
   if (r.x != null) {
     if (!oneOf(CONSTRAINT_X, r.x)) throw new FlcmError("authoring", "must be one of " + words(CONSTRAINT_X) + " — got " + JSON.stringify(r.x) + ".", { path: at + ".x" });
@@ -263,7 +263,7 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, at: string): W
     const raw: unknown = cfg.gap;
     if (isVariableInput(raw)) layout.gap = compileVariableRef(raw, gapAt, "FLOAT");
     else if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-      rejectUnknownKeys(raw, GAP_KEYS, gapAt);
+      rejectUnknownKeys(raw, GAP_KEYS, gapAt, { reference: "props" });
       const g = raw as { row?: unknown; column?: unknown };
       if (g.row == null || g.column == null) throw new FlcmError("authoring", guidance, { path: gapAt });
       layout.gap = { row: side(g.row, "row"), column: side(g.column, "column") };
@@ -427,7 +427,7 @@ function compileStrokeWidth(value: unknown, type: string, at: string): Bindable 
   if (isVariableInput(value)) return compileVariableRef(value, at, "FLOAT");
   let sides: Edges<Bindable>;
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    rejectUnknownKeys(value, EDGE_KEYS, at);
+    rejectUnknownKeys(value, EDGE_KEYS, at, { reference: "props" });
     const v = value as Record<string, unknown>;
     const side = (name: string): Bindable => {
       if (v[name] == null) throw new FlcmError("authoring", "as an object it names all four sides { top, right, bottom, left } — " + name + " is missing. Add it, or give one width.", { path: at });
@@ -460,7 +460,7 @@ function compileBorderRadius(value: unknown, at: string): CornerRadii<Bindable> 
     return { topLeft: ref, topRight: ref, bottomRight: ref, bottomLeft: ref };
   }
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    rejectUnknownKeys(value, CORNER_KEYS, at);
+    rejectUnknownKeys(value, CORNER_KEYS, at, { reference: "props" });
     const v = value as Record<string, unknown>;
     const corner = (name: string): Bindable => {
       if (v[name] == null) throw new FlcmError("authoring", "as an object it names all four corners { topLeft, topRight, bottomRight, bottomLeft } — " + name + " is missing. Add it, or give one radius.", { path: at });
@@ -476,7 +476,7 @@ function compileBorderRadius(value: unknown, at: string): CornerRadii<Bindable> 
 export function compilePaintSlot(wn: WriteProps, value: unknown, slot: "fill" | "stroke", at: string): void {
   const path = at + "." + slot;
   if (isStyleInput(value)) {
-    rejectUnknownKeys(value, STYLE_INPUT_KEYS, path);
+    rejectUnknownKeys(value, STYLE_INPUT_KEYS, path, { reference: "values" });
     wn.styles = { ...wn.styles, [slot]: compileStyleRef(value.style, path, "PAINT") };
     return;
   }
@@ -487,7 +487,7 @@ export function compilePaintSlot(wn: WriteProps, value: unknown, slot: "fill" | 
 // whole effect style does.
 function compileEffectsSlot(wn: WriteProps, value: unknown, at: string): void {
   if (isStyleInput(value)) {
-    rejectUnknownKeys(value, STYLE_INPUT_KEYS, at);
+    rejectUnknownKeys(value, STYLE_INPUT_KEYS, at, { reference: "values" });
     wn.styles = { ...wn.styles, effect: compileStyleRef(value.style, at, "EFFECT") };
     return;
   }

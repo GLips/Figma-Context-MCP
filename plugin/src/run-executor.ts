@@ -9,7 +9,14 @@
 import type { ActivityFeed } from "./activity-feed.js";
 import type { AgentSession, AgentSessions } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
-import { safeSerialize, guardReturnValue } from "./serialize.js";
+import {
+  guardReturnValue,
+  resolveWireSnapshot,
+  serializeForWire,
+  snapshotForWire,
+  type IsFigmaNode,
+  type WireSnapshot,
+} from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
@@ -185,7 +192,7 @@ export function createRunExecutor({
       } catch { /* A diagnostic must never change execution or cleanup. */ }
     };
     trace("eval-start");
-    const consoleLog: string[] = [];
+    const logged: { level: string; args: WireSnapshot }[] = [];
     const originalConsole = {
       log: console.log,
       info: console.info,
@@ -194,11 +201,12 @@ export function createRunExecutor({
     };
 
     // Capture the agent's console output so it round-trips back as feedback. Each call takes the
-    // result's egress (one projection for the whole line) and node-aware serializer, so logging a live
-    // node yields `{id,name,type}` instead of an opaque failure.
+    // result's egress (one projection for the whole line) and is snapshotted as it is logged; which of
+    // its objects are live nodes Figma only answers asynchronously, so those resolve to `{id,name,type}`
+    // before the reply.
     const capture = (level: string) => (...args: unknown[]) => {
-      const line = runtime ? (runtime.projectForEgress(args, "console") as unknown[]) : args;
-      consoleLog.push(`[${level}] ${line.map(stringifyArg).join(" ")}`);
+      const line = runtime ? runtime.projectForEgress(args, "console") : args;
+      logged.push({ level, args: snapshotForWire(line) });
     };
     console.log = capture("log");
     console.info = capture("info");
@@ -261,8 +269,8 @@ export function createRunExecutor({
       trace("code-returned");
       // Return-path node guard: a returned live node would otherwise collapse to
       // { id } and silently drop everything else. Make that loud instead of lossy.
-      guardReturnValue(raw);
-      result = safeSerialize(runtime.projectForEgress(raw, "result"));
+      await guardReturnValue(raw, isFigmaNode);
+      result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode);
       // Session capture is optional; its narrower data contract must not reject a valid wire result.
       try { session.last = raw; } catch { session.last = undefined; }
     } catch (err) {
@@ -311,6 +319,17 @@ export function createRunExecutor({
           `its verb is called, so an unawaited verb (or a sibling of one that rejected in Promise.all) ` +
           `still lands. This reply waited for them; await every verb to keep your result and the canvas in step.`,
       });
+    }
+    const consoleLog: string[] = [];
+    for (const { level, args } of logged) {
+      try {
+        const line = (await resolveWireSnapshot(args, isFigmaNode)) as unknown[];
+        consoleLog.push(`[${level}] ${line.map(stringifyArg).join(" ")}`);
+      } catch (err) {
+        // A cycle through an object Figma disowned is only found now, past the console.log it would
+        // have thrown from, so it fails the run the way that throw would have.
+        errorMessage ??= formatFailureForAgent(err);
+      }
     }
     if (runtime) consoleLog.push(...runtime.warnings.summary());
     // After `last` is captured and the run settled, so the budgets see everything the run kept.
@@ -415,8 +434,10 @@ export function createRunExecutor({
 }
 
 
+// Figma hands back the identical object for a live node. Asked only with a node-shaped id
+// (serialize.ts), which getNodeByIdAsync answers promptly.
+const isFigmaNode: IsFigmaNode = async (value) => (await figma.getNodeByIdAsync(value.id)) === value;
+
 function stringifyArg(value: unknown): string {
-  if (typeof value === "string") return value;
-  const serialized = safeSerialize(value);
-  return typeof serialized === "string" ? serialized : JSON.stringify(serialized);
+  return typeof value === "string" ? value : JSON.stringify(value);
 }

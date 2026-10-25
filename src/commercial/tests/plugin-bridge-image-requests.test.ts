@@ -100,7 +100,10 @@ test("handler: over the distinct-url cap fails loud naming the cap", async () =>
     fetchImage: async () => "b",
   });
   const urls = Array.from({ length: MAX_IMAGES_PER_REQUEST + 1 }, (_, i) => `u${i}`);
-  await assert.rejects(handler(urls, RUN), new RegExp(`over the ${MAX_IMAGES_PER_REQUEST} cap`));
+  await assert.rejects(
+    handler(urls, RUN),
+    new RegExp(`over the ${MAX_IMAGES_PER_REQUEST} one call can load`),
+  );
 });
 
 test("handler: after one fetch fails, workers claim no new urls (bounded tail work)", async () => {
@@ -133,11 +136,11 @@ test("handler: a single fetch failure rejects the whole request", async () => {
   const handler = createImagesRequestHandler({
     cache: new ImageByteCache(),
     fetchImage: async (url) => {
-      if (url === "bad") throw new Error('flcm.image could not load "bad": blocked range');
+      if (url === "bad") throw new Error('the image "bad" could not be loaded: blocked range');
       return "b";
     },
   });
-  await assert.rejects(handler(["ok", "bad"], RUN), /could not load "bad"/);
+  await assert.rejects(handler(["ok", "bad"], RUN), /could not be loaded: blocked range/);
 });
 
 test("cancellation reaches image fetches, drains started work and claims no more URLs", async () => {

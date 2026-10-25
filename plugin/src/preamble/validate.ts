@@ -19,8 +19,6 @@ export function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
 
-const listKeys = (allowed: ReadonlySet<string>): string => [...allowed].map((k) => JSON.stringify(k)).join(", ");
-
 // The reject must never crash while describing bad input — JSON.stringify itself throws on BigInt
 // and cycles, and returns undefined for undefined/functions/symbols.
 export const showValue = (v: unknown): string => {
@@ -31,42 +29,109 @@ export const showValue = (v: unknown): string => {
   }
 };
 
-// Fail loud when `obj` isn't a plain object, or on any own key outside `allowed`, naming the
-// offender(s) and the allowed set. ONE gate for every agent-input boundary in the preamble: the
-// authoring compilers validate a `prop`, the locate verbs a `query key` — same scan, each
-// boundary keeping its own vocabulary via `noun` and locating itself via `path`, the bag's spec
-// path ("flcm.render.spec.textStyle", "flcm.find"). `owner` names what takes the set ("a FRAME")
-// where the path alone doesn't say. The non-object branch is the BACKSTOP: a call site with a
-// richer shape to show (pad's number form, absolute's "none", find's did-you-mean) pre-empts it
-// with its own tailored guard — keep those, don't fold them in here. The known set is passed
-// pre-built (callers hold it at module scope) and the message lists are built only in the throw
-// paths, so the happy path adds no per-call allocation.
-// `hint` names the NEGATIVE SPACE of a closed set — where the word you wanted lives, when the set itself
-// is the answer to "what can I say here" but not to "so where do I say the rest". Appended verbatim to the
-// unknown-key message; omit it where the closed set really is the whole world.
-export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, path: string, noun = "prop", hint = "", owner?: string): void {
+/**
+ * A section of the flcm reference, by the id both channels take (get_flcm_reference's `sections`,
+ * the `reference` CLI command). The server's section table is typed by this, so a renamed section
+ * fails its typecheck rather than leaving an error pointing nowhere.
+ */
+export type FlcmReferenceSection =
+  | "mental-model" | "layout" | "reads" | "verbs" | "props" | "annotations" | "values" | "edit" | "components" | "recipes";
+
+/** How a refusal names a closed set of words: what one word is, who takes them, where they're all listed. */
+export interface WordSetDescription {
+  /** What one word of the set is called: "prop" (the default), "query key", "field". */
+  noun?: string;
+  /** What takes the set ("a FRAME", "a FRAME's layout"), where the path alone doesn't say. */
+  owner?: string;
+  /**
+   * The reference section that lists the set. Required even of a set short enough to list in full,
+   * so a set that grows past the cap never needs its call sites revisited.
+   */
+  reference: FlcmReferenceSection;
+}
+
+// A set this short IS the answer, so a refusal lists it; a longer one would bury the fix in a dump
+// of words, so the refusal points at the section that lists them instead.
+const WORD_SET_LIST_CAP = 8;
+
+// The sentence every closed-set refusal ends on, lowercase so a caller can lead with it after a dash.
+function describeWordSet(allowed: ReadonlySet<string>, { noun = "prop", owner, reference }: WordSetDescription): string {
+  if (allowed.size <= WORD_SET_LIST_CAP) return (owner ? owner + " takes only " : "the " + noun + "s here are ") + words(allowed) + ".";
+  return "every " + noun + " " + (owner ? owner + " takes" : "here") + " is in the " + JSON.stringify(reference) + " section of the flcm reference.";
+}
+
+const sentence = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * `candidates` close to `word`, fewest edits first. A typo is about one edit per four letters; anything
+ * farther is a different word, and suggesting it ("foo" → "top") would steer the agent wrong. A word
+ * inside a candidate, or around it, is close however many letters it lacks ("radius" → "borderRadius").
+ */
+export function closestWords(word: string, candidates: Iterable<string>): string[] {
+  const want = word.toLowerCase();
+  const reach = Math.max(1, Math.floor((want.length + 2) / 4));
+  const scored: { name: string; distance: number }[] = [];
+  for (const name of new Set(candidates)) {
+    const have = name.toLowerCase();
+    const distance = editDistance(want, have);
+    // Containment counts only when the shorter word is most of the longer: "x" is inside half the
+    // vocabulary, and "text" inside "textTransform" names a different prop.
+    const [short, long] = have.length < want.length ? [have, want] : [want, have];
+    const contains = short.length >= 3 && short.length * 2 >= long.length && long.includes(short);
+    if (distance <= reach || contains) scored.push({ name, distance });
+  }
+  return scored.sort((a, b) => a.distance - b.distance).map((s) => s.name);
+}
+
+// Edits to turn `a` into `b`, a swap of two neighbours counting as one: "tpye" is one slip from "type".
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+export interface UnknownKeyOptions extends WordSetDescription {
+  /**
+   * The NEGATIVE SPACE of a closed set — where the word you wanted lives, when the set itself is the
+   * answer to "what can I say here" but not to "so where do I say the rest". Appended verbatim.
+   */
+  hint?: string;
+}
+
+// Fail loud when `obj` isn't a plain object, or on any own key outside `allowed`: the one gate every
+// unknown-word refusal in the preamble comes from. It names the offender(s), the closest allowed word
+// to each, and the set itself (describeWordSet). `path` is the bag's spec path ("flcm.render.spec.textStyle",
+// "flcm.find"). The non-object branch is the BACKSTOP: a call site with a richer shape to show (pad's
+// number form, absolute's "none", find's did-you-mean) pre-empts it with its own tailored guard. The
+// known set is passed pre-built (callers hold it at module scope) and messages are built only in the
+// throw paths, so the happy path adds no per-call allocation.
+export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, path: string, options: UnknownKeyOptions): void {
+  const noun = options.noun ?? "prop";
   if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
     // Object.keys on a string enumerates its character indices — without this branch a string
     // here rejects as unknown keys "0", "1", "2"…: every word true, none naming the actual
     // object-vs-value mistake.
-    throw new FlcmError(
-      "authoring",
-      `must be an object (${noun}s: ${listKeys(allowed)}) — got ${showValue(obj)}.`,
-      { path },
-    );
+    throw new FlcmError("authoring", `must be an object of ${noun}s — got ${showValue(obj)}. ${sentence(describeWordSet(allowed, options))}`, { path });
   }
   const unknown = Object.keys(obj).filter((k) => !allowed.has(k));
   if (unknown.length) {
     const label = noun + (unknown.length > 1 ? "s" : "");
+    const suggested = [...new Set(unknown.flatMap((k) => closestWords(k, allowed).slice(0, 1)))];
+    const set = describeWordSet(allowed, options);
     throw new FlcmError(
       "authoring",
       `unknown ${label} ${unknown.map((k) => JSON.stringify(k)).join(", ")} — ` +
-        (owner ? `${owner} takes only ` : `the ${noun}s here are `) + `${listKeys(allowed)}.${hint ? " " + hint : ""}`,
+        (suggested.length ? `did you mean ${suggested.map((k) => JSON.stringify(k)).join(", ")}? ${sentence(set)}` : set) +
+        (options.hint ? " " + options.hint : ""),
       { path },
     );
   }
 }
-
 
 // The pure, document-blind half of a DELTA's validation (invariant 2's validate-then-mutate: this
 // runs before any target is resolved, so a misspelled word reads "unknown prop" no matter what it
@@ -101,18 +166,15 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
     const disposition = nodeWordDisposition(key);
     if (disposition === undefined || disposition === "author") foreign[key] = (changes as Record<string, unknown>)[key];
   }
-  rejectUnknownKeys(normalizeInputAliases(foreign, path), known, path);
-  assertDeltaNotEmpty(changes, known, path);
+  // A delta's words are node props, which the props section lists node type by node type.
+  const described: WordSetDescription = { reference: "props" };
+  rejectUnknownKeys(normalizeInputAliases(foreign, path), known, path, described);
+  assertDeltaNotEmpty(changes, known, path, described);
 }
 
-export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>, path: string): void {
+export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>, path: string, described: WordSetDescription): void {
   if (Object.keys(changes).length === 0) {
-    throw new FlcmError(
-      "authoring",
-      "the changes object is empty, so there is nothing to apply. Name at least one of: " +
-        [...known].join(", ") + ".",
-      { path },
-    );
+    throw new FlcmError("authoring", "the changes object is empty, so there is nothing to apply. Name a prop to change: " + describeWordSet(known, described), { path });
   }
 }
 

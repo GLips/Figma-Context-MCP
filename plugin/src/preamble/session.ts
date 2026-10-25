@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { FlcmError } from "./flcm-error.js";
+import { isPlainData } from "./plain-data.js";
 
 /**
  * Session values own their data. Copying on ingress closes the alias loophole: an agent cannot
@@ -23,10 +24,7 @@ export function createSession(): Record<string, unknown> {
   function copy(value: unknown, path: string, destination?: object, retainOwned = true, ancestors = new Set<object>(), copies = new WeakMap<object, object>()): unknown {
     if (value === null || value === undefined || typeof value === "string" || typeof value === "boolean") return value;
     if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value !== "object" || value === destination || ancestors.has(value)) return fail(path);
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== null && prototype !== Object.prototype && prototype !== Array.prototype) return fail(path);
-    if ("removed" in value && "id" in value && "type" in value) return fail(path);
+    if (!isPlainData(value) || value === destination || ancestors.has(value)) return fail(path);
     const previous = copies.get(value);
     if (previous) return previous;
     const target: unknown[] | Record<string, unknown> = Array.isArray(value) ? [] : {};

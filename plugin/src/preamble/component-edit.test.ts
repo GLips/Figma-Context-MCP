@@ -149,7 +149,7 @@ test("`description` is a component word, and no other node type takes it", async
   await edit(comp.id, { description: "A compact labelled chip." });
   assert.equal(comp.description, "A compact labelled chip.");
   const plain = await render({ type: "FRAME", key: "plain", width: 10, height: 10 });
-  await assert.rejects(edit("plain", { description: "nope" }), refused({ kind: "authoring", node: { type: "FRAME", id: plain.id } }, /has no `description` to edit/));
+  await assert.rejects(edit("plain", { description: "nope" }), refused({ kind: "authoring", node: { type: "FRAME", id: plain.id } }, /unknown prop "description" — every prop a FRAME takes/));
   assert.equal((await figma.getNodeByIdAsync(plain.id)).description, undefined);
 });
 
@@ -601,7 +601,7 @@ test("an instance's SLOT takes gap, padding and fills; its direction stays the c
   await assert.rejects(edit(slot.id, { layout: { mode: "column" } }), /\(instance\.layout-mode-change\)/);
   assert.equal(slot.layoutMode, "HORIZONTAL");
   // Still a slot, not a text: the words are a frame's, not everything.
-  await assert.rejects(edit(slot.id, { text: "nope" }), refused({ kind: "authoring", node: { type: "SLOT", id: slot.id } }, /has no `text` to edit/));
+  await assert.rejects(edit(slot.id, { text: "nope" }), refused({ kind: "authoring", node: { type: "SLOT", id: slot.id } }, /unknown prop "text" — every prop a SLOT takes/));
 });
 
 test("editMany refuses a batch that both renames a property and binds to it, naming both entries", async () => {
@@ -736,11 +736,11 @@ test("every definition refusal names the cause and writes nothing", async () => 
   // The definition words reach a COMPONENT, not one of its layers or an instance.
   await assert.rejects(
     edit(icon.id, { propertyDefinitions: { Icon: null } }),
-    refused({ kind: "authoring", node: { type: "RECTANGLE", id: icon.id } }, /has no `propertyDefinitions` to edit/),
+    refused({ kind: "authoring", node: { type: "RECTANGLE", id: icon.id } }, /unknown prop "propertyDefinitions" — every prop a RECTANGLE takes/),
   );
   await assert.rejects(
     edit(inst.id, { propertyDefinitions: { Icon: null } }),
-    /has no `propertyDefinitions` to edit/,
+    /unknown prop "propertyDefinitions" — every prop an? INSTANCE takes/,
   );
 
   assert.deepEqual(figma.undoLog.slice(before), []);

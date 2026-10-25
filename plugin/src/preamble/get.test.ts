@@ -12,6 +12,8 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { effects } from "./value-sugar.js";
 import { get } from "./read.js";
 import { render } from "./structure.js";
+import * as flcm from "./runtime.js";
+import { FlcmError, isFigmaRefusal } from "./flcm-error.js";
 
 test("get on a frame returns the expanded canonical shape — values inline, children included", async () => {
   createFigmaMock();
@@ -233,4 +235,22 @@ test("get on a nested node keeps the sizing and position it has as a child; a pa
   assert.deepEqual((await get("cell")).node.layout, { gridColumn: "1", gridRow: "1" });
   assert.deepEqual([screen.width, screen.designedWidth], ["contextual", "402px"]);
   assert.equal(screen.left, undefined);
+});
+
+// Figma throws raw values ("in get_fills: …") that carry no kind and no call; the verb boundary
+// owes the agent both, the same as for any failure flcm raises itself.
+test("a raw Figma throw inside flcm.get names the call and is a Figma refusal", async () => {
+  createFigmaMock();
+  const built = await render({ type: "RECTANGLE", key: "chip", width: 40, height: 40 });
+  const node = await figma.getNodeByIdAsync(built.id);
+  Object.defineProperty(node, "fills", { get() { throw new Error("in get_fills: boom"); } });
+
+  await assert.rejects(flcm.get(built.id), (err: unknown) => {
+    assert.ok(err instanceof FlcmError);
+    assert.equal(err.kind, "figma");
+    assert.equal(err.call, "flcm.get");
+    assert.ok(isFigmaRefusal(err));
+    assert.match(err.message, /^flcm\.get: Figma refused: "in get_fills: boom"/);
+    return true;
+  });
 });

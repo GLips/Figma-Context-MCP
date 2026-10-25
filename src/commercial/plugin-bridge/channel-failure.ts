@@ -2,6 +2,23 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import type { FlcmErrorKind } from "@framelink/plugin/protocol";
+
+/**
+ * A capability's failure, naming whose it is. `kind` is an own enumerable field, so channelFailure
+ * carries it across and the preamble makes it the kind of the FlcmError the agent sees (host.ts
+ * serverCall). A failure with no kind reaches the agent as flcm's own bug. The message is what
+ * went wrong and what to do next; the preamble names the verb, so the message never does.
+ */
+export class CapabilityFailure extends Error {
+  readonly kind: FlcmErrorKind;
+
+  constructor(kind: FlcmErrorKind, message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
 /** JSON failure envelope. Codes are open-ended; capability-owned JSON fields pass through. */
 export interface ChannelFailure {
   code: string;

@@ -76,7 +76,7 @@ interface PreparedOptions {
 
 function compileComponentOptions(raw: unknown): PreparedOptions {
   if (raw == null) return { definitions: [] };
-  rejectUnknownKeys(raw, COMPONENT_OPTION_KEYS, SUBJECT + ".options");
+  rejectUnknownKeys(raw, COMPONENT_OPTION_KEYS, SUBJECT + ".options", { reference: "components" });
   const bag = raw as Record<string, unknown>;
   const out: PreparedOptions = { definitions: compilePropertyDefinitions(bag.propertyDefinitions) };
   for (const word of ["name", "description"] as const) {
@@ -429,7 +429,7 @@ function compileVariantsOptions(raw: unknown): VariantsOptions {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new FlcmError("authoring", 'must name the set: { name: "Button", description? } — got ' + JSON.stringify(raw) + ".", { path: VARIANTS_SUBJECT + ".options" });
   }
-  rejectUnknownKeys(raw, VARIANTS_OPTION_KEYS, VARIANTS_SUBJECT + ".options");
+  rejectUnknownKeys(raw, VARIANTS_OPTION_KEYS, VARIANTS_SUBJECT + ".options", { reference: "components" });
   const bag = raw as Record<string, unknown>;
   if (typeof bag.name !== "string" || !bag.name.trim()) {
     throw new FlcmError("authoring",
@@ -479,7 +479,7 @@ function compileVariantEntries(raw: unknown): AuthoredVariant[] {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new FlcmError("authoring", "must be an object like { component, variant } — got " + JSON.stringify(entry) + ".", { path: at });
     }
-    rejectUnknownKeys(entry, VARIANT_ENTRY_KEYS, at);
+    rejectUnknownKeys(entry, VARIANT_ENTRY_KEYS, at, { reference: "components" });
     const { component: target, variant } = entry as { component?: unknown; variant?: unknown };
     if (!isTargetShaped(target)) {
       throw new FlcmError("authoring", "must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(target) + ".", { path: at + ".component" });

@@ -7,7 +7,7 @@ import { channelFailure } from "./channel-failure.js";
 import { MAX_CHANNEL_BYTES } from "./relay-listener.js";
 import type { RelayConnection } from "./relay-connection.js";
 import type { ChannelRunContext, RunLedger } from "./run-ledger.js";
-import type { PluginEvent } from "@framelink/plugin/protocol";
+import type { FlcmErrorKind, PluginEvent } from "@framelink/plugin/protocol";
 
 /** Opaque JSON payloads. Only explicitly registered names can be called. */
 export type CapabilityHandler = (
@@ -46,7 +46,8 @@ export class ChannelServer {
   refuseMalformed(connection: RelayConnection, id: string): void {
     this.responder(connection, id).refuse(
       "INVALID_INPUT",
-      "flcm: the channel request was missing its execution id or capability — it was refused.",
+      "internal",
+      "the plugin's request to the server was missing its execution id or capability, so the server refused it.",
     );
   }
 
@@ -60,7 +61,8 @@ export class ChannelServer {
     if (!run || run.connection !== connection) {
       refuse(
         "RUN_INACTIVE",
-        `flcm: run ${executionId} is no longer active on this server (cancelled, timed out, or already finished) — the channel request was refused.`,
+        "run-ended",
+        "this run is no longer active on the server (it was cancelled, timed out or already finished), so the server refused the plugin's request.",
       );
       return;
     }
@@ -70,19 +72,26 @@ export class ChannelServer {
     if (run.payloadType !== "EXECUTE_CODE") {
       refuse(
         "INVALID_INPUT",
-        `flcm: run ${executionId} is not a code run — only EXECUTE_CODE runs may call server capabilities.`,
+        "internal",
+        `run ${executionId} is not a code run, and only EXECUTE_CODE runs may call server capabilities.`,
       );
       return;
     }
     const handler = this.capabilities.get(request.capability);
     if (!handler) {
-      refuse("UNKNOWN_CAPABILITY", "flcm: unknown server capability.");
+      refuse(
+        "UNKNOWN_CAPABILITY",
+        "internal",
+        "the plugin asked for an unknown server capability.",
+      );
       return;
     }
     if (run.services >= MAX_INFLIGHT_SERVICES_PER_RUN) {
+      // Mutating verbs run one at a time and each makes one request, so reaching the cap is flcm's bug.
       refuse(
         "TOO_MANY_REQUESTS",
-        `flcm: run ${executionId} already has ${run.services} channel requests in flight — this one was refused.`,
+        "internal",
+        `this run already has ${run.services} requests to the server in flight, so the server refused another.`,
       );
       return;
     }
@@ -98,7 +107,8 @@ export class ChannelServer {
           // The run died during service; withhold the result rather than resume a zombie.
           refuse(
             "RUN_INACTIVE",
-            `flcm: run ${executionId} is no longer active on this server — the channel reply was withheld.`,
+            "run-ended",
+            "this run ended on the server while it worked, so the server withheld its reply.",
           );
           return;
         }
@@ -106,13 +116,21 @@ export class ChannelServer {
       })
       .catch((err: unknown) => {
         if (run.servicesAbort.signal.aborted) {
-          refuse("CANCELLED", "flcm: the run ended; server work was cancelled.");
+          refuse(
+            "CANCELLED",
+            "run-ended",
+            "the run ended, so the server stopped the work it was doing for it.",
+          );
           return;
         }
         try {
           send({ type: "CHANNEL_RESPONSE", ok: false, error: channelFailure(err) });
         } catch {
-          refuse("SERIALIZATION_FAILED", "flcm: server failure could not be encoded as JSON.");
+          refuse(
+            "SERIALIZATION_FAILED",
+            "internal",
+            "the server's failure could not be encoded as JSON.",
+          );
         }
       })
       .finally(release);
@@ -124,12 +142,17 @@ export class ChannelServer {
     id: string,
   ): {
     send: (body: Record<string, unknown>) => void;
-    refuse: (code: string, message: string) => void;
+    refuse: (code: string, kind: FlcmErrorKind, message: string) => void;
   } {
     const send = (body: Record<string, unknown>): void => {
       if (!this.isCurrent(connection) || !connection.isOpen) return;
       const failure = (code: string, message: string): string =>
-        JSON.stringify({ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message } });
+        JSON.stringify({
+          type: "CHANNEL_RESPONSE",
+          id,
+          ok: false,
+          error: { code, message, kind: "internal" },
+        });
       let encoded: string;
       try {
         // Encoding can fail for non-JSON handler output, including cycles or excessive depth.
@@ -137,13 +160,13 @@ export class ChannelServer {
         if (Buffer.byteLength(encoded) > MAX_CHANNEL_BYTES) {
           encoded = failure(
             "RESPONSE_TOO_LARGE",
-            "flcm: server response exceeds the channel size cap.",
+            "the server's reply was over the channel's size cap.",
           );
         }
       } catch {
         encoded = failure(
           "SERIALIZATION_FAILED",
-          "flcm: server response could not be encoded as JSON.",
+          "the server's reply could not be encoded as JSON.",
         );
       }
       try {
@@ -152,8 +175,9 @@ export class ChannelServer {
         Logger.log("Could not send channel response");
       }
     };
-    const refuse = (code: string, message: string): void => {
-      send({ type: "CHANNEL_RESPONSE", ok: false, error: { code, message } });
+    // Every refusal says whose failure it is, as a capability's failure does (CapabilityFailure).
+    const refuse = (code: string, kind: FlcmErrorKind, message: string): void => {
+      send({ type: "CHANNEL_RESPONSE", ok: false, error: { code, message, kind } });
     };
     return { send, refuse };
   }

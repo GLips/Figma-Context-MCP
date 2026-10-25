@@ -113,7 +113,7 @@ export function compilePropertyDefinitionEditBag(raw: unknown, subject: string):
         { path: where + "[" + JSON.stringify(name) + "]" },
       );
     }
-    if (value !== null) rejectUnknownKeys(value, PROPERTY_DEFINITION_EDIT_KEYS, where + "[" + JSON.stringify(name) + "]", "prop", defaultValueHint(value));
+    if (value !== null) rejectUnknownKeys(value, PROPERTY_DEFINITION_EDIT_KEYS, where + "[" + JSON.stringify(name) + "]", { hint: defaultValueHint(value), reference: "components" });
     out[name] = value as ComponentPropertyDefinitionEdit | null;
   }
   return out;

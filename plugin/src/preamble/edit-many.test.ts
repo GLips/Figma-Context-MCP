@@ -91,8 +91,8 @@ test("one invalid delta mutates NOTHING, and the error names every failing entry
     ]),
     (err: Error) => {
       assert.match(err.message, /2 of 3 entries were rejected/);
-      assert.match(err.message, /\n {2}\[1\] TEXT "Text" \(id "[^"]+"\) at borderRadius: a TEXT has no `borderRadius` to edit/);
-      assert.match(err.message, /\n {2}\[2\] TEXT "Text" \(id "[^"]+"\) at clip: a TEXT has no `clip` to edit/);
+      assert.match(err.message, /\n {2}\[1\] TEXT "Text" \(id "[^"]+"\): unknown prop "borderRadius" — every prop a TEXT takes/);
+      assert.match(err.message, /\n {2}\[2\] TEXT "Text" \(id "[^"]+"\): unknown prop "clip" — every prop a TEXT takes/);
       return true;
     },
   );
@@ -369,7 +369,7 @@ test("failures from DIFFERENT stages report together — the batch is one round 
       assert.match(err.message, /3 of 4 entries were rejected/);
       assert.match(err.message, /\[0\].*unknown prop "colour"/s);
       assert.match(err.message, /\[1\].*"ghost"/s);
-      assert.match(err.message, /\n {2}\[2\] TEXT .* at borderRadius: a TEXT has no `borderRadius` to edit/);
+      assert.match(err.message, /\n {2}\[2\] TEXT .*: unknown prop "borderRadius" — every prop a TEXT takes/);
       return true;
     },
   );

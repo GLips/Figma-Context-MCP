@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { looksLikeNode } from "./live-node.js";
+import { isPlainData } from "./plain-data.js";
 import type { WarningRecord } from "@framelink/core";
 export type { WarningRecord } from "@framelink/core";
 
@@ -16,7 +16,7 @@ export function createWarningRegistry() {
   function forNode(id: string): WarningRecord[] { return records.filter(record => record.id === id); }
   // Only registered read/handle projections enter here. An agent's own {id} is not an echo.
   function project(value: unknown, seen = new Map<object, unknown>()): unknown {
-    if (!value || typeof value !== "object" || looksLikeNode(value)) return value;
+    if (!isPlainData(value)) return value;
     if (seen.has(value)) return seen.get(value);
     const output: Record<string, unknown> | unknown[] = Array.isArray(value) ? [] : {};
     seen.set(value, output);

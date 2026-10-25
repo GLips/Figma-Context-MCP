@@ -742,7 +742,6 @@ test("session rejects request plumbing and alias attacks at every write boundary
     attempt(() => session.bad = Promise.resolve(1));
     attempt(() => session.bad = { get hidden() { throw new Error("getter must not run"); } });
     attempt(() => session.bad = { [Symbol()]: flcm });
-    attempt(() => session.bad = { id: "1:1", type: "FRAME", removed: false });
     attempt(() => session.tree.loop = session);
     attempt(() => Object.freeze(session));
     const alias = { nested: {} };
@@ -750,11 +749,14 @@ test("session rejects request plumbing and alias attacks at every write boundary
     alias.nested.bad = flcm;
     session.tree.children.push({ name: "a" }, { name: "b" });
     session.tree.children.unshift(session.tree.children.pop());
-    return { rejects, safe: session.safe, order: session.tree.children.map(n => n.name) };
+    // Shaped like a node, but plain: the agent's own data.
+    session.nodeShaped = { id: "1:1", type: "FRAME", removed: false };
+    return { rejects, safe: session.safe, order: session.tree.children.map(n => n.name), nodeShaped: session.nodeShaped };
   `);
   assert.equal(result.errors, null);
   assert.deepEqual(JSON.parse(JSON.stringify(result.result)), {
-    rejects: Array(11).fill(true), safe: { nested: {} }, order: ["b", "a"],
+    rejects: Array(10).fill(true), safe: { nested: {} }, order: ["b", "a"],
+    nodeShaped: { id: "1:1", type: "FRAME", removed: false },
   });
 });
 
@@ -805,6 +807,24 @@ test("two calls reorder and re-append a stored tree while preserving live ids", 
   const read = await execute(h, `return (await flcm.get(session.screen)).node.id;`);
   assert.equal(read.errors, null);
   assert.equal(read.result, promoted.result);
+});
+
+test("a live node is told apart from node-shaped data by Figma's own identity, returned or logged", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const returned = await execute(h, `const card = figma.createFrame(); card.name = "Card"; return { card };`);
+  assert.match(returned.errors!, /"Card" .* at return value\.card: your code returned a live Figma node/);
+  const logged = await execute(h, `
+    const card = figma.createFrame(); card.name = "Card";
+    const meta = { step: 1 };
+    console.log(card, meta);
+    meta.step = 2;
+    return { id: card.id, type: "FRAME", removed: false, name: "mine" };
+  `);
+  assert.equal(logged.errors, null);
+  assert.deepEqual({ ...logged.result }, { id: logged.result.id, type: "FRAME", removed: false, name: "mine" });
+  assert.deepEqual([...logged.console], [`[log] {"id":"${logged.result.id}","name":"Card","type":"FRAME"} {"step":1}`]);
 });
 
 test("a raw figma write counts even when its change event lands after the reply", async () => {
@@ -1114,6 +1134,28 @@ test("server refusals reject the suspended image await", async () => {
   assert.match((await result).errors!, /run no longer active/);
   assert.equal(h.context.resumed, undefined);
 });
+
+// Whose failure it is is the capability's call, sent as `kind`; the verb names itself once, and a
+// server failure is never passed off as Figma refusing.
+for (const [kind, expected] of [["authoring", "authoring"], [undefined, "internal"], ["bogus", "internal"]] as const) {
+  test(`a capability failure of kind ${kind} reaches the agent as ${expected}, named by its verb`, async () => {
+    const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+    const h = host(createFigmaMock());
+    await h.connect(1);
+    const result = execute(h, `try {
+      await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("https://cdn.example.com/a.png") });
+    } catch (error) { return { kind: error.kind, message: error.message }; }`);
+    const request = await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
+    const message = 'the image "https://cdn.example.com/a.png" could not be loaded: fetch failed with status 404.';
+    h.sendFrame(1, { type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: { code: "COMPUTATION_FAILED", message, kind } });
+    const reply = await result;
+    assert.equal(reply.errors, null);
+    assert.equal(reply.result.kind, expected);
+    assert.ok(reply.result.message.startsWith("flcm.render: " + message), reply.result.message);
+    assert.equal(reply.result.message.split("flcm.render").length, 2, "the verb is named once");
+    assert.doesNotMatch(reply.result.message, /Figma refused/);
+  });
+}
 
 test("a failed run's error keeps only the frames from the agent's own code", () => {
   // QuickJS names every frame of the eval'd agent code <input>, and the plugin's own PLUGIN_<n>_SOURCE.

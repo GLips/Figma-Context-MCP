@@ -86,7 +86,7 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
       return withPaintBlend(solid(parseColor(leaf.color)), leaf.blendMode);
     }
     if (leaf.type === "SOLID" && isVariableInput(leaf.color)) {
-      rejectUnknownKeys(leaf, BOUND_SOLID_KEYS, field);
+      rejectUnknownKeys(leaf, BOUND_SOLID_KEYS, field, { reference: "values" });
       const opacity = leaf.opacity ?? 1;
       if (typeof opacity !== "number" || !(opacity >= 0 && opacity <= 1)) throw new FlcmError("authoring", "must be a number 0–1 — got " + JSON.stringify(leaf.opacity) + ".", { path: field + ".opacity" });
       return withPaintBlend(boundSolid(compileVariableRef(leaf.color, field + ".color", "COLOR"), opacity), leaf.blendMode);
@@ -118,7 +118,7 @@ function withPaintBlend(paint: WritePaint, blendMode: unknown): WritePaint {
 }
 
 // ---- Image paint adjustments: the read's image-fill words, and flcm.image's matching options. ----
-const IMAGE_FILTER_KEYS: readonly string[] = NESTED_WORDS.imageFilters;
+const IMAGE_FILTER_KEYS: ReadonlySet<string> = new Set(NESTED_WORDS.imageFilters);
 
 // `where` is the input's path ("flcm.render.spec.fill[0]", "opts"). Out-of-range values fail here
 // rather than at Figma's set_fills, whose error names neither the node nor the word.
@@ -149,14 +149,9 @@ export function parseImageAdjustments(
 }
 
 function parseImageFilters(input: unknown, where: string): WriteImageFilters {
-  if (typeof input !== "object" || Array.isArray(input)) {
-    throw new FlcmError("authoring", "must be an object of { " + IMAGE_FILTER_KEYS.join(", ") + " } — got " + JSON.stringify(input) + ".", { path: where });
-  }
+  rejectUnknownKeys(input, IMAGE_FILTER_KEYS, where, { noun: "filter", reference: "values" });
   const filters: Record<string, number> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-    if (IMAGE_FILTER_KEYS.indexOf(key) === -1) {
-      throw new FlcmError("authoring", 'has no "' + key + '" — use ' + IMAGE_FILTER_KEYS.join(", ") + ".", { path: where });
-    }
     if (typeof value !== "number" || !(value >= -1 && value <= 1)) {
       throw new FlcmError("authoring", "must be a number -1–1 (0 is untouched) — got " + JSON.stringify(value) + ".", { path: where + "." + key });
     }

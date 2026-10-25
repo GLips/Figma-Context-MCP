@@ -146,7 +146,7 @@ export class ImageUploadStore {
     if (!stored) {
       throw new Error(
         "the upload handle is unknown to this server or has expired (handles last 30 minutes, " +
-          "on the server that issued them)",
+          "on the server that issued them); upload the file again for a fresh handle",
       );
     }
     return stored.base64;

@@ -10,7 +10,7 @@
 // The policy ships with the preamble, so it changes with no plugin release; the host only calls
 // projectForEgress on the way out and serializes what comes back (run-executor.ts executeCode). State is
 // module-level on purpose: a factory evaluation is one run, so registrations die with the run.
-import { looksLikeNode } from "./live-node.js";
+import { isPlainData } from "./plain-data.js";
 import { warnings } from "./warnings.js";
 import { refuseIfRunFinished } from "./host.js";
 import { FlcmError } from "./flcm-error.js";
@@ -36,7 +36,7 @@ function dataEntries(value: object): [string, unknown][] {
 }
 
 function capture(value: unknown): void {
-  if (!value || typeof value !== "object" || looksLikeNode(value) || capturedFields.has(value)) return;
+  if (!isPlainData(value) || capturedFields.has(value)) return;
   captureFrom(value);
 }
 
@@ -51,7 +51,7 @@ function captureFrom(value: object): void {
 function unchangedSinceRead(value: object): boolean {
   const seen = new Set<object>();
   const unchanged = (current: unknown): boolean => {
-    if (!current || typeof current !== "object" || looksLikeNode(current) || seen.has(current)) return true;
+    if (!isPlainData(current) || seen.has(current)) return true;
     seen.add(current);
     const before = capturedFields.get(current);
     const after = dataEntries(current);
@@ -100,7 +100,8 @@ function undefinedFieldsWarning(paths: string[]): string | null {
 
 /**
  * The egress copy of a returned (`result`) or logged (`console`, the whole argument list) value, with
- * the warnings it carries committed as delivered. Live nodes pass through for the host to collapse.
+ * the warnings it carries committed as delivered. Only plain data is copied: any other object (a live
+ * node, a style, a Map) passes through by reference, for the host to identify and serialize.
  *
  * A returned field the agent left undefined is named in one warning: JSON drops it, so the agent would
  * see `{ a }` with no sign `b` was returned. Only the agent's own fields count — a read's undefined
@@ -125,7 +126,7 @@ interface DroppedFields {
 }
 
 function walk(value: unknown, ancestors: Set<object>, channel: EgressChannel, dropped: DroppedFields | undefined): unknown {
-  if (value === null || typeof value !== "object" || looksLikeNode(value)) return value;
+  if (!isPlainData(value)) return value;
   if (ancestors.has(value)) {
     throw new FlcmError(
       "authoring",

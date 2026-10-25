@@ -12,6 +12,11 @@ import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
+import {
+  createImageSourceFetcher,
+  createImagesCapability,
+  ImageByteCache,
+} from "~/commercial/plugin-bridge/image-requests.js";
 
 const bridges: PluginBridge[] = [];
 function create(options: ConstructorParameters<typeof PluginBridge>[0] = {}) {
@@ -69,7 +74,7 @@ it("refuses unknown names, including prototype names, without invoking any handl
       type: "CHANNEL_RESPONSE",
       id: name,
       ok: false,
-      error: { message: expect.stringContaining("unknown server capability") },
+      error: { kind: "internal", message: expect.stringContaining("unknown server capability") },
     });
   }
   expect(handler).not.toHaveBeenCalled();
@@ -140,14 +145,14 @@ it("never suspends the ceiling and refuses both late requests and late service r
   expect(h.socket.frames.at(-1)).toMatchObject({
     id: "late",
     ok: false,
-    error: { message: expect.stringContaining("no longer active") },
+    error: { kind: "run-ended", message: expect.stringContaining("no longer active") },
   });
   release("must not resume");
   await vi.advanceTimersByTimeAsync(0);
   expect(h.socket.frames.at(-1)).toMatchObject({
     id: "first",
     ok: false,
-    error: { message: expect.stringContaining("withheld") },
+    error: { kind: "run-ended", message: expect.stringContaining("withheld") },
   });
   expect(handler).toHaveBeenCalledTimes(1);
 });
@@ -174,6 +179,32 @@ it.each([false, true])(
     await h.result;
   },
 );
+
+// The images capability decides whose failure an image that won't load is, and says so on the wire:
+// the agent named the source, so the failure is the agent's to fix, and only the verb names itself.
+it("an image source that can't load replies as the agent's failure, naming no verb", async () => {
+  const images = createImagesCapability({
+    fetchImage: createImageSourceFetcher({ uploads: null }),
+    cache: new ImageByteCache(),
+  });
+  const h = await running(async () => null, { capabilities: new Map([["images.fetch", images]]) });
+  // A literal loopback host is refused before any socket opens, so no network is involved.
+  h.request("img", "images.fetch", ["http://127.0.0.1/photo.png"]);
+  await vi.waitFor(() => expect(h.socket.frames.some((f) => f.id === "img")).toBe(true));
+  const reply = h.socket.frames.find((f) => f.id === "img") as { error: { message: string } };
+  expect(reply).toMatchObject({
+    ok: false,
+    error: {
+      kind: "authoring",
+      message: expect.stringMatching(
+        /^the image "http:\/\/127\.0\.0\.1\/photo\.png" could not be loaded: .*blocked.*\. Check that the url serves/,
+      ),
+    },
+  });
+  expect(reply.error.message).not.toContain("flcm.");
+  h.bridge.stop();
+  await h.result;
+});
 
 it("accepts a deeply nested raw payload without reserializing the request", async () => {
   const handler = vi.fn(async () => "processed");

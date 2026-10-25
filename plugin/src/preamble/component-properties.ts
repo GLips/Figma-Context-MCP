@@ -98,7 +98,7 @@ export function compilePropertyDefinition(name: string, raw: unknown, at: string
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new FlcmError("authoring", 'must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".", { path: at });
   }
-  rejectUnknownKeys(raw, DEFINITION_KEYS, at, "prop", defaultValueHint(raw));
+  rejectUnknownKeys(raw, DEFINITION_KEYS, at, { hint: defaultValueHint(raw), reference: "components" });
   const bag = raw as Record<string, unknown>;
   // `name` is edit's RENAME word, and this call is DECLARING a property whose name is the key it is
   // filed under — two names for one property, with no way to say which the bindings mean.

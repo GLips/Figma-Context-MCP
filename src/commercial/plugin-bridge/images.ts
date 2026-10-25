@@ -28,6 +28,7 @@ import ipaddr from "ipaddr.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
 import { readRasterDimensions } from "~/utils/raster-header.js";
 import { readBodyWithLimit } from "~/utils/read-body.js";
+import { CapabilityFailure } from "./channel-failure.js";
 import { OutsideAssetRootError, type ContainedFileReader } from "./contained-file.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
@@ -208,6 +209,30 @@ export async function processImageBytes(bytes: Uint8Array, signal?: AbortSignal)
 }
 
 /**
+ * A source the agent named that didn't load, as the agent's own failure: the run's end, when that is
+ * what stopped it, is not.
+ */
+export function imageSourceFailure(
+  source: string,
+  err: unknown,
+  remedy: string,
+  signal?: AbortSignal,
+): CapabilityFailure {
+  if (signal?.aborted) {
+    return new CapabilityFailure(
+      "run-ended",
+      `the run ended before the image ${JSON.stringify(source)} loaded.`,
+    );
+  }
+  // Reasons come from several layers, some ending their sentence and some not.
+  const reason = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
+  return new CapabilityFailure(
+    "authoring",
+    `the image ${JSON.stringify(source)} could not be loaded: ${reason}. ${remedy}.`,
+  );
+}
+
+/**
  * Fetch a single image url and return validated, downscaled base64 bytes ready for figma.createImage —
  * the whole trust boundary in one call. Throws (naming the url) on any failure: blocked range, oversize,
  * non-image payload, unreachable host. The caller surfaces that loud rather than rendering a blank fill.
@@ -216,8 +241,12 @@ export async function fetchAndProcessImage(url: string, signal?: AbortSignal): P
   try {
     return await processImageBytes(await guardedFetch(url, signal), signal);
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`flcm.image could not load ${JSON.stringify(url)}: ${reason}`);
+    throw imageSourceFailure(
+      url,
+      err,
+      "Check that the url serves a PNG, JPEG or GIF from a public host, or use another image",
+      signal,
+    );
   }
 }
 
@@ -242,6 +271,7 @@ export function createLocalImageReader(
       "it to the user: the server's --asset-root sets it"
     : "Move the file under the asset root, or rerun execute with --asset-root set to a directory " +
       "that holds it";
+  const readRemedy = "Check that the path names a PNG, JPEG or GIF file under the asset root";
   return async function readLocalImage(source: string, signal?: AbortSignal): Promise<string> {
     try {
       return await processImageBytes(
@@ -249,10 +279,11 @@ export function createLocalImageReader(
         signal,
       );
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      const rootAdvice = err instanceof OutsideAssetRootError ? `. ${outOfRootRemedy}` : "";
-      throw new Error(
-        `flcm.image could not load ${JSON.stringify(source)}: ${reason}${rootAdvice}`,
+      throw imageSourceFailure(
+        source,
+        err,
+        err instanceof OutsideAssetRootError ? outOfRootRemedy : readRemedy,
+        signal,
       );
     }
   };

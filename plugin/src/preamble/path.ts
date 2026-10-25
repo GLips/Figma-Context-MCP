@@ -432,7 +432,7 @@ export function normalizeVectorPaths(value: unknown, where: string): VectorPaths
   }
   return value.map((path, index) => {
     const at = where + "[" + index + "]";
-    rejectUnknownKeys(path, VECTOR_PATH_KEYS, at, "field");
+    rejectUnknownKeys(path, VECTOR_PATH_KEYS, at, { noun: "field", reference: "values" });
     if (typeof path.data !== "string") throw new FlcmError("authoring", "must be SVG path data (a string) — got " + JSON.stringify(path.data) + ".", { path: at + ".data" });
     if (!WINDING_RULES.includes(path.windingRule)) {
       throw new FlcmError("authoring", "must be one of " + WINDING_RULES.map((rule) => JSON.stringify(rule)).join(", ") + " — got " + JSON.stringify(path.windingRule) + ".", {

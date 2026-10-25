@@ -33,7 +33,12 @@ closed catalogue. Binary data uses base64 strings.
 
 Failures cross opaquely too: the plugin forwards the server's error value on the rejection's
 `detail` rather than flattening it to prose, so a future capability can ship a structured failure
-with no plugin release. A handler must not await a fresh plugin request — that request queues
+with no plugin release. Whose failure it is crosses the same way, on a `kind` field
+(one of `FLCM_ERROR_KINDS` in `protocol.ts`), which a capability sets by throwing a
+`CapabilityFailure` (`channel-failure.ts`) and the channel sets on its own refusals. The preamble's
+`serverCall` (`host.ts`) turns every rejection into an `FlcmError` of that kind, and one with no
+valid kind into `internal`, so a server failure is never reported as Figma's. A capability's message
+says what went wrong and what to do next, never which verb it is in: `publicVerb` names that. A handler must not await a fresh plugin request — that request queues
 behind the execution suspended on the call, and both wait forever; gather evidence, compute, then
 do follow-up `figma.*` work after the reply.
 

@@ -568,8 +568,7 @@ export type WriteChild = WriteNode;
 // A node's stable identity — the fields every returned reference shares, pulled out of the live node by
 // identity.identityOf so render's Handle and the read verbs' SlimHandle can't drift on how they read
 // name/key/text. `key` is our pluginData flcm/key (only on nodes stamped with one); `text` is present for
-// TEXT nodes. Deliberately NO `removed` field beside id/type — safeSerialize's live-node collapse keys on
-// `"removed" in value`, so a read shape that exposed it would be wrongly collapsed in transit.
+// TEXT nodes.
 export interface Identity { warnings?: WarningRecord[]; id: string; type: string; name: string; key?: string; text?: string }
 
 // Edit and clone return measured handles. Tree verbs return authored data with ids.

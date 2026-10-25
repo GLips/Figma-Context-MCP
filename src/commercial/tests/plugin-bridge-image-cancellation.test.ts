@@ -88,7 +88,7 @@ it.each(["headers", "body"])(
           deadline = setTimeout(() => reject(new Error("HTTP work survived cancellation")), 1000);
         }),
       ]);
-      expect(String(failure)).toContain("run cancelled");
+      expect(failure).toMatchObject({ kind: "run-ended" });
     } finally {
       clearTimeout(deadline);
       chunks.unsubscribe(onChunk);

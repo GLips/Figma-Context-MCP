@@ -46,10 +46,10 @@ with a stand-in `FlcmHost`, hand the resulting `flcm` to the scenario. So a gree
 - **Real font metrics / text wrapping.** Text width is a crude `chars × fontSize × 0.55` estimate and
   line wrapping is approximate — pixel-exact layout and any text-fit question need the live plugin.
 - **Actual rendering / screenshots.** No `exportAsync`; use `get_screenshot` live to see real pixels.
-- **The return envelope.** The harness returns raw JS; it does NOT pass through `safeSerialize`
-  (`../src/serialize.ts`), so it does **not** reproduce the live-node collapse (a live `SceneNode` →
-  `{id,name,type}`). Handles and read POJOs round-trip whole through `safeSerialize` anyway, but a returned
-  live node behaves differently live — verify that behavior with the plugin.
+- **The return envelope.** The harness returns raw JS; it does NOT pass through the host's wire
+  serialization (`../src/serialize.ts`), so it does **not** reproduce the live-node handling (a returned
+  `SceneNode` is refused, a logged one collapses to `{id,name,type}`). Handles and read POJOs round-trip
+  whole there anyway, but a returned live node behaves differently live — verify that behavior with the plugin.
 - **Real component-property / variant features** (`addComponentProperty`, `componentPropertyDefinitions`,
   variant sets), constraints, effects rendering.
 - **Token edges**: library (remote) variables and styles, mode switching on a node

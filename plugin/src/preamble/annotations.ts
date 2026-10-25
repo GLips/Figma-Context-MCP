@@ -32,7 +32,7 @@ export function compileAnnotations(value: unknown): WriteAnnotation[] {
   if (!Array.isArray(value)) throw new FlcmError("authoring", "annotations must be an array of { text?, category?, properties? } objects — got " + showValue(value) + ". Pass [] to clear every annotation.");
   return value.map((entry: unknown) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new FlcmError("authoring", "each annotation must be an object { text?, category?, properties? } — got " + showValue(entry) + ".");
-    rejectUnknownKeys(entry, ANNOTATION_KEYS, "an annotation");
+    rejectUnknownKeys(entry, ANNOTATION_KEYS, "an annotation", { reference: "annotations" });
     const { text, category, properties } = entry as Record<string, unknown>;
     const out: WriteAnnotation = {};
     if (text !== undefined) {

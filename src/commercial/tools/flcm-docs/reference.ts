@@ -34,6 +34,7 @@ import {
   INSTANCE_WRITE_RULES,
   instanceWordsVerifiedToLand,
   type VerbCategory,
+  type FlcmReferenceSection,
 } from "@framelink/plugin/schema";
 import {
   mentalModel,
@@ -307,7 +308,7 @@ function verbTable(): string {
 // ---- Sections. Each is addressable by id via get_flcm_reference(id); the whole set (in order) is the
 // full human doc. Bodies interleave generated tables with narrative fragments. ----
 interface Section {
-  id: string;
+  id: FlcmReferenceSection;
   title: string;
   blurb: string; // one-liner for the menu a nameless call gets back
   body: (channel: DocsChannel) => string;
@@ -458,7 +459,7 @@ const SECTIONS: Section[] = [
   },
 ];
 
-const SECTION_IDS = SECTIONS.map((s) => s.id);
+const SECTION_IDS: readonly string[] = SECTIONS.map((s) => s.id);
 
 // Claude Code truncates tool descriptions at a hard 2KB, and the truncated tail (the return-envelope
 // contract + raw-figma guidance) is exactly what an agent needs. So the ≤2KB cap is a real invariant, not

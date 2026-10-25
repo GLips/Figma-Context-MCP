@@ -156,7 +156,7 @@ export function compileTextStyleWords(cfg: unknown, at: string): WriteTextStyle 
   }
   const c = cfg as NonNullable<TextProps["textStyle"]>;
   rejectUnauthorableTextLeaves(c, at);
-  rejectUnknownKeys(c, TEXTSTYLE_INPUT_KEYS, at);
+  rejectUnknownKeys(c, TEXTSTYLE_INPUT_KEYS, at, { reference: "props" });
   const ts: WriteTextStyle = {};
   const raw = c as Record<string, unknown>;
   if (raw.value !== undefined && raw.style == null) {
@@ -326,7 +326,7 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, at: string
     // the rest, so a typo'd `textTransfrom` on a run vanished. Reject it here, on the raw author delta.
     const styleAt = at + "[" + i + "][1]";
     rejectUnauthorableTextLeaves(delta, styleAt, REFUSED_RUN_TEXT_LEAVES);
-    rejectUnknownKeys(delta, RUN_INPUT_KEYS, styleAt);
+    rejectUnknownKeys(delta, RUN_INPUT_KEYS, styleAt, { reference: "props" });
     for (const seg of parseMarkdownAt(raw, at + "[" + i + "]")) {
       out.push(compileRun(seg.text, mergeDelta(seg, delta, boldWeight), baseStyle, styleAt));
     }

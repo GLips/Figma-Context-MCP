@@ -41,7 +41,7 @@ export function withoutReadRecords(bag: Record<string, unknown>): Record<string,
  */
 export function acceptAuthoringProps<P = Record<string, unknown>>(bag: unknown, entry: AuthoringEntry): Accepted<P> {
   const owner = "a " + entry.type;
-  if (bag === null || typeof bag !== "object" || Array.isArray(bag)) rejectUnknownKeys(bag, entry.known, entry.path, "prop", "", owner);
+  if (bag === null || typeof bag !== "object" || Array.isArray(bag)) rejectUnknownKeys(bag, entry.known, entry.path, { owner, reference: "props" });
   const src = normalizeInputAliases(bag as Record<string, unknown>, entry.path, entry.type);
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(src)) {
@@ -75,10 +75,10 @@ export function acceptAuthoringProps<P = Record<string, unknown>>(bag: unknown, 
   if (out.layout != null) {
     const layout = readyLayout(out.layout, entry.path + ".layout");
     const words: readonly string[] = hasContainerLayout(entry.type) ? WORD_GROUPS.layout : WORD_GROUPS.childLayout;
-    rejectUnknownKeys(layout, new Set(words), entry.path + ".layout", "prop", "", owner + "'s layout");
+    rejectUnknownKeys(layout, new Set(words), entry.path + ".layout", { owner: owner + "'s layout", reference: "props" });
     out.layout = layout;
   }
-  rejectUnknownKeys(out, entry.known, entry.path, "prop", "", owner);
+  rejectUnknownKeys(out, entry.known, entry.path, { owner, reference: "props" });
   // Past the gate on purpose: beside a `"fill"` the designed size is the compile's page fallback
   // (WriteLayout.designedSize), inert unless a created root lands on a page. Create only — edit and
   // live moves reuse a delta whose destination isn't known here, so there it stays a dropped read-only word.

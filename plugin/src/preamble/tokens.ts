@@ -20,6 +20,7 @@
 import { sceneFigma as figma } from "./scene-access.js";
 import { FlcmError } from "./flcm-error.js";
 import { isTokenRef } from "./ir.js";
+import { closestWords } from "./validate.js";
 import type { VariableRef, StyleRef, TokenRef, Bindable } from "./ir.js";
 
 // ---- compile ----
@@ -248,7 +249,7 @@ export class TokenLookups {
     }
     if (named.length) throw new FlcmError("authoring", "the variable " + JSON.stringify(name) + " is " + named[0].resolvedType + ", and this property needs a " + ref.resolvedType + " variable. Name one of that type, or give the literal.", { path: ref.word });
     const all = [...(await this.localVars()), ...(await this.page()).variables].filter((v) => v.resolvedType === ref.resolvedType);
-    const near = nearestNames(name, all.map((v) => v.name));
+    const near = closestWords(name, all.map((v) => v.name));
     throw new FlcmError(
       "authoring",
       "no " + ref.resolvedType + " variable is named " + JSON.stringify(name) + " in this file's variables, on this page or in its enabled libraries" +
@@ -278,7 +279,7 @@ export class TokenLookups {
     }
     if (named.length) throw this.wrongStyleKind(named[0], ref);
     const all = [...(await this.local()), ...(await this.page()).styles].filter((s) => s.type === ref.styleType);
-    const near = nearestNames(name, all.map((s) => s.name));
+    const near = closestWords(name, all.map((s) => s.name));
     throw new FlcmError(
       "authoring",
       "no " + STYLE_TYPE_NOUN[ref.styleType] + " style is named " + JSON.stringify(name) + " in this file's styles or on this page" +
@@ -450,28 +451,6 @@ export async function scanUsedTokens(pages: readonly PageNode[]): Promise<{ vari
   const variables = (await Promise.all([...variableIds].map((id) => figma.variables.getVariableByIdAsync(id)))).filter((v): v is Variable => !!v);
   const styles = (await Promise.all([...styleIds].map((id) => figma.getStyleByIdAsync(id)))).filter((s): s is BaseStyle => !!s);
   return { variables, styles };
-}
-
-// Closest names first: an exact case-insensitive hit, then containment either way, then the shortest
-// edit distance. Only what the cap would show survives.
-function nearestNames(name: string, names: readonly string[]): string[] {
-  const want = name.toLowerCase();
-  const scored = [...new Set(names)].map((n) => {
-    const have = n.toLowerCase();
-    const score = have === want ? 0 : have.includes(want) || want.includes(have) ? 1 : 2 + editDistance(want, have);
-    return { n, score };
-  });
-  return scored.sort((a, b) => a.score - b.score).filter((s) => s.score <= Math.max(3, want.length / 2) + 2).map((s) => s.n);
-}
-
-function editDistance(a: string, b: string): number {
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const row = [i];
-    for (let j = 1; j <= b.length; j++) row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    prev = row;
-  }
-  return prev[b.length];
 }
 
 async function describeVariable(variable: Variable): Promise<ResolvedVariable> {

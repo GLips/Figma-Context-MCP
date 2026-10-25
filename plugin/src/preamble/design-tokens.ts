@@ -22,6 +22,7 @@
 // stops or effects, which the read doesn't emit either.
 import { sceneFigma as figma } from "./scene-access.js";
 import { FlcmError } from "./flcm-error.js";
+import { rejectUnknownKeys } from "./validate.js";
 import { enabledLibraryListing, scanUsedTokens, TokenLookups } from "./tokens.js";
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
@@ -153,8 +154,7 @@ function parseTokenQuery(from: unknown): DesignTokenUsedQuery | DesignTokenLibra
   if (used && query.used !== true) throw refuse("used must be true.");
   if (used && "library" in query) throw refuse("used and library are two different loads — pass one.");
   const known = used ? USED_QUERY_KEYS : LIBRARY_QUERY_KEYS;
-  const unknown = Object.keys(query).filter((k) => !known.has(k));
-  if (unknown.length) throw refuse("unknown key " + unknown.map((k) => JSON.stringify(k)).join(", ") + ".");
+  rejectUnknownKeys(query, known, "the query", { noun: "query key", hint: usage, reference: "values" });
   if (!used && typeof query.library !== "string") throw refuse("library must be the library's name, as flcm.designTokens() lists it under libraries.");
   if (query.collection !== undefined && typeof query.collection !== "string") throw refuse("collection must be a collection name.");
   const types = used ? [...LISTED_VARIABLE_TYPES, ...LISTED_STYLE_TYPES] : [...LISTED_VARIABLE_TYPES];

@@ -105,12 +105,12 @@ test("a failed image fetch rejects the render with zero canvas writes", async ()
         fill: image("https://cdn.example.com/blocked.jpg"),
       },
       async () => {
-        throw new Error(
-          'flcm.image could not load "https://cdn.example.com/blocked.jpg": blocked range',
-        );
+        // The installed host's rejection: the server's message, and its failure on `detail`.
+        const message = 'the image "https://cdn.example.com/blocked.jpg" could not be loaded: blocked range.';
+        throw Object.assign(new Error(message), { detail: { code: "COMPUTATION_FAILED", message, kind: "authoring" } });
       },
     ),
-    /could not load/,
+    (err: FlcmError) => err.kind === "authoring" && /could not be loaded: blocked range/.test(err.reason),
   );
   assert.equal(figma.currentPage.children.length, before, "a failed fetch created nothing");
 });
@@ -249,7 +249,7 @@ test("paint adjustments Figma can't realize fail loud by name", () => {
   assert.throws(() => image("https://cdn.example.com/a.jpg", { filters: { exposure: 2 } }), /opts\.filters\.exposure: must be a number -1–1/);
   assert.throws(
     () => compilePaintWord({ type: "IMAGE", imageRef: "x", scaleMode: "FILL", filters: { blur: 1 } } as never, "fill"),
-    /fill\.filters: has no "blur"/,
+    /fill\.filters: unknown filter "blur" — the filters here are "exposure", /,
   );
   assert.throws(() => compilePaintWord({ type: "SOLID", color: "#000", blendMode: "pass-through" }, "fill"), /unsupported blend "pass-through"/);
 });

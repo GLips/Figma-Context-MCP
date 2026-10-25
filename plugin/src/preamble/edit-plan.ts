@@ -128,23 +128,11 @@ export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
   rejectNonDeltaWordsAgainst(changes, EDIT_KEYS, subject);
 }
 
-// The per-type legality gate (a node's type is identity, not a live fact, so this holds whenever it
-// runs; an illegal word rejects with zero writes). Returns the type's word set so the compile step
-// can flag radius/clip from it.
-function assertDeltaLegalForType(node: SceneNode, changes: EditDelta, subject: string): ReadonlySet<string> {
-  // edit accepts on a node exactly its type's create row minus the create-only words (vocabulary.ts)
-  // — one vocabulary, no permissive edit dialect: `fill` on a LINE rejects here as LINE rejects it.
-  const legal = editWordsOf(node.type) ?? (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
-  for (const prop of Object.keys(changes)) {
-    if (!legal.has(prop)) {
-      throw new FlcmError(
-        "authoring",
-        "a " + node.type + " has no `" + prop + "` to edit. Drop it; a " + node.type + " edit takes only " + [...legal].join(", ") + ".",
-        { path: subject + "." + prop, node: { type: node.type, name: node.name, id: node.id } },
-      );
-    }
-  }
-  return legal;
+// The words an edit of this node may name: its type's create row minus the create-only words
+// (vocabulary.ts) — one vocabulary, no permissive edit dialect, so `fill` on a LINE rejects as LINE
+// rejects it at create. A node's type is identity, not a live fact, so this holds whenever it's read.
+function editWordsForNode(node: SceneNode): ReadonlySet<string> {
+  return editWordsOf(node.type) ?? (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
 }
 
 // A textStyle delta naming SOME font-identity word resolves the rest of the triple against the
@@ -406,11 +394,13 @@ export function emptyEditPlan(node: SceneNode): EditPlan {
  * before the round trip, against the document as it stood then.
  */
 export function compileEditPlan(node: SceneNode, delta: EditDelta, subject: string): EditPlan {
-  const changes = acceptAuthoringProps<EditDelta>(delta, { type: node.type, verb: "edit", known: EDIT_KEYS, path: subject }) as EditDelta;
+  // The prelude's closed-set gate judges the delta against this node's own words, so a word its
+  // type lacks refuses exactly as it would at create, with zero writes.
+  const legal = editWordsForNode(node);
+  const changes = acceptAuthoringProps<EditDelta>(delta, { type: node.type, verb: "edit", known: legal, path: subject }) as EditDelta;
   // A delta of ONLY read-only words (`{ type }`) folds to nothing — same refusal as an empty object,
   // now that the prelude has run.
-  assertDeltaNotEmpty(changes, EDIT_KEYS, subject);
-  const legal = assertDeltaLegalForType(node, changes, subject);
+  assertDeltaNotEmpty(changes, legal, subject, { owner: "a " + node.type, reference: "props" });
   const instanceWords = takeInstanceEditWords(changes, subject);
   const componentWords = takeComponentEditWords(changes, subject);
   // Unconditional: an EMPTY component bag doesn't make `instanceWords`/`componentWords`, and it must
