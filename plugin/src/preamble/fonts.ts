@@ -27,6 +27,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 import { WriteNode, WriteChild, WriteProps, WriteTextStyle, namesFontIdentity, isTokenRef } from "./ir.js";
 import { variableLiteral, variableValues, styleFor, tokenKey, type ResolvedTokens } from "./tokens.js";
 import type { Bindable, StyleRef, VariableRef } from "./ir.js";
+import { ConcurrentEditError, FlcmError } from "./flcm-error.js";
 
 // Every font this run has loaded, by Figma's own (family, style) label. Per-run, like every
 // piece of preamble state: the preamble is eval'd fresh inside each run's wrapper, and a font a
@@ -159,7 +160,7 @@ function styleKey(ref: StyleRef): string {
 /** The font a text style lands in, loaded by the prepare that resolved the style. */
 export function textStyleFont(fonts: FontMap, ref: StyleRef): { family: string; style: string } {
   const font = fonts[styleKey(ref)];
-  if (!font) throw new Error(ref.word + ": the text style's font was not loaded before the write. This is an internal error; report it.");
+  if (!font) throw new FlcmError("internal", ref.word + ": the text style's font was not loaded before the write. This is a bug in flcm, not in your call.");
   return font;
 }
 
@@ -263,24 +264,27 @@ export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fo
   for (const font of liveFontsOf(t)) {
     // Only a write needs it, and whether one is due is decided where it would land (assertTextFontsAvailable).
     if (loadedFonts.has(fontLabel(font)) || unavailableFonts.has(fontLabel(font))) continue;
-    throw new Error(
-      subject + ": the font of " + who + " changed to " + font.family + " " + font.style +
-        " while this call was loading fonts and images, so the delta was resolved against a node that no longer exists in that state. Nothing was applied — re-run the call.",
-    );
+    throw new ConcurrentEditError({
+      call: subject,
+      node: { type: t.type, name: t.name, id: t.id },
+      changed: "the font of " + who + " became " + font.family + " " + font.style,
+    });
   }
   const authored: FontNeed[] = [];
   if (namesFontIdentity(patch.textStyle)) authored.push(needOf(patch.textStyle!));
   for (const run of patch.runs || []) if (run.style && namesFontIdentity(run.style)) authored.push(needOf(run.style));
   const style = patch.textStyle?.style;
   if (style && !fonts[styleKey(style)]) {
-    throw new Error(subject + ": " + who + " sets a text style whose font this call did not load. This is an internal error; report it.");
+    throw new FlcmError("internal", who + " sets a text style whose font this call did not load. This is a bug in flcm, not in your call.", { call: subject });
   }
   for (const need of authored) {
     if (fonts[key(need.family, need.weight, !!need.italic)]) continue;
-    throw new Error(
-      subject + ": " + who + " needs " + (isTokenRef(need.family) ? "its bound family" : need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
-        "), which this call did not load — the text's font changed while the call was loading fonts and images. Nothing was applied — re-run the call.",
-    );
+    throw new ConcurrentEditError({
+      call: subject,
+      node: { type: t.type, name: t.name, id: t.id },
+      changed: "the font of " + who + " changed, so the " + (isTokenRef(need.family) ? "bound family" : need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
+        ") it now needs was never loaded",
+    });
   }
 }
 
@@ -289,7 +293,11 @@ export function assertTextFontsAvailable(node: TextNode, patch: WriteProps, subj
   if (!textEditReflows(patch)) return;
   for (const font of liveFontsOf(node)) {
     if (!unavailableFonts.has(fontLabel(font))) continue;
-    throw new Error(subject + ": the font " + font.family + " " + font.style + " isn't available here, so this text can't be rewritten — " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") uses it. Install the font, or set textStyle.fontFamily to one this file has.");
+    throw new FlcmError(
+      "figma",
+      "the font " + font.family + " " + font.style + " isn't available here, so this text can't be rewritten — " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") uses it. Install the font, or set textStyle.fontFamily to one this file has.",
+      { call: subject, node: { type: node.type, name: node.name, id: node.id } },
+    );
   }
 }
 
@@ -390,7 +398,7 @@ export function fontDivergences(family: Bindable<string> | undefined, weight: Bi
 export function resolveFontStrict(fonts: FontMap, family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic = false): { family: string; style: string } {
   const font = fonts[key(family, weight, italic)];
   if (!font) {
-    throw new Error("TEXT: a run's font (" + (isTokenRef(family) ? "bound family" : family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is an internal error; report it.");
+    throw new FlcmError("internal", "TEXT: a run's font (" + (isTokenRef(family) ? "bound family" : family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is a bug in flcm, not in your call.");
   }
   return font;
 }

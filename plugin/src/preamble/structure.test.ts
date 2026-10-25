@@ -23,6 +23,7 @@ import { render, append,
   replace, } from "./structure.js";
 import { get } from "./read.js";
 import { readKey } from "./identity.js";
+import { FlcmError } from "./flcm-error.js";
 
 let figma = createFigmaMock();
 
@@ -288,7 +289,7 @@ test("a source deleted while the destination resolved refuses at the seal — Fi
   try {
     await assert.rejects(
       clone(src.id, dest.id),
-      /flcm\.clone: "RECTANGLE" \(id .*\) was deleted while this call was resolving targets and loading resources/,
+      (err: unknown) => err instanceof FlcmError && err.kind === "concurrent-edit" && err.call === "flcm.clone",
     );
   } finally {
     figma.getNodeByIdAsync = getNodeByIdAsync;
@@ -322,7 +323,7 @@ test("a destination dragged to a page this call never loaded refuses before the 
         height: 20,
         fill: image("https://cdn.example.com/a.jpg"),
       }),
-      /moved to page "Page 2" \(id .*\) while this call was resolving targets and loading resources, and that page is not loaded/,
+      (err: unknown) => err instanceof FlcmError && err.kind === "concurrent-edit" && /"Page 2"/.test(err.reason),
     );
   } finally {
     delete g.__flcmHost;

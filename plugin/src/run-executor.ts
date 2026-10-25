@@ -30,6 +30,8 @@ import type {
 import type { FlcmHost, RunCancelCause } from "./preamble/host.js";
 // Likewise type-only: the factory result types both agent bindings without bundling their implementation.
 import type * as SandboxRuntime from "./preamble/sandbox.js";
+// The one value import from preamble/: flcm-error imports nothing, so it bundles alone.
+import { FlcmError, formatFailureForConsole } from "./preamble/flcm-error.js";
 
 // What a run cancelled before it started tells its (late) reply, by cause.
 const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
@@ -245,7 +247,8 @@ export function createRunExecutor({
         typeof built.committedVerbCount !== "function" ||
         typeof built.projectForEgress !== "function"
       ) {
-        throw new Error(
+        throw new FlcmError(
+          "internal",
           "the flcm std-lib the server sent doesn't match this plugin — it lacks the mutation queue " +
             "or the read egress this host drives. Update the server (`npx figma-developer-mcp@latest`) " +
             "and the plugin, then restart.",
@@ -264,7 +267,7 @@ export function createRunExecutor({
       try { session.last = raw; } catch { session.last = undefined; }
     } catch (err) {
       trace("code-returned");
-      errorMessage = formatError(err);
+      errorMessage = formatFailureForConsole(err);
     } finally {
       // Drain before anything else in here, and the order of the three is load-bearing:
       //   • BEFORE the console restore, so a queued verb's warnings still reach the agent's reply;
@@ -345,7 +348,7 @@ export function createRunExecutor({
       reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
     } catch (err) {
       activity.advance(to.id, cancelledRuns.cancellation(to) !== null ? "cancelled" : "failed");
-      reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
+      reply(to, { type: "SCREENSHOT_RESULT", errors: formatFailureForConsole(err) });
     } finally {
       cancelledRuns.settle(to);
     }
@@ -411,12 +414,6 @@ export function createRunExecutor({
   };
 }
 
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.stack ? `${err.name}: ${err.message}\n${err.stack}` : `${err.name}: ${err.message}`;
-  }
-  return String(err);
-}
 
 function stringifyArg(value: unknown): string {
   if (typeof value === "string") return value;

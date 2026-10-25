@@ -10,6 +10,7 @@
 import { toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
 import type { ServerFrame } from "./protocol.js";
+import { FlcmError } from "./preamble/flcm-error.js";
 
 export interface PendingServerCall {
   resolve: (payload: unknown) => void;
@@ -42,7 +43,8 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       // reaches its call only AFTER the drop.
       if (!isConnected(to.connKey)) {
         return Promise.reject(
-          new Error(
+          new FlcmError(
+            "run-ended",
             "flcm: the server for this run is not connected — the server call cannot be issued and the script stops here.",
           ),
         );
@@ -72,10 +74,14 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       // that can't be updated in step with a new capability, so it must not flatten the server's error
       // to prose: a future capability ships a structured failure and a preamble that reads `.detail`.
       // `message` stays a string only because throwing a non-Error in the sandbox loses the stack.
+      // A plain Error, not an FlcmError: the failure is the capability's own, and it carries no kind.
+      // eslint-disable-next-line no-restricted-syntax -- the platform's failure, deliberately kindless
       const error = new Error(
         typeof msg.error === "string"
           ? msg.error
+          // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
           : msg.error && typeof msg.error === "object" && "message" in msg.error && typeof msg.error.message === "string"
+            // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
             ? msg.error.message
             : "flcm: the server capability failed.",
       );
@@ -92,7 +98,7 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       for (const [id, call] of pending) {
         if (!match(call)) continue;
         pending.delete(id);
-        call.reject(new Error(reason));
+        call.reject(new FlcmError("run-ended", reason));
       }
     },
   };

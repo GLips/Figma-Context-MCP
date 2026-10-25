@@ -21,7 +21,7 @@ import { compileEditPlan, type EditPlan, type InstanceNeeds } from "./edit-plan.
 import { resolveTarget, createResolvedTargets, type ResolvedTargets } from "./target.js";
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
 import { captureReadDependencies, NO_READ_DEPENDENCIES, type ReadDependencies } from "./call-obligations.js";
-import { deriveBuiltNodeObligations, deriveBuiltStretchObligations, deriveDriftObligations, deriveLiveEntryObligations, liveObligationSite, obligationsOnTarget } from "./obligation-derivation.js";
+import { deriveBuiltNodeObligations, deriveBuiltStretchObligations, deriveConcurrentEditObligations, deriveLiveEntryObligations, liveObligationSite, obligationsOnTarget } from "./obligation-derivation.js";
 import { recordObligations } from "./obligation.js";
 import { compileBindingBag } from "./compile-component-words.js";
 import { bindableFieldsOf } from "./vocabulary.js";
@@ -29,6 +29,7 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import type { EditDelta } from "./schema.js";
 import { resolveInstanceMains, type InstanceMains } from "./operation-schedule.js";
 import { liveSublayerId } from "@framelink/core";
+import { FlcmError, locateFailure } from "./flcm-error.js";
 
 /** What a tree's prepare loaded, for its gate to finish: the resources, plus the targets its instances name. */
 export interface LoadedTreeResources extends LoadedResources {
@@ -195,7 +196,7 @@ export function gateEditResources(loaded: LoadedResources, needs: readonly Insta
 }
 
 function assertSceneNode(node: BaseNode): asserts node is SceneNode {
-  if (node.type === "PAGE" || node.type === "DOCUMENT") throw new Error("a page or document cannot be placed as a scene node.");
+  if (node.type === "PAGE" || node.type === "DOCUMENT") throw new FlcmError("authoring", "a page or document cannot be placed as a scene node.");
 }
 
 // Live nodes whose spec parent this verb builds: a new node's children, or a new instance's slot
@@ -213,10 +214,10 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
     try {
       const node = await resolveTarget({ id: ref.liveId });
       assertSceneNode(node);
-      if (ref.authoring.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
-      if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) throw new Error("type " + ref.source.type + " does not match live " + node.type + ".");
+      if (ref.authoring.svg !== undefined) throw new FlcmError("authoring", "svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
+      if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) throw new FlcmError("authoring", "type " + ref.source.type + " does not match live " + node.type + ".");
       live.push({ ref, node });
-    } catch (cause) { throw new Error(ref.sourcePath + ": " + (cause instanceof Error ? cause.message : String(cause))); }
+    } catch (cause) { throw locateFailure(cause, { path: ref.sourcePath }); }
   }
   for (const { ref, node } of live) {
     const at = ref.sourcePath;
@@ -225,28 +226,28 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       const refs = componentPropertyReferences === undefined ? undefined : compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
       let pathData: VectorPaths | undefined;
       if (d !== undefined) {
-        if (node.type !== "VECTOR") throw new Error("d is a VECTOR geometry word.");
-        if (typeof d !== "string" || !d.trim()) throw new Error("d must be a non-empty SVG path string.");
+        if (node.type !== "VECTOR") throw new FlcmError("authoring", "d is a VECTOR geometry word.");
+        if (typeof d !== "string" || !d.trim()) throw new FlcmError("authoring", "d must be a non-empty SVG path string.");
         pathData = [{ data: normalizePathData(d), windingRule: "NONZERO" }];
       }
       if (vectorPaths !== undefined) {
-        if (node.type !== "VECTOR" || d !== undefined) throw new Error("vectorPaths requires a VECTOR and cannot be combined with d.");
+        if (node.type !== "VECTOR" || d !== undefined) throw new FlcmError("authoring", "vectorPaths requires a VECTOR and cannot be combined with d.");
         pathData = normalizeVectorPaths(vectorPaths);
       }
-      if (key !== undefined && typeof key !== "string") throw new Error("key must be a string.");
+      if (key !== undefined && typeof key !== "string") throw new FlcmError("authoring", "key must be a string.");
       const changes = delta as EditDelta;
       const hint = Object.keys(delta).some(k => delta[k] !== undefined) ? compileEditPlan(node, changes, at) : undefined;
       const targets = createResolvedTargets();
       const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
       const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
       entries.set(ref, { ref, node, changes, key, refs, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(ref) });
-    } catch (cause) { throw new Error(at + ": " + (cause instanceof Error ? cause.message : String(cause))); }
+    } catch (cause) { throw locateFailure(cause, { path: at }); }
   }
   const prepared = [...entries.values()];
   let dependencies = NO_READ_DEPENDENCIES;
   const capture = (tokens: ResolvedTokens) => {
     dependencies = captureReadDependencies(prepared.flatMap((e) => [
-      ...(e.hint ? deriveDriftObligations(e.hint, e.instance, tokens, liveObligationSite(e.node), e.ref.sourcePath) : []),
+      ...(e.hint ? deriveConcurrentEditObligations(e.hint, e.instance, tokens, liveObligationSite(e.node), e.ref.sourcePath) : []),
       ...obligationsOnTarget(deriveLiveEntryObligations(e.key as string | undefined, e.pathData, e.refs), { node: e.node }, e.ref.sourcePath),
     ]));
   };

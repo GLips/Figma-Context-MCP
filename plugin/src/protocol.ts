@@ -385,6 +385,7 @@ function parseWriteAccessNotice(value: unknown): WriteAccessNotice | null {
   if (n.kind === "sign-in-pending" && typeof n.userCode === "string" && typeof n.verificationUri === "string")
     return { kind: n.kind, userCode: n.userCode, verificationUri: n.verificationUri };
   if (n.kind === "signed-in") return { kind: n.kind, seat: typeof n.seat === "boolean" ? n.seat : null };
+  // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
   if (n.kind === "sign-in-failed" && typeof n.message === "string") return { kind: n.kind, message: n.message };
   return null;
 }

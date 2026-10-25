@@ -25,6 +25,7 @@ import { rejectUnknownKeys, own, oneOf, words, assertEnum } from "./validate.js"
 import { isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
 import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
 import { normalizeEffects } from "./value-sugar.js";
+import { FlcmError } from "./flcm-error.js";
 import { assertSlotFrameNameAgrees, compileBindings, compileComponentPropertyBag, compileOverrideBag } from "./compile-component-words.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
@@ -58,7 +59,7 @@ function padEdges(pad: PadInput): Edges<Bindable> {
     return { top: ref, right: ref, bottom: ref, left: ref };
   }
   if (pad == null || typeof pad !== "object" || Array.isArray(pad)) {
-    throw new Error('flcm: pad must be a number, a CSS box shorthand string ("12px 16px"), { variable }, or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
+    throw new FlcmError("authoring", 'pad must be a number, a CSS box shorthand string ("12px 16px"), { variable }, or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
   }
   rejectUnknownKeys(pad, PAD_KEYS, "pad");
   const edge = (v: unknown, name: string): Bindable | undefined => {
@@ -68,7 +69,7 @@ function padEdges(pad: PadInput): Edges<Bindable> {
       try {
         return length(literal);
       } catch {
-        throw new Error("flcm: pad." + name + ' must be a number or "Npx" (or { variable }), got ' + JSON.stringify(literal) + ".");
+        throw new FlcmError("authoring", "pad." + name + ' must be a number or "Npx" (or { variable }), got ' + JSON.stringify(literal) + ".");
       }
     });
   };
@@ -100,7 +101,7 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
         sz[key] = "fixed";
         dims[dim] = length(val);
       } catch {
-        throw new Error('flcm: width/height must be a number, "Npx", "N%", "fill", "hug", or { variable } — got ' + JSON.stringify(val) + ".");
+        throw new FlcmError("authoring", 'width/height must be a number, "Npx", "N%", "fill", "hug", or { variable } — got ' + JSON.stringify(val) + ".");
       }
     }
   };
@@ -118,13 +119,13 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
 function applyPlacement(layout: WriteLayout, props: SizeProps): void {
   const { left, top, position } = props;
   if (position != null && !(WORD_VALUES.position as readonly string[]).includes(position)) {
-    throw new Error('flcm: position must be "absolute" or "none" — got ' + JSON.stringify(position) + ".");
+    throw new FlcmError("authoring", 'position must be "absolute" or "none" — got ' + JSON.stringify(position) + ".");
   }
   if (position === "none") {
     // A node rejoining the flow is placed by the layout, not by coordinates — a coordinate beside
     // "none" is two contradictory claims, refused rather than resolved.
     if (left != null || top != null) {
-      throw new Error('flcm: position: "none" returns the node to its parent\'s flow, where the layout places it — `left`/`top` can\'t ride along. Drop them, or drop position: "none".');
+      throw new FlcmError("authoring", 'position: "none" returns the node to its parent\'s flow, where the layout places it — `left`/`top` can\'t ride along. Drop them, or drop position: "none".');
     }
     layout.position = "none";
     return;
@@ -140,7 +141,7 @@ function applyPlacement(layout: WriteLayout, props: SizeProps): void {
     try {
       layout[key] = length(val);
     } catch {
-      throw new Error("flcm: " + key + ' must be a number, "Npx", or "N%" — got ' + JSON.stringify(val) + ".");
+      throw new FlcmError("authoring", key + ' must be a number, "Npx", or "N%" — got ' + JSON.stringify(val) + ".");
     }
   };
   axis(left, "left");
@@ -188,17 +189,17 @@ function parseConstraints(raw: unknown): { x?: ConstraintX; y?: ConstraintY } | 
   if (raw == null) return undefined;
   if (raw === "none") return { x: "none", y: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error('flcm: constraints must be an object like { x, y } or "none" — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'constraints must be an object like { x, y } or "none" — got ' + JSON.stringify(raw) + ".");
   }
   const r = raw as { x?: string; y?: string };
   rejectUnknownKeys(r, CONSTRAINT_KEYS, "constraints");
   const out: { x?: ConstraintX; y?: ConstraintY } = {};
   if (r.x != null) {
-    if (!oneOf(CONSTRAINT_X, r.x)) throw new Error("flcm: constraints.x must be one of " + words(CONSTRAINT_X) + " — got " + JSON.stringify(r.x) + ".");
+    if (!oneOf(CONSTRAINT_X, r.x)) throw new FlcmError("authoring", "constraints.x must be one of " + words(CONSTRAINT_X) + " — got " + JSON.stringify(r.x) + ".");
     out.x = r.x;
   }
   if (r.y != null) {
-    if (!oneOf(CONSTRAINT_Y, r.y)) throw new Error("flcm: constraints.y must be one of " + words(CONSTRAINT_Y) + " — got " + JSON.stringify(r.y) + ".");
+    if (!oneOf(CONSTRAINT_Y, r.y)) throw new FlcmError("authoring", "constraints.y must be one of " + words(CONSTRAINT_Y) + " — got " + JSON.stringify(r.y) + ".");
     out.y = r.y;
   }
   return out.x != null || out.y != null ? out : undefined;
@@ -212,7 +213,7 @@ export function mapCssWord<T extends string>(name: string, raw: unknown, table: 
   const mapped = tableWord(table, raw);
   if (!mapped) {
     const allowed = Object.keys(table).map((w) => '"' + w + '"').join(", ");
-    throw new Error("flcm: " + name + " must be one of " + allowed + " — got " + JSON.stringify(raw) + "." + hint);
+    throw new FlcmError("authoring", name + " must be one of " + allowed + " — got " + JSON.stringify(raw) + "." + hint);
   }
   return mapped;
 }
@@ -234,7 +235,7 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
   for (const key of ["gridTemplateColumns", "gridTemplateRows"] as const) {
     const raw = cfg[key];
     if (raw === undefined) continue;
-    if (typeof raw !== "string" || !raw.trim()) throw new Error(subject + ": " + key + " needs a track template.");
+    if (typeof raw !== "string" || !raw.trim()) throw new FlcmError("authoring", key + " needs a track template.", { call: subject });
     layout[key] = parseGridTracks(raw, subject);
   }
   for (const key of ["gridColumn", "gridRow"] as const) {
@@ -247,14 +248,14 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
   }
   if (cfg.alignSelf !== undefined) layout.alignSelf = mapCssWord(subject + ".alignSelf", cfg.alignSelf, ALIGN_SELF, " " + FLOW_ALIGNMENT_GUIDANCE);
   if (cfg.zIndex !== undefined) {
-    if (!Number.isSafeInteger(cfg.zIndex) || cfg.zIndex < 0) throw new Error(subject + ": zIndex needs a non-negative integer.");
+    if (!Number.isSafeInteger(cfg.zIndex) || cfg.zIndex < 0) throw new FlcmError("authoring", "zIndex needs a non-negative integer.", { call: subject });
     layout.zIndex = cfg.zIndex;
   }
   if (cfg.mode != null) layout.mode = assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
   if (cfg.gap != null) {
-    const guidance = "flcm." + subject + ': gap needs a finite number, "Npx", "row-gap column-gap", { variable }, or { row, column }.';
+    const guidance = 'gap needs a finite number, "Npx", "row-gap column-gap", { variable }, or { row, column }.';
     const finite = (v: Bindable): Bindable => {
-      if (!isTokenRef(v) && (typeof v !== "number" || !Number.isFinite(v))) throw new Error(guidance);
+      if (!isTokenRef(v) && (typeof v !== "number" || !Number.isFinite(v))) throw new FlcmError("authoring", guidance, { call: "flcm." + subject });
       return v;
     };
     const side = (v: unknown, name: string): Bindable => finite(compileBindable(v, subject + ".gap." + name, "FLOAT", length));
@@ -263,17 +264,17 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
     else if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
       rejectUnknownKeys(raw, GAP_KEYS, subject + ".gap");
       const g = raw as { row?: unknown; column?: unknown };
-      if (g.row == null || g.column == null) throw new Error(guidance);
+      if (g.row == null || g.column == null) throw new FlcmError("authoring", guidance, { call: "flcm." + subject });
       layout.gap = { row: side(g.row, "row"), column: side(g.column, "column") };
     } else {
       const values = typeof raw === "string" ? raw.trim().split(/\s+/).map(length) : [raw as number];
-      if (values.length < 1 || values.length > 2) throw new Error(guidance);
+      if (values.length < 1 || values.length > 2) throw new FlcmError("authoring", guidance, { call: "flcm." + subject });
       values.forEach(finite);
       layout.gap = values.length === 1 || values[0] === values[1] ? values[0] : { row: values[0], column: values[1] };
     }
   }
   if (cfg.wrap !== undefined) {
-    if (typeof cfg.wrap !== "boolean") throw new Error("flcm." + subject + ": wrap must be a boolean.");
+    if (typeof cfg.wrap !== "boolean") throw new FlcmError("authoring", "wrap must be a boolean.", { call: "flcm." + subject });
     layout.wrap = cfg.wrap;
   }
   if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
@@ -307,7 +308,7 @@ function applyDesignedSize(props: { designedWidth?: unknown; designedHeight?: un
     try {
       designed[dim] = length(val as string | number);
     } catch {
-      throw new Error("flcm: `" + word + '` must be a number or "Npx" — got ' + JSON.stringify(val) + ".");
+      throw new FlcmError("authoring", "`" + word + '` must be a number or "Npx" — got ' + JSON.stringify(val) + ".");
     }
   };
   axis(props.designedWidth, "horizontal", "width", "designedWidth");
@@ -325,13 +326,13 @@ export function compileLineWidth(props: Pick<LineProps, "width">): WriteLayout |
   if (w === "fill") return { sizing: { horizontal: "fill" } };
   if (isVariableInput(w)) return { sizing: { horizontal: "fixed" }, dimensions: { width: compileVariableRef(w, "width", "FLOAT") } };
   if (w === "hug" || isPercent(w)) {
-    throw new Error('flcm: a LINE\'s width is its length — "hug" and "N%" have no meaning on a line, which has no content to hug and no cell to measure against. Use a number, or "fill" under a row or column. Got ' + JSON.stringify(w) + ".");
+    throw new FlcmError("authoring", 'a LINE\'s width is its length — "hug" and "N%" have no meaning on a line, which has no content to hug and no cell to measure against. Use a number, or "fill" under a row or column. Got ' + JSON.stringify(w) + ".");
   }
   let px: number;
   try {
     px = length(w);
   } catch {
-    throw new Error('flcm: `width` on a LINE must be a number or "Npx" — got ' + JSON.stringify(w) + ".");
+    throw new FlcmError("authoring", '`width` on a LINE must be a number or "Npx" — got ' + JSON.stringify(w) + ".");
   }
   // The sizing intent must say "fixed": the parent policy’s clearFill keys the un-fill off it, so a width edit on a
   // live line someone set to grow (layoutGrow 1 — authorable in the Figma UI, not in flcm) actually takes
@@ -356,7 +357,7 @@ export function buildLayout(props: FrameProps, nodeType: WriteType, subject: str
 // mean "absent": presence-preserving stays intact.
 export function assertScalarType(value: unknown, want: "string" | "number" | "boolean", prop: string): void {
   if (typeof value !== want) {
-    throw new Error("flcm: `" + prop + "` must be a " + want + " — got " + JSON.stringify(value) + ".");
+    throw new FlcmError("authoring", "`" + prop + "` must be a " + want + " — got " + JSON.stringify(value) + ".");
   }
 }
 
@@ -368,7 +369,7 @@ export function base(wn: WriteProps, props: BaseProps & { annotations?: unknown 
     assertScalarType(props.key, "string", "key");
     // A bare target string spelled like an id is always read as one (target.ts resolveString).
     if (isNodeIdShaped(props.key)) {
-      throw new Error("key: " + JSON.stringify(props.key) + " is spelled like a node id, and a target spelled like an id always means the id. Choose a key that isn't, e.g. \"card\".");
+      throw new FlcmError("authoring", "key: " + JSON.stringify(props.key) + " is spelled like a node id, and a target spelled like an id always means the id. Choose a key that isn't, e.g. \"card\".");
     }
     wn.key = props.key;
   }
@@ -411,15 +412,16 @@ function compileStrokeWidth(value: unknown, type: string): Bindable | Edges<Bind
     rejectUnknownKeys(value, EDGE_KEYS, "strokeWidth");
     const v = value as Record<string, unknown>;
     const side = (name: string): Bindable => {
-      if (v[name] == null) throw new Error("flcm: strokeWidth as an object names all four sides { top, right, bottom, left } — " + name + " is missing.");
+      if (v[name] == null) throw new FlcmError("authoring", "strokeWidth as an object names all four sides { top, right, bottom, left } — " + name + " is missing.");
       return compileBindable(v[name], "strokeWidth." + name, "FLOAT", (literal: number | string) => length(literal));
     };
     sides = { top: side("top"), right: side("right"), bottom: side("bottom"), left: side("left") };
   } else sides = boxShorthand(value as string, "strokeWidth");
   if (sides.top === sides.right && sides.right === sides.bottom && sides.bottom === sides.left) return sides.top;
   if (!PER_SIDE_STROKE_TYPES.has(type)) {
-    throw new Error(
-      "flcm: a " + type + " has one stroke weight for every side — the per-side strokeWidth " + JSON.stringify(value) +
+    throw new FlcmError(
+      "authoring",
+      "a " + type + " has one stroke weight for every side — the per-side strokeWidth " + JSON.stringify(value) +
         " has no equivalent on it. Give one width.",
     );
   }
@@ -442,7 +444,7 @@ function compileBorderRadius(value: unknown): CornerRadii<Bindable> {
     rejectUnknownKeys(value, CORNER_KEYS, "borderRadius");
     const v = value as Record<string, unknown>;
     const corner = (name: string): Bindable => {
-      if (v[name] == null) throw new Error("flcm: borderRadius as an object names all four corners { topLeft, topRight, bottomRight, bottomLeft } — " + name + " is missing.");
+      if (v[name] == null) throw new FlcmError("authoring", "borderRadius as an object names all four corners { topLeft, topRight, bottomRight, bottomLeft } — " + name + " is missing.");
       return compileBindable(v[name], "borderRadius." + name, "FLOAT", (literal: number | string) => length(literal));
     };
     return { topLeft: corner("topLeft"), topRight: corner("topRight"), bottomRight: corner("bottomRight"), bottomLeft: corner("bottomLeft") };
@@ -484,7 +486,7 @@ const STROKE_ALIGNS: Record<WordValue<"strokeAlign">, "INSIDE" | "OUTSIDE" | "CE
 function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
   const hit = typeof value === "string" ? tableWord(STROKE_ALIGNS, value.toLowerCase()) : undefined;
   if (!hit) {
-    throw new Error('flcm: strokeAlign is "inside", "outside" or "center" — got ' + JSON.stringify(value) + ".");
+    throw new FlcmError("authoring", 'strokeAlign is "inside", "outside" or "center" — got ' + JSON.stringify(value) + ".");
   }
   return hit;
 }
@@ -504,7 +506,7 @@ function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
 export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): WritePaintStack {
   if (value === "none") return [];
   if (isStyleInput(value)) {
-    throw new Error("flcm: " + subject + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }`, never as a run's color or an imported SVG's paint.");
+    throw new FlcmError("authoring", subject + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }`, never as a run's color or an imported SVG's paint.");
   }
   if (Array.isArray(value)) return value.map((leaf, i) => parseFill(leaf, subject + "[" + i + "]"));
   return [parseFill(value, subject)];
@@ -533,7 +535,7 @@ function compileFrame(props: Accepted<FrameProps>): BuiltNode {
 function compileInstance(props: Accepted<InstanceProps>): BuiltNode {
   const component = props.componentId;
   if (!isTargetShaped(component)) {
-    throw new Error("INSTANCE: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
+    throw new FlcmError("authoring", "INSTANCE: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
   }
   const wn: BuiltNode = { type: "INSTANCE" };
   wn.component = component;
@@ -590,7 +592,7 @@ function compileLine(props: Accepted<LineProps>): BuiltNode {
 function compileSvg(props: Accepted<SvgProps>): BuiltNode {
   const markup = props.svg;
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
-    throw new Error("VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
+    throw new FlcmError("authoring", "VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
   }
   const wn: BuiltNode = { type: "VECTOR", vector: { kind: "svg", markup } };
   // Compiled like any other node's paints, but the bridge lands them on the vectors INSIDE the imported
@@ -611,7 +613,7 @@ function compileSvg(props: Accepted<SvgProps>): BuiltNode {
 function compilePath(accepted: Accepted<PathProps>): BuiltNode {
   const d = accepted.d;
   if (accepted.vectorPaths === undefined && (typeof d !== "string" || !d.trim())) {
-    throw new Error("VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
+    throw new FlcmError("authoring", "VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
   const { width, height, aspectRatio, ...props } = accepted;
   const paths = props.vectorPaths !== undefined
@@ -631,7 +633,7 @@ function compilePath(accepted: Accepted<PathProps>): BuiltNode {
 function compileScale(scale: number | undefined): number | undefined {
   if (scale === undefined) return undefined;
   if (typeof scale !== "number" || !isFinite(scale) || scale <= 0) {
-    throw new Error("VECTOR: `scale` must be a positive number multiplying the path's natural size (scale: 2 draws it twice as big) — got " + JSON.stringify(scale) + ".");
+    throw new FlcmError("authoring", "VECTOR: `scale` must be a positive number multiplying the path's natural size (scale: 2 draws it twice as big) — got " + JSON.stringify(scale) + ".");
   }
   return scale;
 }

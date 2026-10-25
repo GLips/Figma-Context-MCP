@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import type { WriteLayout } from "./ir.js";
+import { FlcmError } from "./flcm-error.js";
 
 export type Axis = "horizontal" | "vertical";
 export const AXES = {
@@ -56,17 +57,17 @@ export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: bool
   const layout = normalizeChildLayoutAliases(words, mode, absolute, subject);
   const hasCellWords = layout.gridColumn || layout.gridRow || layout.justifySelf || layout.zIndex !== undefined;
   const kind = placementKind(mode, absolute);
-  if (hasCellWords && kind !== "grid") throw new Error(subject + ": grid placement requires an in-flow GRID parent.");
+  if (hasCellWords && kind !== "grid") throw new FlcmError("authoring", "grid placement requires an in-flow GRID parent.", { call: subject });
   if (kind === "free") {
-    if (layout.alignSelf) throw new Error(subject + ": alignSelf requires an in-flow auto-layout parent.");
+    if (layout.alignSelf) throw new FlcmError("authoring", "alignSelf requires an in-flow auto-layout parent.", { call: subject });
     return { kind, layout };
   }
   if (mode.kind === "flow") {
-    if (layout.alignSelf !== undefined) throw new Error(subject + ": " + FLOW_ALIGNMENT_GUIDANCE);
+    if (layout.alignSelf !== undefined) throw new FlcmError("authoring", FLOW_ALIGNMENT_GUIDANCE, { call: subject });
     return { kind: "flow", mode, layout };
   }
   const alignment = layout.alignSelf;
-  if (alignment && !Object.prototype.hasOwnProperty.call(CELL_ALIGN, alignment)) throw new Error(subject + ": alignSelf under grid must be " + Object.keys(CELL_ALIGN).join(", ") + ".");
+  if (alignment && !Object.prototype.hasOwnProperty.call(CELL_ALIGN, alignment)) throw new FlcmError("authoring", "alignSelf under grid must be " + Object.keys(CELL_ALIGN).join(", ") + ".", { call: subject });
   return { kind: "grid", layout, align: alignment ? CELL_ALIGN[alignment as keyof typeof CELL_ALIGN] : undefined };
 }
 
@@ -80,7 +81,7 @@ export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: bool
 function normalizeChildLayoutAliases(layout: WriteLayout, parent: LayoutMode, absolute: boolean, subject: string): WriteLayout {
   let out = layout;
   if (layout.alignSelf === "stretch") {
-    if (absolute || parent.kind === "free") throw new Error(subject + ': alignSelf "stretch" requires an in-flow row/column or grid parent.');
+    if (absolute || parent.kind === "free") throw new FlcmError("authoring", 'alignSelf "stretch" requires an in-flow row/column or grid parent.', { call: subject });
     out = stretchIntoFill(out, "alignSelf", parent.kind === "flow" ? parent.cross : "vertical", subject);
   }
   // Out of flow (or under a row/column, which has no cell) the word is left alone for childLayout's
@@ -91,7 +92,7 @@ function normalizeChildLayoutAliases(layout: WriteLayout, parent: LayoutMode, ab
 
 function stretchIntoFill(layout: WriteLayout, word: "alignSelf" | "justifySelf", axis: "horizontal" | "vertical", subject: string): WriteLayout {
   if (layout.sizing?.[axis] !== undefined && layout.sizing[axis] !== "fill") {
-    throw new Error(subject + ": " + word + ' "stretch" conflicts with the authored ' + (axis === "horizontal" ? "width" : "height") + '; use "fill".');
+    throw new FlcmError("authoring", word + ' "stretch" conflicts with the authored ' + (axis === "horizontal" ? "width" : "height") + '; use "fill".', { call: subject });
   }
   const words = { ...layout };
   delete words[word];

@@ -20,6 +20,7 @@
  * that retired original, so the copy reads under its own id and the old one refuses.
  */
 import { componentPath, guidOf, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
+import { FlcmError } from "./flcm-error.js";
 type Container = BaseNode & ChildrenMixin;
 interface State {
   native: BaseNode;
@@ -135,16 +136,16 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       if (records.length) {
         while (stack.length && stack[stack.length - 1].next === stack[stack.length - 1].ids.length) stack.pop();
         const edge = stack[stack.length - 1];
-        if (!edge) throw new Error("flcm: indexed scene order exceeds the native child topology.");
+        if (!edge) throw new FlcmError("figma", "indexed scene order exceeds the native child topology.");
         const child = edge.ids[edge.next++];
-        if (child.type !== node.type) throw new Error("flcm: indexed scene order disagrees with native child types.");
+        if (child.type !== node.type) throw new FlcmError("figma", "indexed scene order disagrees with native child types.");
         // A retired original's descendants are listed under its dead path too.
         copied = edge.retired || (isSublayerId(child.id) && guidOf(child.id) !== guidOf(node.id));
         if (copied) retired.set(child.id, node.id);
         alias = copied ? node.id : child.id;
         parent = edge.record;
       }
-      if (seen.has(alias) || seen.has(node.id)) throw new Error("flcm: indexed scene contains an ambiguous node identity.");
+      if (seen.has(alias) || seen.has(node.id)) throw new FlcmError("figma", "indexed scene contains an ambiguous node identity.");
       seen.add(alias); seen.add(node.id);
       const state = stateOf(node, alias);
       const record: RecordNode = { state, parent, children: [] };
@@ -155,7 +156,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       const children = "children" in node ? (node as Container).children : [];
       if (children.length) stack.push({ record, ids: children, next: 0, retired: copied });
     }
-    if (stack.some(edge => edge.next !== edge.ids.length)) throw new Error("flcm: this Figma host does not provide complete indexed scene access.");
+    if (stack.some(edge => edge.next !== edge.ids.length)) throw new FlcmError("figma", "this Figma host does not provide complete indexed scene access.");
     scope.records = records;
     scope.byId = byId;
     scope.retired = retired;
@@ -223,7 +224,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     const wasIndexed = !!moved.scope || !!moved.ownScope;
     const children = placedChildren(dest);
     const landed = children[index === "end" ? children.length - 1 : index];
-    if (!landed || landed.native.type !== moved.native.type) throw new Error("flcm: placed node identity is unavailable in its destination.");
+    if (!landed || landed.native.type !== moved.native.type) throw new FlcmError("figma", "placed node identity is unavailable in its destination.");
     if (landed !== moved) {
       const after = landed.record;
       adoptLanded(moved, landed);
@@ -329,7 +330,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       const record = scope.byId.get(currentId);
       const copy = record ? undefined : scope.retired.get(currentId) ?? copies.get(id);
       if (copy) {
-        throw new Error("flcm: Figma retired id " + JSON.stringify(id) + " when it copied that inherited slot content into another slot. " +
+        throw new FlcmError("authoring", "Figma retired id " + JSON.stringify(id) + " when it copied that inherited slot content into another slot. " +
           "Use the id the move returned: the copy is " + JSON.stringify(copy) + ".");
       }
       if (!record || record.state.native.removed) return null;

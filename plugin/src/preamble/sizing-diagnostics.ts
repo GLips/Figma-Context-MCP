@@ -5,6 +5,7 @@
 import { warnings } from "./warnings.js";
 import type { AuthorizedLayout } from "./instance-write-authorization.js";
 import { concedeRealization } from "./obligation.js";
+import { FlcmError, describeFailure } from "./flcm-error.js";
 // One accumulator per synchronous mutation span. Diagnostics observe final geometry after all
 // entries, overrides and percent sizing settle; they never turn a successful write into a failure,
 // with one exception: a planned resize Figma ignores on a layer an instance locks (resizeToPlannedSize).
@@ -120,7 +121,7 @@ export function resizeToPlannedSize(
     if (Math.abs(actual - requested) <= 0.01) continue;
     if (bound && Math.abs(actual - node[bound]!) <= 0.01) continue;
     const message = "requested " + axis + " " + Number(requested.toFixed(2)) + "; Figma realized " + Number(actual.toFixed(2));
-    if (layout.context.ownWritesLockedBy) throw new Error(message + " (instance write policy gap)");
+    if (layout.context.ownWritesLockedBy) throw new FlcmError("internal", message + " (instance write policy gap)");
     misses.push({ node, prop: axis, authored: requested, realized: actual, message });
     // The miss stays a warning; the finalizer accepts this value, and fails only if it moves again.
     concedeRealization(node, { kind: "write-time-resize-miss", axis, realized: actual });
@@ -205,7 +206,7 @@ export function finishSizingDiagnostics(verb: string): void {
       });
     }
   } catch (error) {
-    warnings.add({ id: null, message: "flcm." + verb + ": write succeeded; sizing diagnostics could not inspect the resulting layout: " + String(error) });
+    warnings.add({ id: null, message: "flcm." + verb + ": write succeeded; sizing diagnostics could not inspect the resulting layout: " + describeFailure(error) });
   } finally {
     beginSizingDiagnostics();
   }

@@ -14,6 +14,7 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
 import { editMany } from "./edit-many.js";
+import { FlcmError } from "./flcm-error.js";
 
 let figma = createFigmaMock();
 
@@ -340,7 +341,13 @@ test("a node deleted during the resource round trip refuses the whole batch — 
         { id: a.id, fill: image("https://cdn.example.com/a.jpg") },
         { id: b.id, opacity: 0.5 },
       ]),
-      /\[0\].*was deleted while this call was resolving targets and loading resources/s,
+      (err: unknown) => {
+        assert.ok(err instanceof FlcmError);
+        assert.equal(err.kind, "concurrent-edit");
+        // The entry line names its entry once, not the batch's call again.
+        assert.match(err.message, /\n {2}\[0\] the file was edited in Figma while this call ran \(.* was deleted\)/);
+        return true;
+      },
     );
   } finally {
     delete g.__flcmHost;

@@ -21,6 +21,7 @@
 // since flcm has no words to bind or spell them; so are variable bindings inside a style's gradient
 // stops or effects, which the read doesn't emit either.
 import { sceneFigma as figma } from "./scene-access.js";
+import { FlcmError } from "./flcm-error.js";
 import { enabledLibraryListing, scanUsedTokens, TokenLookups } from "./tokens.js";
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
@@ -115,9 +116,9 @@ async function usedTokens(query: DesignTokenUsedQuery): Promise<UsedDesignTokens
     const inCollection = variables.filter((_, i) => named[i] === query.collection);
     if (!inCollection.length) {
       const names = [...new Set(named.filter((n): n is string => n !== undefined))];
-      throw new Error("flcm.designTokens: no used library variable" + (query.type === undefined ? "" : " of type " + query.type) +
+      throw new FlcmError("authoring", "no used library variable" + (query.type === undefined ? "" : " of type " + query.type) +
         " is in a collection named " + JSON.stringify(query.collection) + ". " +
-        (names.length ? "Used collections: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "The file uses no library variables" + (query.type === undefined ? "" : " of that type") + "."));
+        (names.length ? "Used collections: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "The file uses no library variables" + (query.type === undefined ? "" : " of that type") + "."), DESIGN_TOKENS_CALL);
     }
     variables = inCollection;
   }
@@ -138,37 +139,36 @@ function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {
   return items.filter((item) => !seen.has(key(item)) && !!seen.add(key(item)));
 }
 
+const DESIGN_TOKENS_CALL = { call: "flcm.designTokens" };
+
 const LIBRARY_QUERY_KEYS: ReadonlySet<string> = new Set(["library", "collection", "type"]);
 const USED_QUERY_KEYS: ReadonlySet<string> = new Set(["used", "collection", "type"]);
 
 // Hand-rolled: the preamble is zod-free. Fails loud on anything it doesn't know, like every flcm verb.
 function parseTokenQuery(from: unknown): DesignTokenUsedQuery | DesignTokenLibraryQuery {
-  const usage = "flcm.designTokens: pass nothing for the file's own tokens, { used: true, collection?, type? } for the library tokens it uses, " +
+  const usage = "pass nothing for the file's own tokens, { used: true, collection?, type? } for the library tokens it uses, " +
     "or { library, collection?, type? } to load one enabled library's variables";
-  if (typeof from !== "object" || from === null || Array.isArray(from)) throw new Error(usage + ".");
+  if (typeof from !== "object" || from === null || Array.isArray(from)) throw new FlcmError("authoring", usage + ".", DESIGN_TOKENS_CALL);
   const query = from as Record<string, unknown>;
   const used = "used" in query;
-  if (used && query.used !== true) throw new Error(usage + "; used must be true.");
-  if (used && "library" in query) throw new Error(usage + "; used and library are two different loads — pass one.");
+  if (used && query.used !== true) throw new FlcmError("authoring", usage + "; used must be true.", DESIGN_TOKENS_CALL);
+  if (used && "library" in query) throw new FlcmError("authoring", usage + "; used and library are two different loads — pass one.", DESIGN_TOKENS_CALL);
   const known = used ? USED_QUERY_KEYS : LIBRARY_QUERY_KEYS;
   const unknown = Object.keys(query).filter((k) => !known.has(k));
-  if (unknown.length) throw new Error(usage + "; unknown key " + unknown.map((k) => JSON.stringify(k)).join(", ") + ".");
-  if (!used && typeof query.library !== "string") throw new Error(usage + "; library must be the library's name, as the default call's libraries list it.");
-  if (query.collection !== undefined && typeof query.collection !== "string") throw new Error(usage + "; collection must be a collection name.");
+  if (unknown.length) throw new FlcmError("authoring", usage + "; unknown key " + unknown.map((k) => JSON.stringify(k)).join(", ") + ".", DESIGN_TOKENS_CALL);
+  if (!used && typeof query.library !== "string") throw new FlcmError("authoring", usage + "; library must be the library's name, as the default call's libraries list it.", DESIGN_TOKENS_CALL);
+  if (query.collection !== undefined && typeof query.collection !== "string") throw new FlcmError("authoring", usage + "; collection must be a collection name.", DESIGN_TOKENS_CALL);
   const types = used ? [...LISTED_VARIABLE_TYPES, ...LISTED_STYLE_TYPES] : [...LISTED_VARIABLE_TYPES];
-  if (query.type !== undefined && !types.includes(query.type as string)) throw new Error(usage + "; type must be one of " + types.join(", ") + ".");
+  if (query.type !== undefined && !types.includes(query.type as string)) throw new FlcmError("authoring", usage + "; type must be one of " + types.join(", ") + ".", DESIGN_TOKENS_CALL);
   if (used && query.collection !== undefined && LISTED_STYLE_TYPES.has(query.type as string)) {
-    throw new Error(usage + "; a collection holds variables, so it can't be narrowed to a style type.");
+    throw new FlcmError("authoring", usage + "; a collection holds variables, so it can't be narrowed to a style type.", DESIGN_TOKENS_CALL);
   }
   return query as unknown as DesignTokenUsedQuery | DesignTokenLibraryQuery;
 }
 
-const NO_TEAMLIBRARY = "this copy of the plugin lacks the teamlibrary permission. Re-import the plugin from its manifest to reach enabled libraries.";
-
-/** The run's listing of enabled collections with variables (or null without the permission), warning once about any unreadable one. */
-async function listedLibraries(): Promise<{ collection: LibraryVariableCollection; variables: LibraryVariable[] }[] | null> {
+/** The run's listing of enabled collections with variables, warning once about any unreadable one. */
+async function listedLibraries(): Promise<{ collection: LibraryVariableCollection; variables: LibraryVariable[] }[]> {
   const listing = await enabledLibraryListing();
-  if (!listing) return null;
   const skipped = listing.filter((c) => !c.variables).map(({ collection: c }) => JSON.stringify(c.libraryName + " / " + c.name));
   if (skipped.length) warnings.add({ id: null, message: "flcm.designTokens: some library collections could not be read and are left out: " + skipped.join(", ") + "." });
   return listing.flatMap(({ collection, variables }) => (variables?.length ? [{ collection, variables }] : []));
@@ -182,10 +182,6 @@ async function listedLibraries(): Promise<{ collection: LibraryVariableCollectio
 async function libraryCatalog(): Promise<{ libraries: DesignTokenLibrary[]; libraryOf: Map<string, string> }> {
   const libraryOf = new Map<string, string>();
   const listed = await listedLibraries();
-  if (!listed) {
-    warnings.add({ id: null, message: "flcm.designTokens: enabled libraries are not listed, because " + NO_TEAMLIBRARY });
-    return { libraries: [], libraryOf };
-  }
   const libraries = new Map<string, DesignTokenLibrary>();
   for (const { collection: c, variables } of listed) {
     for (const v of variables) libraryOf.set(v.key, c.libraryName);
@@ -198,17 +194,16 @@ async function libraryCatalog(): Promise<{ libraries: DesignTokenLibrary[]; libr
 
 async function libraryTokens(query: DesignTokenLibraryQuery): Promise<LibraryDesignTokens> {
   const listed = await listedLibraries();
-  if (!listed) throw new Error("flcm.designTokens: no library can be loaded, because " + NO_TEAMLIBRARY);
   const inLibrary = listed.filter(({ collection: c }) => c.libraryName === query.library);
   if (!inLibrary.length) {
     const names = [...new Set(listed.map(({ collection: c }) => c.libraryName))];
-    throw new Error("flcm.designTokens: no enabled library with variables is named " + JSON.stringify(query.library) + ". " +
-      (names.length ? "Enabled: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "This file has none enabled."));
+    throw new FlcmError("authoring", "no enabled library with variables is named " + JSON.stringify(query.library) + ". " +
+      (names.length ? "Enabled: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "This file has none enabled."), DESIGN_TOKENS_CALL);
   }
   const chosen = query.collection === undefined ? inLibrary : inLibrary.filter(({ collection: c }) => c.name === query.collection);
   if (!chosen.length) {
-    throw new Error("flcm.designTokens: " + JSON.stringify(query.library) + " has no collection named " + JSON.stringify(query.collection) +
-      ". Its collections: " + inLibrary.map(({ collection: c }) => JSON.stringify(c.name)).join(", ") + ".");
+    throw new FlcmError("authoring", JSON.stringify(query.library) + " has no collection named " + JSON.stringify(query.collection) +
+      ". Its collections: " + inLibrary.map(({ collection: c }) => JSON.stringify(c.name)).join(", ") + ".", DESIGN_TOKENS_CALL);
   }
   // The type filter runs on the listing, before any import, which is what makes it worth having.
   const wanted = chosen.flatMap(({ variables }) => variables)

@@ -18,6 +18,7 @@
 // Negative space: creating variables or styles is not here. Listing what exists is design-tokens.ts,
 // which shares scanUsedTokens below.
 import { sceneFigma as figma } from "./scene-access.js";
+import { FlcmError } from "./flcm-error.js";
 import { isTokenRef } from "./ir.js";
 import type { VariableRef, StyleRef, TokenRef, Bindable } from "./ir.js";
 
@@ -62,7 +63,8 @@ function tokenIdentity(raw: unknown, token: "variable" | "style", word: string):
       return out;
     }
   }
-  throw new Error(
+  throw new FlcmError(
+    "authoring",
     word + ": `" + token + "` names a " + token + ' by name, id or key — "color/primary", { name }, { id }, or the read\'s { id, name }. Got ' +
       JSON.stringify(raw) + ".",
   );
@@ -75,7 +77,8 @@ function tokenIdentity(raw: unknown, token: "variable" | "style", word: string):
 export function compileVariableRef(input: { variable: unknown }, word: string, resolvedType: VariableType): VariableRef {
   const extra = Object.keys(input).filter((k) => k !== "variable" && k !== "value");
   if (extra.length) {
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       word + ": a variable reference is { variable } (and a read's `value`) alone — " + extra.map((k) => "`" + k + "`").join(", ") +
         " can't ride beside it." + (resolvedType === "COLOR" ? ' For a bound solid with its own opacity or blend, write { type: "SOLID", color: { variable }, opacity, blendMode }.' : ""),
     );
@@ -96,14 +99,14 @@ export function compileStyleRef(raw: unknown, word: string, styleType: StyleType
 export function compileBindable<T>(value: unknown, word: string, resolvedType: VariableType, literal: (v: never) => T): Bindable<T> {
   if (isVariableInput(value)) return compileVariableRef(value, word, resolvedType);
   if (isStyleInput(value)) {
-    throw new Error(word + ": a style names a whole paint, effect or text slot, so it can't stand for one value. Bind a variable ({ variable }) or give the literal.");
+    throw new FlcmError("authoring", word + ": a style names a whole paint, effect or text slot, so it can't stand for one value. Bind a variable ({ variable }) or give the literal.");
   }
   return literal(value as never);
 }
 
 /** Refuse a token input where none can bind, naming the word and why (the contract's negative space). */
 export function refuseTokenInput(value: unknown, word: string, why: string): void {
-  if (isVariableInput(value) || isStyleInput(value)) throw new Error(word + ": " + why + ". Give the literal value.");
+  if (isVariableInput(value) || isStyleInput(value)) throw new FlcmError("authoring", word + ": " + why + ". Give the literal value.");
 }
 
 // ---- prepare ----
@@ -227,22 +230,24 @@ export class TokenLookups {
         ? await figma.variables.getVariableByIdAsync(ref.id)
         : await figma.variables.importVariableByKeyAsync(ref.id).catch(() => null);
       if (byId) return this.checkVariableKind(byId, ref);
-      if (ref.name === undefined) throw new Error(ref.word + ": no variable has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
+      if (ref.name === undefined) throw new FlcmError("authoring", ref.word + ": no variable has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
     }
     const name = ref.name!;
     const named = await this.variablesNamed(name);
     const fitting = named.filter((v) => v.resolvedType === ref.resolvedType);
     if (fitting.length === 1) return fitting[0].variable ?? figma.variables.importVariableByKeyAsync(fitting[0].key);
     if (fitting.length > 1) {
-      throw new Error(
+      throw new FlcmError(
+        "authoring",
         ref.word + ": " + fitting.length + " " + ref.resolvedType + " variables are named " + JSON.stringify(name) + " — name one by id: " +
           capped(await Promise.all(fitting.map((v) => v.describe()))) + ".",
       );
     }
-    if (named.length) throw new Error(ref.word + ": the variable " + JSON.stringify(name) + " is " + named[0].resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
+    if (named.length) throw new FlcmError("authoring", ref.word + ": the variable " + JSON.stringify(name) + " is " + named[0].resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
     const all = [...(await this.localVars()), ...(await this.page()).variables].filter((v) => v.resolvedType === ref.resolvedType);
     const near = nearestNames(name, all.map((v) => v.name));
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       ref.word + ": no " + ref.resolvedType + " variable is named " + JSON.stringify(name) + " in this file's variables, on this page or in its enabled libraries" +
         (ref.id !== undefined ? " (and its id " + JSON.stringify(ref.id) + " is gone)" : "") +
         (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : "") + ".",
@@ -253,14 +258,15 @@ export class TokenLookups {
     if (ref.id !== undefined) {
       const byId = STYLE_ID.test(ref.id) ? await figma.getStyleByIdAsync(ref.id) : await this.styleByKey(ref.id);
       if (byId) return this.checkStyleKind(byId, ref);
-      if (ref.name === undefined) throw new Error(ref.word + ": no style has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
+      if (ref.name === undefined) throw new FlcmError("authoring", ref.word + ": no style has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
     }
     const name = ref.name!;
     const named = await this.stylesNamed(name);
     const fitting = named.filter((s) => s.type === ref.styleType);
     if (fitting.length === 1) return fitting[0];
     if (fitting.length > 1) {
-      throw new Error(
+      throw new FlcmError(
+        "authoring",
         ref.word + ": " + fitting.length + " " + STYLE_TYPE_NOUN[ref.styleType] + " styles are named " + JSON.stringify(name) + " — name one by id: " +
           capped(fitting.map((s) => JSON.stringify(s.name) + " (id " + s.key + ")")) + ".",
       );
@@ -268,7 +274,8 @@ export class TokenLookups {
     if (named.length) throw this.wrongStyleKind(named[0], ref);
     const all = [...(await this.local()), ...(await this.page()).styles].filter((s) => s.type === ref.styleType);
     const near = nearestNames(name, all.map((s) => s.name));
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       ref.word + ": no " + STYLE_TYPE_NOUN[ref.styleType] + " style is named " + JSON.stringify(name) + " in this file's styles or on this page" +
         (ref.id !== undefined ? " (and its id " + JSON.stringify(ref.id) + " is gone)" : "") +
         (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : "") + ".",
@@ -308,7 +315,7 @@ export class TokenLookups {
   }
 
   private library(): Promise<VariableCandidate[]> {
-    this.libraryCandidates ??= enabledLibraryListing().then((listing) => (listing ?? []).flatMap(({ collection, variables }) => (variables ?? []).map((v) => ({
+    this.libraryCandidates ??= enabledLibraryListing().then((listing) => listing.flatMap(({ collection, variables }) => (variables ?? []).map((v) => ({
       name: v.name, key: v.key, resolvedType: v.resolvedType,
       describe: async () => JSON.stringify(v.name) + " (library " + JSON.stringify(collection.libraryName) + ", collection " + JSON.stringify(collection.name) + ", key " + v.key + ")",
     }))));
@@ -340,8 +347,8 @@ export class TokenLookups {
     return v;
   }
 
-  private wrongVariableKind(v: Variable, ref: VariableRef): Error {
-    return new Error(ref.word + ": the variable " + JSON.stringify(v.name) + " (id " + v.id + ") is " + v.resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
+  private wrongVariableKind(v: Variable, ref: VariableRef): FlcmError {
+    return new FlcmError("authoring", ref.word + ": the variable " + JSON.stringify(v.name) + " (id " + v.id + ") is " + v.resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
   }
 
   private checkStyleKind(s: BaseStyle, ref: StyleRef): BaseStyle {
@@ -349,8 +356,8 @@ export class TokenLookups {
     return s;
   }
 
-  private wrongStyleKind(s: BaseStyle, ref: StyleRef): Error {
-    return new Error(ref.word + ": the style " + JSON.stringify(s.name) + " (id " + s.key + ") is a " + s.type + " style, and this word needs a " + ref.styleType + " style.");
+  private wrongStyleKind(s: BaseStyle, ref: StyleRef): FlcmError {
+    return new FlcmError("authoring", ref.word + ": the style " + JSON.stringify(s.name) + " (id " + s.key + ") is a " + s.type + " style, and this word needs a " + ref.styleType + " style.");
   }
 
   private async describeVariable(v: Variable): Promise<string> {
@@ -371,31 +378,15 @@ interface LibraryCollectionListing { collection: LibraryVariableCollection; vari
 
 // Keyed by the teamLibrary object, so a test's fresh mock lists afresh. Live, the preamble is evaluated
 // anew for every run, so this lasts one run: short enough that the enabled set can't change under it.
-const libraryListings = new WeakMap<object, Promise<LibraryCollectionListing[] | null>>();
+const libraryListings = new WeakMap<object, Promise<LibraryCollectionListing[]>>();
 
-/**
- * Every enabled library collection's variables, listed once per run — it rides the network. Null
- * means Figma refused the namespace: a plugin imported before the manifest granted `teamlibrary`
- * still runs a newer server's preamble (ADR-0010).
- */
-export function enabledLibraryListing(): Promise<LibraryCollectionListing[] | null> {
-  let teamLibrary: PluginAPI["teamLibrary"];
-  try {
-    teamLibrary = figma.teamLibrary;
-  } catch (error) {
-    if (!/teamlibrary/i.test(String(error))) throw error;
-    return Promise.resolve(null);
-  }
+/** Every enabled library collection's variables, listed once per run — it rides the network. */
+export function enabledLibraryListing(): Promise<LibraryCollectionListing[]> {
+  const teamLibrary = figma.teamLibrary;
   let listing = libraryListings.get(teamLibrary);
   if (!listing) {
     listing = (async () => {
-      let collections: LibraryVariableCollection[];
-      try {
-        collections = await teamLibrary.getAvailableLibraryVariableCollectionsAsync();
-      } catch (error) {
-        if (!/teamlibrary/i.test(String(error))) throw error;
-        return null;
-      }
+      const collections = await teamLibrary.getAvailableLibraryVariableCollectionsAsync();
       const lists = await Promise.all(collections.map((c) => teamLibrary.getVariablesInLibraryCollectionAsync(c.key).catch(() => null)));
       return collections.map((collection, i) => ({ collection, variables: lists[i] }));
     })();
@@ -482,7 +473,7 @@ async function describeVariable(variable: Variable): Promise<ResolvedVariable> {
 // value the target can take.
 async function followAliases(value: VariableValue, depth: number): Promise<VariableValue[]> {
   if (!isPlainObject(value) || value.type !== "VARIABLE_ALIAS") return [value];
-  if (depth > 16) throw new Error("flcm: variable alias chain through " + String(value.id) + " is too deep (a cycle?).");
+  if (depth > 16) throw new FlcmError("figma", "variable alias chain through " + String(value.id) + " is too deep (a cycle?).");
   const target = await figma.variables.getVariableByIdAsync(value.id as string);
   if (!target) return [];
   const out: VariableValue[] = [];
@@ -494,7 +485,7 @@ async function followAliases(value: VariableValue, depth: number): Promise<Varia
 
 function resolvedVariable(ref: VariableRef, tokens: ResolvedTokens | undefined): ResolvedVariable {
   const hit = tokens?.variables.get(tokenKey(ref));
-  if (!hit) throw new Error(ref.word + ": the variable was not resolved before the write. This is an internal error; report it.");
+  if (!hit) throw new FlcmError("internal", ref.word + ": the variable was not resolved before the write. This is a bug in flcm, not in your call.");
   return hit;
 }
 
@@ -514,7 +505,7 @@ export function variableValues(ref: VariableRef, tokens: ResolvedTokens | undefi
 
 export function styleFor(ref: StyleRef, tokens: ResolvedTokens | undefined): BaseStyle {
   const hit = tokens?.styles.get(tokenKey(ref));
-  if (!hit) throw new Error(ref.word + ": the style was not resolved before the write. This is an internal error; report it.");
+  if (!hit) throw new FlcmError("internal", ref.word + ": the style was not resolved before the write. This is a bug in flcm, not in your call.");
   return hit;
 }
 

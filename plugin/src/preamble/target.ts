@@ -12,6 +12,7 @@ import { keyedDescendants, readKey } from "./identity.js";
 import { isNodeIdShaped } from "@framelink/core";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { isReadableSceneNode } from "./scene-readability.js";
+import { ConcurrentEditError, FlcmError } from "./flcm-error.js";
 
 // Whether a value has a target's shape — the one predicate every verb that tells a target apart from
 // another argument (instance specs, swaps, component/variants subjects, clone's props-or-parent)
@@ -27,7 +28,9 @@ export const COMPONENT_TARGET_HINT = "a component's node id (a read's `component
 // Component target syntax is shared by new instances and swaps; prepare resolves live identity.
 export function compileSwapTarget(raw: unknown, subject: string): Target {
   if (!isTargetShaped(raw)) {
-    throw new Error(subject + ".componentId: the component to swap to must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", "the component to swap to must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(raw) + ".", {
+      path: subject + ".componentId",
+    });
   }
   return raw;
 }
@@ -62,10 +65,10 @@ export async function resolveTarget(target: Target, within?: Target): Promise<Sc
   if (typeof target === "string") return resolveString(target, within);
   if (hasId(target)) {
     const node = await byId(target.id);
-    if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target.id)} — it may have been deleted.`);
+    if (!node) throw new FlcmError("authoring", `no live node with id ${JSON.stringify(target.id)} — it may have been deleted.`);
     return node;
   }
-  throw new Error(`flcm: cannot resolve target ${JSON.stringify(target)} — pass a node id, an flcm/key, or a handle.`);
+  throw new FlcmError("authoring", `cannot resolve target ${JSON.stringify(target)} — pass a node id, an flcm/key, or a handle.`);
 }
 
 // A bare string is read by its shape: one spelled like a node id is an id, anything else is an flcm/key.
@@ -73,23 +76,25 @@ export async function resolveTarget(target: Target, within?: Target): Promise<Sc
 // lookup with no search of the page.
 async function resolveString(target: string, within?: Target): Promise<SceneNode> {
   if (!target.trim()) {
-    throw new Error("flcm: empty target — pass a node id, an flcm/key, or a handle.");
+    throw new FlcmError("authoring", "empty target — pass a node id, an flcm/key, or a handle.");
   }
   if (isNodeIdShaped(target)) {
     const node = await byId(target);
-    if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target)} — it may have been deleted.`);
+    if (!node) throw new FlcmError("authoring", `no live node with id ${JSON.stringify(target)} — it may have been deleted.`);
     return node;
   }
   const byKey = scanKey(target, await resolveScanRoot(within));
   if (byKey.length === 1) return byKey[0];
   if (byKey.length > 1) {
-    throw new Error(
-      `flcm: target ${JSON.stringify(target)} is ambiguous — ${byKey.length} nodes carry the flcm/key ${JSON.stringify(target)}. ` +
+    throw new FlcmError(
+      "authoring",
+      `target ${JSON.stringify(target)} is ambiguous — ${byKey.length} nodes carry the flcm/key ${JSON.stringify(target)}. ` +
         `Keys must be unique; scope with \`within\`, or address a specific node by id.`,
     );
   }
-  throw new Error(
-    `flcm: no node found for target ${JSON.stringify(target)} — no node carries it as an flcm/key on the searched root, and it isn't spelled like a node id.`,
+  throw new FlcmError(
+    "authoring",
+    `no node found for target ${JSON.stringify(target)} — no node carries it as an flcm/key on the searched root, and it isn't spelled like a node id.`,
   );
 }
 
@@ -137,9 +142,10 @@ export function createResolvedTargets(): ResolvedTargets {
       // Prepare decides WHICH values are targets from the document as it stood then (a property's
       // declared type, a definition's). A miss here means that decision no longer holds at the seal.
       if (!entry) {
-        throw new Error(
-          subject + ": " + JSON.stringify(target) + " was not resolved before this call's seal — the definitions it depends on changed while the call was loading fonts and images. Nothing was applied; re-run the call.",
-        );
+        throw new ConcurrentEditError({
+          call: subject,
+          changed: "the definitions " + JSON.stringify(target) + " depends on changed, so it was never resolved",
+        });
       }
       if ("error" in entry) throw entry.error;
       assertNodeStillOnCanvas(entry.node, subject);
@@ -152,7 +158,7 @@ export async function resolveScanRoot(within: Target | undefined): Promise<ScanR
   if (within == null) return figma.currentPage;
   const node = await resolveTarget(within);
   if (!("findAll" in node)) {
-    throw new Error(`flcm: \`within\` target resolved to a ${node.type} with no children to search — pass a container (frame/group/section) or a page.`);
+    throw new FlcmError("authoring", `\`within\` target resolved to a ${node.type} with no children to search — pass a container (frame/group/section) or a page.`);
   }
   return node;
 }

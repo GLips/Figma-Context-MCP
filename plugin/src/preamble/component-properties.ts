@@ -12,6 +12,7 @@ import type { BoundLiveNode, InstancePlans, RenderResources } from "./bridge.js"
 import { describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 import { realizeAtWritePoint } from "./write-point.js";
+import { FlcmError } from "./flcm-error.js";
 import { defaultValueHint } from "./compile-component-words.js";
 import { BINDABLE_FIELDS, wordsOf, type BindableField, type WordValue } from "./vocabulary.js";
 
@@ -95,28 +96,28 @@ export interface PreparedDefinition {
  */
 export function compilePropertyDefinition(name: string, raw: unknown, at: string): AuthoredDefinition {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(at + ' must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", at + ' must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".");
   }
   rejectUnknownKeys(raw, DEFINITION_KEYS, at, "prop", defaultValueHint(raw));
   const bag = raw as Record<string, unknown>;
   // `name` is edit's RENAME word, and this call is DECLARING a property whose name is the key it is
   // filed under — two names for one property, with no way to say which the bindings mean.
   if (bag.name != null) {
-    throw new Error(
-      at + ": `name` renames an EXISTING property, and this declares a new one — the key it is filed under (" + JSON.stringify(name) + ") IS its name. " +
-        "Drop `name`, or key the entry by the property you meant to rename.",
+    throw new FlcmError("authoring",
+      "`name` renames an EXISTING property, and this declares a new one — the key it is filed under (" + JSON.stringify(name) + ") IS its name. " +
+        "Drop `name`, or key the entry by the property you meant to rename.", { path: at },
     );
   }
   const type = bag.type;
   if (type === "variant" || type === "VARIANT") {
-    throw new Error(
-      at + ": a variant axis is not declared on a component — the axes come from the SET. Make each variant its own component, then combine them: " +
-        'flcm.variants([{ component: a, variant: { ' + JSON.stringify(name) + ': "…" } }, …], { name: "…" }).',
+    throw new FlcmError("authoring",
+      "a variant axis is not declared on a component — the axes come from the SET. Make each variant its own component, then combine them: " +
+        'flcm.variants([{ component: a, variant: { ' + JSON.stringify(name) + ': "…" } }, …], { name: "…" }).', { path: at },
     );
   }
   const figmaType = typeof type === "string" ? own(PROPERTY_TYPES, type) : undefined;
   if (!figmaType) {
-    throw new Error(at + ".type must be one of " + quoted(PROPERTY_TYPE_WORDS) + " — got " + JSON.stringify(type) + ".");
+    throw new FlcmError("authoring", at + ".type must be one of " + quoted(PROPERTY_TYPE_WORDS) + " — got " + JSON.stringify(type) + ".");
   }
   return { name, type: type as string, figmaType };
 }
@@ -180,8 +181,8 @@ export function writeInheritedDefault(figmaType: string, wn: WriteNode, value: b
  */
 export function readableComponentOf(component: any, node: any, at: string): any {
   if (component) return component;
-  throw new Error(
-    at + ": " + describeNodeIdentity(node) + " has no readable main component — it comes from a library the file can't reach right now, so there is no component to read its instance_swap default from.",
+  throw new FlcmError("figma",
+    describeNodeIdentity(node) + " has no readable main component — it comes from a library the file can't reach right now, so there is no component to read its instance_swap default from.", { path: at },
   );
 }
 
@@ -198,16 +199,16 @@ export function agreedDefault(
     { inherited: boolean | string; unboundRemedy?: string },
 ): boolean | string {
   if (!binders.length) {
-    throw new Error(at + ": nothing in this call binds " + JSON.stringify(definition.name) + ". A property's default IS its bound layer's content, so " + unboundRemedy);
+    throw new FlcmError("authoring", "nothing in this call binds " + JSON.stringify(definition.name) + ". A property's default IS its bound layer's content, so " + unboundRemedy, { path: at });
   }
   const stated = binders.filter((b) => b.value !== undefined);
   if (!stated.length) return inherited;
   const first = stated[0].value!;
   if (stated.every((b) => b.value === first)) return first;
-  throw new Error(
-    at + ": " + stated.length + " layers bind " + JSON.stringify(definition.name) + " and show different " + FIELD_FOR_TYPE[definition.type] + " — " +
+  throw new FlcmError("authoring",
+    stated.length + " layers bind " + JSON.stringify(definition.name) + " and show different " + FIELD_FOR_TYPE[definition.type] + " — " +
       stated.map((b) => b.layer + " is " + JSON.stringify(b.value)).join(", ") +
-      ". Binding writes the property's one default into every one of them, so make them agree in this call (set the same " + FIELD_FOR_TYPE[definition.type] + " on each), or bind just one.",
+      ". Binding writes the property's one default into every one of them, so make them agree in this call (set the same " + FIELD_FOR_TYPE[definition.type] + " on each), or bind just one.", { path: at },
   );
 }
 

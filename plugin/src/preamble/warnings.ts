@@ -71,6 +71,7 @@ export function createWarningRegistry() {
     project,
     summary(): string[] {
       return records.filter(record => !emitted.has(record)).map(record =>
+        // eslint-disable-next-line no-restricted-syntax -- a warning record's field, not an error's text
         "[warn] " + (record.id === null ? "" : record.id + " ") + record.message +
         (record.prop === undefined ? "" : " " + record.prop + ": authored " + JSON.stringify(record.authored) + ", realized " + JSON.stringify(record.realized) + "."));
     },

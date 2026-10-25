@@ -26,12 +26,13 @@ import {
   type InstanceWriteRuleId,
 } from "./instance-write-policy.js";
 import type { PatchFieldKey } from "./obligation.js";
+import { FlcmError } from "./flcm-error.js";
 
 // Only this module holds the token, so only its mint functions can construct the values below.
 const MINT: unique symbol = Symbol("instance-write-authorization");
 
 function assertMinted(token: typeof MINT): void {
-  if (token !== MINT) throw new Error("flcm: an authorized write was constructed outside instance-write-authorization. This is an internal error; report it.");
+  if (token !== MINT) throw new FlcmError("internal", "an authorized write was constructed outside instance-write-authorization. This is a bug in flcm, not in your call.");
 }
 
 /** A field the policy forbids writing where it lands: the rule, and the word as a refusal names it. */
@@ -154,14 +155,14 @@ function classifyInstanceWrites(node: any, patch: WriteProps, sizing: NodeSizing
 }
 
 /** The policy's refusal for `refused` words of `who`, in `context`. */
-export function instanceWriteRefusal(subject: string, who: string, context: InstanceContextFacts, refused: Refusals): Error {
+export function instanceWriteRefusal(subject: string, who: string, context: InstanceContextFacts, refused: Refusals): FlcmError {
   const owner = context.ownWritesLockedBy;
   const where = !owner
     ? who + " is an instance, and an instance's own words follow its component where Figma keeps them"
     : who + " sits inside " + (owner.projected ? "the instance of " + describeNodeIdentity(owner.node) + " this call creates or re-points" : "instance " + describeNodeIdentity(owner.node)) +
       ", where a layer's look is yours to override and its geometry is the component's";
   const parts = refused.map(({ rule: id, words }) => words.join(", ") + ": " + describeInstanceWriteRule(id) + ".");
-  return new Error(subject + ": " + where + ". " + parts.join(" ") + " Nothing was applied.");
+  return new FlcmError("figma", where + ". " + parts.join(" ") + " Nothing was applied.", { call: subject });
 }
 
 function classifyOrRefuse(subject: string, who: string, node: any, patch: WriteProps, sizing: NodeSizingPlan, context: InstanceContextFacts): InstanceWriteClassification {
@@ -218,7 +219,7 @@ export function assertInstanceRootLayoutMode(subject: string, node: SceneNode | 
 function mintPlan(
   subject: string, source: EditPlan, patch: WriteProps, resolved: ResolvedLiveLayout | null, context: InstanceContextFacts, landing: EditPlanLanding,
 ): AuthorizedEditPlan {
-  if (context.basis !== "live") throw new Error("flcm: an edit plan is minted only against a live node; a projected plan is preflight. This is an internal error; report it.");
+  if (context.basis !== "live") throw new FlcmError("internal", "an edit plan is minted only against a live node; a projected plan is preflight. This is a bug in flcm, not in your call.");
   const node = source.node;
   const facts = resolved ? resolved.sizingFacts : liveNodeSizingFacts(node);
   const child = resolved ? resolved.child : NO_LAYOUT;

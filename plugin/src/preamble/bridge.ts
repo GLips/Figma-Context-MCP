@@ -53,7 +53,8 @@ import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, fontDivergences, textStyleFont, FontMap } from "./fonts.js";
 import { writeKey, identityOf, type InstanceContextFacts } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
-import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
+import { MutatingVerbError, locateBuiltNodeFailure } from "./verb-error.js";
+import { FlcmError, describeFailure } from "./flcm-error.js";
 import { unrotatedCornerOf } from "./pivot.js";
 
 // The resource half of the walk context — what an applier resolves against, split out so an exported
@@ -208,7 +209,7 @@ function stampKey(node: any, wn: BuiltNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   // No verb name: the same walk runs under render AND under every structural insert verb, and
   // naming the wrong one sends the agent looking at a call it didn't make.
-  if (ctx.keys.has(wn.key)) throw new Error('flcm: duplicate key "' + wn.key + '" — keys must be unique within one call.');
+  if (ctx.keys.has(wn.key)) throw new FlcmError("authoring", 'duplicate key "' + wn.key + '" — keys must be unique within one call.');
   writeKey(node, wn.key);
   ctx.keys.add(wn.key);
 }
@@ -248,7 +249,7 @@ function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
   if (typeof b64 !== "string") {
     // Every url on a paint site (paintSitesOf) is prefetched before any node is built, so a miss is
     // a paint that reached here some other way — fail loud rather than paint a blank fill.
-    throw new Error('flcm.image: no fetched bytes for "' + paint.url + '" — the image was not resolved before render.');
+    throw new FlcmError("internal", 'no fetched bytes for "' + paint.url + '" — the image was not resolved before render. This is a bug in flcm, not in your call.', { call: "flcm.image" });
   }
   const img = figma.createImage(figma.base64Decode(b64));
   return { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: img.hash, ...imagePaintAdjustments(paint) };
@@ -333,7 +334,7 @@ function applyCornerRadii(node: any, r: CornerRadii<Bindable>, tokens: ResolvedT
     return;
   }
   if (!("topLeftRadius" in node)) {
-    throw new Error("flcm: a " + node.type + " has one radius for all four corners — per-corner borderRadius has no equivalent on it.");
+    throw new FlcmError("authoring", "a " + node.type + " has one radius for all four corners — per-corner borderRadius has no equivalent on it.");
   }
   writeBindable(node, "topLeftRadius", r.topLeft, tokens);
   writeBindable(node, "topRightRadius", r.topRight, tokens);
@@ -1013,7 +1014,7 @@ function legalChildLayout(wn: BuiltNode, words: WriteLayout, facts: ParentFlowFa
     return context;
   } catch (cause) {
     if (!wn.sourcePath) throw cause;
-    throw new NodeBuildError(wn, wn.sourcePath, cause, { flcmRefusal: true });
+    throw locateBuiltNodeFailure(cause, wn);
   }
 }
 
@@ -1082,7 +1083,7 @@ function authorizeBuiltChild(parent: any, wn: BuiltNode, child: ChildLayout, fac
     return mintAuthorizedBuiltLayout(facts.subject, wn, child, facts.context ?? parent, componentMode);
   } catch (cause) {
     if (!wn.sourcePath) throw cause;
-    throw new NodeBuildError(wn, wn.sourcePath, cause, { flcmRefusal: true });
+    throw locateBuiltNodeFailure(cause, wn);
   }
 }
 
@@ -1135,7 +1136,7 @@ function buildFrame(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout, enc
 // child-side words (position, fill, constraints) are attachBuiltChild's, after the caller places the node.
 function buildInstance(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const plan = ctx.instances.get(wn);
-  if (!plan) throw new Error("flcm: an INSTANCE node reached the build walk without a resolved plan. This is an internal error; report it.");
+  if (!plan) throw new FlcmError("internal", "an INSTANCE node reached the build walk without a resolved plan. This is a bug in flcm, not in your call.");
   const inst = plan.component.createInstance();
   figma.currentPage.appendChild(inst); // enter the doc; reparented when appended to a parent frame
   if (Object.keys(plan.properties).length) inst.setProperties(plan.properties);
@@ -1334,7 +1335,7 @@ function buildLine(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any
 // Both fail loud on unparseable input rather than leaving a silent empty node.
 function buildVector(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const source = wn.vector;
-  if (!source) throw new Error("flcm: a VECTOR node carries no geometry (compileSvg/compilePath guarantee one).");
+  if (!source) throw new FlcmError("internal", "a VECTOR node carries no geometry (compileSvg/compilePath guarantee one). This is a bug in flcm, not in your call.");
   return source.kind === "svg" ? buildSvg(wn, source.markup, ctx, layout) : buildPath(wn, source, ctx, layout);
 }
 
@@ -1342,8 +1343,8 @@ function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx, layout: Authori
   let frame: any;
   try {
     frame = figma.createNodeFromSvg(markup);
-  } catch (e: any) {
-    throw new Error("VECTOR: Figma could not parse the SVG markup — " + (e && e.message ? e.message : String(e)));
+  } catch (e) {
+    throw new FlcmError("figma", "VECTOR: Figma could not parse the SVG markup — " + describeFailure(e));
   }
   figma.currentPage.appendChild(frame);
   // createNodeFromSvg returns a FrameNode, which inherits Figma's clipsContent=true default — so vector art
@@ -1396,10 +1397,10 @@ function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }
   if (!wn.strokes) v.strokes = [];
   try {
     v.vectorPaths = source.paths;
-  } catch (e: any) {
+  } catch (e) {
     // Already normalized to Figma's absolute M/L/C/Q/Z subset at compile (compile-nodes.ts compilePath); reaching
     // here means the parser rejected something the normalizer emitted, so show what it actually sent.
-    throw new Error('VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + (e && e.message ? e.message : String(e)));
+    throw new FlcmError("figma", 'VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + describeFailure(e));
   }
   applyPaint(v, wn, ctx);
   applyOwnSizing(v, layout, ctx.tokens);
@@ -1432,17 +1433,18 @@ const BUILDERS: Record<WriteType, (wn: BuiltNode, ctx: RenderCtx, layout: Author
 export function buildNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuiltLayout, enclosingWidthBounded?: boolean): any {
   try { return buildCompiledNode(wn, ctx, layout, enclosingWidthBounded); }
   catch (cause) {
-    // Innermost wins: the deepest node that failed is the one the verb error should name. A nested
-    // verb error (slot content, a placed live child) already names it, so it passes through too.
-    if (cause instanceof NodeBuildError || cause instanceof MutatingVerbError || !wn.sourcePath) throw cause;
-    throw new NodeBuildError(wn, wn.sourcePath, cause);
+    // Innermost wins (locateFailure keeps a site already set): the deepest node that failed is the
+    // one the verb error should name. A nested verb error (slot content, a placed live child)
+    // already names it, so it passes through untouched.
+    if (cause instanceof MutatingVerbError || !wn.sourcePath) throw cause;
+    throw locateBuiltNodeFailure(cause, wn);
   }
 }
 
 function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuiltLayout, enclosingWidthBounded?: boolean): any {
   const build = own(BUILDERS, wn.type);
   if (!build) {
-    throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
+    throw new FlcmError("authoring", 'cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
   const node = build(wn, ctx, layout, enclosingWidthBounded);
   if (wn.source) ctx.placedIds.set(wn.source, node.id);
@@ -1472,8 +1474,9 @@ function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuil
   stampKey(node, wn, ctx);
   if (wn.componentPropertyReferences) {
     if (!ctx.bindings) {
-      throw new Error(
-        "flcm: a node in this tree carries `componentPropertyReferences`, and this verb has no declaring component behind it for the binding to point at — that is flcm.component, or an insert landing inside a component. " +
+      throw new FlcmError(
+        "internal",
+        "a node in this tree carries `componentPropertyReferences`, and this verb has no declaring component behind it for the binding to point at — that is flcm.component, or an insert landing inside a component. " +
           "(The verb's prepare should have refused the tree; reaching the build walk is a bug.)",
       );
     }

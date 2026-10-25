@@ -72,6 +72,7 @@ import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
 import { own } from "./validate.js";
 import { bareName, matchPropertyNames } from "./component-properties.js";
 import type { EditDelta } from "./schema.js";
+import { ConcurrentEditError, FlcmError, locateFailure } from "./flcm-error.js";
 
 const SUBJECT = "INSTANCE";
 
@@ -172,7 +173,7 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
   for (const wn of instances) {
     const { plan, overrides } = (() => {
       try { return planInstanceNode(wn, planning); }
-      catch (cause) { throw new Error((wn.sourcePath ?? "INSTANCE") + ": " + (cause instanceof Error ? cause.message : String(cause))); }
+      catch (cause) { throw locateFailure(cause, { path: wn.sourcePath ?? "INSTANCE" }); }
     })();
     needs.plans.set(wn, plan);
     for (const o of overrides) {
@@ -270,11 +271,12 @@ function resolveComponentNode(node: any, subject: string): ResolvedComponent {
   if (node.type === "COMPONENT") return resolvedFromComponent(node);
   const who = describeNodeIdentity(node);
   if (node.type === "INSTANCE") {
-    throw new Error(
-      subject + ": " + who + " is itself an instance, not a component. Pass the component it comes from — flcm.get(" + JSON.stringify(node.id) + ") reports it as `componentId`.",
+    throw new FlcmError("authoring",
+      who + " is itself an instance, not a component. Pass the component it comes from — flcm.get(" + JSON.stringify(node.id) + ") reports it as `componentId`.",
+      { call: subject },
     );
   }
-  throw new Error(subject + ": " + who + " is not a component — only a COMPONENT (or a COMPONENT_SET, whose variant the `componentProperties` pick) can be instantiated.");
+  throw new FlcmError("authoring", who + " is not a component — only a COMPONENT (or a COMPONENT_SET, whose variant the `componentProperties` pick) can be instantiated.", { call: subject });
 }
 
 
@@ -289,15 +291,17 @@ export function resolvePropertyName(authored: string, definitions: Record<string
   const matches = matchPropertyNames(authored, definitions);
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) {
-    throw new Error(
-      where + ": " + JSON.stringify(authored) + " names " + matches.length + " properties on this component (" +
+    throw new FlcmError("authoring",
+      JSON.stringify(authored) + " names " + matches.length + " properties on this component (" +
         matches.map((m) => JSON.stringify(m)).join(", ") + ") — use the full name with its #suffix.",
+      { path: where },
     );
   }
   const available = Object.keys(definitions);
-  throw new Error(
-    where + ": this component has no property " + JSON.stringify(authored) + " — " +
+  throw new FlcmError("authoring",
+    "this component has no property " + JSON.stringify(authored) + " — " +
       (available.length ? "its properties are " + available.map((n) => JSON.stringify(bareName(n))).join(", ") : "it defines no properties") + ".",
+    { path: where },
   );
 }
 
@@ -327,24 +331,24 @@ function resolveComponentProperties(
       case "VARIANT": {
         const options: string[] = def.variantOptions || [];
         if (typeof value !== "string" || options.indexOf(value) === -1) {
-          throw new Error(where + ": " + JSON.stringify(value) + " is not an option of variant axis " + JSON.stringify(full) + " — the options are " + options.map((o) => JSON.stringify(o)).join(", ") + ".");
+          throw new FlcmError("authoring", JSON.stringify(value) + " is not an option of variant axis " + JSON.stringify(full) + " — the options are " + options.map((o) => JSON.stringify(o)).join(", ") + ".", { path: where });
         }
         variant[full] = value;
         break;
       }
       case "BOOLEAN":
-        if (typeof value !== "boolean") throw new Error(where + ": " + JSON.stringify(full) + " is a boolean property — got " + JSON.stringify(value) + ".");
+        if (typeof value !== "boolean") throw new FlcmError("authoring", JSON.stringify(full) + " is a boolean property — got " + JSON.stringify(value) + ".", { path: where });
         properties[full] = value;
         break;
       case "TEXT":
-        if (typeof value !== "string") throw new Error(where + ": " + JSON.stringify(full) + " is a text property — got " + JSON.stringify(value) + ".");
+        if (typeof value !== "string") throw new FlcmError("authoring", JSON.stringify(full) + " is a text property — got " + JSON.stringify(value) + ".", { path: where });
         properties[full] = value;
         break;
       case "INSTANCE_SWAP": {
-        if (typeof value === "boolean") throw new Error(where + ": " + JSON.stringify(full) + " is an instance-swap property, which takes a component (its node id or a handle) — got " + JSON.stringify(value) + ".");
+        if (typeof value === "boolean") throw new FlcmError("authoring", JSON.stringify(full) + " is an instance-swap property, which takes a component (its node id or a handle) — got " + JSON.stringify(value) + ".", { path: where });
         const swap: any = targets.node(value as Target, where);
         if (swap.type !== "COMPONENT") {
-          throw new Error(where + ": " + JSON.stringify(full) + " swaps in a COMPONENT, and " + JSON.stringify(swap.name) + " (id " + JSON.stringify(swap.id) + ") is a " + swap.type + (swap.type === "COMPONENT_SET" ? " — name one of its variants" : "") + ".");
+          throw new FlcmError("authoring", JSON.stringify(full) + " swaps in a COMPONENT, and " + JSON.stringify(swap.name) + " (id " + JSON.stringify(swap.id) + ") is a " + swap.type + (swap.type === "COMPONENT_SET" ? " — name one of its variants" : "") + ".", { path: where });
         }
         properties[full] = swap.id;
         break;
@@ -353,7 +357,7 @@ function resolveComponentProperties(
         if (!slotNamed) slotNamed = { full, where };
         break;
       default:
-        throw new Error(where + ": " + JSON.stringify(full) + " is a " + String(def.type) + " property, which flcm has no word for.");
+        throw new FlcmError("authoring", JSON.stringify(full) + " is a " + String(def.type) + " property, which flcm has no word for.", { path: where });
     }
   }
   const component = Object.keys(variant).length ? selectVariant(resolved, variant, subject) : resolved.base;
@@ -362,9 +366,10 @@ function resolveComponentProperties(
     // frame's in THIS variant — walked so the refusal hands over the exact key to write.
     const hole = slotFrameBoundTo(component, slotNamed.full);
     const path = hole ? JSON.stringify(componentPath(hole.id)) : '"<slotPath>"';
-    throw new Error(
-      slotNamed.where + ": " + JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
+    throw new FlcmError("authoring",
+      JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
         subject + ".overrides[" + path + "] = { children: [ …nodes ] } (FRAME/text/instance…; [] empties it).",
+      { path: slotNamed.where },
     );
   }
   return { component, properties, variant };
@@ -377,7 +382,7 @@ function resolveComponentProperties(
 function selectVariant(resolved: ResolvedComponent, variant: Record<string, string>, subject: string): any {
   const { base, set } = resolved;
   if (!set) {
-    throw new Error(subject + ".componentProperties: " + JSON.stringify(base.name) + " is a standalone component with no variant axes, but a variant value was named.");
+    throw new FlcmError("authoring", JSON.stringify(base.name) + " is a standalone component with no variant axes, but a variant value was named.", { path: subject + ".componentProperties" });
   }
   const tuple: Record<string, string> = { ...(base.variantProperties || {}), ...variant };
   const axes = Object.keys(tuple);
@@ -389,9 +394,9 @@ function selectVariant(resolved: ResolvedComponent, variant: Record<string, stri
   const spelled = axes.map((a) => a + "=" + tuple[a]).join(", ");
   if (matches.length === 0) {
     const has = (set.children as any[]).map((v) => JSON.stringify(v.name)).join(", ");
-    throw new Error(subject + ".componentProperties: " + JSON.stringify(set.name) + " has no variant " + spelled + " — its variants are " + has + ".");
+    throw new FlcmError("authoring", JSON.stringify(set.name) + " has no variant " + spelled + " — its variants are " + has + ".", { path: subject + ".componentProperties" });
   }
-  throw new Error(subject + ".componentProperties: " + JSON.stringify(set.name) + " has " + matches.length + " variants named " + spelled + " (the set has a conflict Figma flags) — resolve it in the file, or pass the variant's own id as the component.");
+  throw new FlcmError("authoring", JSON.stringify(set.name) + " has " + matches.length + " variants named " + spelled + " (the set has a conflict Figma flags) — resolve it in the file, or pass the variant's own id as the component.", { path: subject + ".componentProperties" });
 }
 
 // ---- the overrides ----
@@ -423,9 +428,10 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
     const id = definitionId(path);
     const definition: any = component.findOne((n: any) => n.id === id);
     if (!definition) {
-      throw new Error(
-        where + ": " + JSON.stringify(component.name) + " (id " + JSON.stringify(component.id) + ") has no sublayer at that path. " +
+      throw new FlcmError("authoring",
+        JSON.stringify(component.name) + " (id " + JSON.stringify(component.id) + ") has no sublayer at that path. " +
           "Paths are component-relative, exactly as flcm.get keys an instance's `overrides` — and each variant has its own; read an instance of THIS variant to see them.",
+        { path: where },
       );
     }
     // The compile runs against the DEFINITION node: a fresh instance's sublayer is a copy of it
@@ -483,8 +489,9 @@ function splitSlotContent(sublayer: any, definition: any, delta: OverrideDeltaIn
   }
   if (raw === undefined) return { rest };
   if (!isSlot) {
-    throw new Error(
-      where + ": `" + SLOT_CONTENT_WORD + "` fills a SLOT, and " + describeNodeIdentity(sublayer) + " at that path is not one. " + slotPathsSentence(definition),
+    throw new FlcmError("authoring",
+      "`" + SLOT_CONTENT_WORD + "` fills a SLOT, and " + describeNodeIdentity(sublayer) + " at that path is not one. " + slotPathsSentence(definition),
+      { path: where },
     );
   }
   return { rest, slotContent: (raw as WriteChild[]).filter((child): child is WriteNode => !!child) };
@@ -500,9 +507,10 @@ function restoreNullWords(delta: OverrideDeltaInput, where: string): EditDelta {
     }
     const restore = own(NULL_RESTORE, key);
     if (restore === undefined) {
-      throw new Error(
-        where + ": `" + key + "` is null. A read's null means the instance lacks a field the component has, and flcm has no removal word for `" + key + "` — the ones it has: " +
+      throw new FlcmError("authoring",
+        "`" + key + "` is null. A read's null means the instance lacks a field the component has, and flcm has no removal word for `" + key + "` — the ones it has: " +
           Object.keys(NULL_RESTORE).join(", ") + ". Pass a value, or leave the field to the component.",
+        { path: where },
       );
     }
     out[key] = restore;
@@ -607,14 +615,15 @@ export function beginOverrideApply(instance: any, ctx: RenderCtx, verb: string):
     const liveId = liveSublayerId(instance.id, path);
     const node = instance.findOne((n: any) => n.id === liveId);
     if (!node) {
-      throw new Error(
-        where + ": " + describeNodeIdentity(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
+      throw new FlcmError("authoring",
+        describeNodeIdentity(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
+        { path: where },
       );
     }
     // The gate judged the path a slot on the tree it could see; a retarget in this span may have
     // put something else there. Asked again on the live node, loud, before a child is touched.
     if (slotContent && node.type !== "SLOT") {
-      throw new Error(where + ": " + describeNodeIdentity(node) + " is not a SLOT in the tree this call produced — a component word in the same call replaced it. Apply the component word, read the instance, then fill.");
+      throw new FlcmError("authoring", describeNodeIdentity(node) + " is not a SLOT in the tree this call produced — a component word in the same call replaced it. Apply the component word, read the instance, then fill.", { path: where });
     }
     // Compiled HERE, against the sublayer the span actually holds — a create's fresh copy, or the
     // tree a retarget just produced — so the words land on what is there, not on the definition
@@ -729,8 +738,9 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
   const instance: any = node;
   if (words.exposed !== undefined) assertExposureTarget(node, subject);
   if (!current) {
-    throw new Error(
-      subject + ": " + describeNodeIdentity(instance) + " has no readable main component — it comes from a library the file can't reach right now, so nothing about its properties or sublayers can be resolved.",
+    throw new FlcmError("figma",
+      describeNodeIdentity(instance) + " has no readable main component — it comes from a library the file can't reach right now, so nothing about its properties or sublayers can be resolved.",
+      { call: subject },
     );
   }
   assertInstanceStillOf(instance, current, subject);
@@ -779,10 +789,11 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
 // against the component the delta names.
 function assertInstanceStillOf(instance: any, current: any, subject: string): void {
   if (instanceStillShows(instance, current)) return;
-  throw new Error(
-    subject + ": the main component of " + describeNodeIdentity(instance) + " changed while this call was resolving targets and loading resources (it was " +
-      describeNodeIdentity(current) + "), so the delta was planned against a component the instance no longer has. Nothing was applied — re-read the instance and re-run the call.",
-  );
+  throw new ConcurrentEditError({
+    call: subject,
+    node: { type: instance.type, name: instance.name, id: instance.id },
+    changed: "the main component of " + describeNodeIdentity(instance) + " changed; it was " + describeNodeIdentity(current),
+  });
 }
 
 /** Whether `instance`'s sublayers are still `component`'s, prefixed: the sync proof of a main component prepare resolved. */
@@ -810,9 +821,10 @@ function planLiveOverrides(
     const liveId = liveSublayerId(instance.id, path);
     const live: any = instance.findOne((n: any) => n.id === liveId);
     if (!live) {
-      throw new Error(
-        where + ": " + describeNodeIdentity(instance) + " has no sublayer at that path. " +
+      throw new FlcmError("authoring",
+        describeNodeIdentity(instance) + " has no sublayer at that path. " +
           "Paths are component-relative, exactly as flcm.get keys this instance's `overrides` — and each variant has its own; read the instance to see the ones it has.",
+        { path: where },
       );
     }
     plans.push(compileOverride(live, component, overrides[path], path, where, gate, instanceContextOf(live)));

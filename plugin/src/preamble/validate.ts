@@ -11,6 +11,7 @@
 // Every closed set in the preamble is indexed by an AGENT-SUPPLIED string, so a plain `table[key]`
 // reaches Object.prototype: `{ type: "toString" }` would pass a type gate and `{ compiler: 1 }` a
 // field gate, both silently. Own-property only — a closed set has to actually be closed.
+import { FlcmError } from "./flcm-error.js";
 import { normalizeInputAliases } from "./input-aliases.js";
 import { nodeWordDisposition } from "./vocabulary.js";
 
@@ -47,15 +48,17 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
     // Object.keys on a string enumerates its character indices — without this branch a string
     // here rejects as unknown keys "0", "1", "2"…: every word true, none naming the actual
     // object-vs-value mistake.
-    throw new Error(
-      `flcm: ${subject} takes an object (${noun}s: ${listKeys(allowed)}) — got ${showValue(obj)}.`,
+    throw new FlcmError(
+      "authoring",
+      `${subject} takes an object (${noun}s: ${listKeys(allowed)}) — got ${showValue(obj)}.`,
     );
   }
   const unknown = Object.keys(obj).filter((k) => !allowed.has(k));
   if (unknown.length) {
     const label = noun + (unknown.length > 1 ? "s" : "");
-    throw new Error(
-      `flcm: unknown ${label} ${unknown.map((k) => JSON.stringify(k)).join(", ")} on ${subject} — ` +
+    throw new FlcmError(
+      "authoring",
+      `unknown ${label} ${unknown.map((k) => JSON.stringify(k)).join(", ")} on ${subject} — ` +
         `${subject} takes only ${listKeys(allowed)}.${hint ? " " + hint : ""}`,
     );
   }
@@ -70,16 +73,20 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
 // "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (the compilers own it).
 export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, subject: string): void {
   if (changes == null || typeof changes !== "object") {
-    throw new Error(subject + ": changes must be an object of props to apply — got " + showValue(changes) + ".");
+    throw new FlcmError("authoring", "changes must be an object of props to apply — got " + showValue(changes) + ".", { call: subject });
   }
   if ("key" in changes) {
-    throw new Error(
-      subject + ": `key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
+    throw new FlcmError(
+      "authoring",
+      "`key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
+      { call: subject },
     );
   }
   if ("x" in changes || "y" in changes) {
-    throw new Error(
-      subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
+    throw new FlcmError(
+      "authoring",
+      "position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
+      { call: subject },
     );
   }
   // The read shape's non-authoring words (`type`, `children`, a root's `designedWidth`, a refused
@@ -96,9 +103,11 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
 
 export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>, subject: string): void {
   if (Object.keys(changes).length === 0) {
-    throw new Error(
-      subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
+    throw new FlcmError(
+      "authoring",
+      "the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
         [...known].join(", ") + ".",
+      { call: subject },
     );
   }
 }
@@ -114,7 +123,7 @@ export function words(set: ReadonlySet<string>): string {
 
 export function assertEnum<T extends string>(name: string, raw: unknown, set: ReadonlySet<T>): T {
   if (typeof raw !== "string" || !oneOf(set, raw)) {
-    throw new Error("flcm: " + name + " must be one of " + words(set) + " — got " + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", name + " must be one of " + words(set) + " — got " + JSON.stringify(raw) + ".");
   }
   return raw;
 }

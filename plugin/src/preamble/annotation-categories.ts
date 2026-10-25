@@ -5,6 +5,7 @@
 import { sceneFigma as figma } from "./scene-access.js";
 import type { WriteNode } from "./ir.js";
 import type { WriteAnnotation } from "./annotations.js";
+import { FlcmError, appendToFailure, describeFailure } from "./flcm-error.js";
 
 // Per-verb state, module-global rather than threaded through the verb's resources object the way
 // fonts and images are: the created-category list outlives the resources, because the FAILURE path
@@ -47,7 +48,7 @@ export async function resolveAnnotationCategories(): Promise<void> {
   for (const name of requestedCategories) {
     const matches = categories.filter((category) => category.label.trim() === name);
     if (matches.length > 1) {
-      throw new Error(`flcm.annotations: category ${JSON.stringify(name)} is ambiguous: ${matches.map((category) => `${JSON.stringify(category.label)} (${category.id})`).join(", ")}. Rename the duplicate categories.`);
+      throw new FlcmError("authoring", `category ${JSON.stringify(name)} is ambiguous: ${matches.map((category) => `${JSON.stringify(category.label)} (${category.id})`).join(", ")}. Rename the duplicate categories.`, { call: "flcm.annotations" });
     }
     if (matches.length) resolvedCategories.set(name, matches[0].id);
   }
@@ -66,7 +67,7 @@ export async function resolveAnnotationCategories(): Promise<void> {
  *
  * Returns the verb's OWN failure, which is what the agent must see — a category that refuses to be
  * removed is a leftover empty category, not the reason the verb failed. Every removal is attempted
- * even after one throws, and the ones that failed ride along on the original error's message so a
+ * even after one throws, and the ones that failed ride along on the original error's reason so a
  * leftover is named rather than silently kept.
  */
 export function removeFailedAnnotationCategories(cause: unknown): unknown {
@@ -76,30 +77,25 @@ export function removeFailedAnnotationCategories(cause: unknown): unknown {
     try {
       category.remove();
     } catch (err) {
-      unremoved.push(`${JSON.stringify(label)} (${err instanceof Error ? err.message : String(err)})`);
+      unremoved.push(`${JSON.stringify(label)} (${describeFailure(err)})`);
     }
   }
   createdCategories = [];
   if (!unremoved.length) return cause;
-  const leftovers = `flcm.annotations: the annotation category this call created could not be removed and is still in the file: ${unremoved.join(", ")}.`;
-  if (cause instanceof Error) {
-    cause.message += " " + leftovers;
-    return cause;
-  }
-  console.log(leftovers);
-  return cause;
+  return appendToFailure(cause, `flcm.annotations: the annotation category this call created could not be removed and is still in the file: ${unremoved.join(", ")}.`);
 }
 
 /** The id a category name resolved to in this call's prepare. */
 export function annotationCategoryId(category: string): string {
   const id = resolvedCategories.get(category);
-  if (!id) throw new Error(`flcm.annotations: unresolved category ${JSON.stringify(category)}.`);
+  // prepare resolves every category the call names, so a miss here is flcm's own.
+  if (!id) throw new FlcmError("internal", `unresolved category ${JSON.stringify(category)}.`, { call: "flcm.annotations" });
   return id;
 }
 
 export function applyAnnotations(node: SceneNode, annotations: readonly WriteAnnotation[] | undefined): void {
   if (annotations === undefined) return;
-  if (!("annotations" in node)) throw new Error(`flcm.annotations: ${node.type} cannot carry annotations.`);
+  if (!("annotations" in node)) throw new FlcmError("figma", `${node.type} cannot carry annotations.`, { call: "flcm.annotations" });
   node.annotations = annotations.map(({ text, category, properties }) => {
     const out: { labelMarkdown?: string; categoryId?: string; properties?: AnnotationProperty[] } = {};
     if (text !== undefined) out.labelMarkdown = text;

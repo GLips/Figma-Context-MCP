@@ -23,6 +23,7 @@ import { serializeGridTracks } from "./grid-tracks.js";
 import { decodeAnnotations, type SceneAnnotation } from "./annotations.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { isCoordinateTransparentType, rotateIntoParentFrame, type PlacementContext } from "@framelink/core";
+import { FlcmError } from "./flcm-error.js";
 import type {
   NodeSnapshot,
   SnapshotColor,
@@ -780,7 +781,7 @@ const LINE_BREAKS = /[\n\u2029]/;
  */
 function decodeSceneText(node: SceneNodeLike): SnapshotText {
   if (!node.getStyledTextSegments) {
-    throw new Error("flcm: TEXT node without getStyledTextSegments (scene fixture missing segments?)");
+    throw new FlcmError("internal", "TEXT node without getStyledTextSegments (scene fixture missing segments?)");
   }
   const characters = node.characters ?? "";
   const segments = node.getStyledTextSegments(TEXT_SEGMENT_FIELDS);

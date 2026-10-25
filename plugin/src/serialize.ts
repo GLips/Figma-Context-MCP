@@ -14,6 +14,7 @@
 // else — a render Handle, a read POJO, an agent's own data — round-trips WHOLE.
 
 import { looksLikeNode } from "./preamble/live-node.js";
+import { FlcmError } from "./preamble/flcm-error.js";
 
 function findLiveNode(value: unknown, path: string, seen: Set<object>): { path: string; type: string } | null {
   if (value === null || typeof value !== "object" || seen.has(value)) return null;
@@ -43,7 +44,8 @@ export function guardReturnValue(value: unknown): void {
   const hit = findLiveNode(value, "", new Set());
   if (!hit) return;
   const where = hit.path ? ` (at return value ${hit.path.startsWith("[") ? hit.path : `.${hit.path}`})` : "";
-  throw new Error(
+  throw new FlcmError(
+    "authoring",
     `You returned a live Figma node${where}: a ${hit.type}. Live nodes can't cross the bridge — ` +
       `they collapse to { id } and you lose every other property. Return the id string instead: ` +
       "`return node.id` (or `return { id: node.id }`, or an array of ids).",
@@ -69,7 +71,7 @@ export function safeSerialize(value: unknown, ancestors = new Set<object>()): un
     };
   }
 
-  if (ancestors.has(value)) throw new Error("Cannot serialize cyclic return or console data.");
+  if (ancestors.has(value)) throw new FlcmError("authoring", "Cannot serialize cyclic return or console data.");
   ancestors.add(value);
   try {
     if (Array.isArray(value)) return value.map(item => safeSerialize(item, ancestors));

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { FlcmError } from "./flcm-error.js";
 import { parseGridPlacement, parseGridTracks, serializeGridTracks, type GridTrack } from "./grid-tracks.js";
 
 type Bag = Record<string, unknown>;
@@ -13,14 +14,14 @@ interface AliasRule {
   combine?: (values: readonly unknown[], canonical: unknown, subject: string) => unknown;
 }
 const cellAlignment = { AUTO: "auto", MIN: "start", CENTER: "center", MAX: "end" } as const;
-function conflict(subject: string): never { throw new Error(subject + ": conflicting alias and canonical values; supply one value or equivalent duplicates."); }
+function conflict(subject: string): never { throw new FlcmError("authoring", "conflicting alias and canonical values; supply one value or equivalent duplicates.", { call: subject }); }
 function mergeValue(value: unknown, canonical: unknown, subject: string): unknown {
   if (canonical !== undefined && !Object.is(canonical, value)) conflict(subject);
   return value;
 }
 function placementAlias([anchor, span]: readonly unknown[], canonical: unknown, subject: string): string {
-  if (anchor !== undefined && (typeof anchor !== "number" || !Number.isSafeInteger(anchor) || anchor < 0 || !Number.isSafeInteger(anchor + 1))) throw new Error(subject + ": anchor index must be a non-negative integer.");
-  if (span !== undefined && (typeof span !== "number" || !Number.isSafeInteger(span) || span < 1)) throw new Error(subject + ": span must be a positive integer.");
+  if (anchor !== undefined && (typeof anchor !== "number" || !Number.isSafeInteger(anchor) || anchor < 0 || !Number.isSafeInteger(anchor + 1))) throw new FlcmError("authoring", "anchor index must be a non-negative integer.", { call: subject });
+  if (span !== undefined && (typeof span !== "number" || !Number.isSafeInteger(span) || span < 1)) throw new FlcmError("authoring", "span must be a positive integer.", { call: subject });
   const placement = canonical === undefined ? undefined : parseGridPlacement(canonical, subject);
   if (anchor !== undefined && placement?.anchor !== undefined && anchor !== placement.anchor) conflict(subject);
   if (span !== undefined && placement && span !== placement.span) conflict(subject);
@@ -29,22 +30,22 @@ function placementAlias([anchor, span]: readonly unknown[], canonical: unknown, 
   return line === undefined ? "span " + extent : String(line + 1) + (extent === 1 ? "" : " / span " + extent);
 }
 function alignmentAlias([value]: readonly unknown[], canonical: unknown, subject: string): unknown {
-  if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(cellAlignment, value)) throw new Error(subject + ": native cell alignment must be AUTO, MIN, CENTER or MAX.");
+  if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(cellAlignment, value)) throw new FlcmError("authoring", "native cell alignment must be AUTO, MIN, CENTER or MAX.", { call: subject });
   return mergeValue(cellAlignment[value as keyof typeof cellAlignment], canonical, subject);
 }
 function nativeTracks(raw: unknown, subject: string): GridTrack[] {
-  if (!Array.isArray(raw) || !raw.length) throw new Error(subject + ": native tracks must be a non-empty array.");
+  if (!Array.isArray(raw) || !raw.length) throw new FlcmError("authoring", "native tracks must be a non-empty array.", { call: subject });
   return raw.map(track => {
-    if (!track || typeof track !== "object" || !["HUG", "FIXED", "FLEX"].includes(track.type)) throw new Error(subject + ": native tracks need type HUG, FIXED or FLEX.");
+    if (!track || typeof track !== "object" || !["HUG", "FIXED", "FLEX"].includes(track.type)) throw new FlcmError("authoring", "native tracks need type HUG, FIXED or FLEX.", { call: subject });
     if (track.type === "HUG") return { type: "HUG" };
     const value = track.type === "FLEX" ? track.value ?? 1 : track.value;
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (track.type === "FLEX" && value === 0)) throw new Error(subject + ": FIXED/FLEX tracks need a finite size, positive for FLEX.");
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (track.type === "FLEX" && value === 0)) throw new FlcmError("authoring", "FIXED/FLEX tracks need a finite size, positive for FLEX.", { call: subject });
     return { type: track.type, value };
   });
 }
 function templateAlias([sizing, tracks]: readonly unknown[], canonical: unknown, subject: string): string {
   const text = (value: unknown) => {
-    if (typeof value !== "string" || !value.trim()) throw new Error(subject + ": sizing needs a track template string.");
+    if (typeof value !== "string" || !value.trim()) throw new FlcmError("authoring", "sizing needs a track template string.", { call: subject });
     return serializeGridTracks(parseGridTracks(value, subject));
   };
   let template = canonical === undefined ? undefined : text(canonical);
@@ -84,8 +85,8 @@ export function normalizeInputAliases(bag: Bag, subject: string, type?: string):
     const sources = rule.group && inner ? [out, inner] : [out];
     if (!sources.some(source => rule.keys.some(key => Object.prototype.hasOwnProperty.call(source, key)))) continue;
     const label = rule.keys.join("/");
-    if (type && rule.types && !rule.types.includes(type)) throw new Error(subject + ": " + label + " is not supported on " + type + ".");
-    if (leaf && nested !== undefined && !inner) throw new Error(subject + ": " + root + " must be an object when using " + label + ".");
+    if (type && rule.types && !rule.types.includes(type)) throw new FlcmError("authoring", label + " is not supported on " + type + ".", { call: subject });
+    if (leaf && nested !== undefined && !inner) throw new FlcmError("authoring", root + " must be an object when using " + label + ".", { call: subject });
     const target = leaf ? { ...inner } : out;
     const values = rule.keys.map(key => {
       const a = out[key], b = rule.group ? inner?.[key] : undefined;
@@ -103,7 +104,7 @@ export function normalizeInputAliases(bag: Bag, subject: string, type?: string):
     const at = subject + ": " + label + " and " + rule.path.join(".");
     if (rule.combine) target[key] = rule.combine(values, target[key], at);
     else {
-      if (target[key] !== undefined && !Object.is(target[key], values[0])) throw new Error(subject + ": conflicting " + label + " and " + rule.path.join(".") + "; supply one value or equivalent duplicates.");
+      if (target[key] !== undefined && !Object.is(target[key], values[0])) throw new FlcmError("authoring", "conflicting " + label + " and " + rule.path.join(".") + "; supply one value or equivalent duplicates.", { call: subject });
       target[key] = values[0];
     }
   }

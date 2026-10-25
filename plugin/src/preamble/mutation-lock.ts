@@ -44,6 +44,7 @@ import { recordCommittedVerb } from "./verb-error.js";
 import { beginObligationLedger, retargetObligationNode } from "./obligation.js";
 import { finalizeMutatingCall, type VerifiedStyleLinks } from "./call-finalizer.js";
 import { describeNodeIdentity } from "./identity.js";
+import { ConcurrentEditError, FlcmError, asFlcmError, describeFailure } from "./flcm-error.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -73,7 +74,7 @@ export async function mutationQueueIdle(): Promise<number> {
 const compensatedFailures = new WeakSet<Error>();
 /** An applier may mark a failure only after restoring every write in its own span. */
 export function compensatedMutationFailure(cause: unknown): Error {
-  const error = cause instanceof Error ? cause : new Error(String(cause));
+  const error = cause instanceof Error ? cause : asFlcmError(cause);
   compensatedFailures.add(error);
   return error;
 }
@@ -90,9 +91,11 @@ export function compensatedMutationFailure(cause: unknown): Error {
 // Dev Mode run leaves zero undo residue.
 function refuseIfDevMode(verb: string): void {
   if (figma.editorType === "dev") {
-    throw new Error(
-      "flcm." + verb + ": Figma is in Dev Mode, where the plugin API is read-only — this write " +
+    throw new FlcmError(
+      "figma",
+      "Figma is in Dev Mode, where the plugin API is read-only — this write " +
         "cannot run. Switch the file back to Design mode to author. Reads are unaffected.",
+      { call: "flcm." + verb },
     );
   }
 }
@@ -101,9 +104,11 @@ function refuseIfDevMode(verb: string): void {
 function refuseIfCancelled(verb: string): void {
   const cause = hostRunCancellation();
   if (cause) {
-    throw new Error(
-      "flcm." + verb + ": " + CANCELLED_BECAUSE[cause] + " — no further mutating verbs start. The " +
+    throw new FlcmError(
+      "run-ended",
+      CANCELLED_BECAUSE[cause] + " — no further mutating verbs start. The " +
         "canvas holds what completed before the cancellation.",
+      { call: "flcm." + verb },
     );
   }
   // Worded apart from the CANCEL: with the thread held, the run can't know whether the server has
@@ -111,10 +116,12 @@ function refuseIfCancelled(verb: string): void {
   // server's clock late). Refusing anyway keeps one rule: a run that holds the plugin past the
   // deadline writes nothing more.
   if (hostDeadlinePassed()) {
-    throw new Error(
-      "flcm." + verb + ": this run held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
+    throw new FlcmError(
+      "run-ended",
+      "this run held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
         "s without reaching the server, past the server's inactivity deadline — no further mutating verbs start. The canvas holds what " +
         "completed before this point. Split long synchronous work across calls.",
+      { call: "flcm." + verb },
     );
   }
 }
@@ -164,7 +171,7 @@ function refuseIfCancelled(verb: string): void {
  * can land inside this verb's undo step — the price of the link — and once one has, Figma's undo
  * reverts none of the step (live-verified 2026-10-24). Hence the finalizer runs before it: only a
  * link that throws can fail the verb after the await, and that rollback is checked by the stamp
- * (UnrolledVerbError). An edit made during the await that changes an authored word wins; the
+ * (ConcurrentEditError, unrolled). An edit made during the await that changes an authored word wins; the
  * result, built after it, shows it.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
@@ -227,9 +234,13 @@ async function linkVerifiedStyles(verb: string, links: VerifiedStyleLinks): Prom
       else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
       else await node.setTextStyleIdAsync(styleId);
     } catch (err) {
-      throw new Error(
-        "flcm." + verb + " couldn't link the " + slot + " style " + JSON.stringify(styleName) + " (id " + JSON.stringify(styleId) + ") to " +
-          subjects[i] + ": " + (err instanceof Error ? err.message : String(err)),
+      // `removed` is the one read besides id a deleted node still answers.
+      if (node.removed) throw new ConcurrentEditError({ call: "flcm." + verb, changed: subjects[i] + " was deleted" });
+      throw new FlcmError(
+        "figma",
+        "couldn't link the " + slot + " style " + JSON.stringify(styleName) + " (id " + JSON.stringify(styleId) + ") to " +
+          subjects[i] + ": " + describeFailure(err),
+        { call: "flcm." + verb },
       );
     }
   }
@@ -240,20 +251,6 @@ function stampUndoStep(): string {
   const stamp = figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === "1" ? "0" : "1";
   figma.root.setPluginData(UNDO_STEP_STAMP_KEY, stamp);
   return stamp;
-}
-
-/**
- * A failed verb whose rollback didn't take: an edit made in Figma while the verb awaited its style
- * links joined its undo step, and Figma then undid none of it. Its writes are still on the canvas.
- */
-export class UnrolledVerbError extends Error {
-  constructor(cause: unknown) {
-    super(
-      (cause instanceof Error ? cause.message : String(cause)).replace(/\.?$/, ".") +
-        " The file was edited in Figma while this call ran, so the call wasn't rolled back: its writes are still on the canvas. " +
-        "Read these nodes again before you retry.",
-    );
-  }
 }
 
 export function enterMutatingVerb<P, G, T>(
@@ -316,8 +313,10 @@ export function enterMutatingVerb<P, G, T>(
         // Explicit clone compensation already restored its writes; undo would reverse that cleanup.
         if (err instanceof Error && compensatedFailures.has(err)) throw err;
         figma.triggerUndo();
-        // The stamp is this step's first write, so it reverts only if the whole step did.
-        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) throw new UnrolledVerbError(err);
+        // The stamp is this step's first write, so it reverts only if the whole step did. If it
+        // didn't, an edit made in Figma while the verb awaited its style links joined its undo step,
+        // and Figma then undid none of it.
+        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) throw new ConcurrentEditError({ call: "flcm." + verb, unrolled: err });
         throw err;
       }
     } catch (err) {

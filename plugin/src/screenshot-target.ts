@@ -9,6 +9,7 @@
 // key→node resolution can only live here, since `pluginData('flcm/key')` is unreachable from the server.
 
 import { readKey } from "./preamble/identity.js";
+import { FlcmError } from "./preamble/flcm-error.js";
 
 export interface ScreenshotTarget {
   nodeId?: string;
@@ -28,7 +29,7 @@ export interface ScreenshotTarget {
 export async function resolveScreenshotTarget({ nodeId, key }: ScreenshotTarget): Promise<BaseNode> {
   if (nodeId !== undefined) {
     const node = await figma.getNodeByIdAsync(nodeId);
-    if (!node) throw new Error(`No node found with id ${nodeId}`);
+    if (!node) throw new FlcmError("authoring", `No node found with id ${nodeId}`);
     return node;
   }
   if (key === undefined) {
@@ -42,13 +43,15 @@ export async function resolveScreenshotTarget({ nodeId, key }: ScreenshotTarget)
   }
   const matches = figma.currentPage.findAll((n) => readKey(n) === key);
   if (!matches.length) {
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       `No node on the current page carries the flcm key "${key}". Keys are stamped by render() from a ` +
         `node's \`key\` prop — check the spelling, or screenshot by nodeId instead.`,
     );
   }
   if (matches.length > 1) {
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       `${matches.length} nodes on the current page carry the flcm key "${key}", so the target is ` +
         `ambiguous (duplicating a node copies its key). Screenshot by nodeId instead, or re-render with ` +
         `unique keys.`,

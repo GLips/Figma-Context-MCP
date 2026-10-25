@@ -12,6 +12,7 @@ import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { length, lineHeight, letterSpacing, isPercent } from "./css.js";
 import { rejectUnknownKeys, own, oneOf, words, assertEnum } from "./validate.js";
 import { compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
+import { FlcmError } from "./flcm-error.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -31,9 +32,11 @@ const FONT_VARIANT: Record<WordValue<"fontVariant">, WriteTextCase> = {
 
 function compileTextCase(c: { textTransform?: unknown; fontVariant?: unknown }, subject: string): WriteTextCase | undefined {
   if (c.textTransform != null && c.fontVariant != null) {
-    throw new Error(
-      subject + ": textTransform and fontVariant are two CSS words for Figma's ONE textCase slot, so they can't both be set — name whichever you mean. " +
+    throw new FlcmError(
+      "authoring",
+      "textTransform and fontVariant are two CSS words for Figma's ONE textCase slot, so they can't both be set — name whichever you mean. " +
         '(To clear a small-caps, use textTransform: "none".)',
+      { call: subject },
     );
   }
   if (c.textTransform != null) return mapCssWord(subject + ".textTransform", c.textTransform, TEXT_TRANSFORM);
@@ -53,10 +56,10 @@ function parseHyperlink(value: unknown, subject: string): string {
     const h = value as { type?: unknown; url?: unknown };
     if (h.type === "URL" && typeof h.url === "string" && h.url.trim()) return h.url;
     if (h.type === "NODE") {
-      throw new Error(subject + ": that is a NODE hyperlink (a jump to another node in the design) — Figma has no way for a plugin to author one. Point it at a URL, or drop the field.");
+      throw new FlcmError("authoring", "that is a NODE hyperlink (a jump to another node in the design) — Figma has no way for a plugin to author one. Point it at a URL, or drop the field.", { call: subject });
     }
   }
-  throw new Error(subject + ': hyperlink must be a non-empty URL string, or the read form { type: "URL", url } — got ' + JSON.stringify(value) + ".");
+  throw new FlcmError("authoring", 'hyperlink must be a non-empty URL string, or the read form { type: "URL", url } — got ' + JSON.stringify(value) + ".", { call: subject });
 }
 
 // Read-shape text leaves that are NOT authoring input, so a spread `{ ...node.textStyle, fontSize: 18 }`
@@ -91,7 +94,7 @@ const RUN_INPUT_KEYS = keySet(WORD_GROUPS.run, IGNORED_READ_TEXT_LEAVES);
 function rejectUnauthorableTextLeaves(c: object, subject: string, refused: Record<string, string> = REFUSED_READ_TEXT_LEAVES): void {
   for (const leaf of Object.keys(refused)) {
     if (c.hasOwnProperty(leaf)) {
-      throw new Error(subject + ": `" + leaf + "` is a read-only field — " + refused[leaf] + ". Drop it from the style.");
+      throw new FlcmError("authoring", "`" + leaf + "` is a read-only field — " + refused[leaf] + ". Drop it from the style.", { call: subject });
     }
   }
 }
@@ -112,7 +115,7 @@ function compileTextFontWords(c: Record<string, unknown>, ts: WriteTextStyle, su
   if (c.fontWeight != null) {
     ts.fontWeight = compileBindable(c.fontWeight, subject + ".fontWeight", "FLOAT", (v: unknown) => {
       if (typeof v !== "number" && typeof v !== "string") {
-        throw new Error("flcm: " + subject + '.fontWeight must be a number (400, 700), a weight name ("bold", "semibold"), or { variable } — got ' + JSON.stringify(v) + ".");
+        throw new FlcmError("authoring", subject + '.fontWeight must be a number (400, 700), a weight name ("bold", "semibold"), or { variable } — got ' + JSON.stringify(v) + ".");
       }
       return v;
     });
@@ -144,7 +147,7 @@ function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, 
 export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextStyle {
   // QuickJS boundary: a present-but-malformed value must reject the whole call, not read as absence.
   if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
-    throw new Error("flcm: " + subject + " must be an object like { fontSize, fontWeight, … } — got " + JSON.stringify(cfg) + ".");
+    throw new FlcmError("authoring", subject + " must be an object like { fontSize, fontWeight, … } — got " + JSON.stringify(cfg) + ".");
   }
   const c = cfg as NonNullable<TextProps["textStyle"]>;
   rejectUnauthorableTextLeaves(c, subject);
@@ -152,14 +155,16 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
   const ts: WriteTextStyle = {};
   const raw = c as Record<string, unknown>;
   if (raw.value !== undefined && raw.style == null) {
-    throw new Error(subject + ": `value` is what a read's text `style` resolves to, and is only accepted beside `style`. Give the words themselves.");
+    throw new FlcmError("authoring", "`value` is what a read's text `style` resolves to, and is only accepted beside `style`. Give the words themselves.", { call: subject });
   }
   if (raw.style != null) {
     const covered = TEXT_STYLE_COVERED_WORDS.filter((word) => raw[word] != null);
     if (covered.length) {
-      throw new Error(
-        subject + ": a text style sets " + covered.join(", ") + " itself, so " + (covered.length === 1 ? "it" : "they") +
+      throw new FlcmError(
+        "authoring",
+        "a text style sets " + covered.join(", ") + " itself, so " + (covered.length === 1 ? "it" : "they") +
           " can't ride beside `style` — drop " + (covered.length === 1 ? "it" : "them") + ", or drop `style` and give every word literally. Only textAlign, textAlignVertical, hyperlink and lineClamp ride beside a style.",
+        { call: subject },
       );
     }
     ts.style = compileStyleRef(raw.style, subject + ".style", "TEXT");
@@ -184,7 +189,7 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
 // stays plain `text`; anything richer becomes `runs`. Exported for edit-plan.ts.
 export function compileTextContent(content: unknown, base: WriteTextStyle, boldWeight?: number | string): { text?: string; runs?: WriteTextRun[] } {
   if (boldWeight != null && typeof boldWeight !== "number" && typeof boldWeight !== "string") {
-    throw new Error('flcm: boldWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(boldWeight) + ".");
+    throw new FlcmError("authoring", 'boldWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(boldWeight) + ".");
   }
   if (Array.isArray(content)) {
     const runs = compileRuns(content, base, boldWeight);
@@ -210,7 +215,7 @@ export function compileText(props: Accepted<TextProps>): BuiltNode {
   // absence as "no content of its own", so the layer takes its property's default (component.ts boundLayerValue).
   if (content != null) Object.assign(wn, compileTextContent(content, ts, props.boldWeight ?? undefined));
   else if (props.boldWeight != null) {
-    throw new Error("TEXT: `boldWeight` says what `**` in `text` resolves to, and this node has no `text` — pass the content as `text`, or drop it.");
+    throw new FlcmError("authoring", "TEXT: `boldWeight` says what `**` in `text` resolves to, and this node has no `text` — pass the content as `text`, or drop it.");
   }
   assertRunColorsBesideFillStyle(wn, "TEXT");
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
@@ -224,7 +229,7 @@ export function compileText(props: Accepted<TextProps>): BuiltNode {
 // so a run color beside it would be silently overwritten. Shared by create and edit.
 export function assertRunColorsBesideFillStyle(wn: WriteProps, subject: string): void {
   if (wn.styles?.fill && wn.runs?.some((run) => run.fills)) {
-    throw new Error(subject + ": a fill style repaints the whole text, so a run's color can't ride beside it — drop the run colors, or give the node a literal fill.");
+    throw new FlcmError("authoring", "a fill style repaints the whole text, so a run's color can't ride beside it — drop the run colors, or give the node a literal fill.", { call: subject });
   }
 }
 
@@ -233,7 +238,7 @@ export function assertRunColorsBesideFillStyle(wn: WriteProps, subject: string):
 // Boundedness is also the caller's — create knows the authored width, edit the live wrap state.
 export function assertLineClampCount(lineClamp: unknown, subject: string): number {
   if (typeof lineClamp !== "number" || !Number.isInteger(lineClamp) || lineClamp < 1) {
-    throw new Error(subject + ': textStyle.lineClamp must be a whole number ≥ 1 or "none" — got ' + JSON.stringify(lineClamp) + ".");
+    throw new FlcmError("authoring", 'textStyle.lineClamp must be a whole number ≥ 1 or "none" — got ' + JSON.stringify(lineClamp) + ".", { call: subject });
   }
   return lineClamp;
 }
@@ -246,7 +251,7 @@ function assertLineClamp(lineClamp: unknown, width: TextProps["width"]): number 
   const n = assertLineClampCount(lineClamp, "TEXT");
   const bounded = typeof width === "number" || width === "fill" || isPercent(width);
   if (!bounded) {
-    throw new Error('TEXT: textStyle.lineClamp needs a bounded width to truncate against — set width to a number, "fill", or "N%". A width-hugging text grows on one line, so there is nothing to wrap and clamp.');
+    throw new FlcmError("authoring", 'TEXT: textStyle.lineClamp needs a bounded width to truncate against — set width to a number, "fill", or "N%". A width-hugging text grows on one line, so there is nothing to wrap and clamp.');
   }
   return n;
 }
@@ -278,7 +283,7 @@ function plainString(content: unknown): string {
 // re-run on decoded text, or that escaped-literal round-trip would false-positive.
 function assertNotReadToken(s: string): string {
   if (/\{\/?ts\d+\}/.test(s)) {
-    throw new Error("TEXT: this text carries figma-mcp style-ref tokens ({tsN}…{/tsN}) — a read artifact. Strip the inline styling, or express the styling as a runs array.");
+    throw new FlcmError("authoring", "TEXT: this text carries figma-mcp style-ref tokens ({tsN}…{/tsN}) — a read artifact. Strip the inline styling, or express the styling as a runs array.");
   }
   return s;
 }
@@ -293,7 +298,7 @@ const isPlainSeg = (seg: MdSegment): boolean => !seg.bold && !seg.italic && !seg
 // heavy weight overrides the plain `**` bold). The `{tsN}` rejection runs on the raw entry text, pre-decode.
 function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, boldWeight?: number | string): WriteTextRun[] {
   if (!runs.length) {
-    throw new Error("TEXT: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
+    throw new FlcmError("authoring", "TEXT: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
   }
   const out: WriteTextRun[] = [];
   for (let i = 0; i < runs.length; i++) {
@@ -303,7 +308,7 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, boldWeight
     if (typeof run === "string") { raw = run; delta = {}; }
     else if (Array.isArray(run) && typeof run[0] === "string") { raw = run[0]; delta = run[1] ?? {}; }
     else {
-      throw new Error('TEXT: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
+      throw new FlcmError("authoring", 'TEXT: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
     }
     // The run delta is the grounded silent-drop site: compileRun reads a positive list and never looked at
     // the rest, so a typo'd `textTransfrom` on a run vanished. Reject it here, on the raw author delta.
@@ -345,9 +350,11 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
   if (baseStyle.style) {
     const covered = TEXT_STYLE_COVERED_WORDS.filter((word) => (delta as Record<string, unknown>)[word] != null);
     if (covered.length) {
-      throw new Error(
-        subject + ": this call sets the node's text style, which covers " + covered.join(", ") +
+      throw new FlcmError(
+        "authoring",
+        "this call sets the node's text style, which covers " + covered.join(", ") +
           " — the style link lands after the runs and would overwrite them. Style the run's color or link only, or drop textStyle.style (markdown ** / * / ~~ set fontWeight, fontStyle and textDecoration).",
+        { call: subject },
       );
     }
   }

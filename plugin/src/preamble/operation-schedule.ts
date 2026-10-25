@@ -16,6 +16,7 @@
 
 import { isSublayerId } from "@framelink/core";
 import { sceneFigma as figma } from "./scene-access.js";
+import { FlcmError } from "./flcm-error.js";
 import { effectKey, reachedGeometry, type GeometryEffect, type GeometryProjection } from "./geometry-dependency.js";
 
 const EDIT_OPERATION_PHASES = [
@@ -110,7 +111,7 @@ export function scheduleEditOperations<Op extends EditOperation>(operations: rea
     order.push(operations[i]);
     for (const j of after[i]) if (--waiting[j] === 0) ready.push(j);
   }
-  if (order.length < n) throw new Error(subject + ": " + describeCycle(operations, after, waiting));
+  if (order.length < n) throw new FlcmError("authoring", describeCycle(operations, after, waiting), { call: subject });
   return order;
 }
 

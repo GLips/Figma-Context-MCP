@@ -734,7 +734,7 @@ export function deriveEditObligations(full: EditPlan, instance: InstanceEditPlan
  * categories resolve after those loads; not a font, which resolves against the fonts they load;
  * not the component half, which only the gate's planning refuses with its own words.
  */
-export function deriveDriftObligations(plan: EditPlan, instance: InstanceEditPlan | undefined, tokens: ResolvedTokens, site: ObligationDerivationSite, subject: string): Obligation[] {
+export function deriveConcurrentEditObligations(plan: EditPlan, instance: InstanceEditPlan | undefined, tokens: ResolvedTokens, site: ObligationDerivationSite, subject: string): Obligation[] {
   const strip = (p: EditPlan): EditPlan => ({ ...p, componentWords: undefined, patch: { ...p.patch, annotations: undefined } });
   const hinted = instance && { ...instance, overrides: instance.overrides.map((o) => ({ ...o, plan: strip(o.plan) })) };
   return obligationsOnTarget(deriveEditObligations(strip(plan), hinted, { fonts: {}, tokens }, site), { node: plan.node }, subject)

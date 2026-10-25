@@ -127,16 +127,3 @@ test("library tokens the file uses are counted and load on request; an enabled l
   await assert.rejects(flcm.designTokens({ library: "Design System", collection: "Spacing" }), /has no collection named "Spacing"\. Its collections: "DS Colors"/);
 });
 
-test("without the teamlibrary permission, the file's own tokens still list and a warning says what's missing", async () => {
-  const figma = setup();
-  seedVariables({ collection: "Brand", variables: [{ name: "color/brand", type: "COLOR", values: { Default: { ...GREEN, a: 1 } } }] });
-  seedVariables({ library: "Design System", collection: "DS Colors", variables: [{ name: "ds/accent", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }] });
-  // Live Figma's refusal on a plugin imported before the manifest granted the permission.
-  Object.defineProperty(figma, "teamLibrary", { get() { throw new Error('in get_teamLibrary: "teamlibrary" permission not specified in manifest.json.'); } });
-  const before = warnings.records.length;
-
-  const tokens = await flcm.designTokens();
-
-  assert.deepEqual(tokens.variables.map((v) => v.reference), [{ variable: "color/brand" }]);
-  assert.match(warnings.records.slice(before).map((r) => r.message).join("\n"), /lacks the teamlibrary permission\. Re-import the plugin/);
-});

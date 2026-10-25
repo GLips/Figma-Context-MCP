@@ -15,9 +15,9 @@
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { enterMutatingVerb, mutationQueueIdle, retargetReplacedNode, UnrolledVerbError } from "./mutation-lock.js";
+import { enterMutatingVerb, mutationQueueIdle, retargetReplacedNode } from "./mutation-lock.js";
 import { recordObligations, type Obligation } from "./obligation.js";
-import { UnrealizedWordsError } from "./call-finalizer.js";
+import { ConcurrentEditError, FlcmError } from "./flcm-error.js";
 import { committedVerbCount } from "./verb-error.js";
 import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
@@ -267,7 +267,8 @@ test("a word that didn't land fails before the style links are awaited, so nothi
       node.opacity = 0.2;
       return () => { built = true; return "handle"; };
     }),
-    (err: unknown) => err instanceof UnrealizedWordsError && /didn't realize 1 of its words.*opacity: asked 0\.5, ended 0\.2/s.test(err.message),
+    // Nothing explains the miss but flcm's own write order, so it is flcm's bug.
+    (err: unknown) => err instanceof FlcmError && err.kind === "internal" && /didn't realize 1 of its words.*opacity: asked 0\.5, ended 0\.2/s.test(err.message),
   );
   assert.equal(linked, false);
   assert.equal(built, false);
@@ -291,8 +292,8 @@ test("a link that fails after an edit joined the call's undo step names the link
       return () => undefined;
     }),
     (err: unknown) =>
-      err instanceof UnrolledVerbError &&
-      /^flcm\.edit couldn't link the fill style "Brand" \(id "S:brand"\) to RECTANGLE "Card" \(id "[^"]+"\): style not found\. .*writes are still on the canvas/s.test(err.message),
+      err instanceof ConcurrentEditError &&
+      /^flcm\.edit: this call failed \(couldn't link the fill style "Brand" \(id "S:brand"\) to RECTANGLE "Card" \(id "[^"]+"\): style not found\), .*writes are still on the canvas/s.test(err.message),
   );
 });
 

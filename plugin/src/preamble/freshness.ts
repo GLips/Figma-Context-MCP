@@ -5,8 +5,10 @@
 // freshness — the gate-phase refusals every mutating verb shares (mutation-lock.ts on the phase
 // rule). A verb's prepare resolves nodes and loads pages across awaits the user has the document
 // open across; its synchronous gate asks these, against the document as it stands at the seal,
-// before anything is written. Each names the same moment the same way — "while this call was
-// resolving targets and loading resources" — because that IS the moment, whatever the verb loaded.
+// before anything is written. Each is the one concurrent-edit error (flcm-error.ts): whatever moved,
+// the file was edited in Figma while the call ran.
+
+import { ConcurrentEditError } from "./flcm-error.js";
 
 /**
  * A node prepare resolved is still on the canvas. Figma keeps accepting writes on a removed node
@@ -15,10 +17,11 @@
  */
 export function assertNodeStillOnCanvas(node: SceneNode, subject: string): void {
   if (!node.removed) return;
-  throw new Error(
-    subject + ": " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
-      ") was deleted while this call was resolving targets and loading resources, so it is no longer on the canvas. Nothing was applied — re-run the call without it.",
-  );
+  throw new ConcurrentEditError({
+    call: subject,
+    node: { type: node.type, name: node.name, id: node.id },
+    changed: JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") was deleted",
+  });
 }
 
 /**
@@ -45,8 +48,8 @@ export async function loadPageForWrite(node: any, pages: LoadedPages): Promise<v
 /** The gate's half: `parent` is a scene node, or a page prepare loaded. */
 export function assertPageLoaded(parent: any, pages: LoadedPages, subject: string): void {
   if (!parent || parent.type !== "PAGE" || pages.has(parent.id)) return;
-  throw new Error(
-    subject + ": the destination moved to page " + JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) +
-      ") while this call was resolving targets and loading resources, and that page is not loaded. Nothing was applied — re-run the call.",
-  );
+  throw new ConcurrentEditError({
+    call: subject,
+    changed: "the destination moved to page " + JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) + "), which this call didn't load",
+  });
 }

@@ -14,6 +14,7 @@ import { specNode } from "../../harness/spec-node.js";
 // refusal fires with zero writes. Creation-side property/variant resolution is instance.test.ts's.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { FlcmError } from "./flcm-error.js";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { inNextRun } from "../../harness/next-run.js";
 import { render } from "./structure.js";
@@ -206,7 +207,7 @@ test("the main component is proven at the seal: a swap during the font load refu
   try {
     await assert.rejects(
       inNextRun(() => edit(inst.id, { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } })),
-      /the main component of INSTANCE .* changed while this call was resolving targets and loading resources \(it was COMPONENT "Chip"/,
+      (err: unknown) => err instanceof FlcmError && err.kind === "concurrent-edit" && /the main component of INSTANCE .* changed; it was COMPONENT "Chip"/.test(err.reason),
     );
   } finally {
     figma.loadFontAsync = loadFontAsync;

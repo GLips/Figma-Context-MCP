@@ -7,6 +7,7 @@ import { writeBindable, type ResolvedTokens } from "./tokens.js";
 import type { WriteLayout } from "./ir.js";
 import { AXES, LAYOUT_MODES, layoutModeOf, type LayoutMode, type Axis, type ChildLayout } from "./layout-mode.js";
 import { hugGridTracks, rowsForGridClaims, type GridClaim, type GridTrack } from "./grid-tracks.js";
+import { FlcmError } from "./flcm-error.js";
 
 // Native layout policy owns mode-dependent writes. Bridge orchestration only chooses a policy.
 interface LayoutBehavior {
@@ -209,8 +210,8 @@ export function applySiblingOrder(parent: any, edits: readonly { child: any; ind
   const slots: any[] = new Array(parent.children.length);
   const named = new Set(edits.map(edit => edit.child));
   for (const { child, index } of edits) {
-    if (index >= slots.length) throw new Error("zIndex must be within the parent's sibling count.");
-    if (slots[index]) throw new Error("zIndex must name a distinct sibling index in one operation.");
+    if (index >= slots.length) throw new FlcmError("authoring", "zIndex must be within the parent's sibling count.");
+    if (slots[index]) throw new FlcmError("authoring", "zIndex must name a distinct sibling index in one operation.");
     slots[index] = child;
   }
   const rest = parent.children.filter((child: any) => !named.has(child));

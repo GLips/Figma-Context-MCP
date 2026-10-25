@@ -18,6 +18,7 @@
 // warning about byte-equality is for a future read side, not the render path.
 
 import { rejectUnknownKeys } from "./validate.js";
+import { FlcmError, type FlcmErrorKind } from "./flcm-error.js";
 import { NESTED_WORDS, WORD_VALUES } from "./vocabulary.js";
 
 // Returns [c1x, c1y, c2x, c2y, endX, endY] cubic segments approximating the arc from (x1,y1) to (x2,y2).
@@ -144,8 +145,9 @@ export function normalizePathData(d: string): string {
   const n = d.length;
   let i = 0;
 
-  const fail = (msg: string): never => {
-    throw new Error('VECTOR: could not parse the SVG path data "' + d + '" — ' + msg + " (at index " + i + ").");
+  const fail = (msg: string, kind: FlcmErrorKind = "authoring"): never => {
+    const reason = 'VECTOR: could not parse the SVG path data "' + d + '" — ' + msg + " (at index " + i + ").";
+    throw new FlcmError(kind, kind === "internal" ? reason + " This is a bug in flcm, not in your call." : reason);
   };
   const isWs = (ch: string): boolean => ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
   const skipSep = (): void => {
@@ -412,7 +414,7 @@ export function normalizePathData(d: string): string {
         // is guarded before the switch. This guards the one remaining path — adding a letter to CMD
         // without a matching case here — which would otherwise spin (that command consumes no numbers, so
         // the cursor never advances). Fail loud instead.
-        fail('internal: command "' + cmd + '" has no handler');
+        fail('command "' + cmd + '" has no handler', "internal");
     }
     skipSep();
   }
@@ -426,13 +428,15 @@ const WINDING_RULES: readonly unknown[] = WORD_VALUES.windingRule;
 
 /** Validate every path before a verb starts mutating the document. */
 export function normalizeVectorPaths(value: unknown): VectorPaths {
-  if (!Array.isArray(value) || !value.length) throw new Error("VECTOR.vectorPaths must be a non-empty path array.");
+  if (!Array.isArray(value) || !value.length) throw new FlcmError("authoring", "VECTOR.vectorPaths must be a non-empty path array.");
   return value.map((path, index) => {
     const at = "VECTOR.vectorPaths[" + index + "]";
     rejectUnknownKeys(path, VECTOR_PATH_KEYS, at, "field");
-    if (typeof path.data !== "string") throw new Error(at + ".data must be SVG path data (a string) — got " + JSON.stringify(path.data) + ".");
+    if (typeof path.data !== "string") throw new FlcmError("authoring", "must be SVG path data (a string) — got " + JSON.stringify(path.data) + ".", { path: at + ".data" });
     if (!WINDING_RULES.includes(path.windingRule)) {
-      throw new Error(at + ".windingRule must be one of " + WINDING_RULES.map((rule) => JSON.stringify(rule)).join(", ") + " — got " + JSON.stringify(path.windingRule) + ".");
+      throw new FlcmError("authoring", "must be one of " + WINDING_RULES.map((rule) => JSON.stringify(rule)).join(", ") + " — got " + JSON.stringify(path.windingRule) + ".", {
+        path: at + ".windingRule",
+      });
     }
     return { data: normalizePathData(path.data), windingRule: path.windingRule };
   });

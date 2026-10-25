@@ -4,6 +4,7 @@
  */
 // A verb's authored words are verified once its last write has landed, before its style links are
 // awaited: a word that didn't land rolls the whole call back with nothing able to join its undo step.
+import type { FlcmError } from "./flcm-error.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock, seedStyle } from "../../harness/figma-mock.mjs";
@@ -311,10 +312,11 @@ test("a restated word that changes while the call loads fonts is refused, keepin
     figma.loadFontAsync = (font: unknown) => { text.fills = [{ type: "SOLID", color: { r: 0, g: 1, b: 0 }, opacity: 1 }]; return load.call(figma, font); };
     const words = { fill: "#ff0000", textStyle: { fontWeight: 700 } };
     const run = verb === "edit" ? flcm.edit(text.id, words as never) : verb === "editMany" ? flcm.editMany([{ id: text.id, ...words }] as never) : flcm.render({ id: text.id, ...words } as never);
-    await assert.rejects(run, (err: Error) => {
-      assert.match(err.message, /fill changed while this call was loading fonts and images \(it was "#ff0000", now "#00FF00"\)/, verb);
+    await assert.rejects(run, (err: FlcmError) => {
+      assert.equal(err.kind, "concurrent-edit", verb);
+      assert.match(err.message, /fill went from "#ff0000" to "#00FF00"/, verb);
       // A batch names the entry once, and asks for a fresh read rather than a fix.
-      if (verb === "editMany") assert.match(err.message, /Read those layers again and re-run it\.\n {2}\[0\] TEXT/);
+      if (verb === "editMany") assert.match(err.message, /Read those layers again and re-run it\.\n {2}\[0\] the file was edited in Figma/);
       return true;
     });
     assert.deepEqual(text.fills[0].color, { r: 0, g: 1, b: 0 }, verb);

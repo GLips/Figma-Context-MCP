@@ -22,6 +22,7 @@ import { rejectUnknownKeys } from "./validate.js";
 import { NESTED_WORDS } from "./vocabulary.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
+import { FlcmError } from "./flcm-error.js";
 
 // FillInput / WriteGradientFill / WriteCssEffects moved to ir.ts (the figma-free type hub) so the schema
 // module can source them without importing this module's parsers. parseFill/parseCssEffects below still
@@ -35,8 +36,8 @@ function parseHex(input: string): Rgba {
   if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2] + "ff";
   else if (h.length === 4) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
   else if (h.length === 6) h = h + "ff";
-  else if (h.length !== 8) throw new Error('bad hex color "' + input + '": use #rgb, #rrggbb, #rgba, or #rrggbbaa.');
-  if (!/^[0-9a-fA-F]{8}$/.test(h)) throw new Error('bad hex color "' + input + '": contains non-hex characters.');
+  else if (h.length !== 8) throw new FlcmError("authoring", 'bad hex color "' + input + '": use #rgb, #rrggbb, #rgba, or #rrggbbaa.');
+  if (!/^[0-9a-fA-F]{8}$/.test(h)) throw new FlcmError("authoring", 'bad hex color "' + input + '": contains non-hex characters.');
   return {
     r: parseInt(h.slice(0, 2), 16) / 255,
     g: parseInt(h.slice(2, 4), 16) / 255,
@@ -50,15 +51,15 @@ function parseHex(input: string): Rgba {
 function parseRgb(input: string): Rgba {
   const inner = input.slice(input.indexOf("(") + 1, input.lastIndexOf(")"));
   const parts = inner.split(/[\s,\/]+/).filter((p) => p.length);
-  if (parts.length < 3 || parts.length > 4) throw new Error('bad color "' + input + '": rgb()/rgba() needs 3 channels and an optional alpha.');
-  if (parts.some((p) => p.indexOf("%") !== -1)) throw new Error('bad color "' + input + '": percent channels are outside the supported subset — use 0-255 numbers.');
+  if (parts.length < 3 || parts.length > 4) throw new FlcmError("authoring", 'bad color "' + input + '": rgb()/rgba() needs 3 channels and an optional alpha.');
+  if (parts.some((p) => p.indexOf("%") !== -1)) throw new FlcmError("authoring", 'bad color "' + input + '": percent channels are outside the supported subset — use 0-255 numbers.');
   const ch = parts.slice(0, 3).map((p) => {
     const n = Number(p);
-    if (!isFinite(n) || n < 0 || n > 255) throw new Error('bad color "' + input + '": channel "' + p + '" must be 0-255.');
+    if (!isFinite(n) || n < 0 || n > 255) throw new FlcmError("authoring", 'bad color "' + input + '": channel "' + p + '" must be 0-255.');
     return n / 255;
   });
   const a = parts.length === 4 ? Number(parts[3]) : 1;
-  if (!isFinite(a) || a < 0 || a > 1) throw new Error('bad color "' + input + '": alpha must be 0-1.');
+  if (!isFinite(a) || a < 0 || a > 1) throw new FlcmError("authoring", 'bad color "' + input + '": alpha must be 0-1.');
   return { r: ch[0], g: ch[1], b: ch[2], a };
 }
 
@@ -78,7 +79,7 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
     if (isImageFill(value)) return readImagePaint(value, field);
     if (isVariableInput(value)) return boundSolid(compileVariableRef(value, field, "COLOR"), 1);
     if (isStyleInput(value)) {
-      throw new Error("flcm: " + field + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }` on its own, never as one layer of a stack, a run's color, or an imported SVG's paint.");
+      throw new FlcmError("authoring", field + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }` on its own, never as one layer of a stack, a run's color, or an imported SVG's paint.");
     }
     const leaf = value as { type?: unknown; color?: unknown; gradient?: unknown; blendMode?: unknown; opacity?: unknown };
     if (leaf.type === "SOLID" && typeof leaf.color === "string") {
@@ -87,7 +88,7 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
     if (leaf.type === "SOLID" && isVariableInput(leaf.color)) {
       rejectUnknownKeys(leaf, BOUND_SOLID_KEYS, field);
       const opacity = leaf.opacity ?? 1;
-      if (typeof opacity !== "number" || !(opacity >= 0 && opacity <= 1)) throw new Error("flcm: " + field + " opacity must be a number 0–1 — got " + JSON.stringify(leaf.opacity) + ".");
+      if (typeof opacity !== "number" || !(opacity >= 0 && opacity <= 1)) throw new FlcmError("authoring", field + " opacity must be a number 0–1 — got " + JSON.stringify(leaf.opacity) + ".");
       return withPaintBlend(boundSolid(compileVariableRef(leaf.color, field + ".color", "COLOR"), opacity), leaf.blendMode);
     }
     if (typeof leaf.gradient === "string" && typeof leaf.type === "string" && leaf.type.indexOf("GRADIENT_") === 0) {
@@ -107,8 +108,8 @@ function boundSolid(colorVariable: VariableRef, opacity: number): WriteSolid {
   return { kind: "solid", color: { r: 0, g: 0, b: 0 }, opacity, colorVariable };
 }
 
-function badFill(field: string, value: unknown): Error {
-  return new Error("flcm: " + field + ' must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, a blended solid { type: "SOLID", color, blendMode }, a color variable { variable }, or a bound solid { type: "SOLID", color: { variable }, opacity?, blendMode? }. Got ' + JSON.stringify(value) + ".");
+function badFill(field: string, value: unknown): FlcmError {
+  return new FlcmError("authoring", field + ' must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, a blended solid { type: "SOLID", color, blendMode }, a color variable { variable }, or a bound solid { type: "SOLID", color: { variable }, opacity?, blendMode? }. Got ' + JSON.stringify(value) + ".");
 }
 
 // A read-form leaf's optional `blendMode` (a CSS keyword) onto its parsed solid/gradient.
@@ -129,13 +130,13 @@ export function parseImageAdjustments(
   if (o.blendMode != null) out.blendMode = parseBlendMode(String(o.blendMode));
   if (o.opacity != null) {
     if (typeof o.opacity !== "number" || !(o.opacity >= 0 && o.opacity <= 1)) {
-      throw new Error("flcm: " + where + " opacity must be a number 0–1 — got " + JSON.stringify(o.opacity) + ".");
+      throw new FlcmError("authoring", where + " opacity must be a number 0–1 — got " + JSON.stringify(o.opacity) + ".");
     }
     out.opacity = o.opacity;
   }
   if (o.rotation != null && o.rotation !== 0) {
     if (o.rotation !== 90 && o.rotation !== 180 && o.rotation !== 270) {
-      throw new Error("flcm: " + where + " rotation must be 0, 90, 180 or 270 — Figma turns an image paint only in quarter turns. Got " + JSON.stringify(o.rotation) + ".");
+      throw new FlcmError("authoring", where + " rotation must be 0, 90, 180 or 270 — Figma turns an image paint only in quarter turns. Got " + JSON.stringify(o.rotation) + ".");
     }
     out.rotation = o.rotation;
   }
@@ -145,15 +146,15 @@ export function parseImageAdjustments(
 
 function parseImageFilters(input: unknown, where: string): WriteImageFilters {
   if (typeof input !== "object" || Array.isArray(input)) {
-    throw new Error("flcm: " + where + " filters must be an object of { " + IMAGE_FILTER_KEYS.join(", ") + " } — got " + JSON.stringify(input) + ".");
+    throw new FlcmError("authoring", where + " filters must be an object of { " + IMAGE_FILTER_KEYS.join(", ") + " } — got " + JSON.stringify(input) + ".");
   }
   const filters: Record<string, number> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     if (IMAGE_FILTER_KEYS.indexOf(key) === -1) {
-      throw new Error("flcm: " + where + ' filters has no "' + key + '" — use ' + IMAGE_FILTER_KEYS.join(", ") + ".");
+      throw new FlcmError("authoring", where + ' filters has no "' + key + '" — use ' + IMAGE_FILTER_KEYS.join(", ") + ".");
     }
     if (typeof value !== "number" || !(value >= -1 && value <= 1)) {
-      throw new Error("flcm: " + where + " filters." + key + " must be a number -1–1 (0 is untouched) — got " + JSON.stringify(value) + ".");
+      throw new FlcmError("authoring", where + " filters." + key + " must be a number -1–1 (0 is untouched) — got " + JSON.stringify(value) + ".");
     }
     filters[key] = value;
   }
@@ -184,21 +185,21 @@ function readImagePaint(value: object, field: string): WriteImageHash {
   // one path that looks like it works is exactly the one that silently strips the animation. There is no
   // hash to point a new paint at (the GIF's own bytes live behind gifRef, which is not an image hash).
   if (typeof o.gifRef === "string" && o.gifRef) {
-    throw new Error(
-      "flcm: " + field + " is an animated GIF fill, and its `imageRef` is only the static snapshot frame — rebuilding from it would drop the animation. Duplicate the node with flcm.clone to keep the GIF.",
+    throw new FlcmError("authoring",
+      field + " is an animated GIF fill, and its `imageRef` is only the static snapshot frame — rebuilding from it would drop the animation. Duplicate the node with flcm.clone to keep the GIF.",
     );
   }
   const hash = typeof o.imageRef === "string" && o.imageRef ? o.imageRef : undefined;
   if (!hash) {
-    throw new Error(
-      "flcm: " + field + " is an image fill with no imageRef — Figma reports a null ref for an asset that lives in a file you don't own, so there is nothing to point the new paint at (" +
+    throw new FlcmError("figma",
+      field + " is an image fill with no imageRef — Figma reports a null ref for an asset that lives in a file you don't own, so there is nothing to point the new paint at (" +
         JSON.stringify(value) + "). Duplicate the node with flcm.clone instead, or author your own image with flcm.image(url).",
     );
   }
   const scaleMode = ownEntry(READ_SCALE_MODES, String(o.scaleMode));
   if (!scaleMode) {
-    throw new Error(
-      "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which flcm has no word to author, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
+    throw new FlcmError("authoring",
+      field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which flcm has no word to author, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
     );
   }
   const paint: WriteImageHash = { kind: "image", hash, scaleMode, ...parseImageAdjustments(o, field) };
@@ -241,7 +242,7 @@ const BLEND_MODES: Record<string, WriteBlendMode> = {
 export function parseBlendMode(input: string): WriteBlendMode {
   const mode = ownEntry(BLEND_MODES, String(input).trim().toLowerCase());
   if (!mode) {
-    throw new Error('flcm: unsupported blend "' + input + '" — use one of these CSS mix-blend-mode names: ' + Object.keys(BLEND_MODES).join(", ") + ". (Figma's pass-through has no CSS name and isn't offered.)");
+    throw new FlcmError("authoring", 'unsupported blend "' + input + '" — use one of these CSS mix-blend-mode names: ' + Object.keys(BLEND_MODES).join(", ") + ". (Figma's pass-through has no CSS name and isn't offered.)");
   }
   return mode;
 }
@@ -329,8 +330,8 @@ function evenSpread(i: number, n: number): number {
   return n > 1 ? i / (n - 1) : 0;
 }
 
-function badGradient(s: string, why: string): Error {
-  return new Error('flcm: cannot parse gradient "' + s + '" — ' + why + ".");
+function badGradient(s: string, why: string): FlcmError {
+  return new FlcmError("authoring", 'cannot parse gradient "' + s + '" — ' + why + ".");
 }
 
 // ---- CSS effect strings (WriteCssEffects) -> WriteEffect[] ----
@@ -394,8 +395,8 @@ function parseBlurs(css: string, build: (cssPx: number) => WriteEffect): WriteEf
   });
 }
 
-function badEffect(s: string, why: string): Error {
-  return new Error('flcm: cannot parse effect "' + s + '" — ' + why + ".");
+function badEffect(s: string, why: string): FlcmError {
+  return new FlcmError("authoring", 'cannot parse effect "' + s + '" — ' + why + ".");
 }
 
 // ---- Scalar metric coercions (author may pass a number or a CSS string) ----
@@ -406,7 +407,7 @@ function badEffect(s: string, why: string): Error {
 export function length(v: number | string): number {
   if (typeof v === "number") return v;
   const m = /^(-?\d+(\.\d+)?)px$/.exec(String(v).trim());
-  if (!m) throw new Error('flcm: expected a number or "Npx" (e.g. 24 or "24px"), got ' + JSON.stringify(v) + " — em/%/rem and bare numeric strings are not coerced.");
+  if (!m) throw new FlcmError("authoring", 'expected a number or "Npx" (e.g. 24 or "24px"), got ' + JSON.stringify(v) + " — em/%/rem and bare numeric strings are not coerced.");
   return parseFloat(m[1]);
 }
 
@@ -418,7 +419,7 @@ export function length(v: number | string): number {
 export function boxShorthand(value: string, field: string): Edges {
   const parts = String(value).trim().split(/\s+/).filter((p) => p.length);
   if (!parts.length || parts.length > 4) {
-    throw new Error("flcm: " + field + ' must be a CSS box shorthand of 1–4 values (e.g. "12px" or "12px 16px") — got ' + JSON.stringify(value) + ".");
+    throw new FlcmError("authoring", field + ' must be a CSS box shorthand of 1–4 values (e.g. "12px" or "12px 16px") — got ' + JSON.stringify(value) + ".");
   }
   const n = parts.map((p) => length(p));
   const top = n[0];
@@ -438,15 +439,15 @@ export function cornerRadii(value: number | string, field: string): CornerRadii 
   // Negative space: Figma corners are circular — there is no vertical corner radius to carry the
   // second half of an elliptical `x / y` shorthand, so it rejects instead of silently dropping it.
   if (raw.indexOf("/") !== -1) {
-    throw new Error(
-      "flcm: " + field + " is " + JSON.stringify(value) +
+    throw new FlcmError("authoring",
+      field + " is " + JSON.stringify(value) +
         ' — Figma corners are circular, so the elliptical "horizontal / vertical" border-radius form has no equivalent. Give one radius per corner.',
     );
   }
   const parts = raw.split(/\s+/).filter((p) => p.length);
   if (!parts.length || parts.length > 4) {
-    throw new Error(
-      "flcm: " + field + ' must be a number, "Npx", or a CSS border-radius shorthand of 1–4 values (e.g. "8px 8px 0px 0px") — got ' +
+    throw new FlcmError("authoring",
+      field + ' must be a number, "Npx", or a CSS border-radius shorthand of 1–4 values (e.g. "8px 8px 0px 0px") — got ' +
         JSON.stringify(value) + ".",
     );
   }
@@ -467,7 +468,7 @@ export function isPercent(v: unknown): v is string {
 }
 export function percent(v: string): number {
   const m = PERCENT_RE.exec(String(v).trim());
-  if (!m) throw new Error('flcm: expected a percent like "50%", got ' + JSON.stringify(v) + ".");
+  if (!m) throw new FlcmError("authoring", 'expected a percent like "50%", got ' + JSON.stringify(v) + ".");
   return parseFloat(m[1]);
 }
 
@@ -475,7 +476,7 @@ export function percent(v: string): number {
 // would otherwise pass "1.5rem" as 1.5em, "5 0%" as 50%, or "12foo%" as 12 — each a silent-wrong metric.
 function unitValue(s: string, unit: "em" | "%", what: string): number {
   const m = new RegExp("^(-?\\d+(\\.\\d+)?)" + unit + "$").exec(s);
-  if (!m) throw new Error("flcm: bad " + what + " " + JSON.stringify(s) + ' — expected e.g. "1.5em" or "150%".');
+  if (!m) throw new FlcmError("authoring", "bad " + what + " " + JSON.stringify(s) + ' — expected e.g. "1.5em" or "150%".');
   return parseFloat(m[1]);
 }
 

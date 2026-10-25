@@ -15,11 +15,20 @@ const CORE_INTERNAL_IMPORT = {
 };
 const LOCAL_LISTENER_MESSAGE =
   "Open local listeners through src/utils/local-listener.ts, which refuses browser requests.";
+// Every error the plugin throws is an FlcmError carrying a kind, and code decides by that kind,
+// never by message text: a reworded sentence must not change who gets blamed. The `.message` ban
+// can't tell an Error from a wire frame or warning record, so those few reads carry a disable.
+const FLCM_ERROR_MESSAGE =
+  "Throw an FlcmError with a kind (plugin/src/preamble/flcm-error.ts), and branch on `kind`, never on message text. Quote a foreign failure with describeFailure.";
+// The plugin keeps its own toolchain (typecheck, node:test, the build's zod guard), so the general
+// rule sets skip it (their `ignores`); its sources get the FlcmError rule and the repo-wide import ban.
+const PLUGIN_SOURCES = "plugin/src/**/*.ts";
 
 export default [
-  js.configs.recommended,
+  { ...js.configs.recommended, ignores: ["plugin/**"] },
   {
     files: ["**/*.ts", "**/*.tsx"],
+    ignores: ["plugin/**"],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
@@ -125,6 +134,32 @@ export default [
     },
   },
   {
+    files: [PLUGIN_SOURCES],
+    languageOptions: {
+      parser: tsparser,
+      parserOptions: { ecmaVersion: 2022, sourceType: "module" },
+    },
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "NewExpression[callee.name=/^(Error|TypeError|RangeError|SyntaxError)$/]",
+          message: FLCM_ERROR_MESSAGE,
+        },
+        {
+          selector: "CallExpression[callee.name=/^(Error|TypeError|RangeError|SyntaxError)$/]",
+          message: FLCM_ERROR_MESSAGE,
+        },
+        { selector: "MemberExpression[property.name='message']", message: FLCM_ERROR_MESSAGE },
+      ],
+    },
+  },
+  {
+    // The one module that reads a failure's text and builds the error type itself.
+    files: ["plugin/src/preamble/flcm-error.ts"],
+    rules: { "no-restricted-syntax": "off" },
+  },
+  {
     files: ["scripts/**/*.mjs"],
     languageOptions: {
       globals: {
@@ -133,18 +168,16 @@ export default [
     },
   },
   {
-    // The plugin carries its own toolchain — its own tsconfig/typecheck, its
-    // own node:test runner, and the build's zod-purity guard. It was never
-    // linted under this config in its origin repo; adopting these rules now
-    // would flag deliberate patterns (e.g. code.ts's `any` on Figma's
-    // SceneNode union). Its quality bar is typecheck + tests + build guard,
-    // run by the root `validate`.
+    // Of the plugin, only its non-test sources are linted (see PLUGIN_SOURCES). The general rules
+    // would flag deliberate patterns there (e.g. code.ts's `any` on Figma's SceneNode union).
     // .agent_cache (cloned reference repos) and .scratch (local probes) are never ours — eslint
     // walks them regardless of .gitignore, so someone else's lint errors would fail `pnpm validate`.
     ignores: [
       "**/dist/**",
       "node_modules/**",
-      "plugin/**",
+      "plugin/*",
+      "!plugin/src",
+      "plugin/src/**/*.test.ts",
       ".agent_cache/**",
       ".claude/**",
       ".scratch/**",

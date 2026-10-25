@@ -39,7 +39,7 @@ import {
 import { landTree } from "./land-tree.js";
 import { loadTreeResources, gateTreeResources, loadEditResources, gateEditResources } from "./verb-resources.js";
 import { recordObligations } from "./obligation.js";
-import { deriveDriftObligations, deriveEditPlanObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf } from "./obligation-derivation.js";
+import { deriveConcurrentEditObligations, deriveEditPlanObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf } from "./obligation-derivation.js";
 import { captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
 import { layoutModeOf } from "./layout-mode.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
@@ -55,6 +55,7 @@ import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./e
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
 import { showValue } from "./validate.js";
+import { FlcmError, appendToFailure, describeFailure } from "./flcm-error.js";
 import { unrotatedCornerOf } from "./pivot.js";
 import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 
@@ -73,9 +74,11 @@ interface Destination {
 // so a container type we've never heard of works and a leaf fails with the same message.
 function assertDestinationIsContainer(subject: string, node: any): void {
   if (typeof node.appendChild !== "function") {
-    throw new Error(
-      subject + ": a " + node.type + ' ("' + node.name + '") holds no children, so nothing can be placed inside it. ' +
+    throw new FlcmError(
+      "authoring",
+      "a " + node.type + ' ("' + node.name + '") holds no children, so nothing can be placed inside it. ' +
         "Target a frame, group, section, or page.",
+      { call: subject },
     );
   }
 }
@@ -96,10 +99,12 @@ function assertInstanceChildListUntouched(subject: string, node: any, role: "des
   const host = (role === "destination" ? context.childListClosedBy : context.ownWritesLockedBy)?.node as any;
   if (!host) return;
   const what = role === "destination" ? "destination" : "node being moved or removed";
-  throw new Error(
-    subject + ": the " + what + " is inside component instance " + JSON.stringify(host.name) + " (id " +
+  throw new FlcmError(
+    "figma",
+    "the " + what + " is inside component instance " + JSON.stringify(host.name) + " (id " +
       JSON.stringify(host.id) + "), whose child list Figma won't let a plugin change. Edit the main " +
       "component it comes from (flcm never auto-detaches an instance)" + slotsOpenIn(host, role) + ".",
+    { call: subject },
   );
 }
 
@@ -119,10 +124,12 @@ function slotsOpenIn(host: any, role: "destination" | "subject"): string {
 // a malformed member. Named here, with the absence stated: nothing adds to an existing set yet.
 function assertBuiltInsertNotIntoSet(subject: string, parent: any): void {
   if (parent.type !== "COMPONENT_SET") return;
-  throw new Error(
-    subject + ": " + JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) + ") is a COMPONENT_SET, and a set's children are its VARIANTS — " +
+  throw new FlcmError(
+    "authoring",
+    JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) + ") is a COMPONENT_SET, and a set's children are its VARIANTS — " +
       "a built node would be a plain frame among them. There is no add-to-an-existing-set form yet: flcm.variants builds a set from standalone components. " +
       "To change what every variant holds, insert into each variant.",
+    { call: subject },
   );
 }
 
@@ -131,9 +138,11 @@ function assertBuiltInsertNotIntoSet(subject: string, parent: any): void {
 function assertNoCycle(subject: string, node: any, destination: any): void {
   for (let p: any = destination; p; p = p.parent) {
     if (p !== node) continue;
-    throw new Error(
-      subject + ": " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") can't be placed inside " +
+    throw new FlcmError(
+      "authoring",
+      JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") can't be placed inside " +
         (node === destination ? "itself" : "its own descendant " + JSON.stringify(destination.name)) + ".",
+      { call: subject },
     );
   }
 }
@@ -156,9 +165,11 @@ function destinationOf(subject: string, anchorNode: any, placement: Placement, p
   if (placement === "before" || placement === "after") {
     const parent = anchorNode.parent;
     if (!parent) {
-      throw new Error(
-        subject + ": " + JSON.stringify(anchorNode.name) + " (id " + JSON.stringify(anchorNode.id) +
+      throw new FlcmError(
+        "authoring",
+        JSON.stringify(anchorNode.name) + " (id " + JSON.stringify(anchorNode.id) +
           ") has no parent to insert beside. Use flcm.append(parent, …) instead.",
+        { call: subject },
       );
     }
     assertPageLoaded(parent, pages, subject);
@@ -243,7 +254,7 @@ type PlacementAnchor = "currentPage" | { arg: "parent" | "sibling"; target: Targ
 // act on a node the agent never named.
 function refuseNullishTarget(subject: string, arg: string, value: unknown, remedy: string): void {
   if (value == null) {
-    throw new Error(subject + ": " + arg + " is " + showValue(value) + " — pass a target (id, flcm/key or a handle)" + remedy + ".");
+    throw new FlcmError("authoring", arg + " is " + showValue(value) + " — pass a target (id, flcm/key or a handle)" + remedy + ".", { call: subject });
   }
 }
 
@@ -359,7 +370,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       let dependencies = NO_READ_DEPENDENCIES;
       // Read off the original: the copy is made from it at the seal, so a change to it under the loads is the copy's too.
       const loaded = await loadEditResources(hint ? [hint] : [], [], (tokens) => {
-        if (hint) dependencies = captureReadDependencies(deriveDriftObligations(hint, undefined, tokens, liveObligationSite(node), "flcm.clone"));
+        if (hint) dependencies = captureReadDependencies(deriveConcurrentEditObligations(hint, undefined, tokens, liveObligationSite(node), "flcm.clone"));
       });
       const anchorNode = destination != null ? await resolveAnchor(destination, "end", pages) : undefined;
       if (!anchorNode) await loadPageForWrite(node.parent, pages);
@@ -369,9 +380,11 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       assertNodeStillOnCanvas(node, "flcm.clone");
       const dest = anchorNode !== undefined ? destinationOf("flcm.clone", anchorNode, "end", pages) : endOf(node.parent);
       if (!dest.parent) {
-        throw new Error(
-          "flcm.clone: " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
+        throw new FlcmError(
+          "authoring",
+          JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
             ") has no parent for the copy to land in — name one: flcm.clone(target, parent).",
+          { call: "flcm.clone" },
         );
       }
       assertPageLoaded(dest.parent, pages, "flcm.clone");
@@ -426,7 +439,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       } catch (cause) {
         if (!copy) throw cause;
         try { removeFailedClone(copy, created); }
-        catch (cleanup) { throw new Error(String(cause) + " Cleanup also failed: " + String(cleanup)); }
+        catch (cleanup) { throw appendToFailure(cause, "Cleanup also failed: " + describeFailure(cleanup)); }
         throw compensatedMutationFailure(cause);
       }
     },
@@ -436,7 +449,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
 function compileCloneProps(node: any, props: EditDelta) {
   if (props && typeof props === "object" && !Array.isArray(props) && Object.keys(props).length === 0) return undefined;
   const plan = compileEditPlan(node, props, "flcm.clone");
-  if (plan.instanceWords || plan.componentWords) throw new Error("flcm.clone: overrides are ordinary root properties; edit component properties, bindings, or nested overrides on the returned copy separately. Nothing was applied.");
+  if (plan.instanceWords || plan.componentWords) throw new FlcmError("authoring", "overrides are ordinary root properties; edit component properties, bindings, or nested overrides on the returned copy separately. Nothing was applied.", { call: "flcm.clone" });
   return plan;
 }
 
@@ -444,7 +457,7 @@ function compileCloneProps(node: any, props: EditDelta) {
 export async function measure(target: Target): Promise<{ x: number; y: number; width: number; height: number; warnings?: WarningRecord[] }> {
   const node: any = await resolveTarget(target);
   assertNodeStillOnCanvas(node, "flcm.measure");
-  if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) throw new Error("flcm.measure: target has no measurable scene geometry.");
+  if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) throw new FlcmError("authoring", "target has no measurable scene geometry.", { call: "flcm.measure" });
   const corner = unrotatedCornerOf(node);
   const measured = { x: corner.x, y: corner.y, width: node.width, height: node.height };
   registerRead(measured, () => measured, node.id);
@@ -520,11 +533,13 @@ export function detach(target: Target): Promise<Handle> {
     (node: any) => {
       assertNodeStillOnCanvas(node, DETACH_SUBJECT);
       if (node.type !== "INSTANCE") {
-        throw new Error(
-          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
+        throw new FlcmError(
+          "authoring",
+          describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
             (isComponentDefinition(node)
               ? "This is the component itself; detach an INSTANCE of it."
               : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
+          { call: DETACH_SUBJECT },
         );
       }
       // Figma does NOT refuse a nested detach — it WIDENS it: detachInstance on an instance inside
@@ -534,10 +549,12 @@ export function detach(target: Target): Promise<Handle> {
       // rather than a canvas it has to reconstruct.
       const host = instanceAncestorOf(node);
       if (host) {
-        throw new Error(
-          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
+        throw new FlcmError(
+          "authoring",
+          describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
             "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
             JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
+          { call: DETACH_SUBJECT },
         );
       }
       return node;

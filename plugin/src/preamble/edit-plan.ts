@@ -4,6 +4,7 @@
  */
 import { acceptAuthoringProps } from "./authoring-input.js";
 import { sceneFigma as figma } from "./scene-access.js";
+import { FlcmError } from "./flcm-error.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. One driver lands them in
 // order (edit-apply.ts) for `flcm.edit`, `flcm.editMany` and a live node a tree places; an
 // INSTANCE's override deltas (instance.ts), edits of one sublayer each, run them directly.
@@ -136,9 +137,11 @@ function assertDeltaLegalForType(node: SceneNode, changes: EditDelta, subject: s
   const legal = editWordsOf(node.type) ?? (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
   for (const prop of Object.keys(changes)) {
     if (!legal.has(prop)) {
-      throw new Error(
-        subject + ": `" + prop + "` is not a " + node.type + " word — a " + node.type + " edit takes only " +
+      throw new FlcmError(
+        "authoring",
+        "`" + prop + "` is not a " + node.type + " word — a " + node.type + " edit takes only " +
           [...legal].join(", ") + ".",
+        { call: subject },
       );
     }
   }
@@ -155,8 +158,10 @@ function enrichFontIdentity(ts: WriteTextStyle, node: TextNode, subject: string)
   if (!namesFontIdentity(ts)) return ts;
   if (node.fontName === figma.mixed) {
     if (ts.fontFamily === undefined) {
-      throw new Error(
-        subject + ": this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `text` runs.",
+      throw new FlcmError(
+        "authoring",
+        "this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `text` runs.",
+        { call: subject },
       );
     }
     return ts; // a family-anchored delta is an absolute whole-node reset — legal on mixed
@@ -204,7 +209,7 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
 function takeInstanceEditWords(changes: EditDelta, subject: string): InstanceEditWords | undefined {
   const words: InstanceEditWords = {};
   if (changes.exposed !== undefined) {
-    if (typeof changes.exposed !== "boolean") throw new Error(subject + ": exposed must be a boolean.");
+    if (typeof changes.exposed !== "boolean") throw new FlcmError("authoring", "exposed must be a boolean.", { call: subject });
     words.exposed = changes.exposed;
   }
   let named = changes.exposed !== undefined;
@@ -250,7 +255,7 @@ function takeComponentEditWords(changes: EditDelta, subject: string): ComponentE
   const description = own(changes as Record<string, unknown>, "description");
   if (description != null) {
     if (typeof description !== "string") {
-      throw new Error(subject + ".description must be a string — what Figma shows beside the component in the assets panel. Got " + JSON.stringify(description) + ".");
+      throw new FlcmError("authoring", subject + ".description must be a string — what Figma shows beside the component in the assets panel. Got " + JSON.stringify(description) + ".");
     }
     words.description = description;
     named = true;
@@ -268,7 +273,7 @@ function takeComponentEditWords(changes: EditDelta, subject: string): ComponentE
     // The bag's fields are judged against the LIVE node's type in the verb's gate (component-edit.ts),
     // which is also where a name is resolved — here it is only "an object with something in it".
     if (typeof bindings !== "object" || Array.isArray(bindings)) {
-      throw new Error(subject + '.componentPropertyReferences must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(bindings) + ".");
+      throw new FlcmError("authoring", subject + '.componentPropertyReferences must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(bindings) + ".");
     }
     if (Object.keys(bindings).length) {
       words.componentPropertyReferences = bindings as ComponentPropertyBindingEdit;
@@ -307,8 +312,10 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
         const named = patch.layout && patch.layout.sizing ? patch.layout.sizing.horizontal : undefined;
         const bounded = named !== undefined ? named !== "hug" : node.textAutoResize !== "WIDTH_AND_HEIGHT";
         if (!bounded) {
-          throw new Error(
-            subject + ': textStyle.lineClamp needs a bounded width to truncate against — this text hugs its width. Set width (a number, "fill", or "N%") in the same edit.',
+          throw new FlcmError(
+            "authoring",
+            'textStyle.lineClamp needs a bounded width to truncate against — this text hugs its width. Set width (a number, "fill", or "N%") in the same edit.',
+            { call: subject },
           );
         }
       }
@@ -322,16 +329,20 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
     patch.layout && patch.layout.sizing && patch.layout.sizing.horizontal === "hug" &&
     node.maxLines != null && patch.maxLines !== "none"
   ) {
-    throw new Error(
-      subject + ': width:"hug" would unbound a clamped text — its live lineClamp (' + node.maxLines +
+    throw new FlcmError(
+      "authoring",
+      'width:"hug" would unbound a clamped text — its live lineClamp (' + node.maxLines +
         ') would never truncate again. Clear it in the same edit (textStyle: { lineClamp: "none" }) or keep a bounded width.',
+      { call: subject },
     );
   }
   // `boldWeight` is a content convention (what `**` in `text` resolves to), not a property of the
   // live node — alone it would re-emphasize nothing, the silent no-op the surface rejects everywhere.
   if (changes.boldWeight != null && changes.text == null) {
-    throw new Error(
-      subject + ": `boldWeight` says what `**` in `text` resolves to, and this delta names no `text` — the live content would not be re-emphasized. Pass the content back as `text` with the new `boldWeight`, or drop it.",
+    throw new FlcmError(
+      "authoring",
+      "`boldWeight` says what `**` in `text` resolves to, and this delta names no `text` — the live content would not be re-emphasized. Pass the content back as `text` with the new `boldWeight`, or drop it.",
+      { call: subject },
     );
   }
   if (changes.text != null) {
@@ -341,8 +352,10 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
     // A styled run that changes font identity with no family anywhere (no run family, no delta
     // textStyle, mixed live base) would silently land in the DEFAULT family — reject instead.
     if (compiled.runs && compiled.runs.some((r) => namesFontIdentity(r.style) && r.style.fontFamily === undefined)) {
-      throw new Error(
-        subject + ": this text mixes fonts, so a styled run has no base family to resolve against — name textStyle.fontFamily in the same edit, or give each styled run its own fontFamily.",
+      throw new FlcmError(
+        "authoring",
+        "this text mixes fonts, so a styled run has no base family to resolve against — name textStyle.fontFamily in the same edit, or give each styled run its own fontFamily.",
+        { call: subject },
       );
     }
     Object.assign(patch, compiled);
@@ -401,7 +414,7 @@ export function compileEditPlan(node: SceneNode, delta: EditDelta, subject: stri
   // same hazard as `{}`: the verb would mint an undo step for zero writes. Instance and component
   // words that carry content have real work ahead of them either way, so they short-circuit it.
   if (!instanceWords && !componentWords && Object.keys(patch).length === 0) {
-    throw new Error(subject + ": the delta compiled to nothing — every value was null, undefined, or an empty object. Pass a real value, or omit the prop.");
+    throw new FlcmError("authoring", "the delta compiled to nothing — every value was null, undefined, or an empty object. Pass a real value, or omit the prop.", { call: subject });
   }
   const plan: EditPlan = { node, patch, delta, authored: wordPathsOf(delta) };
   if (instanceWords) plan.instanceWords = instanceWords;

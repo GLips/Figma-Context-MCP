@@ -5,8 +5,9 @@
 // call-obligations — what a verb's gate checks of the call's words before the first write, so a
 // call the finalizer would only roll back is refused with zero writes instead. Two checks:
 //
-// Drift. A word the node already held when prepare read it, and that changed while the call was
-// loading, is a value someone else just wrote: writing the call's copy would undo it. Refused.
+// Concurrent edits. A word the node already held when prepare read it, and that changed while the
+// call was loading, is a value someone else just wrote: writing the call's copy would undo it.
+// Refused with the one ConcurrentEditError.
 //
 // Realize-only words. A word the instance write policy forbids writing must already hold. One that
 // doesn't, and that no write in the call can produce — a geometry write that reaches it
@@ -21,6 +22,7 @@ import { concessionsOnNode, resolveObligationTarget, type Obligation, type Oblig
 import { OBLIGATION_OBSERVERS, observeObligation, type ObligationObserver } from "./obligation-observers.js";
 import { geometryProducedBy, type GeometryEffect, type GeometryProjection } from "./geometry-dependency.js";
 import { definitionsInheritedBy, type InstanceMains } from "./operation-schedule.js";
+import { ConcurrentEditError, FlcmError } from "./flcm-error.js";
 
 /** A realize-only word, observed against its basis: the live node, or the definition sublayer a projected plan compiled on. */
 export interface RealizeOnlyCheck {
@@ -79,16 +81,13 @@ export interface CallObligations {
   readonly mains?: InstanceMains;
 }
 
-/** Refuse the call before any write when a word drifted under it, or a realize-only word can't come to hold. */
+/** Refuse the call before any write when a word was edited in Figma under it, or a realize-only word can't come to hold. */
 export function gateCallObligations(call: CallObligations, subject: string): void {
-  assertNoDrift(call.obligations ?? [], call.dependencies ?? NO_READ_DEPENDENCIES, subject);
+  assertNoConcurrentEdit(call.obligations ?? [], call.dependencies ?? NO_READ_DEPENDENCIES, subject);
   assertRealizeOnlyWordsCanHold(call.checks ?? [], (obligation) => producedLater(obligation, call), subject);
 }
 
-/** A word someone else changed while the call loaded: no fix to the call's words answers it, only a fresh read. */
-export class ReadDriftError extends Error {}
-
-function assertNoDrift(obligations: readonly Obligation[], dependencies: ReadDependencies, subject: string): void {
+function assertNoConcurrentEdit(obligations: readonly Obligation[], dependencies: ReadDependencies, subject: string): void {
   if (!dependencies.readings.size) return;
   for (const { key, obligation, node } of keyed(obligations)) {
     const before = dependencies.readings.get(key);
@@ -98,11 +97,12 @@ function assertNoDrift(obligations: readonly Obligation[], dependencies: ReadDep
     if (stableStringify(now) === stableStringify(before.reading) || observer.realizes(now, obligation.request, concessionsOnNode(node))) continue;
     // It held at prepare, so what it was is the request itself: a holding reading may carry no description.
     const asked = observer.describeRequest(obligation.request);
-    throw new ReadDriftError(
-      subject + ": " + describeNodeIdentity(node) + " " + obligation.source.path + " changed while this call was loading fonts and images (it was " +
-        asked + ", now " + observer.describeReading(now) + "), and this call restated " + asked +
-        " — writing it would undo that change. Nothing was applied: read the node again and re-run.",
-    );
+    throw new ConcurrentEditError({
+      call: subject,
+      node: { type: node.type, name: node.name, id: node.id },
+      changed: describeNodeIdentity(node) + " " + obligation.source.path + " went from " + asked + " to " + observer.describeReading(now) +
+        ", and this call restates " + asked + ", which would undo that edit",
+    });
   }
 }
 
@@ -178,10 +178,12 @@ export function assertNoContradictoryWords(obligations: readonly Obligation[], s
     const other = contradictingObligation(obligation, obligations);
     if (!other) continue;
     const node = resolveObligationTarget(obligation.target)!;
-    throw new Error(
-      subject + ": " + site(obligation) + " " + obligation.source.path + " and " + site(other) + " " + other.source.path + " both state " +
+    throw new FlcmError(
+      "authoring",
+      site(obligation) + " " + obligation.source.path + " and " + site(other) + " " + other.source.path + " both state " +
         describeNodeIdentity(node) + "'s " + other.source.path.split(".").pop() + " (" + observerOf(obligation.kind).describeRequest(obligation.request) + " vs " +
         observerOf(other.kind).describeRequest(other.request) + "); state it once. Nothing was applied.",
+      { call: subject },
     );
   }
 }

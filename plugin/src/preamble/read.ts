@@ -14,6 +14,7 @@ import { type UnreadableSink, type SceneNodeLike, type SceneTokenResolver } from
 import { readSceneDesign, type CommentCounts } from "./scene-read.js";
 import { rejectUnknownKeys, showValue } from "./validate.js";
 import { registerRead } from "./egress.js";
+import { FlcmError } from "./flcm-error.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { warnings } from "./warnings.js";
 import { mapInBatches } from "./batches.js";
@@ -232,9 +233,11 @@ async function projectHits(hits: readonly SceneNode[], indexRoot: ScanRoot, unre
 // styling predicate and is excluded rather than handed an `undefined` the closure would crash dereferencing.
 async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: ReadPredicate, unreadable: UnreadableSink): Promise<SlimHandle[]> {
   if (hits.length > FIND_MATERIALIZE_CAP) {
-    throw new Error(
-      `flcm.find: the query matched ${hits.length} candidate nodes, over the ${FIND_MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
+    throw new FlcmError(
+      "authoring",
+      `the query matched ${hits.length} candidate nodes, over the ${FIND_MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
         `Narrow the query so fewer nodes reach the predicate.`,
+      { call: "flcm.find" },
     );
   }
   if (!hits.length) return [];
@@ -257,7 +260,8 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
 // is `within` — the docs say the same.)
 function rejectStringQuery(query: unknown, verb: string): void {
   if (typeof query === "string") {
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       `${verb} takes a query object; got a string. Did you mean ${verb}({ type: ${JSON.stringify(query)} }) — ` +
         `or filter by name/key? The query keys are ${[...FIND_KEY_SET].map((k) => JSON.stringify(k)).join(", ")} ` +
         `(within is the target-shaped scope).`,
@@ -278,19 +282,21 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   invalidateSceneAccess();
   rejectStringQuery(query, "flcm.find");
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key", FIND_PREDICATE_HINT);
-  if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new Error("flcm.find: hasAnnotations must be a boolean.");
+  if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new FlcmError("authoring", "hasAnnotations must be a boolean.", { call: "flcm.find" });
   for (const key of ["type", "key"] as const) {
-    if (query[key] !== undefined && typeof query[key] !== "string") throw new Error("flcm.find: " + key + " must be a string.");
+    if (query[key] !== undefined && typeof query[key] !== "string") throw new FlcmError("authoring", key + " must be a string.", { call: "flcm.find" });
   }
-  if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new Error("flcm.find: name must be a string (literal substring) or RegExp.");
-  if (predicate !== undefined && typeof predicate !== "function") throw new Error("flcm.find: predicate must be a function.");
+  if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new FlcmError("authoring", "name must be a string (literal substring) or RegExp.", { call: "flcm.find" });
+  if (predicate !== undefined && typeof predicate !== "function") throw new FlcmError("authoring", "predicate must be a function.", { call: "flcm.find" });
   // A present-but-nullish `within` is almost always an unset variable (`within: copy.id` off a value that has
   // no id). Falling back to the page default would answer with someone else's nodes, so only an ABSENT key
   // means "the current page".
   if ("within" in query && query.within == null) {
-    throw new Error(
-      `flcm.find: within is ${showValue(query.within)} — pass a container target (id, flcm/key or a handle), ` +
+    throw new FlcmError(
+      "authoring",
+      `within is ${showValue(query.within)} — pass a container target (id, flcm/key or a handle), ` +
         "or omit within to search the current page.",
+      { call: "flcm.find" },
     );
   }
   const root = await resolveScanRoot(query.within);
@@ -318,9 +324,11 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
   rejectStringQuery(query, "flcm.findOne");
   const hits = await find(query, predicate);
   if (hits.length !== 1) {
-    throw new Error(
-      `flcm.findOne: expected exactly one match for ${JSON.stringify(query)} but found ${hits.length}. ` +
+    throw new FlcmError(
+      "authoring",
+      `expected exactly one match for ${JSON.stringify(query)} but found ${hits.length}. ` +
         `Use flcm.find for zero-or-many, or narrow the query or predicate.`,
+      { call: "flcm.findOne" },
     );
   }
   return hits[0];

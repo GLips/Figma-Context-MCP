@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { FlcmError } from "./flcm-error.js";
+
 /**
  * Session values own their data. Copying on ingress closes the alias loophole: an agent cannot
  * retain an input object, attach a request-bound function later, and smuggle it into the store.
@@ -10,7 +12,7 @@
 export function createSession(): Record<string, unknown> {
   const owned = new WeakSet<object>();
   const fail = (path: string): never => {
-    throw new Error(`session: ${path} must contain plain data only (strings, finite numbers, booleans, null, undefined, arrays and plain objects). Functions, live nodes, accessors, symbols, class instances and cycles are not supported.`);
+    throw new FlcmError("authoring", `session: ${path} must contain plain data only (strings, finite numbers, booleans, null, undefined, arrays and plain objects). Functions, live nodes, accessors, symbols, class instances and cycles are not supported.`);
   };
 
   function copy(value: unknown, path: string, destination?: object, retainOwned = true, ancestors = new Set<object>(), copies = new WeakMap<object, object>()): unknown {

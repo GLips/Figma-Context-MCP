@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { FlcmError } from "./flcm-error.js";
+
 // markdown — the WRITE-edge inverse of figma-mcp read's `escapeMarkdown` + `renderRunMarkdown`
 // (@framelink/core's transformers/text.ts), pinned by the shared spec's "Markdown leaf format"
 // section (canonical-vocabulary.md). A plain authored string is decoded (escapes → literal chars,
@@ -96,7 +98,7 @@ function findFirstLink(chs: Ch[]): Link | null {
     const url = unescapeLinkUrl(raw);
     if (!url.trim()) continue; // empty destination — not a link
     if (i > 0 && !chs[i - 1].lit && chs[i - 1].c === "!") {
-      throw new Error("TEXT: markdown image syntax ![…](…) has no text equivalent — use flcm.image(url) for a raster fill, or { type: \"VECTOR\", svg } / { type: \"VECTOR\", d } for vector art.");
+      throw new FlcmError("authoring", "TEXT: markdown image syntax ![…](…) has no text equivalent — use flcm.image(url) for a raster fill, or { type: \"VECTOR\", svg } / { type: \"VECTOR\", d } for vector art.");
     }
     return { start: i, innerStart: i + 1, innerEnd: j, after: k + 1, url };
   }

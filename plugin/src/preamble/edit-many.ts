@@ -37,14 +37,15 @@ import { showValue } from "./validate.js";
 import { EditPlan, rejectNonDeltaWords, compileEditPlan, authorizeEditPlan } from "./edit-plan.js";
 import { obligationsInCall, recordObligations } from "./obligation.js";
 import {
-  deriveDriftObligations, deriveEditObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf,
+  deriveConcurrentEditObligations, deriveEditObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf,
 } from "./obligation-derivation.js";
 import { loadEditResources, gateEditResources } from "./verb-resources.js";
 import {
   resolveInstanceEditTargets, planInstanceEdit, overrideRealizeOnlyChecks, instanceGeometryWrites, withoutRetargetHeldChecks, instanceStillShows, InstanceEditPlan, InstancePlanning,
 } from "./instance.js";
 import { resolveInstanceMains, provenInstanceMains, definitionsEditedAt } from "./operation-schedule.js";
-import { assertNoContradictoryWords, captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES, ReadDriftError } from "./call-obligations.js";
+import { assertNoContradictoryWords, captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
+import { FlcmError, describeFailure, failureKindOf, messageWithinCall, type FlcmErrorKind } from "./flcm-error.js";
 import { geometryWritesOf } from "./geometry-dependency.js";
 import type { AuthorizedEditPlan } from "./instance-write-authorization.js";
 import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./edit-apply.js";
@@ -58,6 +59,11 @@ import type { EditDelta, EditEntry } from "./schema.js";
 
 const SUBJECT = "flcm.editMany";
 
+/** The call an entry's own checks speak as; the ledger matches it to name each entry once. */
+function entryCall(index: number): string {
+  return SUBJECT + "[" + index + "]";
+}
+
 /**
  * One entry as the pipeline works with it: the live node it addresses, and the delta to apply there.
  *
@@ -66,10 +72,6 @@ const SUBJECT = "flcm.editMany";
  * per-entry allow-list here to fall out of step with the edit vocabulary.
  */
 interface BatchEntry { id: string; changes: EditDelta }
-
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * The batch's per-entry failure record — ONE rejection for the whole prepare, naming every entry
@@ -92,32 +94,43 @@ interface BatchLedger {
 
 function createBatchLedger(total: number): BatchLedger {
   const failures: (string | undefined)[] = [];
+  const kinds = new Set<FlcmErrorKind>();
   let count = 0;
-  let drifted = 0;
+  let concurrentEdits = 0;
   return {
     record(index, err) {
       if (failures[index] !== undefined) return;
       // The line already names its entry: a gate check that spoke as `flcm.editMany[i]` says it once.
-      const own = SUBJECT + "[" + index + "]: ";
-      const message = messageOf(err);
-      failures[index] = message.startsWith(own) ? message.slice(own.length) : message;
+      const own = err instanceof FlcmError && err.call === entryCall(index);
+      failures[index] = own ? messageWithinCall(err) : describeFailure(err);
       count++;
-      if (err instanceof ReadDriftError) drifted++;
+      const kind = failureKindOf(err);
+      kinds.add(kind);
+      if (kind === "concurrent-edit") concurrentEdits++;
     },
     failed(index) {
       return failures[index] !== undefined;
     },
     rejectIfAny() {
       if (!count) return;
-      const remedy = drifted === count ? "Read those layers again and re-run it."
-        : drifted ? "Fix every entry below, read again the layers that changed while it loaded, and re-run it."
+      const remedy = concurrentEdits === count ? "Read those layers again and re-run it."
+        : concurrentEdits ? "Fix every entry below, read again the layers edited in Figma meanwhile, and re-run it."
         : "Fix every entry below and re-run it.";
-      throw new Error(
-        SUBJECT + ": " + count + " of " + total + " entries were rejected, so NOTHING was applied — " +
+      throw new FlcmError(
+        batchKindOf(kinds),
+        count + " of " + total + " entries were rejected, so NOTHING was applied — " +
           "the batch is all-or-nothing. " + remedy + "\n" + collapseFailures(failures, total).join("\n"),
+        { call: SUBJECT },
       );
     },
   };
+}
+
+// The batch's kind is its most actionable entry's: a bug outranks the rest so it gets reported, an
+// entry the agent must fix outranks a Figma limit, and a concurrent edit (re-read and re-run) ranks last.
+const BATCH_KIND_RANK: readonly FlcmErrorKind[] = ["internal", "run-ended", "authoring", "figma", "concurrent-edit"];
+function batchKindOf(kinds: ReadonlySet<FlcmErrorKind>): FlcmErrorKind {
+  return BATCH_KIND_RANK.find((kind) => kinds.has(kind))!;
 }
 
 /**
@@ -165,13 +178,15 @@ function forEachLiveEntry(ledger: BatchLedger, total: number, step: (index: numb
 
 function assertBatchShape(entries: unknown): void {
   if (!Array.isArray(entries)) {
-    throw new Error(
-      SUBJECT + ": the first argument is an array of { id, ...changes } entries — got " + showValue(entries) +
+    throw new FlcmError(
+      "authoring",
+      "the first argument is an array of { id, ...changes } entries — got " + showValue(entries) +
         ". To nudge a single node, use flcm.edit(target, changes).",
+      { call: SUBJECT },
     );
   }
   if (!entries.length) {
-    throw new Error(SUBJECT + ": the entries array is empty — nothing to apply (an empty batch would still mint an undo step).");
+    throw new FlcmError("authoring", "the entries array is empty — nothing to apply (an empty batch would still mint an undo step).", { call: SUBJECT });
   }
 }
 
@@ -185,21 +200,25 @@ function assertBatchShape(entries: unknown): void {
  */
 function compileBatchEntry(entry: EditEntry, index: number): BatchEntry {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-    throw new Error(SUBJECT + ": each entry is an object { id, ...changes } — got " + showValue(entry) + ".");
+    throw new FlcmError("authoring", "each entry is an object { id, ...changes } — got " + showValue(entry) + ".", { call: SUBJECT });
   }
   if ("target" in entry) {
-    throw new Error(
-      SUBJECT + ": an entry names its node with `id`, not `target` — write { id, ...changes }, the shape every verb reads and writes. " +
+    throw new FlcmError(
+      "authoring",
+      "an entry names its node with `id`, not `target` — write { id, ...changes }, the shape every verb reads and writes. " +
         "A batch edits nodes you have already located: find them first (flcm.find / flcm.findOne / a render result) and pass each one's `id`.",
+      { call: SUBJECT },
     );
   }
   const { id, ...rest } = entry as { id?: unknown } & EditDelta;
   if (typeof id !== "string" || !id.trim()) {
-    throw new Error(
-      SUBJECT + ": an entry needs an `id` — the live id of the node to edit, as flcm.find, flcm.findOne, flcm.get and render results all carry. Got " + showValue(id) + ".",
+    throw new FlcmError(
+      "authoring",
+      "an entry needs an `id` — the live id of the node to edit, as flcm.find, flcm.findOne, flcm.get and render results all carry. Got " + showValue(id) + ".",
+      { call: SUBJECT },
     );
   }
-  const changes = compileDeltaTrees(rest as EditDelta, SUBJECT + "[" + index + "]");
+  const changes = compileDeltaTrees(rest as EditDelta, entryCall(index));
   rejectNonDeltaWords(changes, SUBJECT);
   return { id, changes };
 }
@@ -236,7 +255,8 @@ function assertOneEntryPerNode(ledger: BatchLedger, nodes: readonly (SceneNode |
       firstSeen[node.id] = i;
       return;
     }
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       "resolves to the same node as entry [" + first + "]: " + JSON.stringify(node.name) + " (id " +
         JSON.stringify(node.id) + "). Merge the two deltas into one entry — a batch applies each node once.",
     );
@@ -426,7 +446,8 @@ function assertNoDefinitionBindingCrossReference(
       if (!named || named.owner !== definitionOwnerOf(declarerPlan.node)) continue;
       ledger.record(
         namer,
-        new Error(
+        new FlcmError(
+          "authoring",
           named.what + " of " + JSON.stringify(declarerPlan.node.name) + " (id " + JSON.stringify(declarerPlan.node.id) +
             "), whose `propertyDefinitions` entry [" + declarer + "] is changing in the same batch — the two would have to run in an order this call never states. " +
             "Split them: rename or delete in one call, " + named.instead + " in the next.",
@@ -485,7 +506,8 @@ function assertNoEntryInsideRetargetedInstance(
       if (!isInsideInstance(innerPlan.node, hostPlan.node)) continue;
       ledger.record(
         inner,
-        new Error(
+        new FlcmError(
+          "authoring",
           "sits inside " + JSON.stringify(hostPlan.node.name) + " (id " + JSON.stringify(hostPlan.node.id) +
             "), the instance entry [" + host + "] re-points — that swap rebuilds these sublayers, so this write would land on a node no longer in the tree. " +
             "Move it into entry [" + host + "]'s own `overrides`, keyed by the sublayer's component-relative path.",
@@ -574,7 +596,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         [...plans, ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : []))],
         instances.flatMap((instance) => (instance ? [instance.needs] : [])),
         (tokens) => {
-          dependencies = captureReadDependencies(plans.flatMap((plan, i) => deriveDriftObligations(plan, instances[i], tokens, liveObligationSite(plan.node), SUBJECT + "[" + i + "]")));
+          dependencies = captureReadDependencies(plans.flatMap((plan, i) => deriveConcurrentEditObligations(plan, instances[i], tokens, liveObligationSite(plan.node), entryCall(i))));
         },
       );
       // What each entry's layer and override paths inherit from: the order a main component's edit
@@ -592,7 +614,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
     // still names every failing entry.
     ({ batch, nodes, targets, currents, mains, loaded, dependencies, inherited }) => {
       const ledger = createBatchLedger(batch.length);
-      forEachLiveEntry(ledger, batch.length, (i) => assertNodeStillOnCanvas(nodes[i] as SceneNode, SUBJECT));
+      forEachLiveEntry(ledger, batch.length, (i) => assertNodeStillOnCanvas(nodes[i] as SceneNode, entryCall(i)));
       const compiled = compileEntries(ledger, nodes, batch);
       const instances = planEntryInstances(ledger, compiled, currents, { targets, gate: loaded });
       const components = planEntryComponents(ledger, compiled, instances, mains);
@@ -620,7 +642,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         const plan = compiled[i]!;
         const parent = plan.node.parent;
         const site = liveObligationSite(plan.node, parent ? deltas[parent.id] : undefined);
-        const subject = SUBJECT + "[" + i + "]";
+        const subject = entryCall(i);
         const owed = obligationsOnTarget(deriveEditObligations(plan, instances[i], loaded, site), { node: plan.node }, subject);
         recordObligations(owed);
         gateCallObligations({

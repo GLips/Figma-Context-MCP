@@ -16,7 +16,7 @@ import { mintHandle, beginRenderWalk } from "./bridge.js";
 import { rejectNonDeltaWords, compileEditPlan, authorizeEditPlan } from "./edit-plan.js";
 import { recordObligations } from "./obligation.js";
 import {
-  deriveDriftObligations, deriveEditObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf,
+  deriveConcurrentEditObligations, deriveEditObligations, liveObligationSite, obligationsOnTarget, realizeOnlyChecksOf,
 } from "./obligation-derivation.js";
 import { loadEditResources, gateEditResources } from "./verb-resources.js";
 import {
@@ -54,7 +54,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
       let dependencies = NO_READ_DEPENDENCIES;
       const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : [], (tokens) => {
-        dependencies = captureReadDependencies(deriveDriftObligations(hint, instance, tokens, liveObligationSite(node), SUBJECT));
+        dependencies = captureReadDependencies(deriveConcurrentEditObligations(hint, instance, tokens, liveObligationSite(node), SUBJECT));
       });
       // A swap binder's component is what its instance_swap property's default is judged against.
       const refs = hint.componentWords?.componentPropertyReferences as Record<string, unknown> | undefined;

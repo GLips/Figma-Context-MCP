@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { FlcmError } from "./flcm-error.js";
+
 // Figma's native tracks and the read template are two representations of the same tracks.
 export type GridTrack = { type: "HUG" } | { type: "FIXED" | "FLEX"; value: number };
 export function serializeGridTracks(tracks: readonly { type: "HUG" | "FIXED" | "FLEX"; value?: number }[]): string {
@@ -16,7 +18,7 @@ export function parseGridTracks(raw: string, subject: string): GridTrack[] {
     const repeat = /^repeat\(\s*(\d+)\s*,\s*(.+)\)$/.exec(token);
     if (repeat) {
       const count = Number(repeat[1]);
-      if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw new Error(subject + ": grid repeat count must be between 1 and 10000.");
+      if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw new FlcmError("authoring", "grid repeat count must be between 1 and 10000.", { call: subject });
       const repeated = parseGridTracks(repeat[2], subject);
       for (let i = 0; i < count; i++) tracks.push(...repeated);
       continue;
@@ -24,7 +26,7 @@ export function parseGridTracks(raw: string, subject: string): GridTrack[] {
     if (token === "auto" || token === "fit-content(100%)") { tracks.push({ type: "HUG" }); continue; }
     const normalized = /^minmax\(\s*0(?:px)?\s*,\s*(\d+(?:\.\d+)?fr)\s*\)$/.exec(token)?.[1] ?? token;
     const match = /^(\d+(?:\.\d+)?)(px|fr)$/.exec(normalized);
-    if (!match || !Number.isFinite(Number(match[1])) || (match[2] === "fr" && Number(match[1]) <= 0)) throw new Error(subject + ": unsupported grid track " + token + "; use Npx, Nfr, auto, fit-content(100%), repeat(N, tracks), or minmax(0, Nfr).");
+    if (!match || !Number.isFinite(Number(match[1])) || (match[2] === "fr" && Number(match[1]) <= 0)) throw new FlcmError("authoring", "unsupported grid track " + token + "; use Npx, Nfr, auto, fit-content(100%), repeat(N, tracks), or minmax(0, Nfr).", { call: subject });
     tracks.push({ type: match[2] === "px" ? "FIXED" : "FLEX", value: Number(match[1]) });
   }
   return tracks;
@@ -109,6 +111,6 @@ export function hugGridTracks(rows: number): GridTrack[] {
 /** The author boundary uses one placement parser for canonical words and composed input aliases. */
 export function parseGridPlacement(raw: unknown, subject: string): { anchor?: number; span: number } {
   const match = typeof raw === "string" ? /^(?:(\d+)(?: \/ span (\d+))?|span (\d+))$/.exec(raw.trim()) : null;
-  if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new Error(subject + ' needs "N", "span N", or "N / span N".');
+  if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new FlcmError("authoring", subject + ' needs "N", "span N", or "N / span N".');
   return { ...(match[1] ? { anchor: Number(match[1]) - 1 } : {}), span: Number(match[2] ?? match[3] ?? 1) };
 }

@@ -406,6 +406,7 @@ function writeAccessCard(connKey: ConnKey, notice: WriteAccessNotice): HTMLEleme
     );
   } else {
     box.appendChild(el("div", "write-access-title", "Sign-in didn't finish"));
+    // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
     box.appendChild(el("div", null, notice.message));
     action("Try again", "UI_SIGN_IN");
   }

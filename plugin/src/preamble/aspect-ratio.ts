@@ -9,6 +9,7 @@ import type { WriteLayout } from "./ir.js";
 import { resizeToPlannedSize } from "./sizing-diagnostics.js";
 import type { AuthorizedLayout } from "./instance-write-authorization.js";
 import { pixelRound } from "@framelink/core";
+import { FlcmError } from "./flcm-error.js";
 
 /**
  * Whether a width × height box agrees with ratio `r` within a read's rounding. A read rounds width,
@@ -21,8 +22,8 @@ export function aspectRatioAgrees(width: number, height: number, r: number): boo
   return Math.abs(boxRatio - r) <= 0.01 + boxRatio * 0.01 * (1 / width + 1 / height);
 }
 
-function bothAxesFillRefusal(subject: string): Error {
-  return new Error(subject + ': with both axes "fill" neither is free to follow aspectRatio. Size one of them, or drop aspectRatio.');
+function bothAxesFillRefusal(subject: string): FlcmError {
+  return new FlcmError("authoring", 'with both axes "fill" neither is free to follow aspectRatio. Size one of them, or drop aspectRatio.', { call: subject });
 }
 
 // What can be judged before the node exists: the value, a "hug" axis (its size is its content's,
@@ -36,11 +37,11 @@ export function compileAspectRatio(raw: unknown, layout: WriteLayout, subject: s
     return;
   }
   if (typeof raw !== "number" || !isFinite(raw) || raw <= 0) {
-    throw new Error(subject + ': aspectRatio must be a positive number, width ÷ height (16 / 9), or "none" to unlock — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'aspectRatio must be a positive number, width ÷ height (16 / 9), or "none" to unlock — got ' + JSON.stringify(raw) + ".", { call: subject });
   }
   const sizing = (layout.sizing ??= {});
   if (sizing.horizontal === "hug" || sizing.vertical === "hug") {
-    throw new Error(subject + ': a "hug" axis is sized by its content, so it can\'t follow aspectRatio. Give it a size or "fill", or drop aspectRatio.');
+    throw new FlcmError("authoring", 'a "hug" axis is sized by its content, so it can\'t follow aspectRatio. Give it a size or "fill", or drop aspectRatio.', { call: subject });
   }
   if (sizing.horizontal === "fill" && sizing.vertical === "fill") throw bothAxesFillRefusal(subject);
   const dims = (layout.dimensions ??= {});
@@ -48,7 +49,7 @@ export function compileAspectRatio(raw: unknown, layout: WriteLayout, subject: s
   const height = typeof dims.height === "number" ? dims.height : undefined;
   if (width !== undefined && height !== undefined) {
     if (!aspectRatioAgrees(width, height, raw)) {
-      throw new Error(subject + ": width " + width + " and height " + height + " are a " + pixelRound(width / height) + " ratio, not aspectRatio " + raw + ". Name one size and the ratio derives the other.");
+      throw new FlcmError("authoring", "width " + width + " and height " + height + " are a " + pixelRound(width / height) + " ratio, not aspectRatio " + raw + ". Name one size and the ratio derives the other.", { call: subject });
     }
   } else if (width !== undefined && sizing.vertical === undefined) {
     sizing.vertical = "fixed";
@@ -79,12 +80,12 @@ export function settleAspectRatio(node: any, layout: AuthorizedLayout): void {
   const ratio = aspect.ratio;
   // Figma can't lock an auto-resizing text at all.
   if (node.type === "TEXT" && node.textAutoResize !== "NONE") {
-    throw new Error("flcm: aspectRatio needs a fixed box, but this TEXT sizes itself to its text. Give it a fixed width and height, or drop aspectRatio.");
+    throw new FlcmError("figma", "aspectRatio needs a fixed box, but this TEXT sizes itself to its text. Give it a fixed width and height, or drop aspectRatio.");
   }
   // A hug axis is sized by its content, and resize() would silently turn it fixed — driving or following.
   const hugging = node.layoutSizingHorizontal === "HUG" ? "width" : node.layoutSizingVertical === "HUG" ? "height" : undefined;
   if (hugging) {
-    throw new Error("flcm: aspectRatio needs a fixed or filled box, but this " + node.type + " hugs its content on its " + hugging + ". Give it a size, or drop aspectRatio.");
+    throw new FlcmError("authoring", "aspectRatio needs a fixed or filled box, but this " + node.type + " hugs its content on its " + hugging + ". Give it a size, or drop aspectRatio.");
   }
   const widthFills = node.layoutSizingHorizontal === "FILL" || layout.sizing.horizontal.resize?.kind === "percent";
   const heightFills = node.layoutSizingVertical === "FILL" || layout.sizing.vertical.resize?.kind === "percent";

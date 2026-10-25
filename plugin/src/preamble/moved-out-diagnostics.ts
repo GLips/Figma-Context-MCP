@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { describeFailure } from "./flcm-error.js";
 import { warnings } from "./warnings.js";
 // A read pasted back with only its root id deleted builds a new root and MOVES every id-bearing
 // child into it, emptying the source. That is the documented rule, not a bug, so this only says it
@@ -83,7 +84,7 @@ export function finishMovedOutDiagnostics(verb: string): void {
       });
     }
   } catch (error) {
-    warnings.add({ id: null, message: "flcm." + verb + ": write succeeded; the moved-node check could not inspect the result: " + String(error) });
+    warnings.add({ id: null, message: "flcm." + verb + ": write succeeded; the moved-node check could not inspect the result: " + describeFailure(error) });
   } finally {
     beginMovedOutDiagnostics();
   }

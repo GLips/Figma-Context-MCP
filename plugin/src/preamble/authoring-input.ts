@@ -7,6 +7,7 @@
 // output (`Accepted`), so no entry can skip it; pure value guards stay in the compilers.
 import { normalizeInputAliases } from "./input-aliases.js";
 import { rejectUnknownKeys, own } from "./validate.js";
+import { FlcmError } from "./flcm-error.js";
 import { WORD_GROUPS, LAYOUT_WORD_DISPOSITIONS, hasContainerLayout, nodeWordDisposition } from "./vocabulary.js";
 
 interface AuthoringEntry {
@@ -26,8 +27,8 @@ export const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
 
 // THE refusal. Every "flcm has no word for this" message is built here, so the sentence and the
 // remedy can't drift between the node-word gate and the layout-word gate.
-function refuse(subject: string, what: string, why: string): Error {
-  return new Error(subject + ": `" + what + "` has no authored form — " + why + ". " + CLONE_REMEDY);
+function refuse(subject: string, what: string, why: string): FlcmError {
+  return new FlcmError("authoring", "`" + what + "` has no authored form — " + why + ". " + CLONE_REMEDY, { call: subject });
 }
 
 /** The bag without the words that describe a read rather than a change (vocabulary "record" words). */
@@ -52,15 +53,17 @@ export function acceptAuthoringProps<P = Record<string, unknown>>(bag: unknown, 
     if (typeof disposition === "object") throw refuse(entry.subject, key, disposition.refuse);
     if (key === "type") {
       if (value !== entry.type) {
-        throw new Error(
-          entry.subject + ": the node is a " + String(value) + ", not a " + entry.type + ". " +
+        throw new FlcmError(
+          "authoring",
+          "the node is a " + String(value) + ", not a " + entry.type + ". " +
             (entry.verb === "create" ? "Use the node's own type." : "Edit the node it was read from, or pass only the fields to change."),
+          { call: entry.subject },
         );
       }
       continue;
     }
     if (key === "children") {
-      throw new Error(entry.subject + ": children belong in a placement spec or an instance slot override. Use append to change a tree and remove to delete nodes.");
+      throw new FlcmError("authoring", "children belong in a placement spec or an instance slot override. Use append to change a tree and remove to delete nodes.", { call: entry.subject });
     }
     out[key] = readyAuthoredValue(key, value, entry.subject);
   }
@@ -105,7 +108,8 @@ const STYLE_REF = /^(layout|style|fill|effect)_[0-9a-f]{8}/;
 
 function assertNotCompressedRef<T>(value: T, field: string): T {
   if (typeof value === "string" && STYLE_REF.test(value)) {
-    throw new Error(
+    throw new FlcmError(
+      "authoring",
       field + ' is a styles-table REFERENCE (like "fill_a1b2c3d4"), not a value — that read came from a COMPRESSED read. ' +
         "flcm.get returns the expanded shape with every value inline; re-read the node with flcm.get, or resolve the ref against the design's `styles` table first.",
     );

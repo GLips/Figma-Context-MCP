@@ -5,6 +5,7 @@
 // HMAC-SHA256 (RFC 2104 over FIPS 180-4) in plain TypeScript, because the plugin host runs in a
 // sandbox with no crypto API. It signs link proofs only: inputs are server-minted base64url and a
 // fixed context, so they are ASCII by construction, and anything else is refused rather than encoded.
+import { FlcmError } from "./preamble/flcm-error.js";
 
 const ROUND_CONSTANTS = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -23,7 +24,7 @@ function asciiBytes(text: string): Uint8Array {
   const bytes = new Uint8Array(text.length);
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
-    if (code > 0x7f) throw new Error("hmacSha256Hex signs ASCII only");
+    if (code > 0x7f) throw new FlcmError("internal", "hmacSha256Hex signs ASCII only");
     bytes[i] = code;
   }
   return bytes;

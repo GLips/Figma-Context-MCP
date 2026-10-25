@@ -13,6 +13,7 @@
 import { looksLikeNode } from "./live-node.js";
 import { warnings } from "./warnings.js";
 import { refuseIfRunFinished } from "./host.js";
+import { FlcmError } from "./flcm-error.js";
 import { TOKEN_ENTRY_MARK, type TokenEntryKind } from "./token-mark.js";
 
 /** Where an egress copy is going. Only the result is read by the server's renderer, so only it is marked. */
@@ -125,7 +126,7 @@ interface DroppedFields {
 
 function walk(value: unknown, ancestors: Set<object>, channel: EgressChannel, dropped: DroppedFields | undefined): unknown {
   if (value === null || typeof value !== "object" || looksLikeNode(value)) return value;
-  if (ancestors.has(value)) throw new Error("Cannot serialize cyclic return or console data.");
+  if (ancestors.has(value)) throw new FlcmError("authoring", "Cannot serialize cyclic return or console data.");
   ancestors.add(value);
   const pathOf = (key: string | number): string =>
     typeof key === "number" ? `${dropped!.at}[${key}]` : dropped!.at ? `${dropped!.at}.${key}` : key;

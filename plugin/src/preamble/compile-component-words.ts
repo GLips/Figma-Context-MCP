@@ -14,6 +14,7 @@ import {
 import { length } from "./css.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own, words } from "./validate.js";
 import { isTargetShaped, COMPONENT_TARGET_HINT } from "./target.js";
+import { FlcmError } from "./flcm-error.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -57,19 +58,21 @@ const PROPERTY_DEFINITION_EDIT_KEYS = keySet(WORD_GROUPS.propertyDefinition, ["v
 export function compileComponentPropertyBag(raw: unknown, subject: string): Record<string, ComponentPropertyInput> {
   const where = subject + ".componentProperties";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(where + ' must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", where + ' must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, ComponentPropertyInput> = {};
   for (const name of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[name];
-    if (!name.trim()) throw new Error(where + ": a property name is empty.");
+    if (!name.trim()) throw new FlcmError("authoring", "a property name is empty.", { path: where });
     if (typeof value === "string" || typeof value === "boolean" || isTargetShaped(value)) {
       out[name] = value as ComponentPropertyInput;
       continue;
     }
-    throw new Error(
-      where + "[" + JSON.stringify(name) + "]: a property value is a string (a variant option or a text), a boolean, or — for an instance-swap property — " +
+    throw new FlcmError(
+      "authoring",
+      "a property value is a string (a variant option or a text), a boolean, or — for an instance-swap property — " +
         COMPONENT_TARGET_HINT + ". Got " + JSON.stringify(value) + ".",
+      { path: where + "[" + JSON.stringify(name) + "]" },
     );
   }
   return out;
@@ -92,18 +95,19 @@ export function defaultValueHint(raw: object): string {
 export function compilePropertyDefinitionEditBag(raw: unknown, subject: string): Record<string, ComponentPropertyDefinitionEdit | null> {
   const where = subject + ".propertyDefinitions";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(where + ' must be an object of definitions by property name, e.g. { Label: { name: "Caption" }, Icon: null } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", where + ' must be an object of definitions by property name, e.g. { Label: { name: "Caption" }, Icon: null } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, ComponentPropertyDefinitionEdit | null> = {};
   for (const rawName of Object.keys(raw)) {
     const name = rawName.trim();
-    if (!name) throw new Error(where + ": a property name is empty.");
+    if (!name) throw new FlcmError("authoring", "a property name is empty.", { path: where });
     if (own(out, name) !== undefined) {
-      throw new Error(where + ": two entries name the property " + JSON.stringify(name) + " — one property, one entry.");
+      throw new FlcmError("authoring", "two entries name the property " + JSON.stringify(name) + " — one property, one entry.", { path: where });
     }
     const value = (raw as Record<string, unknown>)[rawName];
     if (value !== null && (!value || typeof value !== "object" || Array.isArray(value))) {
-      throw new Error(
+      throw new FlcmError(
+        "authoring",
         where + "[" + JSON.stringify(name) + "] must be a definition object — { name } to rename it, { type } to add one (bound in the same editMany), " +
           "or null to delete it. Got " + JSON.stringify(value) + ".",
       );
@@ -121,27 +125,31 @@ export function compilePropertyDefinitionEditBag(raw: unknown, subject: string):
 export function compileOverrideBag(raw: unknown, subject: string): Record<string, OverrideDeltaInput> {
   const where = subject + ".overrides";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(where + ' must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", where + ' must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, OverrideDeltaInput> = {};
   for (const path of Object.keys(raw)) {
-    if (!path.trim()) throw new Error(where + ": a sublayer path is empty.");
+    if (!path.trim()) throw new FlcmError("authoring", "a sublayer path is empty.", { path: where });
     const delta = (raw as Record<string, unknown>)[path];
     const at = where + "[" + JSON.stringify(path) + "]";
     if (delta && typeof delta === "object") {
       for (const word of Object.keys(delta)) {
         if (INSTANCE_COMPONENT_WORDS.has(word)) {
-          throw new Error(
-            at + ": `" + word + "` reaches a NESTED instance's own component, which an override path can't address — the path names a sublayer, and the tree behind it is what this call is still deciding. " +
+          throw new FlcmError(
+            "authoring",
+            "`" + word + "` reaches a NESTED instance's own component, which an override path can't address — the path names a sublayer, and the tree behind it is what this call is still deciding. " +
               'Edit that instance directly once this call lands: flcm.edit("I<instanceId>;' + path + '", { ' + word + ": … }).",
+            { path: at },
           );
         }
         // The definition words reach the COMPONENT, and an override is a per-INSTANCE difference —
         // writing one here would change every instance, which is the opposite of what an override is.
         if (COMPONENT_EDIT_WORDS.has(word)) {
-          throw new Error(
-            at + ": `" + word + "` belongs to the main COMPONENT, not to one instance's override — setting it here would change every instance of it. " +
+          throw new FlcmError(
+            "authoring",
+            "`" + word + "` belongs to the main COMPONENT, not to one instance's override — setting it here would change every instance of it. " +
               "Edit the component itself: flcm.edit(componentId, { " + word + ": … }).",
+            { path: at },
           );
         }
       }
@@ -154,7 +162,7 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
 }
 
 function assertSlotContentShape(raw: unknown, at: string): void {
-  if (!Array.isArray(raw)) throw new Error(at + ".children must be an array of node specs.");
+  if (!Array.isArray(raw)) throw new FlcmError("authoring", at + ".children must be an array of node specs.");
 }
 
 // ---- the BINDING word (`componentPropertyReferences`) ----
@@ -171,16 +179,17 @@ function assertBindingFieldLegal(field: string, legal: readonly string[], where:
   if (legal.indexOf(field) !== -1) return;
   const entry: { owner?: string } | undefined = own(BINDABLE_FIELDS as Record<string, { owner?: string }>, field);
   const owner = entry?.owner;
-  throw new Error(
-    where + ": `" + field + "` is not one of " + what + "'s binding fields (" + legal.join(", ") + ")" +
-      (owner ? " — " + owner : "") + ".",
+  throw new FlcmError(
+    "authoring",
+    "`" + field + "` is not one of " + what + "'s binding fields (" + legal.join(", ") + ")" + (owner ? " — " + owner : "") + ".",
+    { path: where },
   );
 }
 
 export function compileBindingBag(raw: unknown, legal: readonly string[], subject: string): ComponentPropertyBinding {
   const where = subject + ".componentPropertyReferences";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, string> = {};
   for (const field of Object.keys(raw)) {
@@ -188,7 +197,11 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], subjec
     if (value == null) continue; // an explicitly-absent field is absence, not a claim
     assertBindingFieldLegal(field, legal, where, subject);
     if (typeof value !== "string" || !value.trim()) {
-      throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property name declared in the same flcm.component call. Got " + JSON.stringify(value) + ".");
+      throw new FlcmError(
+        "authoring",
+        "a binding names the component property that drives this field — a property name declared in the same flcm.component call. Got " + JSON.stringify(value) + ".",
+        { path: where + "." + field },
+      );
     }
     // Trimmed like a definition's name (component.ts compilePropertyDefinitions), so both sides meet on one spelling.
     out[field] = value.trim();
@@ -208,7 +221,7 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], subjec
 export function compileBindingEditBag(raw: unknown, legal: readonly string[], subject: string, what: string): Record<string, string | null> {
   const where = subject + ".componentPropertyReferences";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, string | null> = {};
   for (const field of Object.keys(raw)) {
@@ -220,7 +233,11 @@ export function compileBindingEditBag(raw: unknown, legal: readonly string[], su
       continue;
     }
     if (typeof value !== "string" || !value.trim()) {
-      throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property this component declares — or null to unbind it. Got " + JSON.stringify(value) + ".");
+      throw new FlcmError(
+        "authoring",
+        "a binding names the component property that drives this field — a property this component declares — or null to unbind it. Got " + JSON.stringify(value) + ".",
+        { path: where + "." + field },
+      );
     }
     out[field] = value.trim();
   }
@@ -244,9 +261,11 @@ export function compileBindings(wn: WriteProps, props: { componentPropertyRefere
 export function assertSlotFrameNameAgrees(name: string | undefined, refs: ComponentPropertyBinding | undefined, subject: string): void {
   const slot = refs?.slot;
   if (slot === undefined || name === undefined || name === slot) return;
-  throw new Error(
-    subject + ": a slot frame's name IS its property's name — Figma keeps one name for both — so a frame named " + JSON.stringify(name) +
+  throw new FlcmError(
+    "authoring",
+    "a slot frame's name IS its property's name — Figma keeps one name for both — so a frame named " + JSON.stringify(name) +
       " can't be bound to slot " + JSON.stringify(slot) + ". Name the property what the frame should be called, or drop `name` and the frame takes the property's.",
+    { call: subject },
   );
 }
 
@@ -264,11 +283,13 @@ export function assertNoComponentPropertyBindings(tree: WriteChild, subject: str
 }
 
 /** The refusal of a binding with no declaring component behind it. */
-export function noDeclaringComponentError(subject: string): Error {
-  return new Error(
-    subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
+export function noDeclaringComponentError(subject: string): FlcmError {
+  return new FlcmError(
+    "authoring",
+    "`componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
       "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
       "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use INSTANCE.",
+    { call: subject },
   );
 }
 

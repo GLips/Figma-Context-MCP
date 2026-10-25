@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { beginMutatingApply } from "./verb-error.js";
 import { render } from "./structure.js";
+import { FlcmError } from "./flcm-error.js";
 
 createFigmaMock();
 
@@ -25,6 +26,18 @@ test("error reporting preserves the original refusal when placement invalidates 
   assert.doesNotMatch(error.message, /stale native parent/);
 });
 
+test("a failure flcm raised inside an instance keeps its kind and isn't blamed on Figma or the component", () => {
+  const instance = { id: "1:1", type: "INSTANCE", name: "Host", parent: null };
+  const node = { id: "I1:1;2:2", type: "FRAME", name: "Body", parent: instance, getPluginData: () => "" };
+  // A Figma limit flcm detected itself is figma-kind, but only Figma's own throw reads "Figma refused".
+  for (const kind of ["internal", "figma"] as const) {
+    const error = beginMutatingApply("edit", node as unknown as SceneNode)(new FlcmError(kind, "the font Inter Bold isn't available here."));
+    assert.equal(error.kind, kind);
+    assert.match(error.message, /^flcm\.edit: failed mid-apply on FRAME "Body"/);
+    assert.doesNotMatch(error.message, /Figma refused|edit the component/);
+  }
+});
+
 test("a render that fails on a nested node names that node, not the page it was building into", async () => {
   const createRectangle = figma.createRectangle;
   figma.createRectangle = () => {
@@ -35,7 +48,8 @@ test("a render that fails on a nested node names that node, not the page it was 
   try {
     await assert.rejects(
       render({ type: "FRAME", name: "Card", children: [{ type: "RECTANGLE", name: "Swatch", fill: "#f00" }] }),
-      (err: Error) => {
+      (err: FlcmError) => {
+        assert.equal(err.kind, "figma");
         assert.match(err.message, /Figma refused a write on RECTANGLE "Swatch" at \S+\.children\[0\], being built into PAGE/);
         assert.match(err.message, /— in set_fills/);
         return true;
@@ -50,7 +64,8 @@ test("an flcm legality check on a nested node refuses in the gate, naming that n
   const before = figma.currentPage.children.length;
   await assert.rejects(
     render({ type: "FRAME", name: "Card", layout: { mode: "row" }, children: [{ type: "RECTANGLE", name: "Bar", width: "50%", height: 4 }] }),
-    (err: Error) => {
+    (err: FlcmError) => {
+      assert.equal(err.kind, "authoring");
       assert.match(err.message, /^flcm\.render\.spec\.children\[0\]: a percent w\/h/);
       assert.doesNotMatch(err.message, /mid-apply|Figma refused/);
       return true;

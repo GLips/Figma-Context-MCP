@@ -5,6 +5,7 @@
 import type { SnapshotAnnotation } from "@framelink/core/snapshot";
 import { rejectUnknownKeys } from "./validate.js";
 import { NESTED_WORDS } from "./vocabulary.js";
+import { FlcmError } from "./flcm-error.js";
 
 // https://developers.figma.com/docs/plugins/api/AnnotationProperty/
 // Validate property names before any file-scoped category can be created.
@@ -28,23 +29,23 @@ function isAnnotationProperty(value: unknown): value is WriteAnnotationProperty 
 }
 
 export function compileAnnotations(value: unknown): WriteAnnotation[] {
-  if (!Array.isArray(value)) throw new Error("flcm.annotations must be an array.");
+  if (!Array.isArray(value)) throw new FlcmError("authoring", "flcm.annotations must be an array.");
   return value.map((entry: unknown) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("flcm.annotations entries must be objects.");
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new FlcmError("authoring", "flcm.annotations entries must be objects.");
     rejectUnknownKeys(entry, ANNOTATION_KEYS, "flcm.annotations");
     const { text, category, properties } = entry as Record<string, unknown>;
     const out: WriteAnnotation = {};
     if (text !== undefined) {
-      if (typeof text !== "string") throw new Error("flcm.annotations.text must be a string.");
+      if (typeof text !== "string") throw new FlcmError("authoring", "flcm.annotations.text must be a string.");
       out.text = text;
     }
     if (category !== undefined) {
-      if (typeof category !== "string" || !category.trim()) throw new Error("flcm.annotations.category must be a non-blank name.");
+      if (typeof category !== "string" || !category.trim()) throw new FlcmError("authoring", "flcm.annotations.category must be a non-blank name.");
       out.category = category.trim();
     }
     if (properties !== undefined) {
       if (!Array.isArray(properties) || !properties.every(isAnnotationProperty)) {
-        throw new Error("flcm.annotations.properties must be an array of pinned property names: " + ANNOTATION_PROPERTIES.join(", ") + ".");
+        throw new FlcmError("authoring", "flcm.annotations.properties must be an array of pinned property names: " + ANNOTATION_PROPERTIES.join(", ") + ".");
       }
       out.properties = [...properties];
     }

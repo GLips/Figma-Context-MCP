@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import type { FlcmError } from "./flcm-error.js";
 import { specNode } from "../../harness/spec-node.js";
 // flcm.edit — the mutate verb. What must not regress silently: a delta applies exactly its fields
 // through the shared appliers (the header's named hazard — riding a compiler would inject
@@ -972,7 +973,7 @@ test("a live fact that changed during the round trip: the delta lands on the FRE
   try {
     await assert.rejects(
       edit("label", { fill: image("https://cdn.example.com/b.jpg"), textStyle: { fontSize: 24 } }),
-      /changed to Roboto Regular while this call was loading fonts and images/,
+      (err: FlcmError) => err.kind === "concurrent-edit" && /the font of "Text" \(id [^)]+\) became Roboto Regular/.test(err.message),
     );
   } finally {
     restore();

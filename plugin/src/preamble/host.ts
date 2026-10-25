@@ -4,6 +4,7 @@
  */
 import type { HostTraceStage, NativeOperation, TraceOperation } from "../protocol.js";
 import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
+import { FlcmError } from "./flcm-error.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
 // Why it's named and typed rather than a pair of loose free identifiers: once the flcm runtime ships
@@ -88,13 +89,11 @@ export function currentHost(): FlcmHost | undefined {
 export async function requestHostImages(urls: string[]): Promise<Record<string, string>> {
   const host = currentHost();
   if (!host) {
-    throw new Error(
-      "flcm.image: this runtime has no host (FlcmHost) — image fills need the live plugin bridge.",
-    );
+    throw new FlcmError("internal", "this runtime has no host (FlcmHost) — image fills need the live plugin bridge.", { call: "flcm.image" });
   }
   const payload = await serverCall(host, "flcm.image", "images.fetch", urls);
   if (!payload || typeof payload !== "object") {
-    throw new Error("flcm.image: the server's image reply was malformed.");
+    throw new FlcmError("internal", "the server's image reply was malformed.", { call: "flcm.image" });
   }
   // Image policy belongs in the server-shipped preamble, not the installed host.
   const images: Record<string, string> = Object.create(null);
@@ -160,10 +159,12 @@ export function hostDeadlinePassed(): boolean {
  */
 export function refuseIfRunFinished(action: string): void {
   if (!currentHost()?.isRunFinished()) return;
-  throw new Error(
-    action + ": this flcm belongs to an earlier call that has already finished and replied, so " +
+  throw new FlcmError(
+    "run-ended",
+    "this flcm belongs to an earlier call that has already finished and replied, so " +
       "it can no longer read, write or fetch. Use the flcm your current call was given (store ids " +
       "and specs in `session`, never flcm itself).",
+    { call: action },
   );
 }
 
@@ -208,8 +209,9 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
   const host = currentHost();
   const abandoned = host
     ? host.whenCancelled().then((cause): never => {
-        throw new Error(
-          "flcm: " + NATIVE_CALLS[operation] + " still hadn't returned after " + Math.round((Date.now() - started) / 1000) +
+        throw new FlcmError(
+          "run-ended",
+          NATIVE_CALLS[operation] + " still hadn't returned after " + Math.round((Date.now() - started) / 1000) +
             "s when " + CANCELLED_BECAUSE[cause] + ", so the run stops here. Figma stalls its calls like this in a file " +
             "whose window or tab is in the background: bring the file to the front in Figma before retrying.",
         );

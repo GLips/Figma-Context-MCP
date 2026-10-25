@@ -28,6 +28,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import { instanceContextOf, instanceContextUnder, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
 import { assertInstanceRootLayoutMode, mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { layoutModeOf } from "./layout-mode.js";
+import { FlcmError } from "./flcm-error.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath, carriedFillAxes } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
@@ -42,10 +43,12 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
   const owner = slotOwnerOf(node, false)!;
   if (parent.type !== "PAGE" && slotOwnerOf(parent as SceneNode, true)?.id === owner.id) return;
   throw refusedBeforeWrite(
-    at + ": " + describeNodeIdentity(node) + " is inherited slot content: an enclosing component's definition put it in a slot of instance " +
+    "figma",
+    describeNodeIdentity(node) + " is inherited slot content: an enclosing component's definition put it in a slot of instance " +
       JSON.stringify(owner.name) + " (id " + JSON.stringify(owner.id) + "), not an override on the instance. Figma can move it only into another slot of " +
       JSON.stringify(owner.name) + "; anywhere else it leaves a node that renders but can't be read or removed. To put it elsewhere, copy it with flcm.clone(" +
       JSON.stringify(node.id) + ", destination); the slot keeps the original.",
+    { path: at },
   );
 }
 
@@ -112,8 +115,11 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
     const at = ref.sourcePath;
     assertNodeStillOnCanvas(node, at);
     const context = instanceContextOf(node);
-    if (context.ownWritesLockedBy) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
-    if (ref.children?.length && (!("appendChild" in node) || context.childListClosedBy)) throw new Error(at + ".children: this live node's child list cannot be authored.");
+    if (context.ownWritesLockedBy) throw new FlcmError("figma", "cannot move a component instance's sublayer; edit its main component.", { path: at });
+    if (ref.children?.length && (!("appendChild" in node) || context.childListClosedBy)) {
+      // A node type with no children is the call's mistake; an instance's closed child list is Figma's rule.
+      throw new FlcmError(context.childListClosedBy ? "figma" : "authoring", "this live node's child list cannot be authored.", { path: at + ".children" });
+    }
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     const planning = { targets, gate: resources };
     const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, at) : undefined;
@@ -158,7 +164,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
       const from = intoNewNode && !isInheritedSlotContent(node) ? node.parent : null;
       const fail = beginMutatingApply(at, node);
       try {
-        for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
+        for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new FlcmError("authoring", "a node cannot move inside itself or its descendant.", { path: at });
         const becomes = instance?.becomesContainer;
         const placement = plan?.patch.layout && withoutContainerWords(plan.patch.layout);
         const words = mintAuthorizedLiveLayout(at, node, assertLiveNodeLandsUnderParent(node, parent, at, placement, becomes, carried), instanceContextUnder(parent, node));
@@ -192,7 +198,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
             const keyed = key === undefined ? undefined : realizeAtWritePoint(node, ["prop:key"]);
             if (keyed?.writes.size) { writeKey(node, key as string); keyed.landed(); }
             if (refs) {
-              if (!ctx.bindings) throw new Error(at + ": componentPropertyReferences has no declaring component.");
+              if (!ctx.bindings) throw new FlcmError("authoring", "componentPropertyReferences has no declaring component.", { path: at });
               ctx.bindings.push({ node, refs });
             }
             if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));

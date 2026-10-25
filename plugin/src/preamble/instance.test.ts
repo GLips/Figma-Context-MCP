@@ -10,6 +10,7 @@ import { specNode } from "../../harness/spec-node.js";
 // refusal fires with zero writes naming the component's own vocabulary.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { FlcmError } from "./flcm-error.js";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { inNextRun } from "../../harness/next-run.js";
 import { get } from "./read.js";
@@ -113,7 +114,7 @@ test("an override is planned at the seal: a definition retyped during the font l
   try {
     await assert.rejects(
       inNextRun(() => render({ type: "INSTANCE", componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } })),
-      /changed to Roboto Regular while this call was loading fonts and images/,
+      (err: unknown) => err instanceof FlcmError && err.kind === "concurrent-edit" && /became Roboto Regular/.test(err.reason),
     );
   } finally {
     figma.loadFontAsync = loadFontAsync;
