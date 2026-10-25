@@ -32,7 +32,7 @@ import type { FlcmHost, RunCancelCause } from "./preamble/host.js";
 // Likewise type-only: the factory result types both agent bindings without bundling their implementation.
 import type * as SandboxRuntime from "./preamble/sandbox.js";
 // The one value import from preamble/: flcm-error imports nothing, so it bundles alone.
-import { FlcmError, formatFailureForAgent } from "./preamble/flcm-error.js";
+import { FlcmError, formatFailureForAgent, wrapAgentCode } from "./preamble/flcm-error.js";
 
 // What a run cancelled before it started tells its (late) reply, by cause.
 const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
@@ -257,7 +257,7 @@ export function createRunExecutor({
       runtime = built;
       const { flcm, session } = built;
       // Indirect eval gives agent code global scope, never this function's host/transport locals.
-      const raw = await (0, eval)("(async function(flcm, session){ " + code + "\n })")(flcm, session);
+      const raw = await (0, eval)(wrapAgentCode(code))(flcm, session);
       trace("code-returned");
       // Return-path node guard: a returned live node would otherwise collapse to
       // { id } and silently drop everything else. Make that loud instead of lossy.

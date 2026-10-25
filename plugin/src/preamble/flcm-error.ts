@@ -187,8 +187,20 @@ export function describeFailure(cause: unknown): string {
 export function formatFailureForAgent(cause: unknown): string {
   if (!(cause instanceof Error)) return String(cause);
   // A parse error's frame has no function: "    at <input>:3".
-  const frames = framesOf(cause.stack).filter((frame) => /[( ]<input>:\d/.test(frame));
+  const frames = framesOf(cause.stack)
+    .filter((frame) => /[( ]<input>:\d/.test(frame))
+    .map((frame) => frame.replace(/<input>:1:(\d+)/, (_, column: string) => "<input>:1:" + Math.max(1, Number(column) - AGENT_CODE_PREFIX.length)));
   return [cause.name + ": " + cause.message, ...frames].join("\n");
+}
+
+// The agent's code is the body of this function, starting on the same line as its prefix so every
+// line number QuickJS reports is the agent's own. Only a column on line 1 counts the prefix too,
+// which formatFailureForAgent takes back off.
+const AGENT_CODE_PREFIX = "(async function(flcm, session){ ";
+
+/** The source run-executor evals for an agent's script: an async function of `flcm` and `session`. */
+export function wrapAgentCode(code: string): string {
+  return AGENT_CODE_PREFIX + code + "\n })";
 }
 
 // The engine's frame lines alone: V8 leads with an "Error: …" header, QuickJS doesn't.

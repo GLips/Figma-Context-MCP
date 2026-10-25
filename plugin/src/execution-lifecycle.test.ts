@@ -1126,3 +1126,10 @@ test("a failed run's error keeps only the frames from the agent's own code", () 
   ].join("\n");
   assert.equal(formatFailureForAgent(err), "TypeError: x is undefined\n    at <anonymous> (<input>:4:20)");
 });
+
+test("an error on the script's first line points at the agent's own column, not the wrapper's", () => {
+  // Live QuickJS, for a script whose first line is `const c = ;`.
+  const err = new SyntaxError("unexpected token in expression: ';'");
+  err.stack = "    at <input>:1:43";
+  assert.equal(formatFailureForAgent(err), "SyntaxError: unexpected token in expression: ';'\n    at <input>:1:11");
+});
