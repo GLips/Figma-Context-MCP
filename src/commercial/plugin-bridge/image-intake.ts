@@ -67,6 +67,10 @@ interface StoredUpload {
   expiresAt: number;
 }
 
+export type UploadRedemption =
+  | { base64: string }
+  | { refused: "not-named-in-script" | "unknown-or-expired" };
+
 export interface IssuedUpload {
   handle: string;
   expiresAt: number;
@@ -130,26 +134,17 @@ export class ImageUploadStore {
   }
 
   /**
-   * The processed bytes behind a handle, for a run that was submitted naming it. One message for
-   * unknown and expired alike: which one it was tells a caller nothing it can act on beyond
-   * "upload again", and a distinction would let a guesser tell a real-but-stale handle from noise.
+   * The processed bytes behind a handle, for a run that was submitted naming it, or why not. Each
+   * refusal has its own remedy, so the caller words it. Unknown and expired are one refusal: which
+   * one it was tells a caller nothing it can act on beyond "upload again", and a distinction would
+   * let a guesser tell a real-but-stale handle from noise.
    */
-  redeem(handle: string, authorized: ReadonlySet<string>): string {
-    if (!authorized.has(handle)) {
-      throw new Error(
-        "this run's script does not name that upload handle, so it can't use it. Write the handle " +
-          "into the script literally, as the upload command printed it",
-      );
-    }
+  redeem(handle: string, authorized: ReadonlySet<string>): UploadRedemption {
+    if (!authorized.has(handle)) return { refused: "not-named-in-script" };
     this.pruneExpired();
     const stored = this.uploads.get(digest(handle));
-    if (!stored) {
-      throw new Error(
-        "the upload handle is unknown to this server or has expired (handles last 30 minutes, " +
-          "on the server that issued them); upload the file again for a fresh handle",
-      );
-    }
-    return stored.base64;
+    if (!stored) return { refused: "unknown-or-expired" };
+    return { base64: stored.base64 };
   }
 
   private issue(base64: string): IssuedUpload {

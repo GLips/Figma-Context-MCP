@@ -29,7 +29,11 @@ import { CLI_NAME } from "~/utils/cli-help.js";
 import { readRasterDimensions } from "~/utils/raster-header.js";
 import { readBodyWithLimit } from "~/utils/read-body.js";
 import { CapabilityFailure } from "./channel-failure.js";
-import { OutsideAssetRootError, type ContainedFileReader } from "./contained-file.js";
+import {
+  AssetRootUnusableError,
+  OutsideAssetRootError,
+  type ContainedFileReader,
+} from "./contained-file.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
 
@@ -271,6 +275,11 @@ export function createLocalImageReader(
       "it to the user: the server's --asset-root sets it"
     : "Move the file under the asset root, or rerun execute with --asset-root set to a directory " +
       "that holds it";
+  // Still authoring: the agent's next call can carry an https url (or an upload handle) instead.
+  const unusableRootRemedy = uploadsAccepted
+    ? "Report it to the user: the server's --asset-root must name a directory. Until then, pass " +
+      `an https url, or run \`npx ${CLI_NAME} upload <file>\` and pass the handle it prints`
+    : "Rerun execute with --asset-root set to a directory that holds the file";
   const readRemedy = "Check that the path names a PNG, JPEG or GIF file under the asset root";
   return async function readLocalImage(source: string, signal?: AbortSignal): Promise<string> {
     try {
@@ -282,7 +291,11 @@ export function createLocalImageReader(
       throw imageSourceFailure(
         source,
         err,
-        err instanceof OutsideAssetRootError ? outOfRootRemedy : readRemedy,
+        err instanceof OutsideAssetRootError
+          ? outOfRootRemedy
+          : err instanceof AssetRootUnusableError
+            ? unusableRootRemedy
+            : readRemedy,
         signal,
       );
     }

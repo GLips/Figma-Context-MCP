@@ -9,14 +9,7 @@
 import type { ActivityFeed } from "./activity-feed.js";
 import type { AgentSession, AgentSessions } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
-import {
-  guardReturnValue,
-  resolveWireSnapshot,
-  serializeForWire,
-  snapshotForWire,
-  type IsFigmaNode,
-  type WireSnapshot,
-} from "./serialize.js";
+import { resolveWireSnapshot, serializeForWire, snapshotForWire, type IsFigmaNode, type WireSnapshot } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
@@ -38,7 +31,7 @@ import {
 import type { FlcmHost, RunCancelCause } from "./preamble/host.js";
 // Likewise type-only: the factory result types both agent bindings without bundling their implementation.
 import type * as SandboxRuntime from "./preamble/sandbox.js";
-// The one value import from preamble/: flcm-error imports nothing, so it bundles alone.
+// The one value import from preamble/: flcm-error imports only types, so it bundles alone.
 import { FlcmError, formatFailureForAgent, wrapAgentCode } from "./preamble/flcm-error.js";
 
 // What a run cancelled before it started tells its (late) reply, by cause.
@@ -201,12 +194,12 @@ export function createRunExecutor({
     };
 
     // Capture the agent's console output so it round-trips back as feedback. Each call takes the
-    // result's egress (one projection for the whole line) and is snapshotted as it is logged; which of
-    // its objects are live nodes Figma only answers asynchronously, so those resolve to `{id,name,type}`
-    // before the reply.
+    // result's egress (one projection for the whole line) and is snapshotted as it is logged, Figma
+    // asked then about any object that could be a node; its answers arrive asynchronously, so those
+    // objects resolve to `{id,name,type}` before the reply.
     const capture = (level: string) => (...args: unknown[]) => {
       const line = runtime ? runtime.projectForEgress(args, "console") : args;
-      logged.push({ level, args: snapshotForWire(line) });
+      logged.push({ level, args: snapshotForWire(line, isFigmaNode) });
     };
     console.log = capture("log");
     console.info = capture("info");
@@ -267,10 +260,8 @@ export function createRunExecutor({
       // Indirect eval gives agent code global scope, never this function's host/transport locals.
       const raw = await (0, eval)(wrapAgentCode(code))(flcm, session);
       trace("code-returned");
-      // Return-path node guard: a returned live node would otherwise collapse to
-      // { id } and silently drop everything else. Make that loud instead of lossy.
-      await guardReturnValue(raw, isFigmaNode);
-      result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode);
+      // A live node anywhere in the result is refused here, with its path (serialize.ts).
+      result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode, "result");
       // Session capture is optional; its narrower data contract must not reject a valid wire result.
       try { session.last = raw; } catch { session.last = undefined; }
     } catch (err) {
@@ -323,7 +314,7 @@ export function createRunExecutor({
     const consoleLog: string[] = [];
     for (const { level, args } of logged) {
       try {
-        const line = (await resolveWireSnapshot(args, isFigmaNode)) as unknown[];
+        const line = (await resolveWireSnapshot(args, "console")) as unknown[];
         consoleLog.push(`[${level}] ${line.map(stringifyArg).join(" ")}`);
       } catch (err) {
         // A cycle through an object Figma disowned is only found now, past the console.log it would

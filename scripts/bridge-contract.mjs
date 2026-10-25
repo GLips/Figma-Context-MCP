@@ -813,7 +813,7 @@ imageRequest("preq-g", infoId, ["u1"]);
 await wait(100);
 const gateRefusal = framesC.find((f) => f.type === "CHANNEL_RESPONSE" && f.id === "preq-g");
 assert.ok(
-  gateRefusal?.ok === false && /not a code run/.test(gateRefusal.error.message),
+  gateRefusal?.ok === false && gateRefusal.error.code === "INVALID_INPUT" && /outside a script run/.test(gateRefusal.error.message),
   "an image request against a non-EXECUTE_CODE pending is refused",
 );
 pluginC.send(JSON.stringify({ type: "GRANT", id: infoId, state: "absent" }));

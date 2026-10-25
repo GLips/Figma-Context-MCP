@@ -436,16 +436,13 @@ test("an image failure while fonts are still pending rejects with zero undo resi
 });
 
 test("a resource load rejecting with `undefined` still fails prepare — never a sealed apply over missing bytes", async () => {
-  installImageChannel(() => Promise.reject(undefined));
+  // Figma's own loads can reject with nothing; the server channel can't (host.ts serverCall).
+  figma.listAvailableFontsAsync = () => Promise.reject(undefined);
+  installImageChannel(() => new Promise((resolve) => setTimeout(() => resolve({ "https://cdn.example.com/a.jpg": "AAAA" }), 20)));
   await assert.rejects(
-    render({
-      type: "RECTANGLE",
-      width: 10,
-      height: 10,
-      fill: image("https://cdn.example.com/a.jpg"),
-    }),
-    // Nothing to quote and no kind, but still a failure the agent can see: the server's, never Figma's.
-    (err: unknown) => err instanceof FlcmError && err.kind === "internal" && err.reason.includes("failed without saying why"),
+    render(treeWithFontsAndImage()),
+    // Nothing to quote, but still a failure the agent can see, and Figma's.
+    (err: unknown) => err instanceof FlcmError && err.kind === "figma" && err.reason.includes("without saying why"),
   );
   // A sentinel-based settle would read this as success and fail INSIDE the sealed apply span:
   // undoLog would show commit/commit/trigger instead of staying empty.

@@ -20,7 +20,7 @@ cannot capture the plugin's local host or transport functions.
 
 The wire uses `{ type: "CHANNEL_REQUEST", id, executionId, capability, payload }` and one response type:
 `{ type: "CHANNEL_RESPONSE", id, ok: true, payload }` or
-`{ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message, details?, ...extensions } }`. The UI routes these through its existing
+`{ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message, kind?, details?, ...extensions } }`. The UI routes these through its existing
 server envelope without interpreting them. Keep capability-specific fields out of the frame.
 
 Failures use an open JSON object with string `code` and `message`, optional JSON `details`, and
@@ -35,8 +35,10 @@ Failures cross opaquely too: the plugin forwards the server's error value on the
 `detail` rather than flattening it to prose, so a future capability can ship a structured failure
 with no plugin release. Whose failure it is crosses the same way, on a `kind` field
 (one of `FLCM_ERROR_KINDS` in `protocol.ts`), which a capability sets by throwing a
-`CapabilityFailure` (`channel-failure.ts`) and the channel sets on its own refusals. The preamble's
-`serverCall` (`host.ts`) turns every rejection into an `FlcmError` of that kind, and one with no
+`CapabilityFailure` (`channel-failure.ts`), the channel sets on its own refusals, and the plugin
+host sets (`run-ended`) on a call it abandons (`server-calls.ts`). The preamble's
+`serverCall` (`host.ts`) reads only that field, never the rejection's class (the host bundle's
+`FlcmError` is not the preamble's), and turns every rejection into an `FlcmError` of that kind, and one with no
 valid kind into `internal`, so a server failure is never reported as Figma's. A capability's message
 says what went wrong and what to do next, never which verb it is in: `publicVerb` names that. A handler must not await a fresh plugin request — that request queues
 behind the execution suspended on the call, and both wait forever; gather evidence, compute, then

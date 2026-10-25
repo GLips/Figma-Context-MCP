@@ -27,6 +27,19 @@ export class OutsideAssetRootError extends Error {
   }
 }
 
+/**
+ * The asset root itself can't be read from: the operator's configuration, which no path the caller
+ * names can fix. Callers name the remedy, as for OutsideAssetRootError.
+ */
+export class AssetRootUnusableError extends Error {
+  constructor(
+    readonly assetRoot: string,
+    problem: string,
+  ) {
+    super(`the asset root (${assetRoot}) ${problem}`);
+  }
+}
+
 export type ContainedFileReader = (
   source: string,
   options: { maxBytes: number; signal?: AbortSignal },
@@ -61,9 +74,14 @@ export function createContainedFileReader(assetRoot: string): ContainedFileReade
   const canonicalRoot = (): Promise<string> => {
     if (!pinnedRoot) {
       pinnedRoot = (async () => {
-        const rootReal = await realpath(assetRoot);
+        const rootReal = await realpath(assetRoot).catch((err: NodeJS.ErrnoException) => {
+          throw new AssetRootUnusableError(
+            assetRoot,
+            err.code === "ENOENT" ? "does not exist" : `could not be resolved: ${err.code}`,
+          );
+        });
         if (!(await stat(rootReal)).isDirectory()) {
-          throw new Error(`the asset root (${assetRoot}) is not a directory`);
+          throw new AssetRootUnusableError(assetRoot, "is not a directory");
         }
         return rootReal;
       })().catch((err: unknown) => {

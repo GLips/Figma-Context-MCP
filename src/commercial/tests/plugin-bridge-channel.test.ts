@@ -450,7 +450,7 @@ it.each([false, true])(
     expect(h.socket.frames.at(-1)).toMatchObject({
       id: "cyclic",
       ok: false,
-      error: { code: "SERIALIZATION_FAILED" },
+      error: { code: "SERIALIZATION_FAILED", kind: "internal" },
     });
     h.bridge.stop();
     await h.result;

@@ -441,7 +441,10 @@ describe("saved-script CLI using production plugin services", () => {
       { document: { ...FIGMA_FILE_REPORT, fileKey: undefined } },
     );
     expect(await finished).toBe(0);
-    expect(pinsReply).toMatchObject({ ok: false, error: { code: "FILE_KEY_UNAVAILABLE" } });
+    expect(pinsReply).toMatchObject({
+      ok: false,
+      error: { kind: "figma", message: expect.stringMatching(/reported no file key/) },
+    });
     expect(figmaCalls).toEqual([]);
   });
 

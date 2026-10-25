@@ -73,7 +73,7 @@ export class ChannelServer {
       refuse(
         "INVALID_INPUT",
         "internal",
-        `run ${executionId} is not a code run, and only EXECUTE_CODE runs may call server capabilities.`,
+        "the plugin asked the server for help outside a script run, so the server refused it.",
       );
       return;
     }
@@ -144,29 +144,39 @@ export class ChannelServer {
     send: (body: Record<string, unknown>) => void;
     refuse: (code: string, kind: FlcmErrorKind, message: string) => void;
   } {
+    // Every refusal says whose failure it is, as a capability's failure does (CapabilityFailure).
+    const refusal = (
+      code: string,
+      kind: FlcmErrorKind,
+      message: string,
+    ): Record<string, unknown> => ({
+      type: "CHANNEL_RESPONSE",
+      ok: false,
+      error: { code, message, kind },
+    });
+    const encode = (body: Record<string, unknown>): string => JSON.stringify({ ...body, id });
     const send = (body: Record<string, unknown>): void => {
       if (!this.isCurrent(connection) || !connection.isOpen) return;
-      const failure = (code: string, message: string): string =>
-        JSON.stringify({
-          type: "CHANNEL_RESPONSE",
-          id,
-          ok: false,
-          error: { code, message, kind: "internal" },
-        });
       let encoded: string;
       try {
         // Encoding can fail for non-JSON handler output, including cycles or excessive depth.
-        encoded = JSON.stringify({ ...body, id });
+        encoded = encode(body);
         if (Buffer.byteLength(encoded) > MAX_CHANNEL_BYTES) {
-          encoded = failure(
-            "RESPONSE_TOO_LARGE",
-            "the server's reply was over the channel's size cap.",
+          encoded = encode(
+            refusal(
+              "RESPONSE_TOO_LARGE",
+              "internal",
+              "the server's reply was over the channel's size cap.",
+            ),
           );
         }
       } catch {
-        encoded = failure(
-          "SERIALIZATION_FAILED",
-          "the server's reply could not be encoded as JSON.",
+        encoded = encode(
+          refusal(
+            "SERIALIZATION_FAILED",
+            "internal",
+            "the server's reply could not be encoded as JSON.",
+          ),
         );
       }
       try {
@@ -175,9 +185,8 @@ export class ChannelServer {
         Logger.log("Could not send channel response");
       }
     };
-    // Every refusal says whose failure it is, as a capability's failure does (CapabilityFailure).
     const refuse = (code: string, kind: FlcmErrorKind, message: string): void => {
-      send({ type: "CHANNEL_RESPONSE", ok: false, error: { code, message, kind } });
+      send(refusal(code, kind, message));
     };
     return { send, refuse };
   }

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import type { FlcmErrorKind } from "../protocol.js";
+
 // flcm-error — the one error type flcm throws, in the preamble and the plugin host alike. Code that
 // needs to know WHY something failed branches on `kind`, never on message text: a reworded sentence
 // must not change who gets blamed. Anything thrown that is NOT an FlcmError came from Figma or the
@@ -18,21 +20,6 @@
 //
 // This module is the only plugin code allowed to read `.message` or construct a bare Error
 // (eslint.config.js, the plugin block): keep foreign text quoted here, and nowhere else.
-
-/**
- * Whose failure it is, which is what decides the agent's next move.
- *
- *   authoring        the call asked for something wrong; fixing the call fixes it
- *   figma            Figma can't or won't do it here — flcm detected the limit, or Figma refused a write
- *   concurrent-edit  the file was edited in Figma (by a person or another plugin) while this call ran
- *   run-ended        the run was cancelled or already replied, or this plugin can't run it, so nothing more starts
- *   internal         flcm's own bug: the call was fine and flcm got it wrong
- *
- * The list lives in protocol.ts (FLCM_ERROR_KINDS), since a server capability's failure names one.
- */
-import type { FlcmErrorKind } from "../protocol.js";
-
-export type { FlcmErrorKind };
 
 /** A layer an error concerns, in the fields a `find` hit carries so the agent re-targets without re-reading. */
 export interface FlcmErrorNode {
@@ -148,7 +135,7 @@ export class FigmaRefusalError extends FlcmError {
   readonly thrown: unknown;
 
   constructor(cause: unknown) {
-    super("figma", describeFigmaRefusal(cause, "") + " Re-run the call; if it fails again, try the change another way.");
+    super("figma", describeFigmaRefusal(cause, "") + " Re-run the call; if Figma refuses again, try another approach.");
     this.thrown = cause;
   }
 }

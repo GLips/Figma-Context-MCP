@@ -540,11 +540,11 @@ test("component rejects binding fields that the node cannot bind", async () => {
       type: "FRAME",
       children: [{ type: "TEXT", text: "Hi", componentPropertyReferences: { slot: "T" } }],
     }),
-    refused({ kind: "authoring", path: "flcm.component.spec.children[0].componentPropertyReferences" }, /`slot` is not one of a TEXT's binding fields \(visible, text\) — `slot` marks the FRAME that IS the slot/),
+    refused({ kind: "authoring", path: "flcm.component.spec.children[0].componentPropertyReferences" }, /a TEXT doesn't take the binding field "slot": `slot` marks the FRAME that IS the slot/),
   );
   await assert.rejects(
     component({ type: "FRAME", componentPropertyReferences: { text: "Label" } }),
-    refused({ kind: "authoring", path: "flcm.component.spec.componentPropertyReferences" }, /`text` is not one of a FRAME's binding fields \(visible, slot\) — `text` drives a TEXT node's content/),
+    refused({ kind: "authoring", path: "flcm.component.spec.componentPropertyReferences" }, /a FRAME doesn't take the binding field "text": `text` drives a TEXT node's content, so it belongs to TEXT\. A FRAME takes only "visible", "slot"\./),
   );
   await assert.rejects(
     component({

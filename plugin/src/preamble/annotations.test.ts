@@ -205,7 +205,7 @@ test("the documented node matrix admits polygon, star and SLOT but refuses group
   }
   for (const type of ["GROUP", "SECTION"]) {
     node.type = type;
-    await assert.rejects(edit(node, { annotations: [] }), (err: FlcmError) => err.kind === "authoring" && /unknown prop "annotations" — a (GROUP|SECTION) takes only /.test(err.message));
+    await assert.rejects(edit(node, { annotations: [] }), (err: FlcmError) => err.kind === "authoring" && /a (GROUP|SECTION) doesn't take the prop "annotations"; drop it\. A (GROUP|SECTION) takes only /.test(err.message));
   }
 });
 

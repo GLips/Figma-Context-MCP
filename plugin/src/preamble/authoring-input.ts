@@ -6,9 +6,11 @@
 // aliases folded, compressed-read refs caught, then the closed-set gate. Node compilers take only its
 // output (`Accepted`), so no entry can skip it; pure value guards stay in the compilers.
 import { normalizeInputAliases } from "./input-aliases.js";
-import { rejectUnknownKeys, own } from "./validate.js";
+import { rejectUnknownKeys, own, type UnknownKeyOptions } from "./validate.js";
 import { FlcmError } from "./flcm-error.js";
-import { WORD_GROUPS, LAYOUT_WORD_DISPOSITIONS, hasContainerLayout, nodeWordDisposition } from "./vocabulary.js";
+import {
+  WORD_GROUPS, LAYOUT_WORD_DISPOSITIONS, LAYOUT_VOCABULARY, aNodeOfType, hasContainerLayout, nodeBagVocabulary, nodeWordDisposition, referenceSectionOfType,
+} from "./vocabulary.js";
 
 interface AuthoringEntry {
   /** The node kind the bag is authored FOR: a compiler's own type, or the live target's under edit. */
@@ -40,8 +42,9 @@ export function withoutReadRecords(bag: Record<string, unknown>): Record<string,
  * Returns the bag with them gone. A non-object goes straight to the gate's own backstop.
  */
 export function acceptAuthoringProps<P = Record<string, unknown>>(bag: unknown, entry: AuthoringEntry): Accepted<P> {
-  const owner = "a " + entry.type;
-  if (bag === null || typeof bag !== "object" || Array.isArray(bag)) rejectUnknownKeys(bag, entry.known, entry.path, { owner, reference: "props" });
+  const owner = aNodeOfType(entry.type);
+  const described: UnknownKeyOptions = { owner, reference: referenceSectionOfType(entry.type), vocabulary: nodeBagVocabulary(entry.type, entry.verb) };
+  if (bag === null || typeof bag !== "object" || Array.isArray(bag)) rejectUnknownKeys(bag, entry.known, entry.path, described);
   const src = normalizeInputAliases(bag as Record<string, unknown>, entry.path, entry.type);
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(src)) {
@@ -75,10 +78,10 @@ export function acceptAuthoringProps<P = Record<string, unknown>>(bag: unknown, 
   if (out.layout != null) {
     const layout = readyLayout(out.layout, entry.path + ".layout");
     const words: readonly string[] = hasContainerLayout(entry.type) ? WORD_GROUPS.layout : WORD_GROUPS.childLayout;
-    rejectUnknownKeys(layout, new Set(words), entry.path + ".layout", { owner: owner + "'s layout", reference: "props" });
+    rejectUnknownKeys(layout, new Set(words), entry.path + ".layout", { owner: owner + "'s layout", reference: "props", vocabulary: LAYOUT_VOCABULARY });
     out.layout = layout;
   }
-  rejectUnknownKeys(out, entry.known, entry.path, { owner, reference: "props" });
+  rejectUnknownKeys(out, entry.known, entry.path, described);
   // Past the gate on purpose: beside a `"fill"` the designed size is the compile's page fallback
   // (WriteLayout.designedSize), inert unless a created root lands on a page. Create only — edit and
   // live moves reuse a delta whose destination isn't known here, so there it stays a dropped read-only word.

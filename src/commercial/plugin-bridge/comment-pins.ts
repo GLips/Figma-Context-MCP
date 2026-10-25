@@ -4,6 +4,7 @@
  */
 import { readCommentThreads } from "~/services/figma-comments.js";
 import type { CapabilityHandler } from "./bridge.js";
+import { CapabilityFailure } from "./channel-failure.js";
 
 /** One open thread's pin, in the anchor's own frame — the preamble hit-tests it on live geometry. */
 export interface CommentPinRecord {
@@ -27,16 +28,17 @@ export interface CommentPinRecord {
 export function createCommentPinsCapability(): CapabilityHandler {
   return async (_payload, { signal, run }) => {
     const { fileKey } = run;
+    // Kind "figma" for both: the call is fine, and Figma won't hand over this file's comments here.
     if (fileKey === null)
-      throw {
-        code: "FILE_KEY_UNAVAILABLE",
-        message: "This run's plugin reported no file key, so its file's comments can't be read.",
-      };
+      throw new CapabilityFailure(
+        "figma",
+        "this run's plugin reported no file key, so its file's comments can't be read.",
+      );
     if (!run.figma)
-      throw {
-        code: "FIGMA_AUTH_UNAVAILABLE",
-        message: "This run has no Figma credentials to read comments with.",
-      };
+      throw new CapabilityFailure(
+        "figma",
+        "this run has no Figma credentials to read comments with.",
+      );
     const { comments } = await run.figma.withSignal(signal).getComments(fileKey);
     const pins: CommentPinRecord[] = [];
     for (const thread of readCommentThreads(comments)) {

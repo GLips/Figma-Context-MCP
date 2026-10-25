@@ -176,19 +176,18 @@ async function serverCall(host: FlcmHost, capability: string, payload: unknown):
   try {
     return await withServerCall(() => host.callServer(capability, payload));
   } catch (failure) {
-    if (failure instanceof FlcmError) throw failure;
-    const reason = failure == null ? "the server's work for this call failed without saying why." : describeFailure(failure);
-    throw new FlcmError(capabilityFailureKind(failure), reason);
+    throw new FlcmError(capabilityFailureKind(failure), describeFailure(failure));
   }
 }
 
 /**
- * Whose failure a capability's rejection is: the `kind` the server named on it, which the installed
- * host forwards untouched on `detail` (server-calls.ts). A failure that names none is the server's
- * bug, since every capability decides whose failure it raised.
+ * Whose failure a call's rejection is: the `kind` on its `detail`, which the installed host forwards
+ * untouched from the server, or sets itself on a call it abandons (server-calls.ts). Read as data,
+ * never by class: the host is a separate bundle whose FlcmError this preamble's instanceof can't see.
+ * A failure that names none is the server's bug, since every capability decides whose failure it raised.
  */
 function capabilityFailureKind(failure: unknown): FlcmErrorKind {
-  const detail = (failure as { detail?: unknown } | null)?.detail;
+  const detail = (failure as { detail?: unknown }).detail;
   const kind = detail !== null && typeof detail === "object" ? (detail as { kind?: unknown }).kind : undefined;
   return FLCM_ERROR_KINDS.find((known) => known === kind) ?? "internal";
 }

@@ -45,7 +45,8 @@ import {
 } from "./instance.js";
 import { resolveInstanceMains, provenInstanceMains, definitionsEditedAt } from "./operation-schedule.js";
 import { assertNoContradictoryWords, captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
-import { FlcmError, describeFailure, describeNodeIdentity, errorNodeOf, failureKindOf, locateFailure, messageWithinCall, type FlcmErrorKind, type FlcmErrorNode } from "./flcm-error.js";
+import { FlcmError, describeFailure, describeNodeIdentity, errorNodeOf, failureKindOf, locateFailure, messageWithinCall, type FlcmErrorNode } from "./flcm-error.js";
+import type { FlcmErrorKind } from "../protocol.js";
 import { geometryWritesOf } from "./geometry-dependency.js";
 import type { AuthorizedEditPlan } from "./instance-write-authorization.js";
 import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./edit-apply.js";

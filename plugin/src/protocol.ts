@@ -502,10 +502,17 @@ export type ServerOneWay =
   | { type: "CHANNEL_RESPONSE"; id: string; ok: false; error: unknown };
 
 /**
- * Whose failure an flcm error is (the preamble's FlcmErrorKind, described in flcm-error.ts). Listed
- * here because a server capability names one on its failure's `kind` field and the preamble reads
- * it back. Both ship from the server, so a new kind needs no protocol bump; the plugin host only
- * carries the field.
+ * Whose failure an flcm error is, which is what decides the agent's next move:
+ *
+ *   authoring        the call asked for something wrong; fixing the call fixes it
+ *   figma            Figma can't or won't do it here — flcm detected the limit, or Figma refused a write
+ *   concurrent-edit  the file was edited in Figma (by a person or another plugin) while this call ran
+ *   run-ended        the run was cancelled or already replied, or this plugin can't run it, so nothing more starts
+ *   internal         flcm's own bug: the call was fine and flcm got it wrong
+ *
+ * Listed here because a server capability names one on its failure's `kind` field, the plugin host
+ * names "run-ended" on a call it abandons, and the preamble reads either back. A new kind the host
+ * never sets ships with the server and needs no protocol bump.
  */
 export const FLCM_ERROR_KINDS = ["authoring", "figma", "concurrent-edit", "run-ended", "internal"] as const;
 export type FlcmErrorKind = (typeof FLCM_ERROR_KINDS)[number];

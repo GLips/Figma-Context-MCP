@@ -680,7 +680,7 @@ An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves i
 
 ## edit() / editMany() — changing existing nodes
 
-`await flcm.edit(target, changes)` patches one live node and returns its updated handle: only the fields you pass change. The target is a node id or key string, or a handle. A node type takes the words it is created with (see props); a word its type lacks, such as `fill` on a LINE, rejects and lists that type's words.
+`await flcm.edit(target, changes)` patches one live node and returns its updated handle: only the fields you pass change. The target is a node id or key string, or a handle. A node type takes the words it is created with (see props); a word its type lacks, such as `fill` on a LINE, rejects by name, saying where that type's words are listed. A word that belongs in a nested object, such as `lineHeight` (in `textStyle`), rejects saying where it goes.
 
 ### Where edit differs from create
 

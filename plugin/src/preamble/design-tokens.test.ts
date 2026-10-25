@@ -125,5 +125,10 @@ test("library tokens the file uses are counted and load on request; an enabled l
 
   await assert.rejects(flcm.designTokens({ library: "Design Sys" }), /no enabled library with variables is named "Design Sys"\. Pass one of the enabled libraries: "Design System"\./);
   await assert.rejects(flcm.designTokens({ library: "Design System", collection: "Spacing" }), /has no collection named "Spacing"\. Pass one of its collections: "DS Colors"/);
+  // A misspelled `used` is offered `used`: the query's words are both loads', not the library load's alone.
+  await assert.rejects(
+    flcm.designTokens({ use: true } as never),
+    /unknown query key "use" — did you mean "used"\? The query keys here are "used", "library", "collection", "type"\./,
+  );
 });
 

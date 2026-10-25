@@ -14,7 +14,7 @@
 // MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
 import type { CapabilityHandler, ChannelRunContext } from "./bridge.js";
 import { CapabilityFailure } from "./channel-failure.js";
-import { imageSourceKind, type ImageUploadStore } from "./image-intake.js";
+import { imageSourceKind, UPLOAD_TTL_MS, type ImageUploadStore } from "./image-intake.js";
 import { fetchAndProcessImage } from "./images.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
 import { limitConcurrency } from "~/utils/concurrency.js";
@@ -211,22 +211,30 @@ export function createImageSourceFetcher({
           "Pass the file's path instead, with --asset-root set to a directory that holds it.",
       );
     }
-    try {
-      return uploads.store.redeem(source, run.uploadHandles);
-    } catch (err) {
-      const port = uploads.port();
-      // Several servers can run in one project, and the upload command can't tell which one is the
-      // agent's; naming this server's port makes the retry certain instead of a guess.
-      const retry =
-        port === null
-          ? ""
-          : `. This server takes uploads on port ${port}; if the handle came from another server, ` +
-            `run \`npx ${CLI_NAME} upload <file> --port ${port}\` for one this server can use`;
+    const redemption = uploads.store.redeem(source, run.uploadHandles);
+    if ("base64" in redemption) return redemption.base64;
+    const handle = `the upload handle ${JSON.stringify(source)}`;
+    if (redemption.refused === "not-named-in-script") {
       throw new CapabilityFailure(
         "authoring",
-        `the upload handle could not be used: ${(err as Error).message}${retry}.`,
+        `${handle} is not written in this run's script, and a run can only use the handles its ` +
+          "code names literally. Write the handle into the script as the upload command printed " +
+          "it, not assembled from parts at run time.",
       );
     }
+    const port = uploads.port();
+    // Several servers can run in one project, and the upload command can't tell which one is the
+    // agent's; naming this server's port makes the retry certain instead of a guess.
+    const reupload =
+      port === null
+        ? "Upload the file again for a fresh handle."
+        : `Run \`npx ${CLI_NAME} upload <file> --port ${port}\` for a fresh one: this server takes ` +
+          "uploads on that port, and a handle from another server doesn't work here.";
+    throw new CapabilityFailure(
+      "authoring",
+      `${handle} is unknown to this server or has expired (a handle lasts ` +
+        `${UPLOAD_TTL_MS / 60_000} minutes, on the server that issued it). ${reupload}`,
+    );
   };
 }
 

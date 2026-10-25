@@ -226,14 +226,14 @@ test("the component words are INSTANCE-only — every other type rejects them by
   });
   await assert.rejects(
     edit("card", { componentProperties: { Size: "Large" } }),
-    /unknown prop "componentProperties" — every prop a FRAME takes is in the "props" section/,
+    /a FRAME doesn't take the prop "componentProperties"; drop it\. Every prop a FRAME takes is in the "props" section/,
   );
   await assert.rejects(
     edit("card", { overrides: { "1:2": { fill: "#000" } } }),
-    /unknown prop "overrides" — every prop a FRAME takes is in the "props" section/,
+    /a FRAME doesn't take the prop "overrides"; drop it\. Every prop a FRAME takes is in the "props" section/,
   );
-  await assert.rejects(edit("card", { componentId: "1:2" }), /unknown prop "componentId" — every prop a FRAME takes/);
-  await assert.rejects(edit("t", { componentId: "1:2" }), /unknown prop "componentId" — every prop a TEXT takes/);
+  await assert.rejects(edit("card", { componentId: "1:2" }), /a FRAME doesn't take the prop "componentId"; drop it\. Every prop a FRAME takes/);
+  await assert.rejects(edit("t", { componentId: "1:2" }), /a TEXT doesn't take the prop "componentId"; drop it\. Every prop a TEXT takes/);
   assert.equal((await figma.getNodeByIdAsync(specNode(out, "card").id)).width, 100);
 });
 
@@ -243,7 +243,7 @@ test("every component-word refusal fires before the seal, with zero writes and z
   const logBefore = [...figma.undoLog];
   await assert.rejects(
     edit(inst.id, { componentProperties: { Lable: "x" } }),
-    /no property "Lable" — its properties are "Label", "Icon"/,
+    /unknown property "Lable" — did you mean "Label"\? This component takes only "Label", "Icon"\./,
   );
   await assert.rejects(
     edit(inst.id, { componentProperties: { Icon: "yes" } }),
@@ -305,7 +305,7 @@ test("editMany takes instance deltas, atomically, alongside ordinary ones", asyn
       { id: other.id, fill: "#0000ff" },
       { id: inst.id, componentProperties: { Nope: "x" } },
     ]),
-    /1 of 2 entries were rejected.*\[1\].*no property "Nope"/s,
+    /1 of 2 entries were rejected.*\[1\].*unknown property "Nope"/s,
   );
   assert.deepEqual(box.fills[0].color, { r: 1, g: 0, b: 0 });
 });

@@ -226,7 +226,7 @@ test("refusals name the component's own vocabulary, with zero writes", async () 
   const before = figma.currentPage.children.length;
   await assert.rejects(
     render({ type: "INSTANCE", componentId: comp.id, componentProperties: { Lable: "x" } }),
-    /no property "Lable" — its properties are "Label", "Icon"/,
+    /unknown property "Lable" — did you mean "Label"\? This component takes only "Label", "Icon"\./,
   );
   await assert.rejects(
     render({ type: "INSTANCE", componentId: comp.id, componentProperties: { Icon: "yes" } }),

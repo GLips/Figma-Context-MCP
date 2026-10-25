@@ -25,6 +25,7 @@ import {
   type UploadEndpoint,
 } from "~/commercial/plugin-bridge/upload-endpoint.js";
 import { runUpload } from "~/commercial/commands/upload.js";
+import { CLI_NAME } from "~/utils/cli-help.js";
 import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { ChannelRunContext, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
@@ -147,10 +148,13 @@ test("the CLI uploads a file and its handle loads only in a run whose code names
   const bytes = Buffer.from(await fetchDuringRun(`flcm.image("${handle}")`, handle), "base64");
   expect([...bytes.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
 
-  // Another run's code never named it: the plugin asking for it there is refused.
-  await expect(fetchDuringRun(`flcm.image("assets/other.png")`, handle)).rejects.toThrow(
-    /does not name that upload handle/,
+  // Another run's code never named it: the plugin asking for it there is refused, and the remedy is
+  // to write it literally, not to upload again.
+  const refusal = fetchDuringRun(`flcm.image("assets/other.png")`, handle);
+  await expect(refusal).rejects.toThrow(
+    `the upload handle "${handle}" is not written in this run's script`,
   );
+  await expect(refusal).rejects.not.toThrow(/upload <file>/);
 });
 
 test("a browser-origin request is refused before the capability is even checked", async () => {
@@ -178,7 +182,11 @@ test("an upload over the byte cap is refused while streaming, without a declared
 test("a handle stops working once it expires", async () => {
   const { handle } = await store.intake([await makePng()]);
   const named = uploadHandlesNamedIn(handle);
-  expect(() => store.redeem(handle, named)).not.toThrow();
+  expect(store.redeem(handle, named)).toHaveProperty("base64");
   now += UPLOAD_TTL_MS + 1;
-  expect(() => store.redeem(handle, named)).toThrow(/unknown to this server or has expired/);
+  await expect(fetchDuringRun(`flcm.image("${handle}")`, handle)).rejects.toThrow(
+    `the upload handle "${handle}" is unknown to this server or has expired (a handle lasts 30 ` +
+      `minutes, on the server that issued it). Run \`npx ${CLI_NAME} upload <file> --port ` +
+      `${endpoint.port}\``,
+  );
 });

@@ -85,8 +85,8 @@ test("grid spans and template edits use read words and refuse unresolved layout 
   await assert.rejects(edit(child, { width: "50%" }), /percent sizes on in-flow GRID/);
   await assert.rejects(render({ type: "FRAME", width: 120, height: 90, layout, children: [{ type: "RECTANGLE", width: "50%" }] }), /percent sizes on in-flow GRID/);
   await assert.rejects(edit(built, { layout: { gridTemplateColumns: "1fr 1fr 1fr 1fr" } }), /fr grid tracks divide the frame's own width.*Give width a number or "fill"/);
-  await assert.rejects(edit(child, { layout: { mode: "none" } }), /unknown prop "mode"/);
-  await assert.rejects(editMany([{ id: built.children![0].id, layout: { padding: 4 } }]), /unknown prop "padding"/);
+  await assert.rejects(edit(child, { layout: { mode: "none" } }), /a RECTANGLE's layout doesn't take the prop "mode"; drop it/);
+  await assert.rejects(editMany([{ id: built.children![0].id, layout: { padding: 4 } }]), /layout doesn't take the prop "padding"; drop it/);
   await assert.rejects(edit(child, { layout: { overflowScroll: ["x"] } } as never), /layout\.overflowScroll: flcm can't write this — scroll behavior/);
   await assert.rejects(render({ type: "FRAME", layout: { mode: "grid" } }), /a new grid needs layout\.gridTemplateColumns/);
   await edit(built, { width: 200, layout: { gridTemplateColumns: "1fr 1fr 1fr 1fr" } });

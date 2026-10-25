@@ -9,8 +9,7 @@
 // before the envelope dispatch, so neither end ever has to guess who minted an id.
 import { toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import type { ServerFrame } from "./protocol.js";
-import { FlcmError } from "./preamble/flcm-error.js";
+import type { FlcmErrorKind, ServerFrame } from "./protocol.js";
 
 export interface PendingServerCall {
   resolve: (payload: unknown) => void;
@@ -43,10 +42,7 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       // reaches its call only AFTER the drop.
       if (!isConnected(to.connKey)) {
         return Promise.reject(
-          new FlcmError(
-            "run-ended",
-            "the server for this run is no longer connected, so the request to it can't be sent and the script stops here.",
-          ),
+          runEnded("the server for this run is no longer connected, so the request to it can't be sent and the script stops here."),
         );
       }
       return new Promise((resolve, reject) => {
@@ -73,21 +69,18 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       // A failure crosses opaquely, the same way a success does. The installed plugin is the ONE piece
       // that can't be updated in step with a new capability, so it must not flatten the server's error
       // to prose: a future capability ships a structured failure and a preamble that reads `.detail`.
-      // `message` stays a string only because throwing a non-Error in the sandbox loses the stack.
-      // A plain Error, not an FlcmError: whose failure it is (its kind) is the capability's to say, on
-      // `detail`, and the server-shipped preamble reads it there (host.ts serverCall).
-      // eslint-disable-next-line no-restricted-syntax -- the capability's failure; its kind rides on detail
-      const error = new Error(
-        typeof msg.error === "string"
-          ? msg.error
-          // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
-          : msg.error && typeof msg.error === "object" && "message" in msg.error && typeof msg.error.message === "string"
+      call.reject(
+        serverCallFailure(
+          typeof msg.error === "string"
+            ? msg.error
             // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
-            ? msg.error.message
-            : "the server couldn't complete the request.",
+            : msg.error && typeof msg.error === "object" && "message" in msg.error && typeof msg.error.message === "string"
+              // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
+              ? msg.error.message
+              : "the server couldn't complete the request.",
+          msg.error,
+        ),
       );
-      (error as Error & { detail?: unknown }).detail = msg.error;
-      call.reject(error);
     },
 
     /**
@@ -99,8 +92,25 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
       for (const [id, call] of pending) {
         if (!match(call)) continue;
         pending.delete(id);
-        call.reject(new FlcmError("run-ended", reason));
+        call.reject(runEnded(reason));
       }
     },
   };
+}
+
+/**
+ * How every call rejects: an Error whose `detail` is wire-shaped data. The preamble judges it by
+ * `detail.kind` alone (host.ts serverCall), never by class: it is a separate bundle with its own
+ * FlcmError, so a host-made one would fail its instanceof and be blamed on flcm. `message` stays a
+ * string only because throwing a non-Error in the sandbox loses the stack.
+ */
+function serverCallFailure(message: string, detail: unknown): Error {
+  // eslint-disable-next-line no-restricted-syntax -- a failure the preamble reads by its detail
+  return Object.assign(new Error(message), { detail });
+}
+
+/** The plugin's own refusal of a call: the run it belongs to has ended, in the server's error shape. */
+function runEnded(message: string): Error {
+  const kind: FlcmErrorKind = "run-ended";
+  return serverCallFailure(message, { kind, message });
 }

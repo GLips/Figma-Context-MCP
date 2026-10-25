@@ -18,7 +18,8 @@
 // warning about byte-equality is for a future read side, not the render path.
 
 import { rejectUnknownKeys } from "./validate.js";
-import { FlcmError, locateFailure, type FlcmErrorKind } from "./flcm-error.js";
+import { FlcmError, locateFailure } from "./flcm-error.js";
+import type { FlcmErrorKind } from "../protocol.js";
 import { NESTED_WORDS, WORD_VALUES } from "./vocabulary.js";
 
 // Returns [c1x, c1y, c2x, c2y, endX, endY] cubic segments approximating the arc from (x1,y1) to (x2,y2).

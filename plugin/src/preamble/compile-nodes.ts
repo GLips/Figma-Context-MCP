@@ -7,7 +7,7 @@
 // prop bag into the plain WriteNode IR; nothing here touches the document.
 import { FLOW_ALIGNMENT_GUIDANCE } from "./layout-mode.js";
 import type { Accepted } from "./authoring-input.js";
-import { keySet, NESTED_WORDS, WORD_VALUES, type WordValue } from "./vocabulary.js";
+import { aNodeOfType, keySet, NESTED_WORDS, WORD_VALUES, type WordValue } from "./vocabulary.js";
 import { parseGridTracks, parseGridPlacement } from "./grid-tracks.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import { compileBounds } from "./size-bounds.js";
@@ -439,7 +439,7 @@ function compileStrokeWidth(value: unknown, type: string, at: string): Bindable 
   if (!PER_SIDE_STROKE_TYPES.has(type)) {
     throw new FlcmError(
       "authoring",
-      "a " + type + " has one stroke weight for every side, so the per-side width " + JSON.stringify(value) +
+      aNodeOfType(type) + " has one stroke weight for every side, so the per-side width " + JSON.stringify(value) +
         " has no equivalent on it. Give one width.",
       { path: at },
     );

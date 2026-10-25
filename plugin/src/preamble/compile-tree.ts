@@ -12,6 +12,7 @@ import { compileText } from "./compile-text.js";
 import { acceptAuthoringProps, withoutReadRecords, type Accepted } from "./authoring-input.js";
 import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, wordsOf, type WordGroup } from "./vocabulary.js";
 import { own, showValue } from "./validate.js";
+import { isPlainData } from "./plain-data.js";
 import { FlcmError, locateFailure } from "./flcm-error.js";
 
 // ---- NODE_ENTRY: how a new node of each type is built. Every entry runs the same prelude
@@ -60,7 +61,7 @@ function copySpec<T>(value: T, path = "spec", ancestors = new Set<object>()): T 
     return value;
   }
   if (ancestors.has(value)) throw new FlcmError("authoring", "this object contains itself, so it isn't a tree. Build each node as its own object.", { path });
-  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) throw new FlcmError("authoring", "must be a plain object, not a class instance. Copy its fields into a plain object.", { path });
+  if (!isPlainData(value)) throw new FlcmError("authoring", "must be a plain object, not a class instance. Copy its fields into a plain object.", { path });
   ancestors.add(value);
   const result = Array.isArray(value)
     ? value.map((v, i) => copySpec(v, path + "[" + i + "]", ancestors))

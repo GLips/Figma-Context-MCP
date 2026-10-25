@@ -827,6 +827,15 @@ test("a live node is told apart from node-shaped data by Figma's own identity, r
   assert.deepEqual([...logged.console], [`[log] {"id":"${logged.result.id}","name":"Card","type":"FRAME"} {"step":1}`]);
 });
 
+test("a logged node reports the name it had when logged, not one it was given afterwards", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const run = await execute(h, `const card = figma.createFrame(); card.name = "A"; console.log(card); card.name = "B"; return card.id;`);
+  assert.equal(run.errors, null);
+  assert.deepEqual([...run.console], [`[log] {"id":"${run.result}","name":"A","type":"FRAME"}`]);
+});
+
 test("a raw figma write counts even when its change event lands after the reply", async () => {
   const h = host();
   await h.connect(1);
@@ -1154,6 +1163,27 @@ for (const [kind, expected] of [["authoring", "authoring"], [undefined, "interna
     assert.ok(reply.result.message.startsWith("flcm.render: " + message), reply.result.message);
     assert.equal(reply.result.message.split("flcm.render").length, 2, "the verb is named once");
     assert.doesNotMatch(reply.result.message, /Figma refused/);
+  });
+}
+
+// The host and the preamble are separate bundles with separate FlcmError classes, so a call the host
+// abandons must say whose failure it is as data the preamble reads, not as a host class instance.
+for (const [how, abandon] of [
+  ["a revoke", (h: ReturnType<typeof host>) => h.sendControl({ type: "UI_REVOKE", credentialId: CREDENTIAL.id, project: "/proj" })],
+  ["a CANCEL", (h: ReturnType<typeof host>, executionId: unknown) => h.sendFrame(1, { type: "CANCEL", executionId })],
+] as const) {
+  test(`a server call abandoned by ${how} reaches the agent as run-ended, not as a bug in flcm`, async () => {
+    const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+    const h = host(createFigmaMock());
+    await h.connect(1);
+    const result = execute(h, `try {
+      await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") });
+    } catch (error) { return { kind: error.kind, message: error.message }; }`);
+    const request = await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
+    abandon(h, request.executionId);
+    const reply = await result;
+    assert.equal(reply.result.kind, "run-ended", reply.result.message);
+    assert.doesNotMatch(reply.result.message, /bug in flcm/);
   });
 }
 

@@ -5,7 +5,7 @@
 import { warnings } from "./warnings.js";
 import { LAYOUT_MODES, CONSTRAINT_H, CONSTRAINT_V, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type Axis, type ChildLayout, type LayoutMode } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
-import { hasContainerLayout } from "./vocabulary.js";
+import { aNodeOfType, hasContainerLayout } from "./vocabulary.js";
 import type { LiveTreeNode } from "./live-tree.js";
 import type { LiveTreeLanding } from "./edit-apply.js";
 import { sceneFigma as figma } from "./scene-access.js";
@@ -334,7 +334,7 @@ function applyCornerRadii(node: any, r: CornerRadii<Bindable>, tokens: ResolvedT
     return;
   }
   if (!("topLeftRadius" in node)) {
-    throw new FlcmError("authoring", "a " + node.type + " has one radius for all four corners, so per-corner borderRadius can't apply to it. Give borderRadius one number.");
+    throw new FlcmError("authoring", aNodeOfType(node.type) + " has one radius for all four corners, so per-corner borderRadius can't apply to it. Give borderRadius one number.");
   }
   writeBindable(node, "topLeftRadius", r.topLeft, tokens);
   writeBindable(node, "topRightRadius", r.topRight, tokens);

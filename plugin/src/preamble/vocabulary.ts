@@ -11,6 +11,7 @@
 // compile error at every depth, so no drift test mirrors one list against another.
 import type { SimplifiedLayout, SimplifiedNode } from "@framelink/core";
 import type { EditableType, WriteType } from "./ir.js";
+import type { FlcmReferenceSection } from "./schema.js";
 import { INPUT_ALIASES } from "./input-aliases.js";
 
 // ---- Native grid spellings (input-aliases.ts). The rule table owns them; they join the groups below
@@ -208,6 +209,78 @@ export function hasContainerLayout(type: string): boolean {
   return typeRow(type)?.includes("frame") ?? false;
 }
 
+// Where the reference lists a type's words: a type flcm creates has its own table in props; one it
+// only edits is described against FRAME's in edit, beside the floor every row-less type gets.
+const TYPE_REFERENCE_SECTION: { [T in EditableType]: T extends WriteType ? "props" : "edit" } = {
+  FRAME: "props", TEXT: "props", RECTANGLE: "props", ELLIPSE: "props", LINE: "props", VECTOR: "props", INSTANCE: "props",
+  COMPONENT: "edit", COMPONENT_SET: "edit", SLOT: "edit", POLYGON: "edit", STAR: "edit",
+};
+
+/** A node of this type, as a refusal names it: "a FRAME", "an INSTANCE". */
+export function aNodeOfType(type: string): string {
+  return (/^[AEIOU]/.test(type) ? "an " : "a ") + type;
+}
+
+/** The reference section that lists every word a node of this type takes. */
+export function referenceSectionOfType(type: string): FlcmReferenceSection {
+  return Object.prototype.hasOwnProperty.call(TYPE_REFERENCE_SECTION, type) ? TYPE_REFERENCE_SECTION[type as EditableType] : "edit";
+}
+
+// ---- The vocabulary a closed set is cut from, for the unknown-word gate (validate.ts rejectUnknownKeys):
+// it tells a real word in the wrong place from a typo, so `lineHeight` on a TEXT is sent to textStyle
+// rather than "corrected" to the nearest gated spelling, minHeight. ----
+export interface WordVocabulary {
+  /** Every word this kind of bag takes on some owner. One the set lacks is a real word this owner doesn't take. */
+  every: ReadonlySet<string>;
+  /** Why a word of `every` is missing from the set, where the vocabulary says. */
+  why?: (word: string) => string | undefined;
+  /** The bags nested under the set's own words, by word: a word one of them takes is pointed there. */
+  nested?: Readonly<Record<string, ReadonlySet<string>>>;
+  /** Spellings from CSS or Figma's API that are no flcm word, each with the flcm way to say it. */
+  foreign?: Readonly<Record<string, string>>;
+}
+
+const LAYOUT_WORDS: ReadonlySet<string> = wordsOf(["layout"]);
+const CHILD_LAYOUT_WORDS: ReadonlySet<string> = wordsOf(["childLayout"]);
+const TEXT_STYLE_WORDS: ReadonlySet<string> = wordsOf(["textStyle"]);
+// Every word a node's own bag, or a bag nested in it, takes on some type: the nested words count, since
+// `lineHeight` on a FRAME is a real word a FRAME lacks, not a misspelling of `minHeight`.
+const NODE_BAG_WORDS: ReadonlySet<string> = new Set([
+  ...wordsOf([...Object.values(TYPE_WORD_GROUPS).flat(), ...SVG_WORD_GROUPS]),
+  ...TEXT_STYLE_WORDS, ...LAYOUT_WORDS,
+]);
+
+/**
+ * A node's own bag. `type` is the node's, absent at edit's document-blind gate, where any type's layout
+ * words may still be right; `edit` marks an edit delta, where a create-only word says why it isn't taken.
+ */
+export function nodeBagVocabulary(type: string | undefined, verb: "create" | "edit"): WordVocabulary {
+  return NODE_BAG_VOCABULARIES[verb][type === undefined || hasContainerLayout(type) ? "container" : "child"];
+}
+
+const createOnlyReason = (word: string): string | undefined =>
+  Object.prototype.hasOwnProperty.call(CREATE_ONLY_WORDS, word) ? "it is set only when the node is created — " + CREATE_ONLY_WORDS[word as CreateOnlyWord] : undefined;
+// The mistakes an agent most often makes on a node, said the flcm way at create and edit alike:
+// "unknown prop" would misdiagnose them, and no spelling near them is the word they mean.
+const POSITION_SPELLING = "position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize";
+const FILL_SPELLING = "a node's color, text included, is its `fill`";
+const NODE_FOREIGN_SPELLINGS: Readonly<Record<string, string>> = {
+  x: POSITION_SPELLING,
+  y: POSITION_SPELLING,
+  color: FILL_SPELLING,
+  background: FILL_SPELLING,
+  backgroundColor: FILL_SPELLING,
+};
+// Built once: every props-taking entry asks for one, and the gate's happy path allocates nothing.
+const nodeBag = (layout: ReadonlySet<string>, why?: WordVocabulary["why"]): WordVocabulary => ({ every: NODE_BAG_WORDS, nested: { textStyle: TEXT_STYLE_WORDS, layout }, why, foreign: NODE_FOREIGN_SPELLINGS });
+const NODE_BAG_VOCABULARIES: Record<"create" | "edit", Record<"container" | "child", WordVocabulary>> = {
+  create: { container: nodeBag(LAYOUT_WORDS), child: nodeBag(CHILD_LAYOUT_WORDS) },
+  edit: { container: nodeBag(LAYOUT_WORDS, createOnlyReason), child: nodeBag(CHILD_LAYOUT_WORDS, createOnlyReason) },
+};
+
+/** A node's `layout` bag: a container word on a node that only sits in a flow is real, not a typo. */
+export const LAYOUT_VOCABULARY: WordVocabulary = { every: LAYOUT_WORDS };
+
 // ---- The binding word's fields: which node types may bind each, the component property type it
 // demands, and — for the refusal's second sentence — why it belongs where it does. `visible` has no
 // owner: every node has one, so it is never the wrong node's word. The key Figma stores each under is
@@ -225,6 +298,12 @@ export const BINDABLE_FIELDS = {
   },
 } as const satisfies Record<string, { types: "any" | readonly WriteType[]; propertyType: WordValue<"propertyType">; owner?: string }>;
 export type BindableField = keyof typeof BINDABLE_FIELDS;
+
+/** The binding bag: a field another node type binds is refused with why it belongs there. */
+export const BINDING_VOCABULARY: WordVocabulary = {
+  every: new Set(Object.keys(BINDABLE_FIELDS)),
+  why: (word) => (Object.prototype.hasOwnProperty.call(BINDABLE_FIELDS, word) ? (BINDABLE_FIELDS[word as BindableField] as { owner?: string }).owner : undefined),
+};
 
 /** Which fields a node of this type may bind, `visible` first — in order, for a refusal to list. */
 export function bindableFieldsOf(type: string): readonly BindableField[] {

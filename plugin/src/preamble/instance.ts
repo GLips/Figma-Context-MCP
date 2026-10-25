@@ -69,7 +69,7 @@ import { realizeOnlyChecksOf } from "./obligation-derivation.js";
 import type { Obligation } from "./obligation.js";
 import { realizeAtWritePoint } from "./write-point.js";
 import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
-import { own } from "./validate.js";
+import { own, unknownWordsMessage } from "./validate.js";
 import { bareName, matchPropertyNames } from "./component-properties.js";
 import type { EditDelta } from "./schema.js";
 import { ConcurrentEditError, FlcmError, describeNodeIdentity, locateFailure, type FlcmLocation } from "./flcm-error.js";
@@ -303,10 +303,12 @@ export function resolvePropertyName(authored: string, definitions: Record<string
       { path: where },
     );
   }
-  const available = Object.keys(definitions);
+  const available = new Set(Object.keys(definitions).map(bareName));
+  if (!available.size) throw new FlcmError("authoring", "this component has no property " + JSON.stringify(authored) + " — it defines no properties.", { path: where });
   throw new FlcmError("authoring",
-    "this component has no property " + JSON.stringify(authored) + " — " +
-      (available.length ? "its properties are " + available.map((n) => JSON.stringify(bareName(n))).join(", ") : "it defines no properties") + ".",
+    unknownWordsMessage([authored], available, {
+      noun: "property", owner: "this component", listedBy: "flcm.get on the component lists every one under its `components` entry's propertyDefinitions",
+    }),
     { path: where },
   );
 }

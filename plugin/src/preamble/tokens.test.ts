@@ -57,6 +57,27 @@ test("an unknown or ambiguous name lists candidates and writes nothing", async (
   assert.deepEqual(figma.undoLog, []);
 });
 
+// Token names are "/"-paths, so an agent names one by a segment; a whole-name nearness rule alone
+// lost every one of these (prop words, with no "/", are judged as before: see unknown-props.test.ts).
+test("an unknown token name is offered the paths it names a segment of", async () => {
+  setup();
+  seedVariables({
+    collection: "Brand",
+    variables: [
+      { name: "color/blue/500", type: "COLOR", values: { Default: { r: 0, g: 0, b: 1, a: 1 } } },
+      { name: "Surface/Default", type: "COLOR", values: { Default: { r: 1, g: 1, b: 1, a: 1 } } },
+      { name: "spacing/md", type: "FLOAT", values: { Default: 12 } },
+    ],
+  });
+  await assert.rejects(flcm.render({ type: "FRAME", fill: { variable: "blue" } }), /no COLOR variable is named "blue".*Nearest: "color\/blue\/500"/);
+  await assert.rejects(flcm.render({ type: "FRAME", fill: { variable: "surface" } }), /Nearest: "Surface\/Default"/);
+  await assert.rejects(flcm.render({ type: "FRAME", layout: { mode: "row", gap: { variable: "md" } } }), /no FLOAT variable is named "md".*Nearest: "spacing\/md"/);
+  await assert.rejects(
+    flcm.render({ type: "FRAME", fill: { variable: "color/blue/500", opacity: 0.5 } as never }),
+    /fill: unknown field "opacity" — a variable reference takes only "variable", "value"\. For a bound solid with its own opacity or blend, write \{ type: "SOLID"/,
+  );
+});
+
 test("a style link lands after apply, and a failing one rolls the verb back", async () => {
   const figma = setup();
   const paint = seedStyle({ type: "PAINT", name: "Brand/Primary", paints: [{ type: "SOLID", color: BRAND_RED, opacity: 1 }] });

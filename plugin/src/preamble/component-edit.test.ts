@@ -149,7 +149,7 @@ test("`description` is a component word, and no other node type takes it", async
   await edit(comp.id, { description: "A compact labelled chip." });
   assert.equal(comp.description, "A compact labelled chip.");
   const plain = await render({ type: "FRAME", key: "plain", width: 10, height: 10 });
-  await assert.rejects(edit("plain", { description: "nope" }), refused({ kind: "authoring", node: { type: "FRAME", id: plain.id } }, /unknown prop "description" — every prop a FRAME takes/));
+  await assert.rejects(edit("plain", { description: "nope" }), refused({ kind: "authoring", node: { type: "FRAME", id: plain.id } }, /a FRAME doesn't take the prop "description"; drop it\. Every prop a FRAME takes/));
   assert.equal((await figma.getNodeByIdAsync(plain.id)).description, undefined);
 });
 
@@ -205,7 +205,7 @@ test("propertyDefinitions RENAMES a property — the bound sublayer follows, and
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Label").characters, "Hi");
   await assert.rejects(
     edit(inst.id, { componentProperties: { Label: "x" } }),
-    /this component has no property "Label"/,
+    /unknown property "Label" — this component takes only "Icon", "Trailing", "Caption"\./,
   );
 });
 
@@ -285,7 +285,7 @@ test("propertyDefinitions DELETES a property — the sublayer is freed and insta
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Icon").visible, true);
   await assert.rejects(
     edit(inst.id, { componentProperties: { Icon: true } }),
-    /this component has no property "Icon"/,
+    /unknown property "Icon" — this component takes only "Label", "Trailing"\./,
   );
 });
 
@@ -601,7 +601,7 @@ test("an instance's SLOT takes gap, padding and fills; its direction stays the c
   await assert.rejects(edit(slot.id, { layout: { mode: "column" } }), /\(instance\.layout-mode-change\)/);
   assert.equal(slot.layoutMode, "HORIZONTAL");
   // Still a slot, not a text: the words are a frame's, not everything.
-  await assert.rejects(edit(slot.id, { text: "nope" }), refused({ kind: "authoring", node: { type: "SLOT", id: slot.id } }, /unknown prop "text" — every prop a SLOT takes/));
+  await assert.rejects(edit(slot.id, { text: "nope" }), refused({ kind: "authoring", node: { type: "SLOT", id: slot.id } }, /a SLOT doesn't take the prop "text"; drop it\. Every prop a SLOT takes is in the "edit" section/));
 });
 
 test("editMany refuses a batch that both renames a property and binds to it, naming both entries", async () => {
@@ -731,16 +731,16 @@ test("every definition refusal names the cause and writes nothing", async () => 
   // A name that isn't there and isn't being declared.
   await assert.rejects(
     edit(comp.id, { propertyDefinitions: { Nope: null } }),
-    /this component has no property "Nope"/,
+    /unknown property "Nope" — this component takes only /,
   );
   // The definition words reach a COMPONENT, not one of its layers or an instance.
   await assert.rejects(
     edit(icon.id, { propertyDefinitions: { Icon: null } }),
-    refused({ kind: "authoring", node: { type: "RECTANGLE", id: icon.id } }, /unknown prop "propertyDefinitions" — every prop a RECTANGLE takes/),
+    refused({ kind: "authoring", node: { type: "RECTANGLE", id: icon.id } }, /a RECTANGLE doesn't take the prop "propertyDefinitions"; drop it\. Every prop a RECTANGLE takes/),
   );
   await assert.rejects(
     edit(inst.id, { propertyDefinitions: { Icon: null } }),
-    /unknown prop "propertyDefinitions" — every prop an? INSTANCE takes/,
+    /an INSTANCE doesn't take the prop "propertyDefinitions"; drop it\. Every prop an INSTANCE takes/,
   );
 
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -856,7 +856,7 @@ test("every binding refusal names the cause and writes nothing", async () => {
   // Per-type field legality, exactly as at construction — read off the LIVE node's type.
   await assert.rejects(
     edit(label.id, { componentPropertyReferences: { slot: "Trailing" } }),
-    /`slot` is not one of a TEXT's binding fields \(visible, text\)/,
+    /a TEXT doesn't take the binding field "slot": `slot` marks the FRAME that IS the slot .* A TEXT takes only "visible", "text"\./,
   );
   // A field drives one property TYPE.
   await assert.rejects(
@@ -866,7 +866,7 @@ test("every binding refusal names the cause and writes nothing", async () => {
   // An unknown name lists the component's own.
   await assert.rejects(
     edit(icon.id, { componentPropertyReferences: { visible: "Nope" } }),
-    /this component has no property "Nope"/,
+    /unknown property "Nope" — this component takes only /,
   );
   // A slot with no frame has nowhere to put an instance's content — delete the property instead.
   await assert.rejects(
@@ -900,7 +900,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
       text: "Hi",
       componentPropertyReferences: { text: "Nope" },
     }),
-    /this component has no property "Nope"/,
+    /unknown property "Nope" — this component takes only /,
   );
   // A slot is one hole, whether the second claim comes from the document or from this same tree.
   await assert.rejects(

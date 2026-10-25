@@ -12,7 +12,8 @@ import { concessionsOnNode, describeObligationTarget, obligationsInCall, resolve
 import { describeObligationRequest, observeObligation, type PendingStyleLink } from "./obligation-observers.js";
 import { describeInstanceWriteRule } from "./instance-write-policy.js";
 import { contradictingObligation } from "./call-obligations.js";
-import { FlcmError, type FlcmErrorKind } from "./flcm-error.js";
+import { FlcmError } from "./flcm-error.js";
+import type { FlcmErrorKind } from "../protocol.js";
 
 declare const VERIFIED_CALL: unique symbol;
 /**

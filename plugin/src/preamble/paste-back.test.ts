@@ -49,7 +49,7 @@ async function chipOnHolder() {
     references: (await live(comp)).children.map((child: any) => child.componentPropertyReferences),
   });
   return { comp, inst, holder, live, state, wire: async (value: unknown) => JSON.parse(JSON.stringify(
-    await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node),
+    await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node, "result"),
   )) };
 }
 

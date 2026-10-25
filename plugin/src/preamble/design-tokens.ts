@@ -140,8 +140,9 @@ function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {
   return items.filter((item) => !seen.has(key(item)) && !!seen.add(key(item)));
 }
 
-const LIBRARY_QUERY_KEYS: ReadonlySet<string> = new Set(["library", "collection", "type"]);
-const USED_QUERY_KEYS: ReadonlySet<string> = new Set(["used", "collection", "type"]);
+// Both loads' words in one set: `used` and `library` excluding each other is refused by name below,
+// so the unknown-word gate judges spelling alone and `use` is offered `used` whichever load was meant.
+const TOKEN_QUERY_KEYS: ReadonlySet<string> = new Set(["used", "library", "collection", "type"]);
 
 // Hand-rolled: the preamble is zod-free. Fails loud on anything it doesn't know, like every flcm verb.
 function parseTokenQuery(from: unknown): DesignTokenUsedQuery | DesignTokenLibraryQuery {
@@ -153,8 +154,7 @@ function parseTokenQuery(from: unknown): DesignTokenUsedQuery | DesignTokenLibra
   const used = "used" in query;
   if (used && query.used !== true) throw refuse("used must be true.");
   if (used && "library" in query) throw refuse("used and library are two different loads — pass one.");
-  const known = used ? USED_QUERY_KEYS : LIBRARY_QUERY_KEYS;
-  rejectUnknownKeys(query, known, "the query", { noun: "query key", hint: usage, reference: "values" });
+  rejectUnknownKeys(query, TOKEN_QUERY_KEYS, "the query", { noun: "query key", hint: usage, reference: "values" });
   if (!used && typeof query.library !== "string") throw refuse("library must be the library's name, as flcm.designTokens() lists it under libraries.");
   if (query.collection !== undefined && typeof query.collection !== "string") throw refuse("collection must be a collection name.");
   const types = used ? [...LISTED_VARIABLE_TYPES, ...LISTED_STYLE_TYPES] : [...LISTED_VARIABLE_TYPES];

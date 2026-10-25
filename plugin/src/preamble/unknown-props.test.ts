@@ -12,25 +12,25 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { render, edit, gradient, image, effects, find } from "./runtime.js";
 import { compileTree } from "./compile-tree.js";
 
-createFigmaMock();
+const figma = createFigmaMock();
 
 test("verbs reject an unknown top-level prop, naming it, the verb, and where the node type's props are listed", async () => {
   await assert.rejects(
-    render({ type: "FRAME", background: "#fff" } as never),
-    /flcm\.render: FRAME at spec: unknown prop "background" — every prop a FRAME takes is in the "props" section of the flcm reference\./,
+    render({ type: "FRAME", shimmer: true } as never),
+    /flcm\.render: FRAME at spec: unknown prop "shimmer" — every prop a FRAME takes is in the "props" section of the flcm reference\./,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "hi", textTransform: "upper" } as never),
-    /spec: unknown prop "textTransform" — every prop a TEXT takes/,
+    /spec: "textTransform" goes in textStyle: \{ textStyle: \{ textTransform: … \} \}\./,
   );
   await assert.rejects(
     render({ type: "RECTANGLE", radius: 4 } as never),
     /spec: unknown prop "radius" — did you mean "borderRadius"\? Every prop a RECTANGLE takes/,
   );
-  await assert.rejects(render({ type: "LINE", height: 10 }), /spec: unknown prop "height" — every prop a LINE takes/);
+  await assert.rejects(render({ type: "LINE", height: 10 }), /spec: a LINE doesn't take the prop "height"; drop it\. Every prop a LINE takes/);
   await assert.rejects(
     render({ type: "VECTOR", d: "M0 0 L1 1", borderRadius: 2 }),
-    /spec: unknown prop "borderRadius" — every prop a VECTOR takes/,
+    /spec: a VECTOR doesn't take the prop "borderRadius"; drop it\. Every prop a VECTOR takes/,
   );
   assert.throws(
     () => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never),
@@ -179,7 +179,55 @@ test("a short closed set is listed in full, since it is the whole answer", () =>
 
 test("a word another node type takes refuses at edit in the same shape as at create", async () => {
   await render({ type: "RECTANGLE", key: "box" });
-  const refusal = /unknown prop "fontSize" — every prop a RECTANGLE takes is in the "props" section of the flcm reference\./;
+  const refusal = /a RECTANGLE doesn't take the prop "fontSize"; drop it\. Every prop a RECTANGLE takes is in the "props" section of the flcm reference\./;
   await assert.rejects(edit("box", { fontSize: 12 } as never), refusal);
   await assert.rejects(render({ type: "RECTANGLE", fontSize: 12 } as never), refusal);
+});
+
+// The mistakes agents make most are real flcm words in the wrong place. Spelled against the gated set
+// alone they drew a wrong "fix" (lineHeight → minHeight), so the vocabulary places them first.
+test("a word a nested bag takes is sent there, at create and at edit, instead of spelled as a typo", async () => {
+  const toTextStyle = (word: string) => (err: Error) => {
+    assert.match(err.message, new RegExp(`"${word}" goes in textStyle: \\{ textStyle: \\{ ${word}: … \\} \\}\\.`));
+    assert.doesNotMatch(err.message, /did you mean/);
+    return true;
+  };
+  await assert.rejects(render({ type: "TEXT", text: "hi", lineHeight: 1.5 } as never), toTextStyle("lineHeight"));
+  await assert.rejects(render({ type: "TEXT", text: "hi", fontWeight: 700 } as never), toTextStyle("fontWeight"));
+  await render({ type: "TEXT", text: "hi", key: "copy" });
+  await assert.rejects(edit("copy", { lineHeight: 2 } as never), toTextStyle("lineHeight"));
+  await assert.rejects(
+    render({ type: "FRAME", padding: 8, gap: 4 } as never),
+    /spec: "padding" goes in layout: \{ layout: \{ padding: … \} \}\. "gap" goes in layout: \{ layout: \{ gap: … \} \}\.(?! Every)/,
+  );
+});
+
+test("a real word this node type doesn't take is refused as that, with the drop-it step", async () => {
+  await assert.rejects(
+    render({ type: "TEXT", text: "hi", strokeWidth: 1 } as never),
+    /spec: a TEXT doesn't take the prop "strokeWidth"; drop it\. Every prop a TEXT takes is in the "props" section/,
+  );
+  // A container layout word on a node that only sits in a flow is not sent to a layout it lacks.
+  await assert.rejects(render({ type: "RECTANGLE", padding: 4 } as never), /spec: a RECTANGLE doesn't take the prop "padding"; drop it\./);
+});
+
+test("a one-letter word is matched only whole, so a pad side's initial isn't 'corrected' to x", async () => {
+  await assert.rejects(render({ type: "FRAME", layout: { mode: "row", padding: { t: 4 } as never } }), (err: Error) => {
+    assert.match(err.message, /spec\.layout\.padding: unknown prop "t" — the props here are /);
+    assert.doesNotMatch(err.message, /did you mean/);
+    return true;
+  });
+});
+
+test("an edit-only type's words are pointed at the edit section, where they are listed", async () => {
+  const component = figma.createComponent();
+  figma.currentPage.appendChild(component);
+  await assert.rejects(edit(component.id, { text: "x" } as never), /a COMPONENT doesn't take the prop "text"; drop it\. Every prop a COMPONENT takes is in the "edit" section/);
+});
+
+test("CSS and Figma spellings are told the flcm word, at create and at edit alike", async () => {
+  await render({ type: "FRAME", key: "moved" });
+  await assert.rejects(edit("moved", { x: 4 } as never), /"x" is no flcm word: position is not spelled with bare x\/y — use `left`\/`top`/);
+  await assert.rejects(render({ type: "FRAME", y: 4 } as never), /"y" is no flcm word: position is not spelled with bare x\/y/);
+  await assert.rejects(render({ type: "TEXT", text: "hi", color: "#000" } as never), /"color" is no flcm word: .*`fill`/);
 });

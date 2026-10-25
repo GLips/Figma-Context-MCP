@@ -14,7 +14,7 @@ function setup() {
   const figma = createFigmaMock();
   (globalThis as any).__flcmHost = { runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false };
   return { figma, wire: async (value: unknown) =>
-    (await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node)) as any };
+    (await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node, "result")) as any };
 }
 
 test("read objects project wherever returned or logged; authored lookalikes and extracted path strings remain whole", async () => {

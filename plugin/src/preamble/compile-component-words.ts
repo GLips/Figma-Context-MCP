@@ -6,7 +6,7 @@
 // instance's property values, swap and override deltas, a component's property definitions under
 // edit, and the binding word. Document-blind like every compiler; which names exist is the gate's.
 
-import { keySet, WORD_GROUPS, EDIT_WORDS, BINDABLE_FIELDS, bindableFieldsOf, wordsOf } from "./vocabulary.js";
+import { keySet, WORD_GROUPS, EDIT_WORDS, BINDING_VOCABULARY, aNodeOfType, bindableFieldsOf, wordsOf } from "./vocabulary.js";
 import {
   WriteProps, WriteChild, WriteType, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding,
   ComponentPropertyDefinitionEdit,
@@ -174,17 +174,12 @@ function assertSlotContentShape(raw: unknown, at: string): void {
 // to say — the same split `componentProperties` takes.
 
 // The per-field legality half, shared by the create bag and the edit bag so a field on the wrong
-// node type reads the same either way. `what` is what the refusal calls the thing that can't bind
-// it — a compiler name at create ("TEXT"), the live node's type under edit ("a TEXT").
-function assertBindingFieldLegal(field: string, legal: readonly string[], where: string, what: string): void {
-  if (legal.indexOf(field) !== -1) return;
-  const entry: { owner?: string } | undefined = own(BINDABLE_FIELDS as Record<string, { owner?: string }>, field);
-  const owner = entry?.owner;
-  throw new FlcmError(
-    "authoring",
-    "`" + field + "` is not one of " + what + "'s binding fields (" + legal.join(", ") + ")" + (owner ? " — " + owner : "") + ".",
-    { path: where },
-  );
+// node type reads the same either way. `fields` holds the bag's claims only: what counts as absence
+// differs between the two (null unbinds under edit). `what` names the node that can't bind ("a TEXT").
+function assertBindingFieldsLegal(fields: readonly string[], legal: readonly string[], where: string, what: string): void {
+  rejectUnknownKeys(Object.fromEntries(fields.map((field) => [field, true])), new Set(legal), where, {
+    noun: "binding field", owner: what, reference: "components", vocabulary: BINDING_VOCABULARY,
+  });
 }
 
 export function compileBindingBag(raw: unknown, legal: readonly string[], type: string, at: string): ComponentPropertyBinding {
@@ -192,11 +187,12 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], type: 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new FlcmError("authoring", 'must be an object naming which component property drives which field, e.g. { text: "Label" } — got ' + JSON.stringify(raw) + ".", { path: where });
   }
+  // An explicitly-absent field is absence, not a claim.
+  assertBindingFieldsLegal(Object.keys(raw).filter((field) => (raw as Record<string, unknown>)[field] != null), legal, where, aNodeOfType(type));
   const out: Record<string, string> = {};
   for (const field of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[field];
-    if (value == null) continue; // an explicitly-absent field is absence, not a claim
-    assertBindingFieldLegal(field, legal, where, "a " + type);
+    if (value == null) continue;
     if (typeof value !== "string" || !value.trim()) {
       throw new FlcmError(
         "authoring",
@@ -217,18 +213,19 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], type: 
  * one is legal) is prepare's, against the owning component: component-edit.ts.
  *
  * `what` names the live node's type, since under edit the offending field belongs to a node, not to
- * a compiler: "`slot` is not one of a TEXT's binding fields".
+ * a compiler: "a TEXT doesn't take the binding field "slot"".
  */
 export function compileBindingEditBag(raw: unknown, legal: readonly string[], subject: string, what: string): Record<string, string | null> {
   const where = subject + ".componentPropertyReferences";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new FlcmError("authoring", 'must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(raw) + ".", { path: where });
   }
+  // An explicitly-undefined field is absence; `null` is the unbind, a claim judged like any other.
+  assertBindingFieldsLegal(Object.keys(raw).filter((field) => (raw as Record<string, unknown>)[field] !== undefined), legal, where, what);
   const out: Record<string, string | null> = {};
   for (const field of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[field];
-    if (value === undefined) continue; // an explicitly-undefined field is absence; `null` is the unbind
-    assertBindingFieldLegal(field, legal, where, what);
+    if (value === undefined) continue;
     if (value === null) {
       out[field] = null;
       continue;

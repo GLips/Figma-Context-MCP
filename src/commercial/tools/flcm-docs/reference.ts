@@ -307,47 +307,46 @@ function verbTable(): string {
 
 // ---- Sections. Each is addressable by id via get_flcm_reference(id); the whole set (in order) is the
 // full human doc. Bodies interleave generated tables with narrative fragments. ----
-interface Section {
-  id: FlcmReferenceSection;
+interface SectionContent {
   title: string;
   blurb: string; // one-liner for the menu a nameless call gets back
   body: (channel: DocsChannel) => string;
+}
+interface Section extends SectionContent {
+  id: FlcmReferenceSection;
 }
 
 // Inside a merged section, a fragment's own `###` subheadings sit one level under the section's `###`.
 const demoteHeadings = (md: string) => md.replace(/^### /gm, "#### ");
 
 // Ordered explanation → reference → recipes, so the full doc reads top-down and the first id is the
-// one every agent should fetch.
-const SECTIONS: Section[] = [
+// one every agent should fetch. Keyed by every section id the preamble's refusals may name, so a
+// missing, extra or misspelled section fails typecheck either way.
+const SECTION_CONTENT: Record<FlcmReferenceSection, SectionContent> = {
   // First, and named in the blank-call refusal, because it is the part that stops an agent being wrong
   // about what a spec IS — identity, copying, session lifetime. An agent that already knows enough to
   // name `verbs` or `components` never asks for a general overview, so the rules have to be reachable
   // by name.
-  {
-    id: "mental-model",
+  "mental-model": {
     title: "The mental model",
     blurb:
       "what a spec is, and the identity, copying, session and fidelity rules every other section assumes. Read this first",
     body: (channel) =>
       `${mentalModel(channel.sessionHowTo)}\n\n### Fidelity and scope\n\n${FIDELITY_AND_SCOPE}`,
   },
-  {
-    id: "layout",
+  layout: {
     title: "Layout and sizing",
     blurb:
       "where sizing differs from CSS: fixed/fill/hug/percent, constraints, text width, bounds and overflow",
     body: () => LAYOUT_MODEL,
   },
-  {
-    id: "reads",
+  reads: {
     title: "Reads and returned data",
     blurb:
       "what reads and returns hand back: get/find shape, using a read as a spec, elided, session.last, readOnlySource, warnings",
     body: () => READS,
   },
-  {
-    id: "verbs",
+  verbs: {
     title: "The verbs",
     blurb: "every verb, render and keys, placing/moving/removing nodes, and pages",
     body: () =>
@@ -359,8 +358,7 @@ const SECTIONS: Section[] = [
       `### Tree shape — placing, moving, removing\n\n${STRUCTURE_INTRO}\n\n${STRUCTURE_RULES}\n\n` +
       `### Pages\n\n${PAGES}`,
   },
-  {
-    id: "props",
+  props: {
     title: "Props by node",
     blurb: "every prop on every node type, with types",
     body: () =>
@@ -392,15 +390,13 @@ const SECTIONS: Section[] = [
       "named is a root-level override. `componentId` names the component in the props form, and swaps it under edit — see the components section.)\n\n" +
       `${propTable({ ...FIELD_GROUPS.swap, ...FIELD_GROUPS.instance })}`,
   },
-  {
-    id: "annotations",
+  annotations: {
     title: "Annotations",
     blurb: "reading and writing Figma's native layer annotations",
     body: (channel) =>
       `${propTable(FIELD_GROUPS.annotation)}\n\n${annotationsReference(channel.commentsHowTo)}`,
   },
-  {
-    id: "values",
+  values: {
     title: "Values — colors, gradients, images, effects, tokens, vector art",
     blurb:
       "the CSS subset, paint and flcm.gradient, flcm.image, flcm.effects, variable and style references, and svg/path vector art",
@@ -412,16 +408,14 @@ const SECTIONS: Section[] = [
       `### Variables and styles\n\n${TOKENS}\n\n` +
       `### Vector art (svg & path)\n\n${VECTOR_INTRO}`,
   },
-  {
-    id: "edit",
+  edit: {
     title: "edit() / editMany() — changing existing nodes",
     blurb: "partial deltas against live nodes, batching them atomically, and the rollback contract",
     body: () =>
       `${EDIT_INTRO}\n\n### Where edit differs from create\n\n${editExceptions()}\n\n` +
       `${EDIT_REMOVAL}\n\n${EDIT_RULES}\n\n${EDIT_MANY}`,
   },
-  {
-    id: "components",
+  components: {
     title: "Components — making and using them",
     blurb:
       "flcm.component / variants to make one; INSTANCE / edit / detach to stamp, override, swap, detach",
@@ -444,8 +438,7 @@ const SECTIONS: Section[] = [
       // refusal beside the rule it enforces, so nothing is listed twice.
       `${COMPONENTS_EDIT}\n\n${instanceWriteRulesSection()}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
-  {
-    id: "recipes",
+  recipes: {
     title: "Recipes",
     blurb:
       "how-tos by task: check what you built, build a screen, lay out a grid, copy from the canvas, make and use components, document operations",
@@ -457,7 +450,12 @@ const SECTIONS: Section[] = [
       ) +
       `\n\n### Move the viewport, selection and other document state\n\n${RAW_FIGMA}`,
   },
-];
+};
+
+// Insertion order is the canonical order: string keys keep it.
+const SECTIONS: Section[] = (
+  Object.entries(SECTION_CONTENT) as [FlcmReferenceSection, SectionContent][]
+).map(([id, content]) => ({ id, ...content }));
 
 const SECTION_IDS: readonly string[] = SECTIONS.map((s) => s.id);
 

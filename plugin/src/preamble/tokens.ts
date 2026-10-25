@@ -20,7 +20,7 @@
 import { sceneFigma as figma } from "./scene-access.js";
 import { FlcmError } from "./flcm-error.js";
 import { isTokenRef } from "./ir.js";
-import { closestWords } from "./validate.js";
+import { closestWords, rejectUnknownKeys } from "./validate.js";
 import type { VariableRef, StyleRef, TokenRef, Bindable } from "./ir.js";
 
 // ---- compile ----
@@ -72,20 +72,18 @@ function tokenIdentity(raw: unknown, token: "variable" | "style", word: string):
   );
 }
 
+// `value` is the literal a read's variable resolved to: accepted so a read pastes back, then ignored.
+const VARIABLE_REF_KEYS: ReadonlySet<string> = new Set(["variable", "value"]);
+
 /**
  * Compile a `{ variable }` input standing in for `word`. A read's `value` (the literal the variable
  * resolved to) is accepted and ignored, so a read pastes back as the binding it was.
  */
 export function compileVariableRef(input: { variable: unknown }, word: string, resolvedType: VariableType): VariableRef {
-  const extra = Object.keys(input).filter((k) => k !== "variable" && k !== "value");
-  if (extra.length) {
-    throw new FlcmError(
-      "authoring",
-      "a variable reference is { variable } (and a read's `value`) alone — drop " + extra.map((k) => "`" + k + "`").join(", ") + "." +
-        (resolvedType === "COLOR" ? ' For a bound solid with its own opacity or blend, write { type: "SOLID", color: { variable }, opacity, blendMode }.' : ""),
-      { path: word },
-    );
-  }
+  rejectUnknownKeys(input, VARIABLE_REF_KEYS, word, {
+    noun: "field", owner: "a variable reference", reference: "values",
+    hint: resolvedType === "COLOR" ? 'For a bound solid with its own opacity or blend, write { type: "SOLID", color: { variable }, opacity, blendMode }.' : undefined,
+  });
   return { token: "variable", ...tokenIdentity(input.variable, "variable", word), word, resolvedType };
 }
 

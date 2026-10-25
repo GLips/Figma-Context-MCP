@@ -124,6 +124,19 @@ test("a missing file fails naming the root, not a bare ENOENT", async () => {
   });
 });
 
+test("an asset root that is no directory sends the agent to the user, not to its own path", async () => {
+  await withRoot(async (root) => {
+    const notADirectory = join(root, "assets.txt");
+    await writeFile(notADirectory, "");
+    await assert.rejects(imageReaderFor(notADirectory)("logo.png"), (err: Error) => {
+      assert.match(err.message, /the asset root \(.*assets\.txt\) is not a directory/);
+      assert.match(err.message, /Report it to the user: the server's --asset-root/);
+      assert.doesNotMatch(err.message, /Check that the path/);
+      return true;
+    });
+  });
+});
+
 test("the canonical root is pinned once, so retargeting a root symlink can't move the boundary", async () => {
   await withRoot(async (outerRoot, outer) => {
     const realA = join(outer, "a");

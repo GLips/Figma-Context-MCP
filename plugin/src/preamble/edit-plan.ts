@@ -109,7 +109,7 @@ import {
 import { compileSwapTarget } from "./target.js";
 import type { EditDelta } from "./schema.js";
 import { wordPathsOf } from "./authored-words.js";
-import { EDIT_WORDS, WORD_GROUPS, editWordsOf } from "./vocabulary.js";
+import { EDIT_WORDS, WORD_GROUPS, aNodeOfType, editWordsOf, referenceSectionOfType } from "./vocabulary.js";
 
 const EDIT_KEYS: ReadonlySet<string> = EDIT_WORDS;
 
@@ -400,7 +400,7 @@ export function compileEditPlan(node: SceneNode, delta: EditDelta, subject: stri
   const changes = acceptAuthoringProps<EditDelta>(delta, { type: node.type, verb: "edit", known: legal, path: subject }) as EditDelta;
   // A delta of ONLY read-only words (`{ type }`) folds to nothing — same refusal as an empty object,
   // now that the prelude has run.
-  assertDeltaNotEmpty(changes, legal, subject, { owner: "a " + node.type, reference: "props" });
+  assertDeltaNotEmpty(changes, legal, subject, { owner: aNodeOfType(node.type), reference: referenceSectionOfType(node.type) });
   const instanceWords = takeInstanceEditWords(changes, subject);
   const componentWords = takeComponentEditWords(changes, subject);
   // Unconditional: an EMPTY component bag doesn't make `instanceWords`/`componentWords`, and it must

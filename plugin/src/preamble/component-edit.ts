@@ -34,7 +34,7 @@ import {
 } from "./component-properties.js";
 import { resolvePropertyName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, noDeclaringComponentError } from "./compile-component-words.js";
-import { bindableFieldsOf } from "./vocabulary.js";
+import { aNodeOfType, bindableFieldsOf } from "./vocabulary.js";
 import { instanceAncestorOf, editableComponentOwnerOf, variantSetOf, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
 import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
@@ -364,7 +364,7 @@ export function prepareComponentBindingEdit(
   const component = host ? null : editableComponentOwnerOf(node, false);
   // Inside an instance or outside every component a binding can't be written, so it must hold
   // already, as a pasted read's does (the finalizer checks it once the call lands).
-  if (!component && bindingsAllHold(node, compileBindingEditBag(raw, bindableFieldsOf(node.type), subject, "a " + node.type))) return { writes: [], owner: null };
+  if (!component && bindingsAllHold(node, compileBindingEditBag(raw, bindableFieldsOf(node.type), subject, aNodeOfType(node.type)))) return { writes: [], owner: null };
   if (host) {
     throw new FlcmError(
       "figma",
@@ -383,7 +383,7 @@ export function prepareComponentBindingEdit(
   }
   const owner = definitionOwnerOf(component);
   const definitions = propertyDefinitionsOf(owner);
-  const refs = compileBindingEditBag(raw, bindableFieldsOf(node.type), subject, "a " + node.type);
+  const refs = compileBindingEditBag(raw, bindableFieldsOf(node.type), subject, aNodeOfType(node.type));
   const live: Record<string, string> = node.componentPropertyReferences || {};
   const writes: ComponentBindingEditPlan["writes"] = [];
   const adds = addsOf?.(owner);

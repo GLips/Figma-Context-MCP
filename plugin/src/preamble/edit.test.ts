@@ -86,7 +86,7 @@ test("legality is per node type: a LINE takes no fill, exactly as LINE does", as
     assert.equal(err.kind, "authoring");
     assert.equal(err.path, "flcm.edit");
     assert.equal(err.node?.type, "LINE");
-    assert.match(err.message, /^flcm\.edit: LINE "LINE" \(id "[^"]+"\): unknown prop "fill" — every prop a LINE takes is in the "props" section of the flcm reference\./);
+    assert.match(err.message, /^flcm\.edit: LINE "LINE" \(id "[^"]+"\): a LINE doesn't take the prop "fill"; drop it\. Every prop a LINE takes is in the "props" section of the flcm reference\./);
     return true;
   });
   const node = await figma.getNodeByIdAsync(specNode(out, "rule").id);
@@ -100,14 +100,14 @@ test("a node type with no vocabulary of its own takes only the shared words, and
   // component-edit.test.ts.)
   const polygon = figma.createPolygon();
   figma.currentPage.appendChild(polygon);
-  await assert.rejects(edit(polygon.id, { fill: "#ff0000" }), /unknown prop "fill" — a POLYGON takes only "name", "opacity", /);
+  await assert.rejects(edit(polygon.id, { fill: "#ff0000" }), /a POLYGON doesn't take the prop "fill"; drop it\. A POLYGON takes only "name", "opacity", /);
   const handle = await edit(polygon.id, { name: "renamed", visible: false });
   assert.equal(polygon.name, "renamed");
   assert.equal(polygon.visible, false);
   assert.equal(handle.id, polygon.id);
   // SLICE has no blend mixin at all — opacity would be an undo step that changed nothing.
   const slice = figma.createSlice();
-  await assert.rejects(edit(slice.id, { opacity: 0.5 }), /unknown prop "opacity" — a SLICE takes only "name", "visible", "locked"\./);
+  await assert.rejects(edit(slice.id, { opacity: 0.5 }), /a SLICE doesn't take the prop "opacity"; drop it\. A SLICE takes only "name", "visible", "locked"\./);
 });
 
 test("an image fill in a delta fetches bytes through the host channel and stamps flcm/image", async () => {
