@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// A verb's authored words are verified once its last write has landed, the awaited style link
-// included: a word something else undid in that wait rolls the whole call back.
+// A verb's authored words are verified once its last write has landed, before its style links are
+// awaited: a word that didn't land rolls the whole call back with nothing able to join its undo step.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock, seedStyle } from "../../harness/figma-mock.mjs";
@@ -16,49 +16,39 @@ function setup() {
   return figma;
 }
 
-// The link lands as asked, and a write landing in its await (a human's, say) undoes the opacity.
-function undoOpacityDuringStyleLink(node: any): () => void {
-  const proto = Object.getPrototypeOf(node);
-  const link = proto.setFillStyleIdAsync;
-  proto.setFillStyleIdAsync = async function (this: any, id: string) {
-    await link.call(this, id);
-    this.opacity = 0.2;
-  };
-  return () => { proto.setFillStyleIdAsync = link; };
+// Figma lands any opacity written to `node` as at most 0.2, so an authored 0.5 doesn't land.
+function capOpacity(node: any): void {
+  let opacity = node.opacity;
+  Object.defineProperty(node, "opacity", { configurable: true, get: () => opacity, set: (v: number) => { opacity = Math.min(v, 0.2); } });
 }
 
 const UNREALIZED_OPACITY = /didn't realize 1 of its words, so it rolled back.*opacity: asked 0\.5, ended 0\.2/s;
 
-test("edit: an authored word undone during the style link rolls the call back, earlier calls kept", async () => {
+test("edit: an authored word that didn't land rolls the call back before its style link, earlier calls kept", async () => {
   const figma = setup();
   const other = await flcm.render({ type: "FRAME", width: 10, height: 10 });
   const target = await flcm.render({ type: "FRAME", width: 10, height: 10 });
   await flcm.edit(other.id, { name: "Kept" });
-  const restore = undoOpacityDuringStyleLink(await figma.getNodeByIdAsync(target.id));
-  try {
-    figma.undoLog.length = 0;
-    let handle: unknown;
-    await assert.rejects(async () => { handle = await flcm.edit(target.id, { fill: { style: "Brand/Primary" }, opacity: 0.5 }); }, UNREALIZED_OPACITY);
-    assert.equal(handle, undefined);
-    assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
-    assert.equal((await figma.getNodeByIdAsync(other.id)).name, "Kept");
-  } finally {
-    restore();
-  }
+  const node = await figma.getNodeByIdAsync(target.id);
+  capOpacity(node);
+  figma.undoLog.length = 0;
+  let handle: unknown;
+  await assert.rejects(async () => { handle = await flcm.edit(target.id, { fill: { style: "Brand/Primary" }, opacity: 0.5 }); }, UNREALIZED_OPACITY);
+  assert.equal(handle, undefined);
+  assert.equal(node.fillStyleId, "");
+  assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
+  assert.equal((await figma.getNodeByIdAsync(other.id)).name, "Kept");
 });
 
 test("clone: the copy's authored words are verified on the copy", async () => {
   const figma = setup();
-  const source = await flcm.render({ type: "FRAME", width: 10, height: 10 });
-  const restore = undoOpacityDuringStyleLink(await figma.getNodeByIdAsync(source.id));
-  try {
-    figma.undoLog.length = 0;
-    await assert.rejects(flcm.clone(source.id, { fill: { style: "Brand/Primary" }, opacity: 0.5 }), UNREALIZED_OPACITY);
-    // The mock's triggerUndo reverts nothing, so the rollback shows as the pop of this call's step.
-    assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
-  } finally {
-    restore();
-  }
+  const source = await live(figma, await flcm.render({ type: "FRAME", width: 10, height: 10 }));
+  const clone = source.clone;
+  source.clone = function (this: any) { const copy = clone.call(this); capOpacity(copy); return copy; };
+  figma.undoLog.length = 0;
+  await assert.rejects(flcm.clone(source.id, { fill: { style: "Brand/Primary" }, opacity: 0.5 }), UNREALIZED_OPACITY);
+  // The mock's triggerUndo reverts nothing, so the rollback shows as the pop of this call's step.
+  assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });
 
 // ---- geometry and inheritance one call reaches: each word lands as asked in either batch order ----
@@ -343,32 +333,15 @@ test("an override and the same sublayer by its own id asking different values ar
   assert.deepEqual(instanceBox.fills[0].color, { r: 0, g: 0, b: 1 });
 });
 
-test("a moved node's restated fill is owed as the px it carries into a free-form frame", async () => {
-  for (const undo of [false, true]) {
-    const figma = setup();
-    const column = await live(figma, await flcm.render({
-      type: "FRAME", name: "Column", width: 480, height: 400, layout: { mode: "column" },
-      children: [{ type: "FRAME", name: "Tile", width: "fill", height: 100 }],
-    } as never));
-    const staging = await live(figma, await flcm.render({ type: "FRAME", name: "Staging", left: 600, width: 900, height: 900 } as never));
-    const tile = named(column, "Tile");
-    const restore = undo ? (() => {
-      const proto = Object.getPrototypeOf(tile);
-      const link = proto.setFillStyleIdAsync;
-      proto.setFillStyleIdAsync = async function (this: any, id: string) { await link.call(this, id); this.resize(300, this.height); };
-      return () => { proto.setFillStyleIdAsync = link; };
-    })() : () => {};
-    try {
-      const move = flcm.append(staging.id, { id: tile.id, width: "fill", fill: { style: "Brand/Primary" } } as never);
-      if (!undo) {
-        await move;
-        assert.equal(tile.parent, staging);
-        assert.equal(tile.width, 480);
-      } else {
-        await assert.rejects(move, /width: asked "fill", ended 300/);
-      }
-    } finally {
-      restore();
-    }
-  }
+test("a moved node's restated fill keeps the px it carries into a free-form frame", async () => {
+  const figma = setup();
+  const column = await live(figma, await flcm.render({
+    type: "FRAME", name: "Column", width: 480, height: 400, layout: { mode: "column" },
+    children: [{ type: "FRAME", name: "Tile", width: "fill", height: 100 }],
+  } as never));
+  const staging = await live(figma, await flcm.render({ type: "FRAME", name: "Staging", left: 600, width: 900, height: 900 } as never));
+  const tile = named(column, "Tile");
+  await flcm.append(staging.id, { id: tile.id, width: "fill", fill: { style: "Brand/Primary" } } as never);
+  assert.equal(tile.parent, staging);
+  assert.equal(tile.width, 480);
 });

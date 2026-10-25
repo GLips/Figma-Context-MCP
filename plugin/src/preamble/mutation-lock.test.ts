@@ -15,7 +15,7 @@
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { enterMutatingVerb, mutationQueueIdle, retargetReplacedNode } from "./mutation-lock.js";
+import { enterMutatingVerb, mutationQueueIdle, retargetReplacedNode, UnrolledVerbError } from "./mutation-lock.js";
 import { recordObligations, type Obligation } from "./obligation.js";
 import { UnrealizedWordsError } from "./call-finalizer.js";
 import { committedVerbCount } from "./verb-error.js";
@@ -252,25 +252,45 @@ const opacityObligation = (node: SceneNode, literal: number): Obligation => ({
   writePoint: "appearance", carries: [{ prop: "opacity" }], writability: "writable", concessions: [],
 });
 
-test("a word undone after the awaited style link rolls the call back before any result is built", async () => {
+test("a word that didn't land fails before the style links are awaited, so nothing can join the step it rolls back", async () => {
   const node = figma.createRectangle();
   figma.currentPage.appendChild(node);
   await enterMutatingVerb("edit", noPrep, noGate, () => { node.name = "Kept"; return () => undefined; });
-  // A write landing during the link's await — a human's, or an un-awaited agent write.
-  node.setFillStyleIdAsync = async () => { node.opacity = 0.2; };
+  let linked = false;
+  node.setFillStyleIdAsync = async () => { linked = true; };
   let built = false;
   await assert.rejects(
     enterMutatingVerb("edit", noPrep, () => recordObligations([opacityObligation(node, 0.5)]), (_gated, span) => {
       node.opacity = 0.5;
       span.styleLinks.push({ node, slot: "fill", styleId: "S:brand" });
+      // A later write in the same call undoes the word.
+      node.opacity = 0.2;
       return () => { built = true; return "handle"; };
     }),
     (err: unknown) => err instanceof UnrealizedWordsError && /didn't realize 1 of its words.*opacity: asked 0\.5, ended 0\.2/s.test(err.message),
   );
+  assert.equal(linked, false);
   assert.equal(built, false);
   // The earlier verb's step is sealed before this one's; the trigger pops only this call's writes.
   assert.deepEqual(figma.undoLog, ["commit", "commit", "commit", "commit", "trigger"]);
   assert.equal(node.name, "Kept");
+});
+
+test("a link that fails after an edit joined the call's undo step says the call's writes remain", async () => {
+  const node = figma.createRectangle();
+  figma.currentPage.appendChild(node);
+  node.setFillStyleIdAsync = async () => {
+    figma.undoStepMerged = true;
+    throw new Error("style not found");
+  };
+  await assert.rejects(
+    enterMutatingVerb("edit", noPrep, noGate, (_gated, span) => {
+      node.opacity = 0.5;
+      span.styleLinks.push({ node, slot: "fill", styleId: "S:brand" });
+      return () => undefined;
+    }),
+    (err: unknown) => err instanceof UnrolledVerbError && /writes are still on the canvas.*style not found/s.test(err.message),
+  );
 });
 
 test("an obligation follows a node the call replaced, as every per-call accumulator does", async () => {

@@ -1523,10 +1523,18 @@ export function createFigmaMock() {
     root: { name: "Untitled", children: [page], setPluginData: (k, v) => page.setPluginData(k, v), getPluginData: (k) => page.getPluginData(k) },
     // Undo API: RECORDED, not emulated — real history semantics are the live probe's to ground
     // (scripts/probe-commit-undo.mjs). Tests assert the SEQUENCE of calls the verb scaffold makes
-    // (entry seal / success commit / failure commit+trigger), never that anything reverts.
+    // (entry seal / success commit / failure commit+trigger). The one thing a pop reverts is the
+    // lock's undo-step stamp, unless a test sets undoStepMerged: live, once an edit made in Figma
+    // joins a plugin's undo step, triggerUndo reverts none of that step (verified 2026-10-24).
     undoLog: [],
-    commitUndo() { this.undoLog.push("commit"); },
-    triggerUndo() { this.undoLog.push("trigger"); },
+    undoStepMerged: false,
+    _stampAtCommit: [],
+    commitUndo() { this.undoLog.push("commit"); this._stampAtCommit.push(page.getPluginData("flcm/undo-step")); },
+    triggerUndo() {
+      this.undoLog.push("trigger");
+      const before = this._stampAtCommit[this._stampAtCommit.length - 2];
+      if (!this.undoStepMerged && before !== undefined) page.setPluginData("flcm/undo-step", before);
+    },
     // A new page lands in the document, NOT under the current page — and is not switched to. Under
     // `documentAccess: dynamic-page` the switch is setCurrentPageAsync's job alone, which is the whole
     // trap flcm.page wraps: the two steps are separate, and only the first has happened here.

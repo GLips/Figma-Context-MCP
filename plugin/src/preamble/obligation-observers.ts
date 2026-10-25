@@ -18,6 +18,7 @@ import { normalizePathData } from "./path.js";
 import { AXES, layoutModeOf, type Axis } from "./layout-mode.js";
 import { readKey } from "./identity.js";
 import { fontHonoursWords } from "./fonts.js";
+import type { ApplySpan, StyleSlot } from "./apply-span.js";
 import {
   concessionsOnNode, describeObligationTarget, resolveObligationTarget,
   type BindableObligationRequest, type Obligation, type ObligationKind, type ObligationRequests, type PaintStackRequest,
@@ -31,6 +32,8 @@ export interface ObligationObserver<K extends ObligationKind, R> {
   /** In the agent's own spelling: 280, "62.5%", { variable: "color/brand" }. */
   describeRequest(request: ObligationRequests[K]): string;
   describeReading(reading: R): string;
+  /** A style-link kind only: the reading once `styleId`, queued by this call, is linked. */
+  linking?(reading: R, styleId: string): R;
 }
 
 export type ObligationObservation = { realized: true } | { realized: false; ended: string };
@@ -465,6 +468,7 @@ export const OBLIGATION_OBSERVERS: { readonly [K in ObligationKind]: ObligationO
     realizes: (reading, request) => reading.styleId === request.styleId && reading.valuesHeld,
     describeRequest: (request) => "{ style: " + JSON.stringify(request.styleName) + " }",
     describeReading: (reading) => (reading.styleId ? "the style " + JSON.stringify(reading.styleId) + (reading.valuesHeld ? "" : " with other values") : "no style"),
+    linking: (reading, styleId) => ({ ...reading, styleId }),
   },
   strokeWeight: {
     read: (node) => readFour(node, STROKE_SIDE_FIELDS, "strokeWeight", "strokeWeight"),
@@ -558,6 +562,7 @@ export const OBLIGATION_OBSERVERS: { readonly [K in ObligationKind]: ObligationO
     realizes: (held, request) => held === request.styleId,
     describeRequest: (request) => "{ style: " + JSON.stringify(request.styleName) + " }",
     describeReading: (reading) => (typeof reading === "symbol" ? "mixed text styles" : reading ? "the style " + JSON.stringify(reading) : "no style"),
+    linking: (_reading, styleId) => styleId,
   },
   lineClamp: {
     read: (node: any) => ({ truncation: node.textTruncation, maxLines: node.maxLines }),
@@ -815,14 +820,31 @@ export const OBLIGATION_OBSERVERS: { readonly [K in ObligationKind]: ObligationO
 };
 
 /** Whether the canvas holds the obligation now. A target the call no longer finds never does. */
-export function observeObligation(obligation: Obligation): ObligationObservation {
+/** A style link this call queued but hasn't written yet: links are async-only, so they land last. */
+export type PendingStyleLink = ApplySpan["styleLinks"][number];
+
+/**
+ * Whether the canvas holds `obligation` now. With `pendingLinks`, a style-link word counts as linked
+ * when this call queued that exact link: a link writes only the style id onto values apply already
+ * wrote, so nothing else it could change is observable before it runs.
+ */
+export function observeObligation(obligation: Obligation, pendingLinks?: readonly PendingStyleLink[]): ObligationObservation {
   const node = resolveObligationTarget(obligation.target);
   if (!node) return { realized: false, ended: "missing" };
   // Erased to `unknown` once, here: the table pairs each kind's reading with its own observer.
   const observer = OBLIGATION_OBSERVERS[obligation.kind] as unknown as ObligationObserver<ObligationKind, unknown>;
-  const reading = observer.read(node, obligation.request);
+  const live = observer.read(node, obligation.request);
+  const queued = observer.linking && pendingLinks ? queuedStyleIdOf(obligation, node, pendingLinks) : undefined;
+  const reading = queued === undefined ? live : observer.linking!(live, queued);
   if (observer.realizes(reading, obligation.request, concessionsOnNode(node))) return { realized: true };
   return { realized: false, ended: observer.describeReading(reading) };
+}
+
+function queuedStyleIdOf(obligation: Obligation, node: SceneNode, pendingLinks: readonly PendingStyleLink[]): string | undefined {
+  const slot: StyleSlot = obligation.kind === "textStyleLink" ? "text" : (obligation as Obligation<"styleLink">).request.slot;
+  let styleId: string | undefined;
+  for (const link of pendingLinks) if (link.node === node && link.slot === slot) styleId = link.styleId;
+  return styleId;
 }
 
 /** The obligation's request in the agent's spelling, for a failure message. */

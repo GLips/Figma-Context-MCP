@@ -8,23 +8,35 @@
 // realizes every authored word or applies nothing.
 
 import { concessionsOnNode, describeObligationTarget, obligationsInCall, resolveObligationTarget, type Obligation } from "./obligation.js";
-import { describeObligationRequest, observeObligation } from "./obligation-observers.js";
+import { describeObligationRequest, observeObligation, type PendingStyleLink } from "./obligation-observers.js";
 import { describeInstanceWriteRule } from "./instance-write-policy.js";
 import { contradictingObligation } from "./call-obligations.js";
+
+declare const VERIFIED_CALL: unique symbol;
+/**
+ * The call's queued style links, once every obligation has been verified: the lock's point of no
+ * return. Only the finalizer mints it and only linking takes it, so nothing that can fail the call
+ * for what it wrote can be placed after the await the links need.
+ */
+export type VerifiedStyleLinks = readonly PendingStyleLink[] & { readonly [VERIFIED_CALL]: true };
 
 /** A call whose writes landed but left authored words unrealized; the lock rolls it back. */
 export class UnrealizedWordsError extends Error {}
 
 const LISTED_WORDS = 20;
 
-/** Synchronous by design: nothing may land between this check and the lock's success commit. */
-export function finalizeMutatingCall(verb: string): void {
+/**
+ * Runs before the style-link await, with the links still queued, so a call that fails rolls back
+ * with no await between its first write and the undo: an edit made in Figma during an await joins
+ * the call's undo step, and the rollback then reverts nothing.
+ */
+export function finalizeMutatingCall(verb: string, pendingLinks: readonly PendingStyleLink[]): VerifiedStyleLinks {
   const subject = "flcm." + verb;
   const lines: string[] = [];
   let unrealized = 0;
   const all = obligationsInCall();
   for (const obligation of all) {
-    const seen = observeObligation(obligation);
+    const seen = observeObligation(obligation, pendingLinks);
     if (seen.realized) continue;
     unrealized++;
     if (lines.length === LISTED_WORDS) continue;
@@ -35,7 +47,7 @@ export function finalizeMutatingCall(verb: string): void {
         ": asked " + describeObligationRequest(obligation) + ", ended " + seen.ended + whyOf(obligation, all, subject) + ".",
     );
   }
-  if (unrealized === 0) return;
+  if (unrealized === 0) return pendingLinks as VerifiedStyleLinks;
   if (unrealized > LISTED_WORDS) lines.push("  and " + (unrealized - LISTED_WORDS) + " more.");
   throw new UnrealizedWordsError(
     subject + ": this call didn't realize " + unrealized + " of its words, so it rolled back and nothing was applied.\n" + lines.join("\n"),

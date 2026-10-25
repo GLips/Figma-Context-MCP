@@ -42,7 +42,7 @@ import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js
 import { settleApplySpan } from "./bridge.js";
 import { recordCommittedVerb } from "./verb-error.js";
 import { beginObligationLedger, retargetObligationNode } from "./obligation.js";
-import { finalizeMutatingCall } from "./call-finalizer.js";
+import { finalizeMutatingCall, type VerifiedStyleLinks } from "./call-finalizer.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -144,24 +144,27 @@ function refuseIfCancelled(verb: string): void {
  *   ApplySpan (apply-span.ts) and writes the plans. Each field is decided at its write point
  *   (write-point.ts): a word the node already holds there is skipped, and the rest is re-authorized
  *   against the node as it stands then. It returns a BUILDER for the verb's result, not the result:
- *   a handle measures geometry, and the geometry is final only after the finalizer.
+ *   a handle measures geometry, and the geometry is final only after the style links.
  *
- *   finalize — after apply, the span's settle and the style links: observe every obligation, and
- *   fail the call if any authored word didn't land as asked (call-finalizer.ts). Only then is the
- *   result built, and nothing awaits between the check and the commit.
+ *   finalize — after apply and the span's settle, BEFORE the style links: observe every obligation
+ *   (a queued link counts as linked) and fail the call if any authored word didn't land as asked
+ *   (call-finalizer.ts). So every failure flcm can know of rolls back with no await behind it.
  *
- *     entry seal → stamp → apply → settle span → style links → finalize → build → success commit   (one undo step)
+ *     entry seal → stamp → apply → settle span → finalize → style links → build → success commit   (one undo step)
  *     entry seal → stamp → any of those throws → commit + trigger (seal the partial writes, pop that step)
  *
  * gate and apply are SYNCHRONOUS BY TYPE, and so is the builder: none can suspend, so nothing can
  * interleave between a gate's read, the seal, and apply's writes. Anything a verb wants to await
  * belongs in prepare.
  *
- * The ONE await inside the sealed span is flushStyleLinks: linking a style is async-only under
+ * The ONE await inside the sealed span is linkVerifiedStyles: linking a style is async-only under
  * dynamic-page (the sync setters throw). It writes only links apply decided, onto nodes already
  * holding the style's values. While it suspends, a human edit or un-awaited agent figma.* writes
- * can land inside this verb's undo step — the price of the link. The finalizer runs after it, so a
- * write there that undoes an authored word fails the call rather than being reported as success.
+ * can land inside this verb's undo step — the price of the link — and once one has, Figma's undo
+ * reverts none of the step (live-verified 2026-10-24). Hence the finalizer runs before it: only a
+ * link that throws can fail the verb after the await, and that rollback is checked by the stamp
+ * (UnrolledVerbError). An edit made during the await that changes an authored word wins; the
+ * result, built after it, shows it.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
  * the last COMMITTED step and swallows uncommitted trailing writes with it (hand-verified
@@ -213,8 +216,8 @@ export function retargetReplacedNode(span: ApplySpan, from: any, to: any): void 
   warnings.retargetNode(from.id, to.id, verbWarningCheckpoint);
 }
 
-async function flushStyleLinks(span: ApplySpan): Promise<void> {
-  for (const { node, slot, styleId } of span.styleLinks.splice(0)) {
+async function linkVerifiedStyles(links: VerifiedStyleLinks): Promise<void> {
+  for (const { node, slot, styleId } of links) {
     if (slot === "fill") await node.setFillStyleIdAsync(styleId);
     else if (slot === "stroke") await node.setStrokeStyleIdAsync(styleId);
     else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
@@ -223,9 +226,24 @@ async function flushStyleLinks(span: ApplySpan): Promise<void> {
 }
 
 const UNDO_STEP_STAMP_KEY = "flcm/undo-step";
-function stampUndoStep(): void {
-  const previous = figma.root.getPluginData(UNDO_STEP_STAMP_KEY);
-  figma.root.setPluginData(UNDO_STEP_STAMP_KEY, previous === "1" ? "0" : "1");
+function stampUndoStep(): string {
+  const stamp = figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === "1" ? "0" : "1";
+  figma.root.setPluginData(UNDO_STEP_STAMP_KEY, stamp);
+  return stamp;
+}
+
+/**
+ * A failed verb whose rollback didn't take: an edit made in Figma while the verb awaited its style
+ * links joined its undo step, and Figma then undid none of it. Its writes are still on the canvas.
+ */
+export class UnrolledVerbError extends Error {
+  constructor(verb: string, cause: unknown) {
+    super(
+      "flcm." + verb + " failed after it wrote, and rolling it back didn't work: an edit made in Figma while it linked styles " +
+        "joined its undo step, so its writes are still on the canvas. Undo in Figma reverts them together with that edit. " +
+        "The failure: " + (cause instanceof Error ? cause.message : String(cause)),
+    );
+  }
 }
 
 export function enterMutatingVerb<P, G, T>(
@@ -258,7 +276,7 @@ export function enterMutatingVerb<P, G, T>(
       // Outside the rollback-protected block on purpose: a stamp that fails to write has put
       // nothing of this verb's on the canvas, and a triggerUndo here would be exactly the
       // overreach into the previous step the stamp exists to prevent.
-      stampUndoStep();
+      const stamp = stampUndoStep();
       const warningCheckpoint = warnings.records.length;
       verbWarningCheckpoint = warningCheckpoint;
       try {
@@ -270,10 +288,10 @@ export function enterMutatingVerb<P, G, T>(
         // The backstop: whatever geometry the verb didn't settle itself, before any style links.
         settleApplySpan(span);
         traceVerb("verb-applied", verb);
-        await flushStyleLinks(span);
-        // No await from here to the commit: what the finalizer verified is what the result reports.
+        // Before the await on purpose: a failure here rolls back over writes nothing else has touched.
         concedeSizeBoundClamps();
-        finalizeMutatingCall(verb);
+        const verified = finalizeMutatingCall(verb, span.styleLinks);
+        await linkVerifiedStyles(verified);
         const result = build();
         figma.commitUndo();
         recordCommittedVerb();
@@ -286,7 +304,10 @@ export function enterMutatingVerb<P, G, T>(
         warnings.discardFrom(warningCheckpoint);
         figma.commitUndo();
         // Explicit clone compensation already restored its writes; undo would reverse that cleanup.
-        if (!(err instanceof Error && compensatedFailures.has(err))) figma.triggerUndo();
+        if (err instanceof Error && compensatedFailures.has(err)) throw err;
+        figma.triggerUndo();
+        // The stamp is this step's first write, so it reverts only if the whole step did.
+        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) throw new UnrolledVerbError(verb, err);
         throw err;
       }
     } catch (err) {
