@@ -839,6 +839,35 @@ test("the frame a component replaced is a node named by its id: collapsed when l
   assert.match(returned.errors!, /removed node \(id "[^"]+"\) at return value\.old: your code returned a live Figma node/);
 });
 
+test("Figma is never asked about an id it doesn't hold: a node removed in this run, or a look-alike's", async () => {
+  // Live, getNodeByIdAsync stalls 10s and then throws for both.
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const figma = createFigmaMock();
+  const lookup = figma.getNodeByIdAsync.bind(figma);
+  const asked: string[] = [];
+  figma.getNodeByIdAsync = (id: string) => (asked.push(id), lookup(id));
+  const h = host(figma);
+  await h.connect(1);
+  const run = await execute(h, `const f = figma.createFrame(); f.remove(); class Ref { constructor() { this.id = "999999:1"; } }
+    console.log(f, new Ref()); return { id: f.id, ref: new Ref() };`);
+  assert.equal(run.errors, null);
+  assert.deepEqual(asked, []);
+  assert.deepEqual([...run.console], [`[log] {"id":"${run.result.id}","removed":true} {"id":"999999:1"}`]);
+});
+
+test("a node logged live and removed right after is still logged as a node", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const figma = createFigmaMock();
+  // Live, Figma answers null for a node removed while it was being asked.
+  const lookup = figma.getNodeByIdAsync.bind(figma);
+  figma.getNodeByIdAsync = async (id: string) => { const node = await lookup(id); return node?.removed ? null : node; };
+  const h = host(figma);
+  await h.connect(1);
+  const run = await execute(h, `const f = figma.createFrame(); f.name = "Card"; console.log(f); f.remove(); return f.id;`);
+  assert.equal(run.errors, null);
+  assert.deepEqual([...run.console], [`[log] {"id":"${run.result}","name":"Card","type":"FRAME"}`]);
+});
+
 test("a logged node reports the name it had when logged, not one it was given afterwards", async () => {
   const { createFigmaMock } = await import("../harness/figma-mock.mjs");
   const h = host(createFigmaMock());

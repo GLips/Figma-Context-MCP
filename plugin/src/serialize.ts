@@ -14,7 +14,6 @@
 // loudly, teaching the id pattern. Everything else — a render Handle, a read POJO, an agent's own
 // data, whatever its fields — round-trips WHOLE.
 
-import { isNodeIdShaped } from "@framelink/core";
 import { isPlainData } from "./preamble/plain-data.js";
 import type { EgressChannel } from "./preamble/egress.js";
 import { FlcmError } from "./preamble/flcm-error.js";
@@ -38,12 +37,10 @@ function readNodeIdentity(candidate: NodeCandidate): NodeIdentity {
   return { id: candidate.id, name: typeof candidate.name === "string" ? candidate.name : undefined, type: candidate.type };
 }
 
-// Figma is asked only about an object that could be a node. Plain data never is, and getNodeByIdAsync
-// stalls ~10s and then throws on an id that is not node-shaped (a style's, a variable's).
+// Figma is asked only about an object that could be a node: plain data never is. Which candidates
+// are worth a lookup at all is the IsFigmaNode's to know.
 function isNodeCandidate(value: object): value is NodeCandidate {
-  if (isPlainData(value)) return false;
-  const id = (value as { id?: unknown }).id;
-  return typeof id === "string" && isNodeIdShaped(id);
+  return !isPlainData(value) && typeof (value as { id?: unknown }).id === "string";
 }
 
 // The agent's own value contains itself; only it can break the cycle.
