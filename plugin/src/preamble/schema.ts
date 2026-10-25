@@ -226,7 +226,7 @@ const SIZE_FIELDS = fieldsFor(WORD_GROUPS.size)({
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
     z.union([z.number(), z.string(), variable]),
-    '"N%" is of the parent\'s realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug".',
+    '"N%" is of the parent\'s actual size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug".',
     'number | "Npx" | "N%" | "fill" | "hug" | { variable }',
   ),
   height: prop(

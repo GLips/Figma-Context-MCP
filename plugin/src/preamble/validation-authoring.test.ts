@@ -30,11 +30,11 @@ test("aliases normalize compilers and edits without changing canonical output", 
   assert.equal(node.children[0].fontSize, 32);
   await assert.rejects(
     render({ type: "FRAME", clip: false, clipsContent: true }),
-    /conflicting clipsContent and clip/,
+    /clip: clipsContent and clip give different values/,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "x", fontSize: 12, textStyle: { fontSize: 13 } }),
-    /conflicting fontSize and textStyle.fontSize/,
+    /textStyle\.fontSize: fontSize and textStyle\.fontSize give different values/,
   );
   await assert.rejects(edit(node.id, { fontSize: 12 }), /fontSize is not supported/);
 });
@@ -65,7 +65,7 @@ test("native grid aliases compose across scopes and normalize through every writ
   assert.equal(edited.children![0].layout!.gridColumn, "1 / span 2");
   assert.equal(edited.children![0].layout!.justifySelf, "start");
   assert.equal(edited.children![0].layout!.alignSelf, "center");
-  await assert.rejects(edit(child, { gridColumnAnchorIndex: 0, layout: { gridColumn: "2" } }), /conflicting/);
+  await assert.rejects(edit(child, { gridColumnAnchorIndex: 0, layout: { gridColumn: "2" } }), /layout\.gridColumn: gridColumnAnchorIndex\/gridColumnSpan and layout\.gridColumn give different values/);
   await assert.rejects(edit(child, { gridColumnAnchorIndex: -1 }), /non-negative integer/);
 });
 
@@ -89,7 +89,7 @@ test("regex searches preserve flags and caller lastIndex, strings remain literal
   assert.equal((await find({ name: "" })).length, (await find()).length);
   assert.equal((await findOne({ name: /^Copy$/ })).name, "Copy");
   assert.equal((await find({ name: /copy/i }, (n) => n.type === "TEXT")).length, 2);
-  await assert.rejects(find({ name: 12 as never }), /name must be a string.*RegExp/);
+  await assert.rejects(find({ name: 12 as never }), /name: must be a string.*RegExp/);
 });
 
 test("insertion inherits selected component layout; non-auto controls reject before writes", async () => {
@@ -138,12 +138,12 @@ test("baseline authors and edits rows and rejects columns before writes", async 
   assert.equal(node.counterAxisAlignItems, "BASELINE");
   await assert.rejects(
     edit(node.id, { layout: { mode: "column", alignItems: "baseline" } }),
-    /baseline.*requires/,
+    /alignItems "baseline" needs layout\.mode "row"/,
   );
   assert.equal(node.layoutMode, "HORIZONTAL");
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "column", alignItems: "baseline" } }),
-    /baseline.*requires/,
+    /alignItems "baseline" needs layout\.mode "row"/,
   );
 });
 
@@ -182,7 +182,7 @@ test("selected variants and slot content inherit resolved auto layout", async ()
       componentProperties: { Mode: "Plain" },
       layout: { alignItems: "baseline" },
     }),
-    /baseline.*requires/,
+    /alignItems "baseline" needs layout\.mode "row"/,
   );
   const holder = await component(
     {

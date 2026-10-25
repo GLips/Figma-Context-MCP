@@ -30,6 +30,7 @@ import type { EditDelta } from "./schema.js";
 import { resolveInstanceMains, type InstanceMains } from "./operation-schedule.js";
 import { liveSublayerId } from "@framelink/core";
 import { FlcmError, locateFailure } from "./flcm-error.js";
+import { showValue } from "./validate.js";
 
 /** What a tree's prepare loaded, for its gate to finish: the resources, plus the targets its instances name. */
 export interface LoadedTreeResources extends LoadedResources {
@@ -111,25 +112,25 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
  * compileOverride); the tree's own texts need no such proof, since their fonts are authored, not
  * live. The plans the build walk consumes are these, never prepare's.
  */
-export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, subject: string, exposure: ExposureContext = {}): RenderResources {
+export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, path: string, exposure: ExposureContext = {}): RenderResources {
   assertExposureTree(tree, exposure);
   assertBuiltInteriorLegal(tree);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, gate: loaded });
-  return gatedRenderResources(loaded, needs.plans, [loaded.live], subject, exposure.destination);
+  return gatedRenderResources(loaded, needs.plans, [loaded.live], path, exposure.destination);
 }
 
 // The apply span's resources: what prepare loaded, the instance plans, the live nodes of `trees`
 // gated with their schedule made, and how the walk records what each node it builds owes.
-function gatedRenderResources(loaded: LoadedResources, instances: InstancePlans, trees: readonly LoadedLiveTree[], subject: string, destination?: BaseNode): RenderResources {
+function gatedRenderResources(loaded: LoadedResources, instances: InstancePlans, trees: readonly LoadedLiveTree[], path: string, destination?: BaseNode): RenderResources {
   const gate = { fonts: loaded.fonts, tokens: loaded.tokens };
   const resources: RenderResources = {
     ...gate, images: loaded.images, instances, live: new Map(),
     recordBuiltWords: (wn, node, parent, stretched) => {
-      recordObligations(obligationsOnTarget(deriveBuiltNodeObligations(wn, node, gate, parent, instances.get(wn)), { node }, wn.sourcePath ?? subject));
+      recordObligations(obligationsOnTarget(deriveBuiltNodeObligations(wn, node, gate, parent, instances.get(wn)), { node }, wn.sourcePath ?? path));
       if (stretched) recordObligations(obligationsOnTarget(deriveBuiltStretchObligations(stretched.axis), { node }, stretched.by));
     },
   };
-  const { nodes, landing } = gateLiveTrees(trees, resources, subject, destination);
+  const { nodes, landing } = gateLiveTrees(trees, resources, path, destination);
   return nodes.size ? { ...resources, live: nodes, liveLanding: landing } : resources;
 }
 
@@ -189,14 +190,17 @@ export interface LoadedResources {
  * The apply span's resources: what stage 3 loaded, plus the instance plans the gate made for the
  * slot content this verb builds — every entry's, merged, since a batch walks its content once.
  */
-export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[], subject: string): RenderResources {
+export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[], path: string): RenderResources {
   const instances = new Map<WriteNode, InstancePlan>();
   for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  return gatedRenderResources(loaded, instances, loaded.liveTrees ?? [], subject);
+  return gatedRenderResources(loaded, instances, loaded.liveTrees ?? [], path);
 }
 
-function assertSceneNode(node: BaseNode): asserts node is SceneNode {
-  if (node.type === "PAGE" || node.type === "DOCUMENT") throw new FlcmError("authoring", "a page or document cannot be placed as a scene node.");
+function assertSceneNode(node: BaseNode, path: string): asserts node is SceneNode {
+  if (node.type !== "PAGE" && node.type !== "DOCUMENT") return;
+  throw new FlcmError("authoring", "an id in a spec names a layer to place, and this is a " + node.type.toLowerCase() + ", which can't be placed. Name a layer's id instead.", {
+    path: path + ".id", node: { type: node.type, name: node.name, id: node.id },
+  });
 }
 
 // Live nodes whose spec parent this verb builds: a new node's children, or a new instance's slot
@@ -213,35 +217,46 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
     if (ref.liveId === undefined) continue;
     try {
       const node = await resolveTarget({ id: ref.liveId });
-      assertSceneNode(node);
-      if (ref.authoring.svg !== undefined) throw new FlcmError("authoring", "svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
-      if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) throw new FlcmError("authoring", "type " + ref.source.type + " does not match live " + node.type + ".");
+      assertSceneNode(node, ref.sourcePath);
+      const site = { node: { type: node.type, name: node.name, id: node.id } };
+      if (ref.authoring.svg !== undefined) {
+        throw new FlcmError("authoring",
+          "svg can't change a layer that already exists: importing markup can change its layer types and ids. Drop `svg` to move this layer by id, or drop the id to import new artwork.",
+          { ...site, path: ref.sourcePath + ".svg" },
+        );
+      }
+      if (ref.source.type !== undefined && ref.source.type !== "IMAGE-SVG" && ref.source.type !== node.type) {
+        throw new FlcmError("authoring", "this layer is a " + node.type + ", not a " + ref.source.type + ". Drop `type`, or check the id.", { ...site, path: ref.sourcePath + ".type" });
+      }
       live.push({ ref, node });
     } catch (cause) { throw locateFailure(cause, { path: ref.sourcePath }); }
   }
   for (const { ref, node } of live) {
     const at = ref.sourcePath;
+    const site = { node: { type: node.type, name: node.name, id: node.id } };
     try {
       const { key, d, vectorPaths, componentPropertyReferences, ...delta } = ref.authoring;
-      const refs = componentPropertyReferences === undefined ? undefined : compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), at);
+      const refs = componentPropertyReferences === undefined ? undefined : compileBindingBag(componentPropertyReferences, bindableFieldsOf(node.type), node.type, at);
       let pathData: VectorPaths | undefined;
       if (d !== undefined) {
-        if (node.type !== "VECTOR") throw new FlcmError("authoring", "d is a VECTOR geometry word.");
-        if (typeof d !== "string" || !d.trim()) throw new FlcmError("authoring", "d must be a non-empty SVG path string.");
-        pathData = [{ data: normalizePathData(d), windingRule: "NONZERO" }];
+        if (node.type !== "VECTOR") throw new FlcmError("authoring", "d sets a VECTOR's geometry, and this layer is a " + node.type + ". Drop d.", { ...site, path: at + ".d" });
+        if (typeof d !== "string" || !d.trim()) throw new FlcmError("authoring", "d must be a non-empty SVG path string — got " + showValue(d) + ".", { ...site, path: at + ".d" });
+        try { pathData = [{ data: normalizePathData(d), windingRule: "NONZERO" }]; }
+        catch (cause) { throw locateFailure(cause, { ...site, path: at + ".d" }); }
       }
       if (vectorPaths !== undefined) {
-        if (node.type !== "VECTOR" || d !== undefined) throw new FlcmError("authoring", "vectorPaths requires a VECTOR and cannot be combined with d.");
-        pathData = normalizeVectorPaths(vectorPaths);
+        if (node.type !== "VECTOR") throw new FlcmError("authoring", "vectorPaths sets a VECTOR's geometry, and this layer is a " + node.type + ". Drop vectorPaths.", { ...site, path: at + ".vectorPaths" });
+        if (d !== undefined) throw new FlcmError("authoring", "vectorPaths and d both set the geometry. Give one of them.", { ...site, path: at + ".vectorPaths" });
+        pathData = normalizeVectorPaths(vectorPaths, at + ".vectorPaths");
       }
-      if (key !== undefined && typeof key !== "string") throw new FlcmError("authoring", "key must be a string.");
+      if (key !== undefined && typeof key !== "string") throw new FlcmError("authoring", "key must be a string — got " + showValue(key) + ".", { ...site, path: at + ".key" });
       const changes = delta as EditDelta;
       const hint = Object.keys(delta).some(k => delta[k] !== undefined) ? compileEditPlan(node, changes, at) : undefined;
       const targets = createResolvedTargets();
       const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
       const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
       entries.set(ref, { ref, node, changes, key, refs, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(ref) });
-    } catch (cause) { throw locateFailure(cause, { path: at }); }
+    } catch (cause) { throw locateFailure(cause, { ...site, path: at }); }
   }
   const prepared = [...entries.values()];
   let dependencies = NO_READ_DEPENDENCIES;

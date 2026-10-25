@@ -20,7 +20,7 @@ import { render, append,
   remove,
   clone,
   measure,
-  replace, } from "./structure.js";
+  replace, } from "./runtime.js";
 import { get } from "./read.js";
 import { readKey } from "./identity.js";
 import { FlcmError } from "./flcm-error.js";
@@ -357,7 +357,7 @@ test("prepare rejects a non-container destination, a cycle, and a hand-built nod
     append("row", { type: "FRAME", children: [{ type: "RECTANGLE", fills: [] }] } as never),
     /children\[0\].*fills/,
   );
-  await assert.rejects(append("row", [] as never), /plain node spec/);
+  await assert.rejects(append("row", [] as never), /must be a node spec object/);
   assert.deepEqual(names(row), ["RECTANGLE", "Frame"]);
   assert.deepEqual(figma.undoLog, before);
 });
@@ -442,15 +442,18 @@ test("an instance's CHILD LIST is closed, but the instance itself is an ordinary
   const dest = await render({ type: "FRAME", key: "dest", width: 100, height: 100 });
   await assert.rejects(
     append(instance.id, { type: "RECTANGLE" }),
-    /inside component instance "Card instance"/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "figma" && err.node?.id === instance.id &&
+      /^this is an instance, and Figma won't let a plugin change an instance's child list/.test(err.reason),
   );
   await assert.rejects(
     append(instance.children[0].id, { type: "RECTANGLE" }),
-    /inside component instance "Card instance"/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "figma" && err.node?.id === instance.children[0].id &&
+      /inside INSTANCE "Card instance"/.test(err.reason),
   );
   await assert.rejects(
     append("dest", { id: instance.children[0].id }),
-    /cannot move a component instance/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "figma" && err.node?.id === instance.children[0].id &&
+      /won't let a plugin move an instance's sublayer/.test(err.reason),
   );
   // …and the other half of the rule: Figma freezes an instance's CHILDREN, not the instance, which
   // is a normal child of its own parent. Moving and deleting one are everyday operations.
@@ -601,7 +604,8 @@ test("replace removal failure stays inside one rollback boundary", async () => {
   figma.undoLog.length = 0;
   await assert.rejects(
     replace("replacement-failure", { type: "RECTANGLE", width: 30 }),
-    /rolled back.*entry seal/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "figma" && err.call === "flcm.replace" && err.node?.id === target.id &&
+      /Figma refused a change to this layer: "injected remove failure"/.test(err.reason) && /Nothing from this call was kept/.test(err.message),
   );
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });
@@ -615,7 +619,7 @@ test("an explicitly undefined or null anchor, clone destination or spec id refus
     await assert.rejects(insertAfter(missing, { type: "RECTANGLE", width: 10, height: 10 }), /flcm\.insertAfter: sibling is (undefined|null)/);
     await assert.rejects(clone("a", missing), /flcm\.clone: the second argument \(props or parent\) is (undefined|null)/);
     await assert.rejects(clone("a", { left: 0 }, missing), /flcm\.clone: parent is (undefined|null)/);
-    await assert.rejects(render({ id: missing, type: "FRAME", width: 10, height: 10 }), /\.id must be a non-empty live node id — got (undefined|null)/);
+    await assert.rejects(render({ id: missing, type: "FRAME", width: 10, height: 10 }), /spec\.id: must be a non-empty live node id — got (undefined|null)/);
   }
   assert.equal(figma.currentPage.children.length, pageChildren);
   assert.equal(row.children.length, 2);

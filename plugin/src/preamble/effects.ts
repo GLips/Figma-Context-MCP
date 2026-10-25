@@ -60,7 +60,7 @@ interface NoiseParts {
 }
 
 export function glass(p: GlassParts): WriteGlass {
-  if (p.depth < 1) throw new FlcmError("authoring", `glass.depth must be >= 1 — got ${p.depth}. (Figma silently clamps a smaller depth to 1, so we reject it rather than surprise you.)`, { call: "flcm.effects" });
+  if (p.depth < 1) throw new FlcmError("authoring", `glass.depth must be >= 1 — got ${p.depth}. Figma would silently clamp a smaller depth to 1; give 1 or more.`);
   return { kind: "glass", ...p };
 }
 export function texture(p: TextureParts): WriteTexture { return { kind: "texture", ...p }; }
@@ -70,7 +70,7 @@ const NOISE_TYPES: Record<WordValue<"noiseType">, WriteNoise["noiseType"]> = { m
 
 export function noise(p: NoiseParts): WriteNoise {
   const noiseType = NOISE_TYPES[p.noiseType];
-  if (!noiseType) throw new FlcmError("authoring", `noise.type must be monotone | duotone | multitone — got ${JSON.stringify(p.noiseType)}.`, { call: "flcm.effects" });
+  if (!noiseType) throw new FlcmError("authoring", `noise.type must be "monotone", "duotone" or "multitone" — got ${JSON.stringify(p.noiseType)}.`);
   return { kind: "noise", noiseType, color: p.color, noiseSize: p.noiseSize, density: p.density, secondaryColor: p.secondaryColor, opacity: p.opacity };
 }
 
@@ -143,7 +143,7 @@ export function toFigmaEffects(effects: WriteEffect[]): Effect[] {
         // runtime (normalizeEffects forwards agent-passed WriteEffect[] unvalidated) throws loud rather
         // than emitting an undefined Effect.
         effect satisfies never;
-        throw new FlcmError("authoring", "unknown effect kind " + JSON.stringify(effect), { call: "flcm.effects" });
+        throw new FlcmError("authoring", "unknown effect " + JSON.stringify(effect) + ". Build effects with flcm.effects({ … }) or the CSS form ({ boxShadow, filter, backdropFilter }), not by hand.");
     }
   });
 }

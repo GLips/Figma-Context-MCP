@@ -22,34 +22,34 @@ export function aspectRatioAgrees(width: number, height: number, r: number): boo
   return Math.abs(boxRatio - r) <= 0.01 + boxRatio * 0.01 * (1 / width + 1 / height);
 }
 
-function bothAxesFillRefusal(subject: string): FlcmError {
-  return new FlcmError("authoring", 'with both axes "fill" neither is free to follow aspectRatio. Size one of them, or drop aspectRatio.', { call: subject });
+function bothAxesFillRefusal(path: string | undefined): FlcmError {
+  return new FlcmError("authoring", 'with both axes "fill" neither is free to follow aspectRatio. Size one of them, or drop aspectRatio.', { path });
 }
 
 // What can be judged before the node exists: the value, a "hug" axis (its size is its content's,
 // so it can't follow a ratio), two filled axes (neither is free to follow) and two fixed sizes that
 // disagree. A fixed axis beside an unnamed one derives it here, so the node is built at the ratio;
 // the rest settles once every size has landed (settleAspectRatio).
-export function compileAspectRatio(raw: unknown, layout: WriteLayout, subject: string): void {
+export function compileAspectRatio(raw: unknown, layout: WriteLayout, path: string): void {
   if (raw === undefined) return;
   if (raw === "none") {
     layout.aspectRatio = "none";
     return;
   }
   if (typeof raw !== "number" || !isFinite(raw) || raw <= 0) {
-    throw new FlcmError("authoring", 'aspectRatio must be a positive number, width ÷ height (16 / 9), or "none" to unlock — got ' + JSON.stringify(raw) + ".", { call: subject });
+    throw new FlcmError("authoring", 'aspectRatio must be a positive number, width ÷ height (16 / 9), or "none" to unlock — got ' + JSON.stringify(raw) + ".", { path });
   }
   const sizing = (layout.sizing ??= {});
   if (sizing.horizontal === "hug" || sizing.vertical === "hug") {
-    throw new FlcmError("authoring", 'a "hug" axis is sized by its content, so it can\'t follow aspectRatio. Give it a size or "fill", or drop aspectRatio.', { call: subject });
+    throw new FlcmError("authoring", 'a "hug" axis is sized by its content, so it can\'t follow aspectRatio. Give it a size or "fill", or drop aspectRatio.', { path });
   }
-  if (sizing.horizontal === "fill" && sizing.vertical === "fill") throw bothAxesFillRefusal(subject);
+  if (sizing.horizontal === "fill" && sizing.vertical === "fill") throw bothAxesFillRefusal(path);
   const dims = (layout.dimensions ??= {});
   const width = typeof dims.width === "number" ? dims.width : undefined;
   const height = typeof dims.height === "number" ? dims.height : undefined;
   if (width !== undefined && height !== undefined) {
     if (!aspectRatioAgrees(width, height, raw)) {
-      throw new FlcmError("authoring", "width " + width + " and height " + height + " are a " + pixelRound(width / height) + " ratio, not aspectRatio " + raw + ". Name one size and the ratio derives the other.", { call: subject });
+      throw new FlcmError("authoring", "width " + width + " and height " + height + " are a " + pixelRound(width / height) + " ratio, not aspectRatio " + raw + ". Name one size and the ratio derives the other.", { path });
     }
   } else if (width !== undefined && sizing.vertical === undefined) {
     sizing.vertical = "fixed";
@@ -90,7 +90,7 @@ export function settleAspectRatio(node: any, layout: AuthorizedLayout): void {
   const widthFills = node.layoutSizingHorizontal === "FILL" || layout.sizing.horizontal.resize?.kind === "percent";
   const heightFills = node.layoutSizingVertical === "FILL" || layout.sizing.vertical.resize?.kind === "percent";
   // resize() would set the follower, and the FILL restore below would undo it — locking fill's box.
-  if (widthFills && heightFills) throw bothAxesFillRefusal("flcm");
+  if (widthFills && heightFills) throw bothAxesFillRefusal(undefined);
   // An existing lock is let go first: whether resize() honours it is unverified, and a resize that
   // did would skew the box the new lock captures.
   if (node.targetAspectRatio) node.unlockAspectRatio();

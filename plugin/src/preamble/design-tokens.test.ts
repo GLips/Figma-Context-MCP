@@ -116,14 +116,14 @@ test("library tokens the file uses are counted and load on request; an enabled l
   const swatch = await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: used.styles[0].reference });
   assert.equal((await figma.getNodeByIdAsync(swatch.id)).fillStyleId, usedStyle.id);
   assert.deepEqual((await flcm.designTokens({ used: true, type: "PAINT" })).variables, []);
-  await assert.rejects(flcm.designTokens({ used: true, collection: "Spacing" }), /Used collections: "DS Colors"/);
+  await assert.rejects(flcm.designTokens({ used: true, collection: "Spacing" }), /collections it uses: "DS Colors"/);
 
   const floats = await flcm.designTokens({ library: "Design System", type: "FLOAT" });
   assert.deepEqual(floats.variables, [{ reference: { variable: "ds/gap" }, collection: "DS Colors", library: "Design System", type: "FLOAT", values: { Default: 8 }, remote: true }]);
   const row = await flcm.render({ type: "FRAME", layout: { mode: "row", gap: floats.variables[0].reference } });
   assert.equal((await figma.getNodeByIdAsync(row.id)).boundVariables.itemSpacing.id, gap.id);
 
-  await assert.rejects(flcm.designTokens({ library: "Design Sys" }), /no enabled library with variables is named "Design Sys"\. Enabled: "Design System"\./);
-  await assert.rejects(flcm.designTokens({ library: "Design System", collection: "Spacing" }), /has no collection named "Spacing"\. Its collections: "DS Colors"/);
+  await assert.rejects(flcm.designTokens({ library: "Design Sys" }), /no enabled library with variables is named "Design Sys"\. Pass one of the enabled libraries: "Design System"\./);
+  await assert.rejects(flcm.designTokens({ library: "Design System", collection: "Spacing" }), /has no collection named "Spacing"\. Pass one of its collections: "DS Colors"/);
 });
 

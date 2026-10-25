@@ -22,6 +22,21 @@
 import { componentPath, guidOf, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
 import { FlcmError } from "./flcm-error.js";
 type Container = BaseNode & ChildrenMixin;
+
+function identityOf(node: BaseNode): { type: string; name: string; id: string } {
+  return { type: node.type, name: node.name, id: node.id };
+}
+
+// Figma's two listings of an instance's layers (the search and each children list) must agree for
+// ids to be paired; when they don't, refusing beats reading one layer's properties as another's.
+function inconsistentInstanceTree(root: BaseNode, mismatch: string): FlcmError {
+  return new FlcmError(
+    "figma",
+    "Figma listed this instance's layers inconsistently (" + mismatch + "), so flcm can't tell which layer is which. " +
+      "Reload the file in Figma, then retry.",
+    { node: identityOf(root) },
+  );
+}
 interface State {
   native: BaseNode;
   anchor?: BaseNode;
@@ -136,16 +151,16 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       if (records.length) {
         while (stack.length && stack[stack.length - 1].next === stack[stack.length - 1].ids.length) stack.pop();
         const edge = stack[stack.length - 1];
-        if (!edge) throw new FlcmError("figma", "indexed scene order exceeds the native child topology.");
+        if (!edge) throw inconsistentInstanceTree(root, "it searched more layers than the children lists hold");
         const child = edge.ids[edge.next++];
-        if (child.type !== node.type) throw new FlcmError("figma", "indexed scene order disagrees with native child types.");
+        if (child.type !== node.type) throw inconsistentInstanceTree(root, "a layer had a different type in the search than in its parent's children");
         // A retired original's descendants are listed under its dead path too.
         copied = edge.retired || (isSublayerId(child.id) && guidOf(child.id) !== guidOf(node.id));
         if (copied) retired.set(child.id, node.id);
         alias = copied ? node.id : child.id;
         parent = edge.record;
       }
-      if (seen.has(alias) || seen.has(node.id)) throw new FlcmError("figma", "indexed scene contains an ambiguous node identity.");
+      if (seen.has(alias) || seen.has(node.id)) throw inconsistentInstanceTree(root, "two layers had the same id");
       seen.add(alias); seen.add(node.id);
       const state = stateOf(node, alias);
       const record: RecordNode = { state, parent, children: [] };
@@ -156,7 +171,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       const children = "children" in node ? (node as Container).children : [];
       if (children.length) stack.push({ record, ids: children, next: 0, retired: copied });
     }
-    if (stack.some(edge => edge.next !== edge.ids.length)) throw new FlcmError("figma", "this Figma host does not provide complete indexed scene access.");
+    if (stack.some(edge => edge.next !== edge.ids.length)) throw inconsistentInstanceTree(root, "its search left out layers the children lists hold");
     scope.records = records;
     scope.byId = byId;
     scope.retired = retired;
@@ -224,7 +239,14 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     const wasIndexed = !!moved.scope || !!moved.ownScope;
     const children = placedChildren(dest);
     const landed = children[index === "end" ? children.length - 1 : index];
-    if (!landed || landed.native.type !== moved.native.type) throw new FlcmError("figma", "placed node identity is unavailable in its destination.");
+    if (!landed || landed.native.type !== moved.native.type) {
+      throw new FlcmError(
+        "figma",
+        "after the move Figma held no layer of this type where it should have landed, so flcm can't tell which layer it became. " +
+          "Read the destination again with flcm.get before you retry.",
+        { node: identityOf(moved.native) },
+      );
+    }
     if (landed !== moved) {
       const after = landed.record;
       adoptLanded(moved, landed);

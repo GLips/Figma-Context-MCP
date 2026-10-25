@@ -43,7 +43,7 @@ import { deriveConcurrentEditObligations, deriveEditPlanObligations, liveObligat
 import { captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
 import { layoutModeOf } from "./layout-mode.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
-import { clearKeysDeep, instanceContextOf, instanceContextUnder, instanceAncestorOf, isComponentDefinition, describeNodeIdentity } from "./identity.js";
+import { clearKeysDeep, instanceContextOf, instanceContextUnder, instanceAncestorOf, isComponentDefinition } from "./identity.js";
 import { mintAuthorizedLiveLayout, preflightInstanceWrites, type AuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
@@ -55,7 +55,7 @@ import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./e
 import { beginMutatingApply } from "./verb-error.js";
 import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
 import { showValue } from "./validate.js";
-import { FlcmError, appendToFailure, describeFailure } from "./flcm-error.js";
+import { FlcmError, appendToFailure, describeFailure, describeNodeIdentity, type FlcmErrorNode } from "./flcm-error.js";
 import { unrotatedCornerOf } from "./pivot.js";
 import { holdPivot, settlePivot, type ApplySpan } from "./apply-span.js";
 
@@ -72,15 +72,19 @@ interface Destination {
 
 // A container is a node with Figma's ChildrenMixin — the structural test, not a type allow-list,
 // so a container type we've never heard of works and a leaf fails with the same message.
-function assertDestinationIsContainer(subject: string, node: any): void {
+function assertDestinationIsContainer(node: any): void {
   if (typeof node.appendChild !== "function") {
     throw new FlcmError(
       "authoring",
-      "a " + node.type + ' ("' + node.name + '") holds no children, so nothing can be placed inside it. ' +
-        "Target a frame, group, section, or page.",
-      { call: subject },
+      "this layer holds no children, so nothing can be placed inside it. Target a frame, group, section, or page.",
+      { node: layerOf(node) },
     );
   }
+}
+
+// A layer in the fields an error names it by.
+function layerOf(node: any): FlcmErrorNode {
+  return { type: node.type, name: node.name, id: node.id };
 }
 
 // Figma forbids changing an instance's CHILDREN — they come from its main component, and the only
@@ -94,17 +98,16 @@ function assertDestinationIsContainer(subject: string, node: any): void {
 //   • a SUBJECT starts at its parent. An instance is an ordinary scene node in ITS parent, so
 //     moving or deleting the instance itself is not just legal but routine, and this gate must
 //     not stand in the way of it; the SLOT node itself is a sublayer, so it stays put.
-function assertInstanceChildListUntouched(subject: string, node: any, role: "destination" | "subject"): void {
+function assertInstanceChildListUntouched(node: any, role: "destination" | "subject"): void {
   const context = instanceContextOf(node);
   const host = (role === "destination" ? context.childListClosedBy : context.ownWritesLockedBy)?.node as any;
   if (!host) return;
-  const what = role === "destination" ? "destination" : "node being moved or removed";
   throw new FlcmError(
     "figma",
-    "the " + what + " is inside component instance " + JSON.stringify(host.name) + " (id " +
-      JSON.stringify(host.id) + "), whose child list Figma won't let a plugin change. Edit the main " +
-      "component it comes from (flcm never auto-detaches an instance)" + slotsOpenIn(host, role) + ".",
-    { call: subject },
+    (host === node ? "this is an instance" : "this layer is inside " + describeNodeIdentity(host)) +
+      ", and Figma won't let a plugin change an instance's child list. Edit the main component it comes from, or detach the instance with flcm.detach" +
+      slotsOpenIn(host, role) + ".",
+    { node: layerOf(node) },
   );
 }
 
@@ -122,27 +125,26 @@ function slotsOpenIn(host: any, role: "destination" | "subject"): string {
 // A COMPONENT_SET's children are its VARIANTS — every one a COMPONENT, all sharing the set's axes.
 // A node built into one would be a plain frame among them, which Figma either refuses or turns into
 // a malformed member. Named here, with the absence stated: nothing adds to an existing set yet.
-function assertBuiltInsertNotIntoSet(subject: string, parent: any): void {
+function assertBuiltInsertNotIntoSet(parent: any): void {
   if (parent.type !== "COMPONENT_SET") return;
   throw new FlcmError(
     "authoring",
-    JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) + ") is a COMPONENT_SET, and a set's children are its VARIANTS — " +
-      "a built node would be a plain frame among them. There is no add-to-an-existing-set form yet: flcm.variants builds a set from standalone components. " +
-      "To change what every variant holds, insert into each variant.",
-    { call: subject },
+    "a COMPONENT_SET's children are its variants, so a new layer would be a plain frame among them, and flcm can't add a variant to an existing set. " +
+      "To change what every variant holds, insert into each variant; to make a new set, build standalone components and combine them with flcm.variants.",
+    { node: layerOf(parent) },
   );
 }
 
 // A node cannot land inside itself or inside its own subtree — Figma refuses the cycle, and its
 // own error names neither node. Checked here so the refusal names both.
-function assertNoCycle(subject: string, node: any, destination: any): void {
+function assertNoCycle(path: string, node: any, destination: any): void {
   for (let p: any = destination; p; p = p.parent) {
     if (p !== node) continue;
     throw new FlcmError(
       "authoring",
-      JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") can't be placed inside " +
-        (node === destination ? "itself" : "its own descendant " + JSON.stringify(destination.name)) + ".",
-      { call: subject },
+      "this layer can't be placed inside " + (node === destination ? "itself" : "its own descendant " + describeNodeIdentity(destination)) +
+        ". Place it somewhere outside its own subtree.",
+      { path, node: layerOf(node) },
     );
   }
 }
@@ -165,12 +167,7 @@ function destinationOf(subject: string, anchorNode: any, placement: Placement, p
   if (placement === "before" || placement === "after") {
     const parent = anchorNode.parent;
     if (!parent) {
-      throw new FlcmError(
-        "authoring",
-        JSON.stringify(anchorNode.name) + " (id " + JSON.stringify(anchorNode.id) +
-          ") has no parent to insert beside. Use flcm.append(parent, …) instead.",
-        { call: subject },
-      );
+      throw new FlcmError("authoring", "this layer has no parent to insert beside. Use flcm.append(parent, …) instead.", { node: layerOf(anchorNode) });
     }
     assertPageLoaded(parent, pages, subject);
     const offset = placement === "after" ? 1 : 0;
@@ -181,7 +178,7 @@ function destinationOf(subject: string, anchorNode: any, placement: Placement, p
       place: (node) => parent.insertChild(parent.children.indexOf(anchorNode) + offset, node),
     };
   }
-  assertDestinationIsContainer(subject, anchorNode);
+  assertDestinationIsContainer(anchorNode);
   return {
     parent: anchorNode,
     place: placement === "start" ? (node) => anchorNode.insertChild(0, node) : (node) => anchorNode.appendChild(node),
@@ -213,9 +210,9 @@ function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverla
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
   const ctx = beginRenderWalk({ ...resources, span }, { bindings: !!bindings });
-  const fail = beginMutatingApply(verb, dest.parent);
+  const fail = beginMutatingApply(dest.parent);
   try {
-    landTree(dest.parent, dest.place, tree, ctx, "flcm." + verb, noteOverlap);
+    landTree(dest.parent, dest.place, tree, ctx, "flcm." + verb + ".spec", noteOverlap);
     // After the tree is attached and settled: the property references (and the slot properties this
     // insert declares) land in the same sealed span, so a bound layer is never on the canvas unbound.
     if (bindings) applyInsertBindings(bindings, ctx.bindings!);
@@ -231,7 +228,7 @@ function applyInsert(verb: string, { dest, tree, resources, bindings, noteOverla
 // that must not be written twice (resettling before the attach would aim `fill` at the old parent).
 function applyPlacement(verb: string, { dest, layout }: PreparedPlacement, span: ApplySpan): void {
   const node: any = layout.node;
-  const fail = beginMutatingApply(verb, node);
+  const fail = beginMutatingApply(node);
   try {
     attachLiveNode(dest.parent, layout, dest.place);
     holdPivot(span, node);
@@ -252,16 +249,16 @@ type PlacementAnchor = "currentPage" | { arg: "parent" | "sibling"; target: Targ
 // An explicitly passed `undefined`/`null` target is almost always an unset variable (`copy.id` off a value
 // with no id). A verb with an omitted-argument default must not read it as an omission: that default would
 // act on a node the agent never named.
-function refuseNullishTarget(subject: string, arg: string, value: unknown, remedy: string): void {
+function refuseNullishTarget(arg: string, value: unknown, remedy: string): void {
   if (value == null) {
-    throw new FlcmError("authoring", arg + " is " + showValue(value) + " — pass a target (id, flcm/key or a handle)" + remedy + ".", { call: subject });
+    throw new FlcmError("authoring", arg + " is " + showValue(value) + " — pass a target (id, flcm/key or a handle)" + remedy + ".");
   }
 }
 
 function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placement: Placement): Promise<AuthoredTree> {
   const subject = "flcm." + verb;
   return enterMutatingVerb(verb, async () => {
-    if (anchor !== "currentPage") refuseNullishTarget(subject, anchor.arg, anchor.target, ", or use flcm.render to place on the current page");
+    if (anchor !== "currentPage") refuseNullishTarget(anchor.arg, anchor.target, ", or use flcm.render to place on the current page");
     const tree = compileTree(spec, subject + ".spec");
     const pages = createLoadedPages();
     const anchorNode = anchor === "currentPage" ? figma.currentPage : await resolveAnchor(anchor.target, placement, pages);
@@ -269,9 +266,9 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
     return { tree, anchorNode, pages, loaded: await loadTreeResources(tree) };
   }, ({ tree, anchorNode, pages, loaded }): PreparedInsert => {
     const dest = destinationOf(subject, anchorNode, placement, pages);
-    assertInstanceChildListUntouched(subject, dest.parent, "destination");
+    assertInstanceChildListUntouched(dest.parent, "destination");
     if (tree.liveId === undefined) {
-      assertBuiltInsertNotIntoSet(subject, dest.parent);
+      assertBuiltInsertNotIntoSet(dest.parent);
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, subject);
     }
@@ -315,11 +312,11 @@ export function remove(target: Target): Promise<RemoveResult> {
     () => resolveTarget(target),
     (node: any) => {
       assertNodeStillOnCanvas(node, "flcm.remove");
-      assertInstanceChildListUntouched("flcm.remove", node, "subject");
+      assertInstanceChildListUntouched(node, "subject");
       return { node, from: node.parent };
     },
     ({ node, from }) => {
-      const fail = beginMutatingApply("remove", node);
+      const fail = beginMutatingApply(node);
       const removedId = node.id;
       try {
         node.remove();
@@ -352,8 +349,8 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
   // A nullish `props` beside a named parent is just "no edits" (the edit-delta rule), so it isn't refused.
   if (arguments.length >= 2) {
     try {
-      if (arguments.length === 2) refuseNullishTarget("flcm.clone", "the second argument (props or parent)", propsOrParent, ", or omit it to copy beside the original");
-      else refuseNullishTarget("flcm.clone", "parent", parent, ", or omit it to copy beside the original");
+      if (arguments.length === 2) refuseNullishTarget("the second argument (props or parent)", propsOrParent, ", or omit it to copy beside the original");
+      else refuseNullishTarget("parent", parent, ", or omit it to copy beside the original");
     } catch (error) {
       return Promise.reject(error);
     }
@@ -380,15 +377,10 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       assertNodeStillOnCanvas(node, "flcm.clone");
       const dest = anchorNode !== undefined ? destinationOf("flcm.clone", anchorNode, "end", pages) : endOf(node.parent);
       if (!dest.parent) {
-        throw new FlcmError(
-          "authoring",
-          JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
-            ") has no parent for the copy to land in — name one: flcm.clone(target, parent).",
-          { call: "flcm.clone" },
-        );
+        throw new FlcmError("authoring", "this layer has no parent for the copy to land in. Name one: flcm.clone(target, parent).", { node: layerOf(node) });
       }
       assertPageLoaded(dest.parent, pages, "flcm.clone");
-      assertInstanceChildListUntouched("flcm.clone", dest.parent, "destination");
+      assertInstanceChildListUntouched(dest.parent, "destination");
       // The ORIGINAL's parent-relative intent: the copy is born carrying the same flow marks, and
       // they mean the old parent's axes exactly as a move's do. No cycle check — the copy did not
       // exist a moment ago, so it can't contain its own destination.
@@ -411,7 +403,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       return { node, dest, resolved, edit, owed, resources: gateEditResources(loaded, [], "flcm.clone"), bindings: captureCloneBindings(node) };
     },
     ({ node, dest, resolved, edit, owed, resources, bindings }, span) => {
-      const fail = beginMutatingApply("clone", node);
+      const fail = beginMutatingApply(node);
       let copy: any;
       const created: CreatedCloneProperties = [];
       try {
@@ -430,7 +422,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
           // After the placement: the copy's own words resolve against the parent it now sits in.
           const plan = authorizeEditPlan({ ...edit, node: copy }, resources, "flcm.clone");
           // The clone's failure, which names the original: the copy is not the layer the agent named.
-          const entry: EditApplyEntry = { node: copy, plan, subject: "clone", tag: "flcm.clone", fail };
+          const entry: EditApplyEntry = { node: copy, plan, site: {}, tag: "flcm.clone", fail };
           runEditOperations([entry], scheduleEditEntries([entry], "flcm.clone"), beginRenderWalk({ ...resources, span }));
         }
         // The cleanup reaches only this span. A failure after it (the lock's settle, a style link,
@@ -439,7 +431,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       } catch (cause) {
         if (!copy) throw cause;
         try { removeFailedClone(copy, created); }
-        catch (cleanup) { throw appendToFailure(cause, "Cleanup also failed: " + describeFailure(cleanup)); }
+        catch (cleanup) { throw appendToFailure(cause, "Removing the partial copy also failed: " + describeFailure(cleanup) + "."); }
         throw compensatedMutationFailure(cause);
       }
     },
@@ -449,7 +441,12 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
 function compileCloneProps(node: any, props: EditDelta) {
   if (props && typeof props === "object" && !Array.isArray(props) && Object.keys(props).length === 0) return undefined;
   const plan = compileEditPlan(node, props, "flcm.clone");
-  if (plan.instanceWords || plan.componentWords) throw new FlcmError("authoring", "overrides are ordinary root properties; edit component properties, bindings, or nested overrides on the returned copy separately. Nothing was applied.", { call: "flcm.clone" });
+  if (plan.instanceWords || plan.componentWords) {
+    throw new FlcmError("authoring",
+      "a clone's props set only the copy's own layer properties; a component swap, component properties, overrides and component definitions aren't accepted here. Make those changes with flcm.edit on the returned copy.",
+      { node: layerOf(node) },
+    );
+  }
   return plan;
 }
 
@@ -457,7 +454,9 @@ function compileCloneProps(node: any, props: EditDelta) {
 export async function measure(target: Target): Promise<{ x: number; y: number; width: number; height: number; warnings?: WarningRecord[] }> {
   const node: any = await resolveTarget(target);
   assertNodeStillOnCanvas(node, "flcm.measure");
-  if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) throw new FlcmError("authoring", "target has no measurable scene geometry.", { call: "flcm.measure" });
+  if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) {
+    throw new FlcmError("authoring", "this layer has no position and size on the canvas to measure. Measure a frame, shape, text or instance instead.", { node: layerOf(node) });
+  }
   const corner = unrotatedCornerOf(node);
   const measured = { x: corner.x, y: corner.y, width: node.width, height: node.height };
   registerRead(measured, () => measured, node.id);
@@ -474,7 +473,7 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     return { node, tree, pages, loaded: await loadTreeResources(tree) };
   }, ({ node, tree, pages, loaded }): PreparedInsert & { original: any } => {
     assertNodeStillOnCanvas(node, "flcm.replace");
-    assertInstanceChildListUntouched("flcm.replace", node, "subject");
+    assertInstanceChildListUntouched(node, "subject");
     const { parent } = destinationOf("flcm.replace", node, "before", pages);
     // Every live node the replacement keeps, the original included, leaves `parent` while the
     // replacement is built and before it lands. So land before the first later sibling that stays.
@@ -485,9 +484,9 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
       parent,
       place: (built) => after ? parent.insertChild(parent.children.indexOf(after), built) : parent.appendChild(built),
     };
-    assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
+    assertInstanceChildListUntouched(dest.parent, "destination");
     if (tree.liveId === undefined) {
-      assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
+      assertBuiltInsertNotIntoSet(dest.parent);
       Object.assign(tree, replacementTree(node, tree));
       foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
@@ -506,7 +505,7 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
   }, (prepared, span) => {
     const build = applyInsert("replace", prepared, span);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
-      const fail = beginMutatingApply("replace", prepared.original);
+      const fail = beginMutatingApply(prepared.original);
       recordVerbRemovedNode(prepared.original);
       try { prepared.original.remove(); } catch (cause) { throw fail(cause); }
     }
@@ -535,11 +534,11 @@ export function detach(target: Target): Promise<Handle> {
       if (node.type !== "INSTANCE") {
         throw new FlcmError(
           "authoring",
-          describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
+          "this layer is not an instance — there is no component link to break. " +
             (isComponentDefinition(node)
               ? "This is the component itself; detach an INSTANCE of it."
               : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
-          { call: DETACH_SUBJECT },
+          { node: layerOf(node) },
         );
       }
       // Figma does NOT refuse a nested detach — it WIDENS it: detachInstance on an instance inside
@@ -551,16 +550,16 @@ export function detach(target: Target): Promise<Handle> {
       if (host) {
         throw new FlcmError(
           "authoring",
-          describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
-            "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
+          "this instance is nested inside " + describeNodeIdentity(host) +
+            ". Figma's detach on a nested instance also detaches every enclosing instance up the chain, so flcm refuses rather than detach more than you named. Detach " +
             JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
-          { call: DETACH_SUBJECT },
+          { node: layerOf(node) },
         );
       }
       return node;
     },
     (node) => {
-      const fail = beginMutatingApply("detach", node);
+      const fail = beginMutatingApply(node);
       try {
         const frame = node.detachInstance();
         return () => mintHandle(frame);

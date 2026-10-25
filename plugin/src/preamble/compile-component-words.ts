@@ -58,7 +58,7 @@ const PROPERTY_DEFINITION_EDIT_KEYS = keySet(WORD_GROUPS.propertyDefinition, ["v
 export function compileComponentPropertyBag(raw: unknown, subject: string): Record<string, ComponentPropertyInput> {
   const where = subject + ".componentProperties";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", where + ' must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".", { path: where });
   }
   const out: Record<string, ComponentPropertyInput> = {};
   for (const name of Object.keys(raw)) {
@@ -95,7 +95,7 @@ export function defaultValueHint(raw: object): string {
 export function compilePropertyDefinitionEditBag(raw: unknown, subject: string): Record<string, ComponentPropertyDefinitionEdit | null> {
   const where = subject + ".propertyDefinitions";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", where + ' must be an object of definitions by property name, e.g. { Label: { name: "Caption" }, Icon: null } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object of definitions by property name, e.g. { Label: { name: "Caption" }, Icon: null } — got ' + JSON.stringify(raw) + ".", { path: where });
   }
   const out: Record<string, ComponentPropertyDefinitionEdit | null> = {};
   for (const rawName of Object.keys(raw)) {
@@ -108,8 +108,9 @@ export function compilePropertyDefinitionEditBag(raw: unknown, subject: string):
     if (value !== null && (!value || typeof value !== "object" || Array.isArray(value))) {
       throw new FlcmError(
         "authoring",
-        where + "[" + JSON.stringify(name) + "] must be a definition object — { name } to rename it, { type } to add one (bound in the same editMany), " +
+        "must be a definition object — { name } to rename it, { type } to add one (bound in the same editMany), " +
           "or null to delete it. Got " + JSON.stringify(value) + ".",
+        { path: where + "[" + JSON.stringify(name) + "]" },
       );
     }
     if (value !== null) rejectUnknownKeys(value, PROPERTY_DEFINITION_EDIT_KEYS, where + "[" + JSON.stringify(name) + "]", "prop", defaultValueHint(value));
@@ -125,7 +126,7 @@ export function compilePropertyDefinitionEditBag(raw: unknown, subject: string):
 export function compileOverrideBag(raw: unknown, subject: string): Record<string, OverrideDeltaInput> {
   const where = subject + ".overrides";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", where + ' must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".", { path: where });
   }
   const out: Record<string, OverrideDeltaInput> = {};
   for (const path of Object.keys(raw)) {
@@ -162,7 +163,7 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
 }
 
 function assertSlotContentShape(raw: unknown, at: string): void {
-  if (!Array.isArray(raw)) throw new FlcmError("authoring", at + ".children must be an array of node specs.");
+  if (!Array.isArray(raw)) throw new FlcmError("authoring", "must be an array of node specs, e.g. [{ type: \"TEXT\", text: \"Hi\" }] — got " + JSON.stringify(raw) + ".", { path: at + ".children" });
 }
 
 // ---- the BINDING word (`componentPropertyReferences`) ----
@@ -186,16 +187,16 @@ function assertBindingFieldLegal(field: string, legal: readonly string[], where:
   );
 }
 
-export function compileBindingBag(raw: unknown, legal: readonly string[], subject: string): ComponentPropertyBinding {
-  const where = subject + ".componentPropertyReferences";
+export function compileBindingBag(raw: unknown, legal: readonly string[], type: string, at: string): ComponentPropertyBinding {
+  const where = at + ".componentPropertyReferences";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object naming which component property drives which field, e.g. { text: "Label" } — got ' + JSON.stringify(raw) + ".", { path: where });
   }
   const out: Record<string, string> = {};
   for (const field of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[field];
     if (value == null) continue; // an explicitly-absent field is absence, not a claim
-    assertBindingFieldLegal(field, legal, where, subject);
+    assertBindingFieldLegal(field, legal, where, "a " + type);
     if (typeof value !== "string" || !value.trim()) {
       throw new FlcmError(
         "authoring",
@@ -221,7 +222,7 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], subjec
 export function compileBindingEditBag(raw: unknown, legal: readonly string[], subject: string, what: string): Record<string, string | null> {
   const where = subject + ".componentPropertyReferences";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(raw) + ".", { path: where });
   }
   const out: Record<string, string | null> = {};
   for (const field of Object.keys(raw)) {
@@ -247,9 +248,9 @@ export function compileBindingEditBag(raw: unknown, legal: readonly string[], su
 // The compiler-side half: compile the bag (when named) onto the WriteNode. An empty bag lands
 // nothing — a node carrying `componentPropertyReferences: {}` binds nothing and must not read as a
 // bound node to flcm.component's gate.
-export function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: unknown }, type: WriteType): void {
+export function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: unknown }, type: WriteType, at: string): void {
   if (props.componentPropertyReferences == null) return;
-  const refs = compileBindingBag(props.componentPropertyReferences, bindableFieldsOf(type), type);
+  const refs = compileBindingBag(props.componentPropertyReferences, bindableFieldsOf(type), type, at);
   if (Object.keys(refs).length) wn.componentPropertyReferences = refs;
 }
 
@@ -265,7 +266,7 @@ export function assertSlotFrameNameAgrees(name: string | undefined, refs: Compon
     "authoring",
     "a slot frame's name IS its property's name — Figma keeps one name for both — so a frame named " + JSON.stringify(name) +
       " can't be bound to slot " + JSON.stringify(slot) + ". Name the property what the frame should be called, or drop `name` and the frame takes the property's.",
-    { call: subject },
+    { path: subject },
   );
 }
 
@@ -289,7 +290,7 @@ export function noDeclaringComponentError(subject: string): FlcmError {
     "`componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
       "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
       "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use INSTANCE.",
-    { call: subject },
+    { path: subject },
   );
 }
 

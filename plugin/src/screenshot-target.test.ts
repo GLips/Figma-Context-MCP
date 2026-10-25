@@ -32,7 +32,7 @@ test("an unmatched key throws naming the key, rather than capturing the page", a
   createFigmaMock();
   await render({ type: "FRAME", key: "root" });
 
-  await assert.rejects(() => resolveScreenshotTarget({ key: "nope" }), /flcm key "nope"/);
+  await assert.rejects(() => resolveScreenshotTarget({ key: "nope" }), /carries the key "nope".*check the spelling/s);
 });
 
 test("a duplicated key throws naming the count, rather than picking one", async () => {
@@ -43,6 +43,6 @@ test("a duplicated key throws naming the count, rather than picking one", async 
 
   await assert.rejects(
     () => resolveScreenshotTarget({ key: "card" }),
-    /2 nodes .* flcm key "card"/,
+    /2 nodes .* the key "card".*by nodeId/s,
   );
 });

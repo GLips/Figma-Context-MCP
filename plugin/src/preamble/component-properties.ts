@@ -9,7 +9,7 @@
 
 import { textOfRuns, type WriteNode, type BuiltNode, type LiveRef, type ComponentPropertyBinding } from "./ir.js";
 import type { BoundLiveNode, InstancePlans, RenderResources } from "./bridge.js";
-import { describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
+import { SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 import { realizeAtWritePoint } from "./write-point.js";
 import { FlcmError } from "./flcm-error.js";
@@ -96,7 +96,7 @@ export interface PreparedDefinition {
  */
 export function compilePropertyDefinition(name: string, raw: unknown, at: string): AuthoredDefinition {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", at + ' must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".", { path: at });
   }
   rejectUnknownKeys(raw, DEFINITION_KEYS, at, "prop", defaultValueHint(raw));
   const bag = raw as Record<string, unknown>;
@@ -117,7 +117,7 @@ export function compilePropertyDefinition(name: string, raw: unknown, at: string
   }
   const figmaType = typeof type === "string" ? own(PROPERTY_TYPES, type) : undefined;
   if (!figmaType) {
-    throw new FlcmError("authoring", at + ".type must be one of " + quoted(PROPERTY_TYPE_WORDS) + " — got " + JSON.stringify(type) + ".");
+    throw new FlcmError("authoring", "must be one of " + quoted(PROPERTY_TYPE_WORDS) + " — got " + JSON.stringify(type) + ".", { path: at + ".type" });
   }
   return { name, type: type as string, figmaType };
 }
@@ -182,7 +182,9 @@ export function writeInheritedDefault(figmaType: string, wn: WriteNode, value: b
 export function readableComponentOf(component: any, node: any, at: string): any {
   if (component) return component;
   throw new FlcmError("figma",
-    describeNodeIdentity(node) + " has no readable main component — it comes from a library the file can't reach right now, so there is no component to read its instance_swap default from.", { path: at },
+    "this instance's main component can't be read — it comes from a library the file can't reach right now, so there is no component to make its instance_swap property's default. " +
+      "Enable that library in this file, or bind an instance of a local component instead.",
+    { path: at, node: node && { type: node.type, name: node.name, id: node.id } },
   );
 }
 

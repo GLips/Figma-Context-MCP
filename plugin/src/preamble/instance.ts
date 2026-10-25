@@ -56,7 +56,7 @@ import {
   applyEditPlanPhase, trackEditPlanSizing, EDIT_PLAN_PHASES, type EditPlanPhase,
 } from "./edit-plan.js";
 import {
-  isComponentDefinition, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
+  isComponentDefinition, variantSetOf, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
   instanceContextOf, projectedInstanceContextOf, type InstanceContextFacts,
 } from "./identity.js";
 import { assertInstanceRootLayoutMode, type AuthorizedEditPlan, type RealizeOnlyFields } from "./instance-write-authorization.js";
@@ -72,9 +72,12 @@ import { SLOT_CONTENT_WORD } from "./compile-component-words.js";
 import { own } from "./validate.js";
 import { bareName, matchPropertyNames } from "./component-properties.js";
 import type { EditDelta } from "./schema.js";
-import { ConcurrentEditError, FlcmError, locateFailure } from "./flcm-error.js";
+import { ConcurrentEditError, FlcmError, describeNodeIdentity, locateFailure, type FlcmLocation } from "./flcm-error.js";
 
-const SUBJECT = "INSTANCE";
+// A word under a spec path, or the word alone when the failing node is the call's own target.
+function pathUnder(base: string | undefined, word: string): string {
+  return base === undefined ? word : base + "." + word;
+}
 
 // A read `null` in an override delta means "the instance LACKS this field the component has" (the
 // read shape omits defaults, so a paint removed or an opacity back at 1 has no value to state).
@@ -135,11 +138,11 @@ export async function resolveInstanceTreeTargets(tree: WriteNode, targets: Resol
 }
 
 // The resolved component behind a target, or null when the resolution failed — the gate is where
-// that failure is reported (targets.node throws it there); prepare only needs to know whether there
-// is a definition to read swap types off.
+// that failure is reported (targets.node throws it there, at the real path); prepare only needs to
+// know whether there is a definition to read swap types off.
 function componentNodeOrNull(target: Target, targets: ResolvedTargets): any | null {
   try {
-    return targets.node(target, SUBJECT);
+    return targets.node(target, "componentId");
   } catch {
     return null;
   }
@@ -173,7 +176,7 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
   for (const wn of instances) {
     const { plan, overrides } = (() => {
       try { return planInstanceNode(wn, planning); }
-      catch (cause) { throw locateFailure(cause, { path: wn.sourcePath ?? "INSTANCE" }); }
+      catch (cause) { throw locateFailure(cause, { path: wn.sourcePath }); }
     })();
     needs.plans.set(wn, plan);
     for (const o of overrides) {
@@ -222,23 +225,26 @@ function planSlotContentNeeds(content: readonly WriteNode[], planning: InstanceP
 }
 
 function planInstanceNode(wn: BuiltNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
-  const resolved = resolveComponentNode(planning.targets.node(wn.component as Target, SUBJECT), SUBJECT);
-  const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
+  // compileTree stamps every node it builds with its spec path, and every INSTANCE comes from it.
+  const at = wn.sourcePath!;
+  const componentAt = pathUnder(at, "componentId");
+  const resolved = resolveComponentNode(planning.targets.node(wn.component as Target, componentAt), componentAt);
+  const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, at, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
   // reads off its target. Judged here, not in the compiler, because that is where it's known.
-  if (wn.layout) assertBounds(wn.layout.bounds, component, SUBJECT);
-  if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT, component.layoutWrap === "WRAP");
-  assertInstanceRootLayoutMode(SUBJECT, null, wn.layout?.mode, layoutModeOf(component));
-  const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.gate);
+  if (wn.layout) assertBounds(wn.layout.bounds, component, at);
+  if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, at, component.layoutWrap === "WRAP");
+  assertInstanceRootLayoutMode(at, null, wn.layout?.mode, layoutModeOf(component));
+  const overrides = planDefinitionOverrides(component, wn.overrides || {}, at, planning.gate);
   // The instance is sized by its own words before its overrides land, so a realize-only measure can wait on them.
-  if (planning.gate) gateCallObligations({ checks: overrideRealizeOnlyChecks(overrides, planning.gate, SUBJECT), writes: geometryWritesOf(component, { layout: wn.layout }) }, SUBJECT);
+  if (planning.gate) gateCallObligations({ checks: overrideRealizeOnlyChecks(overrides, planning.gate, at), writes: geometryWritesOf(component, { layout: wn.layout }) }, at);
   return {
     plan: {
       component,
       // A create stamps the exact variant (`component` above), so the variant axes are not restated
       // as property writes — only the non-variant values are.
       properties,
-      applyOverrides: (instance, ctx) => applyOverridePlans(instance, overrides, component, ctx, "render"),
+      applyOverrides: (instance, ctx) => applyOverridePlans(instance, overrides, component, ctx, { path: wn.sourcePath }),
       overrides,
     },
     overrides,
@@ -266,17 +272,17 @@ function resolvedFromComponent(node: any): ResolvedComponent {
  * with one sentence. Sync, from a node prepare already resolved: a set's default variant is a live
  * fact, read where every live fact is read.
  */
-function resolveComponentNode(node: any, subject: string): ResolvedComponent {
+function resolveComponentNode(node: any, path: string): ResolvedComponent {
   if (node.type === "COMPONENT_SET") return { base: node.defaultVariant, set: node };
   if (node.type === "COMPONENT") return resolvedFromComponent(node);
-  const who = describeNodeIdentity(node);
+  const site = { path, node: { type: node.type, name: node.name, id: node.id } };
   if (node.type === "INSTANCE") {
     throw new FlcmError("authoring",
-      who + " is itself an instance, not a component. Pass the component it comes from — flcm.get(" + JSON.stringify(node.id) + ") reports it as `componentId`.",
-      { call: subject },
+      "this layer is itself an instance, not a component. Pass the component it comes from — flcm.get(" + JSON.stringify(node.id) + ") reports it as `componentId`.",
+      site,
     );
   }
-  throw new FlcmError("authoring", who + " is not a component — only a COMPONENT (or a COMPONENT_SET, whose variant the `componentProperties` pick) can be instantiated.", { call: subject });
+  throw new FlcmError("authoring", "this layer is not a component — only a COMPONENT (or a COMPONENT_SET, whose variant `componentProperties` picks) can be instantiated. Pass a component's id or handle.", site);
 }
 
 
@@ -314,7 +320,7 @@ export function resolvePropertyName(authored: string, definitions: Record<string
  * the whole combination is validated before either verb writes anything.
  */
 function resolveComponentProperties(
-  resolved: ResolvedComponent, authored: Record<string, ComponentPropertyInput>, subject: string, targets: ResolvedTargets,
+  resolved: ResolvedComponent, authored: Record<string, ComponentPropertyInput>, at: string | undefined, targets: ResolvedTargets,
 ): { component: any; properties: Record<string, string | boolean>; variant: Record<string, string> } {
   const definitions = propertyDefinitionsOf(definitionOwnerOf(resolved.base));
   const properties: Record<string, string | boolean> = {};
@@ -323,10 +329,10 @@ function resolveComponentProperties(
   // refusal hands over is per variant (each realizes the set's slot with its own frame).
   let slotNamed: { full: string; where: string } | undefined;
   for (const name of Object.keys(authored)) {
-    const full = resolvePropertyName(name, definitions, subject + ".componentProperties");
+    const full = resolvePropertyName(name, definitions, pathUnder(at, "componentProperties"));
     const def = definitions[full];
     const value = authored[name];
-    const where = subject + ".componentProperties[" + JSON.stringify(name) + "]";
+    const where = pathUnder(at, "componentProperties[" + JSON.stringify(name) + "]");
     switch (def.type) {
       case "VARIANT": {
         const options: string[] = def.variantOptions || [];
@@ -337,18 +343,18 @@ function resolveComponentProperties(
         break;
       }
       case "BOOLEAN":
-        if (typeof value !== "boolean") throw new FlcmError("authoring", JSON.stringify(full) + " is a boolean property — got " + JSON.stringify(value) + ".", { path: where });
+        if (typeof value !== "boolean") throw new FlcmError("authoring", JSON.stringify(full) + " is a boolean property — got " + JSON.stringify(value) + ". Pass true or false.", { path: where });
         properties[full] = value;
         break;
       case "TEXT":
-        if (typeof value !== "string") throw new FlcmError("authoring", JSON.stringify(full) + " is a text property — got " + JSON.stringify(value) + ".", { path: where });
+        if (typeof value !== "string") throw new FlcmError("authoring", JSON.stringify(full) + " is a text property — got " + JSON.stringify(value) + ". Pass a string.", { path: where });
         properties[full] = value;
         break;
       case "INSTANCE_SWAP": {
         if (typeof value === "boolean") throw new FlcmError("authoring", JSON.stringify(full) + " is an instance-swap property, which takes a component (its node id or a handle) — got " + JSON.stringify(value) + ".", { path: where });
         const swap: any = targets.node(value as Target, where);
         if (swap.type !== "COMPONENT") {
-          throw new FlcmError("authoring", JSON.stringify(full) + " swaps in a COMPONENT, and " + JSON.stringify(swap.name) + " (id " + JSON.stringify(swap.id) + ") is a " + swap.type + (swap.type === "COMPONENT_SET" ? " — name one of its variants" : "") + ".", { path: where });
+          throw new FlcmError("authoring", JSON.stringify(full) + " swaps in a COMPONENT, and " + describeNodeIdentity(swap) + " is not one. " + (swap.type === "COMPONENT_SET" ? "Pass one of its variants." : "Pass a component's id or handle."), { path: where });
         }
         properties[full] = swap.id;
         break;
@@ -357,18 +363,18 @@ function resolveComponentProperties(
         if (!slotNamed) slotNamed = { full, where };
         break;
       default:
-        throw new FlcmError("authoring", JSON.stringify(full) + " is a " + String(def.type) + " property, which flcm has no word for.", { path: where });
+        throw new FlcmError("authoring", JSON.stringify(full) + " is a " + String(def.type) + " property, which flcm can't set. Drop it, or set it in Figma.", { path: where });
     }
   }
-  const component = Object.keys(variant).length ? selectVariant(resolved, variant, subject) : resolved.base;
+  const component = Object.keys(variant).length ? selectVariant(resolved, variant, pathUnder(at, "componentProperties")) : resolved.base;
   if (slotNamed) {
     // A slot has no value: its content is stated at the slot's PATH, and the path is the bound
     // frame's in THIS variant — walked so the refusal hands over the exact key to write.
     const hole = slotFrameBoundTo(component, slotNamed.full);
     const path = hole ? JSON.stringify(componentPath(hole.id)) : '"<slotPath>"';
     throw new FlcmError("authoring",
-      JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
-        subject + ".overrides[" + path + "] = { children: [ …nodes ] } (FRAME/text/instance…; [] empties it).",
+      JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value. Drop it here and state the slot's content as `children` at its path instead: " +
+        "overrides: { " + path + ": { children: [ …nodes ] } } (FRAME/text/instance…; [] empties it).",
       { path: slotNamed.where },
     );
   }
@@ -379,10 +385,10 @@ function resolveComponentProperties(
 // would resolve by "keep the rest of the current variant" is completed the same way here (from
 // the base's own axes), then must name EXACTLY one variant. The set's own child list is the
 // authority, not the axis options: an axis may list an option no combination actually has.
-function selectVariant(resolved: ResolvedComponent, variant: Record<string, string>, subject: string): any {
+function selectVariant(resolved: ResolvedComponent, variant: Record<string, string>, path: string): any {
   const { base, set } = resolved;
   if (!set) {
-    throw new FlcmError("authoring", JSON.stringify(base.name) + " is a standalone component with no variant axes, but a variant value was named.", { path: subject + ".componentProperties" });
+    throw new FlcmError("authoring", describeNodeIdentity(base) + " is a standalone component with no variant axes, but a variant value was named. Drop the variant value.", { path });
   }
   const tuple: Record<string, string> = { ...(base.variantProperties || {}), ...variant };
   const axes = Object.keys(tuple);
@@ -394,9 +400,9 @@ function selectVariant(resolved: ResolvedComponent, variant: Record<string, stri
   const spelled = axes.map((a) => a + "=" + tuple[a]).join(", ");
   if (matches.length === 0) {
     const has = (set.children as any[]).map((v) => JSON.stringify(v.name)).join(", ");
-    throw new FlcmError("authoring", JSON.stringify(set.name) + " has no variant " + spelled + " — its variants are " + has + ".", { path: subject + ".componentProperties" });
+    throw new FlcmError("authoring", describeNodeIdentity(set) + " has no variant " + spelled + " — its variants are " + has + ". Name one of those.", { path });
   }
-  throw new FlcmError("authoring", JSON.stringify(set.name) + " has " + matches.length + " variants named " + spelled + " (the set has a conflict Figma flags) — resolve it in the file, or pass the variant's own id as the component.", { path: subject + ".componentProperties" });
+  throw new FlcmError("authoring", describeNodeIdentity(set) + " has " + matches.length + " variants named " + spelled + " (a conflict Figma flags in the set) — resolve it in the file, or pass the variant's own id as componentId.", { path });
 }
 
 // ---- the overrides ----
@@ -421,17 +427,16 @@ function slotPathsSentence(definition: any): string {
 // retargeting edit's. The sublayer a path names is found INSIDE the resolved component (a sync
 // walk of a subtree prepare already loaded), which is also what makes a path from a sibling
 // variant refuse: it names a real node this component doesn't hold.
-function planDefinitionOverrides(component: any, overrides: Record<string, OverrideDeltaInput>, subject: string, gate: GateResources | undefined): OverridePlan[] {
+function planDefinitionOverrides(component: any, overrides: Record<string, OverrideDeltaInput>, at: string | undefined, gate: GateResources | undefined): OverridePlan[] {
   const plans: OverridePlan[] = [];
   for (const path of Object.keys(overrides)) {
-    const where = subject + ".overrides[" + JSON.stringify(path) + "]";
+    const where = pathUnder(at, "overrides[" + JSON.stringify(path) + "]");
     const id = definitionId(path);
     const definition: any = component.findOne((n: any) => n.id === id);
     if (!definition) {
       throw new FlcmError("authoring",
-        JSON.stringify(component.name) + " (id " + JSON.stringify(component.id) + ") has no sublayer at that path. " +
-          "Paths are component-relative, exactly as flcm.get keys an instance's `overrides` — and each variant has its own; read an instance of THIS variant to see them.",
-        { path: where },
+        "this component has no sublayer at that path. Paths are component-relative, exactly as flcm.get keys an instance's `overrides` — and each variant has its own; read an instance of THIS variant to see them.",
+        { path: where, node: { type: component.type, name: component.name, id: component.id } },
       );
     }
     // The compile runs against the DEFINITION node: a fresh instance's sublayer is a copy of it
@@ -490,8 +495,8 @@ function splitSlotContent(sublayer: any, definition: any, delta: OverrideDeltaIn
   if (raw === undefined) return { rest };
   if (!isSlot) {
     throw new FlcmError("authoring",
-      "`" + SLOT_CONTENT_WORD + "` fills a SLOT, and " + describeNodeIdentity(sublayer) + " at that path is not one. " + slotPathsSentence(definition),
-      { path: where },
+      "`" + SLOT_CONTENT_WORD + "` fills a SLOT, and this layer is not one. " + slotPathsSentence(definition),
+      { path: where, node: { type: sublayer.type, name: sublayer.name, id: sublayer.id } },
     );
   }
   return { rest, slotContent: (raw as WriteChild[]).filter((child): child is WriteNode => !!child) };
@@ -508,7 +513,7 @@ function restoreNullWords(delta: OverrideDeltaInput, where: string): EditDelta {
     const restore = own(NULL_RESTORE, key);
     if (restore === undefined) {
       throw new FlcmError("authoring",
-        "`" + key + "` is null. A read's null means the instance lacks a field the component has, and flcm has no removal word for `" + key + "` — the ones it has: " +
+        "`" + key + "` is null. A read's null means the instance lacks a field the component has, and flcm can't remove `" + key + "` — the fields it can remove: " +
           Object.keys(NULL_RESTORE).join(", ") + ". Pass a value, or leave the field to the component.",
         { path: where },
       );
@@ -529,8 +534,8 @@ function overrideSite(plan: EditPlan, context: InstanceContextFacts) {
 }
 
 /** Every override's realize-only words, as checks against the sublayer each was compiled on. */
-export function overrideRealizeOnlyChecks(overrides: readonly OverridePlan[], gate: GateResources, subject: string): RealizeOnlyCheck[] {
-  return overrides.flatMap((o) => realizeOnlyChecksOf(o.plan, o.realizeOnly, gate, overrideSite(o.plan, o.context), subject, o.context));
+export function overrideRealizeOnlyChecks(overrides: readonly OverridePlan[], gate: GateResources, path: string): RealizeOnlyCheck[] {
+  return overrides.flatMap((o) => realizeOnlyChecksOf(o.plan, o.realizeOnly, gate, overrideSite(o.plan, o.context), path, o.context));
 }
 
 /**
@@ -604,26 +609,28 @@ export function overrideOperationsOf(instance: SceneNode, overrides: readonly Ov
  * The sealed apply of `instance`'s override operations, one at a time in the order the call's
  * schedule gives. A path's live sublayer is found by the composite id the path predicts, the first
  * time one of its operations runs: re-acquired then, not trusted from the gate, because a swap or a
- * variant write earlier in the same span replaced the tree the paths named. `verb` is what the span
- * reports as — a batch spells its entry into it, so an override that fails names which entry's it was.
+ * variant write earlier in the same span replaced the tree the paths named. `at` is where its
+ * failures say they happened — a batch entry's call, a placed node's spec path.
  */
-export function beginOverrideApply(instance: any, ctx: RenderCtx, verb: string): (operation: OverrideOperation) => void {
-  const subject = "flcm." + verb;
-  const acquired = new Map<OverridePlan, { editPlan: AuthorizedEditPlan; fail: EditPlanFailure }>();
+export function beginOverrideApply(instance: any, ctx: RenderCtx, at: FlcmLocation): (operation: OverrideOperation) => void {
+  const acquired = new Map<OverridePlan, { editPlan: AuthorizedEditPlan; fail: EditPlanFailure; where: string }>();
   const acquire = ({ path, delta, slotContent }: OverridePlan) => {
-    const where = subject + ".overrides[" + JSON.stringify(path) + "]";
+    const where = pathUnder(at.path, "overrides[" + JSON.stringify(path) + "]");
     const liveId = liveSublayerId(instance.id, path);
     const node = instance.findOne((n: any) => n.id === liveId);
     if (!node) {
       throw new FlcmError("authoring",
-        describeNodeIdentity(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
-        { path: where },
+        "this instance has no sublayer at that path any more: componentId or a variant in componentProperties in the same call replaced its layers. Make that change in one call, read the instance again, then set the override in the next.",
+        { path: where, node: { type: instance.type, name: instance.name, id: instance.id } },
       );
     }
     // The gate judged the path a slot on the tree it could see; a retarget in this span may have
     // put something else there. Asked again on the live node, loud, before a child is touched.
     if (slotContent && node.type !== "SLOT") {
-      throw new FlcmError("authoring", describeNodeIdentity(node) + " is not a SLOT in the tree this call produced — a component word in the same call replaced it. Apply the component word, read the instance, then fill.", { path: where });
+      throw new FlcmError("authoring",
+        "this layer is no longer a SLOT: componentId or a variant in componentProperties in the same call replaced the instance's layers. Make that change in one call, read the instance again, then fill the slot in the next.",
+        { path: where, node: { type: node.type, name: node.name, id: node.id } },
+      );
     }
     // Compiled HERE, against the sublayer the span actually holds — a create's fresh copy, or the
     // tree a retarget just produced — so the words land on what is there, not on the definition
@@ -634,23 +641,24 @@ export function beginOverrideApply(instance: any, ctx: RenderCtx, verb: string):
     // doesn't hold is the finalizer's to name, once every write in the call has landed.
     const editPlan = delta ? gateEditPlan(node, delta, ctx, where) : authorizeEditPlan(emptyEditPlan(node), ctx, where);
     trackEditPlanSizing(editPlan);
-    return { editPlan, fail: openEditPlanApply(verb, editPlan, ctx.span) };
+    return { editPlan, fail: openEditPlanApply(editPlan, ctx.span, { path: where }), where };
   };
   return (operation) => {
     const { override } = operation;
     let landing = acquired.get(override);
     if (!landing) acquired.set(override, (landing = acquire(override)));
-    if (operation.phase === "slot-content") placeSlotContent(landing.fail, landing.editPlan.node, override.slotContent!, ctx, subject);
+    if (operation.phase === "slot-content") placeSlotContent(landing.fail, landing.editPlan.node, override.slotContent!, ctx, landing.where);
     else applyEditPlanPhase(landing.fail, landing.editPlan, operation.phase as EditPlanPhase, ctx);
   };
 }
 
 // A created instance's overrides: their own schedule, since nothing else in the walk writes the sublayers.
-function applyOverridePlans(instance: any, overrides: OverridePlan[], component: { id: string }, ctx: RenderCtx, verb: string): void {
+function applyOverridePlans(instance: any, overrides: OverridePlan[], component: { id: string }, ctx: RenderCtx, at: FlcmLocation): void {
   if (!overrides.length) return;
-  const operations = overrideOperationsOf(instance, overrides, { entry: 0, tag: "flcm." + verb, becomes: component, mains: new Map() });
-  const land = beginOverrideApply(instance, ctx, verb);
-  for (const operation of scheduleEditOperations(operations, "flcm." + verb)) land(operation);
+  const tag = at.path ?? "";
+  const operations = overrideOperationsOf(instance, overrides, { entry: 0, tag, becomes: component, mains: new Map() });
+  const land = beginOverrideApply(instance, ctx, at);
+  for (const operation of scheduleEditOperations(operations, tag)) land(operation);
 }
 
 // Replace a live SLOT's content: every current child goes — the definition's placeholder sublayers
@@ -658,9 +666,9 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], component:
 // the attach-then-size entry every insert rides. Removing a placeholder sublayer is an ASSUMPTION
 // on the live checklist: if Figma refuses, the refusal surfaces from this span and the whole call
 // rolls back — loud, never a half-filled slot.
-function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonly WriteNode[], ctx: RenderCtx, subject: string): void {
+function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonly WriteNode[], ctx: RenderCtx, path: string): void {
   try {
-    const facts = liveParentAttachFacts(slot, subject);
+    const facts = liveParentAttachFacts(slot, path);
     for (const content of slotContent) attachBuiltChild(slot, content, ctx, facts, (child) => slot.appendChild(child));
   } catch (cause) {
     throw fail(cause);
@@ -732,33 +740,35 @@ export async function resolveInstanceEditTargets(node: SceneNode, words: Instanc
 /**
  * The sync half of an instance edit, run in the verb's gate: resolve the property values and every
  * override path against the document as it stands at the seal, and compile the overrides against
- * their sublayers. Everything the component can refuse is refused here, with zero writes.
+ * their sublayers. Everything the component can refuse is refused here, with zero writes. `at` is
+ * the spec path the instance's words sit at, rooted at the call.
  */
-export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, current: any | null, planning: InstancePlanning, subject: string): InstanceEditPlan {
+export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, current: any | null, planning: InstancePlanning, at: string): InstanceEditPlan {
   const instance: any = node;
-  if (words.exposed !== undefined) assertExposureTarget(node, subject);
+  if (words.exposed !== undefined) assertExposureTarget(node, at);
   if (!current) {
     throw new FlcmError("figma",
-      describeNodeIdentity(instance) + " has no readable main component — it comes from a library the file can't reach right now, so nothing about its properties or sublayers can be resolved.",
-      { call: subject },
+      "this instance has no readable main component: it comes from a library the file can't reach right now, so its properties and sublayers can't be read. " +
+        "Make the library available to this file in Figma, or leave componentId, componentProperties and overrides out of the call.",
+      { path: at, node: { type: instance.type, name: instance.name, id: instance.id } },
     );
   }
-  assertInstanceStillOf(instance, current, subject);
+  assertInstanceStillOf(instance, current, at);
   // The base the property names and variant axes are read against: the component being swapped IN
   // when the delta names one, else the instance's CURRENT main (so a partial variant tuple
   // completes from the variant it is on, exactly as Figma's own "keep the rest" does).
   const resolved = words.componentId != null
-    ? resolveComponentNode(planning.targets.node(words.componentId, subject), subject)
+    ? resolveComponentNode(planning.targets.node(words.componentId, pathUnder(at, "componentId")), pathUnder(at, "componentId"))
     : resolvedFromComponent(current);
-  const { component, properties, variant } = resolveComponentProperties(resolved, words.componentProperties || {}, subject, planning.targets);
+  const { component, properties, variant } = resolveComponentProperties(resolved, words.componentProperties || {}, at, planning.targets);
   // The one fact that decides everything downstream: does this delta leave the instance pointing at
   // the component it already points at? A swap to the same component and a variant value restating
   // the current one are both no-ops, and the sublayer tree the override paths name is unchanged.
   const retargets = component !== current;
   const swapTo = words.componentId != null && retargets ? component : null;
   const overrides = retargets
-    ? planDefinitionOverrides(component, words.overrides || {}, subject, planning.gate)
-    : planLiveOverrides(instance, component, words.overrides || {}, subject, planning.gate);
+    ? planDefinitionOverrides(component, words.overrides || {}, at, planning.gate)
+    : planLiveOverrides(instance, component, words.overrides || {}, at, planning.gate);
   return {
     swapTo,
     becomes: component,
@@ -787,12 +797,12 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
 // Negative space: an empty component has no sublayers to compare, so a swap between two empty
 // components passes. There is nothing to override on one, and its property writes are gated
 // against the component the delta names.
-function assertInstanceStillOf(instance: any, current: any, subject: string): void {
+function assertInstanceStillOf(instance: any, current: any, at: string): void {
   if (instanceStillShows(instance, current)) return;
   throw new ConcurrentEditError({
-    call: subject,
+    path: at,
     node: { type: instance.type, name: instance.name, id: instance.id },
-    changed: "the main component of " + describeNodeIdentity(instance) + " changed; it was " + describeNodeIdentity(current),
+    changed: "its main component changed; it was " + describeNodeIdentity(current),
   });
 }
 
@@ -813,18 +823,17 @@ export function instanceStillShows(instance: any, component: any): boolean {
 // carries the live font and the live wrap mode, which is what a text delta's font enrichment and a
 // clamp's bounded-width gate need to read.
 function planLiveOverrides(
-  instance: any, component: any, overrides: Record<string, OverrideDeltaInput>, subject: string, gate: GateResources | undefined,
+  instance: any, component: any, overrides: Record<string, OverrideDeltaInput>, at: string, gate: GateResources | undefined,
 ): OverridePlan[] {
   const plans: OverridePlan[] = [];
   for (const path of Object.keys(overrides)) {
-    const where = subject + ".overrides[" + JSON.stringify(path) + "]";
+    const where = pathUnder(at, "overrides[" + JSON.stringify(path) + "]");
     const liveId = liveSublayerId(instance.id, path);
     const live: any = instance.findOne((n: any) => n.id === liveId);
     if (!live) {
       throw new FlcmError("authoring",
-        describeNodeIdentity(instance) + " has no sublayer at that path. " +
-          "Paths are component-relative, exactly as flcm.get keys this instance's `overrides` — and each variant has its own; read the instance to see the ones it has.",
-        { path: where },
+        "this instance has no sublayer at that path. Paths are component-relative, exactly as flcm.get keys this instance's `overrides` — and each variant has its own; read the instance to see the ones it has.",
+        { path: where, node: { type: instance.type, name: instance.name, id: instance.id } },
       );
     }
     plans.push(compileOverride(live, component, overrides[path], path, where, gate, instanceContextOf(live)));

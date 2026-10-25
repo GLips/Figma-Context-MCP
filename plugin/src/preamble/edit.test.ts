@@ -15,8 +15,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { inNextRun } from "../../harness/next-run.js";
 import { image } from "./value-sugar.js";
-import { render } from "./structure.js";
-import { edit } from "./edit.js";
+import { render, edit } from "./runtime.js";
 
 let figma = createFigmaMock();
 
@@ -59,18 +58,18 @@ test("visible, locked, and name — scene words — land on the live node", asyn
 test("vocabulary rejections happen before any write: unknown prop, key, bare x/y, empty delta", async () => {
   const node = await renderKeyedRowFrame();
   const logBefore = [...figma.undoLog];
-  await assert.rejects(edit("card", { wat: 1 } as never), /unknown prop "wat" on flcm\.edit/);
-  await assert.rejects(edit("card", { key: "rekeyed" } as never), /`key` is not editable/);
+  await assert.rejects(edit("card", { wat: 1 } as never), /flcm\.edit: unknown prop "wat"/);
+  await assert.rejects(edit("card", { key: "rekeyed" } as never), /`key` can't be edited/);
   await assert.rejects(edit("card", { x: 10 } as never), /use `left`\/`top`/);
   await assert.rejects(edit("card", {}), /empty/);
   // A mistyped scalar rejects the WHOLE delta — the valid fill beside it must not land as a
   // partial write (QuickJS has no type checking, so this is the runtime's only line of defense).
   await assert.rejects(
     edit("card", { fill: "#ff0000", opacity: "bad" } as never),
-    /`opacity` must be a number/,
+    /opacity\b.*must be a number/,
   );
   // Named words whose values are all null/undefined compile to nothing — same hazard as {}.
-  await assert.rejects(edit("card", { fill: undefined }), /compiled to nothing/);
+  await assert.rejects(edit("card", { fill: undefined }), /this delta changes nothing/);
   // All rejected before the entry seal: no undo activity, node untouched.
   assert.deepEqual(figma.undoLog, logBefore);
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 });
@@ -83,7 +82,13 @@ test("legality is per node type: a LINE takes no fill, exactly as LINE does", as
     height: 100,
     children: [{ type: "LINE", key: "rule", width: 80 }],
   });
-  await assert.rejects(edit("rule", { fill: "#ff0000" }), /`fill` is not a LINE word/);
+  await assert.rejects(edit("rule", { fill: "#ff0000" }), (err: FlcmError) => {
+    assert.equal(err.kind, "authoring");
+    assert.equal(err.path, "flcm.edit.fill");
+    assert.equal(err.node?.type, "LINE");
+    assert.match(err.message, /^flcm\.edit: LINE "LINE" \(id "[^"]+"\) at fill: a LINE has no `fill` to edit\. Drop it/);
+    return true;
+  });
   const node = await figma.getNodeByIdAsync(specNode(out, "rule").id);
   await edit("rule", { stroke: "#ff0000" });
   assert.deepEqual(node.strokes[0].color, { r: 1, g: 0, b: 0 });
@@ -95,14 +100,14 @@ test("a node type with no vocabulary of its own takes only the shared words, and
   // component-edit.test.ts.)
   const polygon = figma.createPolygon();
   figma.currentPage.appendChild(polygon);
-  await assert.rejects(edit(polygon.id, { fill: "#ff0000" }), /`fill` is not a POLYGON word/);
+  await assert.rejects(edit(polygon.id, { fill: "#ff0000" }), /a POLYGON has no `fill` to edit\. Drop it; a POLYGON edit takes only name, opacity/);
   const handle = await edit(polygon.id, { name: "renamed", visible: false });
   assert.equal(polygon.name, "renamed");
   assert.equal(polygon.visible, false);
   assert.equal(handle.id, polygon.id);
   // SLICE has no blend mixin at all — opacity would be an undo step that changed nothing.
   const slice = figma.createSlice();
-  await assert.rejects(edit(slice.id, { opacity: 0.5 }), /`opacity` is not a SLICE word/);
+  await assert.rejects(edit(slice.id, { opacity: 0.5 }), /a SLICE has no `opacity` to edit/);
 });
 
 test("an image fill in a delta fetches bytes through the host channel and stamps flcm/image", async () => {
@@ -365,7 +370,7 @@ test("a LINE's `width` is its length: it fills under a column, and nothing else 
   await edit("rule", { width: 40 });
   assert.equal(line.width, 40);
   await assert.rejects(edit("rule", { width: "hug" }), /"hug" and "N%" have no meaning on a line/);
-  await assert.rejects(edit("rule", { width: "80" } as never), /`width` on a LINE must be a number/);
+  await assert.rejects(edit("rule", { width: "80" } as never), /width: .*must be a number/);
   // Out of the flow nothing supplies the length.
   await render({ type: "FRAME", width: 100, height: 100, children: [{ type: "LINE", key: "loose", width: 20 }] });
   await assert.rejects(edit("loose", { width: "fill" }), /a LINE fills only as an in-flow child of a row or column/);
@@ -519,7 +524,7 @@ test("edit validates boldWeight through the same content compile as create", asy
   });
   await assert.rejects(
     edit("label", { text: "**hi**", boldWeight: { weight: 700 } }),
-    /boldWeight must be a number/,
+    /boldWeight: must be a number/,
   );
 });
 
@@ -527,19 +532,19 @@ test("a present-but-malformed structured value rejects the WHOLE delta — no pa
   const node = await renderKeyedRowFrame();
   await assert.rejects(
     edit("card", { fill: "#ff0000", position: false } as never),
-    /position must be "absolute" or "none"/,
+    /position\b.*must be "absolute" or "none"/,
   );
   await assert.rejects(
     edit("card", { fill: "#ff0000", layout: false } as never),
-    /flcm\.edit\.layout takes an object/,
+    /layout: must be an object/,
   );
   await assert.rejects(
     edit("card", { fill: "#ff0000", layout: { padding: [] } } as never),
-    /pad must be a number, a CSS box shorthand/,
+    /layout\.padding: must be a number, a CSS box shorthand/,
   );
   await assert.rejects(
     edit("card", { fill: "#ff0000", constraints: [] } as never),
-    /constraints must be an object/,
+    /constraints\b.*must be an object/,
   );
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 }); // the valid fill beside them never landed
 });
@@ -640,7 +645,7 @@ test("an unknown padding key rejects the whole delta instead of compiling to zer
   const node = await renderKeyedRowFrame();
   await assert.rejects(
     edit("card", { fill: "#ff0000", layout: { padding: { wat: 12 } } } as never),
-    /unknown prop "wat" on pad/,
+    /layout\.padding: unknown prop "wat"/,
   );
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 });
 });
@@ -685,11 +690,11 @@ test("a Figma refusal mid-apply rolls back and the error is a pointer: identity 
       throw new Error("in set_fills: Expected an array of paints");
     },
   });
-  await assert.rejects(edit("card", { fill: "#ff0000" }), (err: Error) => {
-    assert.match(err.message, /flcm\.edit: Figma refused a write on FRAME/);
-    assert.match(err.message, /in set_fills/);
-    assert.match(err.message, /id "\d+:\d+"/);
-    assert.match(err.message, /rolled back to its entry seal/);
+  await assert.rejects(edit("card", { fill: "#ff0000" }), (err: FlcmError) => {
+    assert.equal(err.kind, "figma");
+    assert.deepEqual(err.node, { type: "FRAME", name: node.name, id: node.id });
+    assert.match(err.message, /^flcm\.edit: FRAME "[^"]+" \(id "\d+:\d+"\): Figma refused a change to this layer: "in set_fills/);
+    assert.match(err.message, /Nothing from this call was kept/);
     return true;
   });
 });
@@ -751,7 +756,7 @@ test("a malformed fontWeight rejects the whole delta instead of silently resetti
   const node = await renderKeyedText("hello", { textStyle: { fontWeight: 700 } });
   await assert.rejects(
     edit("label", { textStyle: { fontWeight: true } } as never),
-    /fontWeight must be a number/,
+    /textStyle\.fontWeight: must be a number/,
   );
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" }); // wantWeight never saw the boolean
 });
@@ -846,10 +851,11 @@ test("a Figma refusal on an instance child names the instance — and never auto
     },
   });
   await assert.rejects(edit(child.id, { fill: "#ff0000" }), (err: Error) => {
-    assert.match(err.message, /lives inside instance "Card"/);
-    assert.match(err.message, /never auto-detaches/);
+    assert.match(err.message, /inside instance "Card"/);
+    assert.match(err.message, /detach the instance with flcm\.detach/);
     return true;
   });
+  assert.equal(inst.type, "INSTANCE");
 });
 
 test("a present-but-malformed textStyle rejects the WHOLE delta — the fill beside it never lands", async () => {
@@ -973,7 +979,7 @@ test("a live fact that changed during the round trip: the delta lands on the FRE
   try {
     await assert.rejects(
       edit("label", { fill: image("https://cdn.example.com/b.jpg"), textStyle: { fontSize: 24 } }),
-      (err: FlcmError) => err.kind === "concurrent-edit" && /the font of "Text" \(id [^)]+\) became Roboto Regular/.test(err.message),
+      (err: FlcmError) => err.kind === "concurrent-edit" && err.node?.id === node.id && /\(its font became Roboto Regular\)/.test(err.message),
     );
   } finally {
     restore();

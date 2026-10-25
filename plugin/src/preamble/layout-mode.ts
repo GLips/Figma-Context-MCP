@@ -51,23 +51,23 @@ export type ChildLayout =
   | { kind: "free"; layout: WriteLayout }
   | { kind: "flow"; mode: Extract<LayoutMode, { kind: "flow" }>; layout: WriteLayout }
   | { kind: "grid"; layout: WriteLayout; align?: "MIN" | "MAX" | "CENTER" | "AUTO" };
-export const FLOW_ALIGNMENT_GUIDANCE = 'Figma renders per-child layoutAlign MIN/CENTER/MAX nowhere (deprecated); only STRETCH is real, accepted here as alignSelf: "stretch" for counter-axis fill. Set layout.alignItems on the parent to align every child, or wrap this child in a fill-sized frame with its own alignItems.';
+export const FLOW_ALIGNMENT_GUIDANCE = 'Under a row or column, alignSelf takes only "stretch" (fill the cross axis): Figma has no other per-child alignment there. Set layout.alignItems on the parent to align every child, or wrap this child in a "fill"-sized frame with its own alignItems.';
 const CELL_ALIGN = { start: "MIN", end: "MAX", center: "CENTER", auto: "AUTO" } as const;
-export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: boolean, subject: string): ChildLayout {
-  const layout = normalizeChildLayoutAliases(words, mode, absolute, subject);
+export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: boolean, path: string | undefined): ChildLayout {
+  const layout = normalizeChildLayoutAliases(words, mode, absolute, path);
   const hasCellWords = layout.gridColumn || layout.gridRow || layout.justifySelf || layout.zIndex !== undefined;
   const kind = placementKind(mode, absolute);
-  if (hasCellWords && kind !== "grid") throw new FlcmError("authoring", "grid placement requires an in-flow GRID parent.", { call: subject });
+  if (hasCellWords && kind !== "grid") throw new FlcmError("authoring", "gridColumn, gridRow, justifySelf and zIndex place a child in a grid cell, and this node is not an in-flow child of a grid. Drop them, or set the parent's layout.mode to \"grid\".", { path });
   if (kind === "free") {
-    if (layout.alignSelf) throw new FlcmError("authoring", "alignSelf requires an in-flow auto-layout parent.", { call: subject });
+    if (layout.alignSelf) throw new FlcmError("authoring", "alignSelf needs an in-flow child of a row, column or grid, and this node is free-form or absolutely positioned. Drop alignSelf.", { path });
     return { kind, layout };
   }
   if (mode.kind === "flow") {
-    if (layout.alignSelf !== undefined) throw new FlcmError("authoring", FLOW_ALIGNMENT_GUIDANCE, { call: subject });
+    if (layout.alignSelf !== undefined) throw new FlcmError("authoring", FLOW_ALIGNMENT_GUIDANCE, { path });
     return { kind: "flow", mode, layout };
   }
   const alignment = layout.alignSelf;
-  if (alignment && !Object.prototype.hasOwnProperty.call(CELL_ALIGN, alignment)) throw new FlcmError("authoring", "alignSelf under grid must be " + Object.keys(CELL_ALIGN).join(", ") + ".", { call: subject });
+  if (alignment && !Object.prototype.hasOwnProperty.call(CELL_ALIGN, alignment)) throw new FlcmError("authoring", "alignSelf in a grid must be one of " + [...Object.keys(CELL_ALIGN), "stretch"].join(", ") + " — got " + JSON.stringify(alignment) + ".", { path });
   return { kind: "grid", layout, align: alignment ? CELL_ALIGN[alignment as keyof typeof CELL_ALIGN] : undefined };
 }
 
@@ -78,21 +78,21 @@ export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: bool
  * inline axis, which only grid has a word for. Both rewrite the same way, so the spelling a CSS
  * author reaches for never becomes a refusal for a picture flcm can draw.
  */
-function normalizeChildLayoutAliases(layout: WriteLayout, parent: LayoutMode, absolute: boolean, subject: string): WriteLayout {
+function normalizeChildLayoutAliases(layout: WriteLayout, parent: LayoutMode, absolute: boolean, path: string | undefined): WriteLayout {
   let out = layout;
   if (layout.alignSelf === "stretch") {
-    if (absolute || parent.kind === "free") throw new FlcmError("authoring", 'alignSelf "stretch" requires an in-flow row/column or grid parent.', { call: subject });
-    out = stretchIntoFill(out, "alignSelf", parent.kind === "flow" ? parent.cross : "vertical", subject);
+    if (absolute || parent.kind === "free") throw new FlcmError("authoring", 'alignSelf "stretch" needs an in-flow child of a row, column or grid, and this node is free-form or absolutely positioned. Size it in pixels instead.', { path });
+    out = stretchIntoFill(out, "alignSelf", parent.kind === "flow" ? parent.cross : "vertical", path);
   }
   // Out of flow (or under a row/column, which has no cell) the word is left alone for childLayout's
-  // own "grid placement requires an in-flow GRID parent" refusal — one home for that sentence.
-  if (out.justifySelf === "stretch" && parent.kind === "grid" && !absolute) out = stretchIntoFill(out, "justifySelf", "horizontal", subject);
+  // own grid-placement refusal — one home for that sentence.
+  if (out.justifySelf === "stretch" && parent.kind === "grid" && !absolute) out = stretchIntoFill(out, "justifySelf", "horizontal", path);
   return out;
 }
 
-function stretchIntoFill(layout: WriteLayout, word: "alignSelf" | "justifySelf", axis: "horizontal" | "vertical", subject: string): WriteLayout {
+function stretchIntoFill(layout: WriteLayout, word: "alignSelf" | "justifySelf", axis: "horizontal" | "vertical", path: string | undefined): WriteLayout {
   if (layout.sizing?.[axis] !== undefined && layout.sizing[axis] !== "fill") {
-    throw new FlcmError("authoring", word + ' "stretch" conflicts with the authored ' + (axis === "horizontal" ? "width" : "height") + '; use "fill".', { call: subject });
+    throw new FlcmError("authoring", word + ' "stretch" means ' + (axis === "horizontal" ? "width" : "height") + ' "fill", and this node also sets a different ' + (axis === "horizontal" ? "width" : "height") + '. Drop one of the two.', { path });
   }
   const words = { ...layout };
   delete words[word];

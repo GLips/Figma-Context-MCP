@@ -257,7 +257,7 @@ export const NODE_WORD_DISPOSITIONS: DispositionsFor<keyof SimplifiedNode> = {
   elided: "record",
   comments: "record",
   template: { refuse: "this is a compressed template reference; read the expanded node with flcm.get" },
-  strokeDashes: { refuse: "flcm strokes are solid; there is no dash-pattern word. Remove strokeDashes to author a solid stroke" },
+  strokeDashes: { refuse: "flcm strokes are solid and have no dash pattern" },
   name: "author", locked: "author", visible: "author", opacity: "author", mixBlendMode: "author",
   annotations: "author", clip: "author", constraints: "author", layout: "author",
   minWidth: "author", maxWidth: "author", minHeight: "author", maxHeight: "author",
@@ -276,7 +276,7 @@ export const LAYOUT_WORD_DISPOSITIONS: { [W in keyof SimplifiedLayout]: W extend
   alignItems: "author",
   alignSelf: "author", // The read word is grid-only; flow stretch is an input alias for fill.
   wrap: "author",
-  overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm word" },
+  overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm property" },
   gridTemplateColumns: "author",
   gridTemplateRows: "author",
   gridColumn: "author",

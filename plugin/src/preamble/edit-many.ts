@@ -45,7 +45,7 @@ import {
 } from "./instance.js";
 import { resolveInstanceMains, provenInstanceMains, definitionsEditedAt } from "./operation-schedule.js";
 import { assertNoContradictoryWords, captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
-import { FlcmError, describeFailure, failureKindOf, messageWithinCall, type FlcmErrorKind } from "./flcm-error.js";
+import { FlcmError, describeFailure, describeNodeIdentity, errorNodeOf, failureKindOf, locateFailure, messageWithinCall, type FlcmErrorKind, type FlcmErrorNode } from "./flcm-error.js";
 import { geometryWritesOf } from "./geometry-dependency.js";
 import type { AuthorizedEditPlan } from "./instance-write-authorization.js";
 import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./edit-apply.js";
@@ -59,7 +59,7 @@ import type { EditDelta, EditEntry } from "./schema.js";
 
 const SUBJECT = "flcm.editMany";
 
-/** The call an entry's own checks speak as; the ledger matches it to name each entry once. */
+/** An entry's spec path: every check of that entry is located under it, and its ledger line says it once. */
 function entryCall(index: number): string {
   return SUBJECT + "[" + index + "]";
 }
@@ -87,24 +87,37 @@ interface BatchEntry { id: string; changes: EditDelta }
  * ones, so a second message from the same entry is a consequence, not a new fault.
  */
 interface BatchLedger {
+  /** The layer an entry resolved to, so its failures name it. */
+  resolved(index: number, node: SceneNode): void;
   record(index: number, err: unknown): void;
   failed(index: number): boolean;
   rejectIfAny(): void;
 }
 
+// One entry's failure twice over: `shared` is what entries that failed the same way have in common
+// (grouped on it), `own` names the entry's layer too, for an entry that failed alone.
+interface EntryFailure { shared: string; own: string }
+
 function createBatchLedger(total: number): BatchLedger {
-  const failures: (string | undefined)[] = [];
+  const failures: (EntryFailure | undefined)[] = [];
+  const layers: (FlcmErrorNode | undefined)[] = [];
   const kinds = new Set<FlcmErrorKind>();
   let count = 0;
   let concurrentEdits = 0;
   return {
+    resolved(index, node) {
+      layers[index] = errorNodeOf(node);
+    },
     record(index, err) {
       if (failures[index] !== undefined) return;
-      // The line already names its entry: a gate check that spoke as `flcm.editMany[i]` says it once.
-      const own = err instanceof FlcmError && err.call === entryCall(index);
-      failures[index] = own ? messageWithinCall(err) : describeFailure(err);
-      count++;
       const kind = failureKindOf(err);
+      // The line already names its entry, so a path under it is said from inside it. The batch's
+      // header carries the bug advice only when every entry is a bug; otherwise the line says so.
+      const describe = (cause: unknown) => (cause instanceof FlcmError ? messageWithinCall(cause, entryCall(index)) : describeFailure(cause)) +
+        (kind === "internal" ? " (a bug in flcm, not in your script)" : "");
+      const shared = describe(err);
+      failures[index] = { shared, own: layers[index] === undefined ? shared : describe(locateFailure(err, { node: layers[index] })) };
+      count++;
       kinds.add(kind);
       if (kind === "concurrent-edit") concurrentEdits++;
     },
@@ -113,22 +126,23 @@ function createBatchLedger(total: number): BatchLedger {
     },
     rejectIfAny() {
       if (!count) return;
-      const remedy = concurrentEdits === count ? "Read those layers again and re-run it."
+      const remedy = kinds.size === 1 && kinds.has("internal") ? ""
+        : concurrentEdits === count ? "Read those layers again and re-run it."
         : concurrentEdits ? "Fix every entry below, read again the layers edited in Figma meanwhile, and re-run it."
         : "Fix every entry below and re-run it.";
       throw new FlcmError(
         batchKindOf(kinds),
-        count + " of " + total + " entries were rejected, so NOTHING was applied — " +
-          "the batch is all-or-nothing. " + remedy + "\n" + collapseFailures(failures, total).join("\n"),
-        { call: SUBJECT },
+        count + " of " + total + " entries were rejected, and a batch applies all of its entries or none." +
+          (remedy ? " " + remedy : "") + "\n" + collapseFailures(failures, total).join("\n"),
       );
     },
   };
 }
 
-// The batch's kind is its most actionable entry's: a bug outranks the rest so it gets reported, an
-// entry the agent must fix outranks a Figma limit, and a concurrent edit (re-read and re-run) ranks last.
-const BATCH_KIND_RANK: readonly FlcmErrorKind[] = ["internal", "run-ended", "authoring", "figma", "concurrent-edit"];
+// The batch's kind is its most actionable entry's: an entry the agent must fix outranks a Figma
+// limit, a concurrent edit (re-read and re-run) ranks below both, and a bug ranks last — the whole
+// batch reads as flcm's bug only when every entry is one.
+const BATCH_KIND_RANK: readonly FlcmErrorKind[] = ["run-ended", "authoring", "figma", "concurrent-edit", "internal"];
 function batchKindOf(kinds: ReadonlySet<FlcmErrorKind>): FlcmErrorKind {
   return BATCH_KIND_RANK.find((kind) => kinds.has(kind))!;
 }
@@ -142,18 +156,18 @@ function batchKindOf(kinds: ReadonlySet<FlcmErrorKind>): FlcmErrorKind {
  * forty identical lines. Distinct messages keep first-seen order, so the indexes still read
  * left-to-right.
  */
-function collapseFailures(failures: readonly (string | undefined)[], total: number): string[] {
+function collapseFailures(failures: readonly (EntryFailure | undefined)[], total: number): string[] {
   const indexesByMessage = new Map<string, number[]>();
   for (let i = 0; i < total; i++) {
-    const message = failures[i];
-    if (message === undefined) continue;
-    const seen = indexesByMessage.get(message);
+    const failure = failures[i];
+    if (failure === undefined) continue;
+    const seen = indexesByMessage.get(failure.shared);
     if (seen) seen.push(i);
-    else indexesByMessage.set(message, [i]);
+    else indexesByMessage.set(failure.shared, [i]);
   }
   const lines: string[] = [];
   indexesByMessage.forEach((at, message) => {
-    lines.push(at.length === 1 ? "  [" + at[0] + "] " + message : "  " + at.length + " entries (" + at.join(", ") + "): " + message);
+    lines.push(at.length === 1 ? "  [" + at[0] + "] " + failures[at[0]]!.own : "  " + at.length + " entries (" + at.join(", ") + "): " + message);
   });
   return lines;
 }
@@ -182,11 +196,10 @@ function assertBatchShape(entries: unknown): void {
       "authoring",
       "the first argument is an array of { id, ...changes } entries — got " + showValue(entries) +
         ". To nudge a single node, use flcm.edit(target, changes).",
-      { call: SUBJECT },
     );
   }
   if (!entries.length) {
-    throw new FlcmError("authoring", "the entries array is empty — nothing to apply (an empty batch would still mint an undo step).", { call: SUBJECT });
+    throw new FlcmError("authoring", "the entries array is empty, so there is nothing to edit. Pass at least one { id, ...changes } entry, or skip the call.");
   }
 }
 
@@ -200,14 +213,13 @@ function assertBatchShape(entries: unknown): void {
  */
 function compileBatchEntry(entry: EditEntry, index: number): BatchEntry {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-    throw new FlcmError("authoring", "each entry is an object { id, ...changes } — got " + showValue(entry) + ".", { call: SUBJECT });
+    throw new FlcmError("authoring", "each entry is an object { id, ...changes } — got " + showValue(entry) + ".");
   }
   if ("target" in entry) {
     throw new FlcmError(
       "authoring",
       "an entry names its node with `id`, not `target` — write { id, ...changes }, the shape every verb reads and writes. " +
         "A batch edits nodes you have already located: find them first (flcm.find / flcm.findOne / a render result) and pass each one's `id`.",
-      { call: SUBJECT },
     );
   }
   const { id, ...rest } = entry as { id?: unknown } & EditDelta;
@@ -215,11 +227,10 @@ function compileBatchEntry(entry: EditEntry, index: number): BatchEntry {
     throw new FlcmError(
       "authoring",
       "an entry needs an `id` — the live id of the node to edit, as flcm.find, flcm.findOne, flcm.get and render results all carry. Got " + showValue(id) + ".",
-      { call: SUBJECT },
     );
   }
   const changes = compileDeltaTrees(rest as EditDelta, entryCall(index));
-  rejectNonDeltaWords(changes, SUBJECT);
+  rejectNonDeltaWords(changes, entryCall(index));
   return { id, changes };
 }
 
@@ -235,6 +246,7 @@ async function resolveEntryNodes(ledger: BatchLedger, batch: readonly BatchEntry
         // Through the target resolver's id branch, not a key scan: an entry's `id` IS live
         // identity, so a string that happens to also be someone's flcm/key is not a question here.
         nodes[i] = await resolveTarget({ id: entry.id });
+        ledger.resolved(i, nodes[i]!);
       } catch (err) {
         ledger.record(i, err);
       }
@@ -257,8 +269,8 @@ function assertOneEntryPerNode(ledger: BatchLedger, nodes: readonly (SceneNode |
     }
     throw new FlcmError(
       "authoring",
-      "resolves to the same node as entry [" + first + "]: " + JSON.stringify(node.name) + " (id " +
-        JSON.stringify(node.id) + "). Merge the two deltas into one entry — a batch applies each node once.",
+      "entry [" + first + "] edits this layer too. Merge the two deltas into one entry — a batch edits each layer once.",
+      { node: { type: node.type, name: node.name, id: node.id } },
     );
   });
 }
@@ -318,7 +330,7 @@ function planEntryInstances(
   const instances: (InstanceEditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, plans.length, (i) => {
     const plan = plans[i];
-    if (plan && plan.instanceWords) instances[i] = planInstanceEdit(plan.node, plan.instanceWords, currents[i], planning, SUBJECT);
+    if (plan && plan.instanceWords) instances[i] = planInstanceEdit(plan.node, plan.instanceWords, currents[i], planning, entryCall(i));
   });
   return instances;
 }
@@ -340,15 +352,15 @@ function planEntryComponents(
   forEachLiveEntry(ledger, plans.length, (i) => {
     const plan = plans[i];
     if (!plan || !plan.componentWords) return;
-    adds[i] = planAddedDefinitions(plan.node, plan.componentWords, SUBJECT);
+    adds[i] = planAddedDefinitions(plan.node, plan.componentWords, entryCall(i));
     if (adds[i].size) addsByOwner.set(plan.node, adds[i]);
   });
   const bindings: (ComponentBindingEditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, plans.length, (i) => {
     const refs = plans[i]?.componentWords?.componentPropertyReferences;
-    if (refs !== undefined) bindings[i] = prepareComponentBindingEdit(plans[i]!.node, refs, SUBJECT, (owner) => addsByOwner.get(owner));
+    if (refs !== undefined) bindings[i] = prepareComponentBindingEdit(plans[i]!.node, refs, entryCall(i), (owner) => addsByOwner.get(owner));
   });
-  const binderValue = (j: number, field: string) => projectedBinderValue(field, plans[j]!.node, plans[j]!, instances[j], mains[j], SUBJECT);
+  const binderValue = (j: number, field: string) => projectedBinderValue(field, plans[j]!.node, plans[j]!, instances[j], mains[j], entryCall(j));
   const bindersOf = (add: AddedDefinition): PropertyBinder[] => {
     const binders: PropertyBinder[] = [];
     bindings.forEach((binding, j) => {
@@ -366,7 +378,7 @@ function planEntryComponents(
     const words = plan.componentWords;
     const component: ComponentEditPlan = {};
     if (words.description !== undefined || words.propertyDefinitions !== undefined) {
-      component.definitions = planComponentDefinitionEdit(plan.node, words, SUBJECT, adds[i], bindersOf);
+      component.definitions = planComponentDefinitionEdit(plan.node, words, entryCall(i), adds[i], bindersOf);
     }
     if (bindings[i]) component.binding = bindings[i];
     components[i] = component;
@@ -394,7 +406,7 @@ function settleEntryBoundDefaults(
     const binding = bindings[j];
     if (!binding) return;
     rewired.set(plans[j]!.node, binding);
-    for (const one of existingPropertyBindings(binding, describeBinder(plans[j]!.node.name, "entry " + j), SUBJECT, (field) => binderValue(j, field))) {
+    for (const one of existingPropertyBindings(binding, describeBinder(plans[j]!.node.name, "entry " + j), entryCall(j), (field) => binderValue(j, field))) {
       existing.push(one);
       entryOf.set(one, j);
     }
@@ -448,8 +460,8 @@ function assertNoDefinitionBindingCrossReference(
         namer,
         new FlcmError(
           "authoring",
-          named.what + " of " + JSON.stringify(declarerPlan.node.name) + " (id " + JSON.stringify(declarerPlan.node.id) +
-            "), whose `propertyDefinitions` entry [" + declarer + "] is changing in the same batch — the two would have to run in an order this call never states. " +
+          named.what + " of " + describeNodeIdentity(declarerPlan.node) +
+            ", whose `propertyDefinitions` entry [" + declarer + "] is changing in the same batch — the two would have to run in an order this call never states. " +
             "Split them: rename or delete in one call, " + named.instead + " in the next.",
         ),
       );
@@ -508,9 +520,10 @@ function assertNoEntryInsideRetargetedInstance(
         inner,
         new FlcmError(
           "authoring",
-          "sits inside " + JSON.stringify(hostPlan.node.name) + " (id " + JSON.stringify(hostPlan.node.id) +
-            "), the instance entry [" + host + "] re-points — that swap rebuilds these sublayers, so this write would land on a node no longer in the tree. " +
+          "this layer sits inside " + describeNodeIdentity(hostPlan.node) +
+            ", the instance entry [" + host + "] re-points — that swap rebuilds its sublayers, so this edit would land on a layer no longer in the tree. " +
             "Move it into entry [" + host + "]'s own `overrides`, keyed by the sublayer's component-relative path.",
+          { node: { type: innerPlan.node.type, name: innerPlan.node.name, id: innerPlan.node.id } },
         ),
       );
     }
@@ -546,7 +559,7 @@ function layoutDeltasByNodeId(plans: readonly (EditPlan | undefined)[]): BatchLa
 function compileEntries(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: readonly BatchEntry[]): (EditPlan | undefined)[] {
   const compiled: (EditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, batch.length, (i) => {
-    compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
+    compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, entryCall(i));
   });
   return compiled;
 }
@@ -625,7 +638,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       forEachLiveEntry(ledger, batch.length, (i) => {
         // The root's layout gate reads the container the entry LEAVES BEHIND (a swap re-points the
         // instance before its own layout words land).
-        authorized[i] = authorizeEditPlan(compiled[i] as EditPlan, loaded, SUBJECT, { deltas, becomes: instances[i]?.becomesContainer });
+        authorized[i] = authorizeEditPlan(compiled[i] as EditPlan, loaded, entryCall(i), { deltas, becomes: instances[i]?.becomesContainer });
       });
       ledger.rejectIfAny();
       const plans = authorized;
@@ -661,7 +674,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       ledger.rejectIfAny();
       assertNoContradictoryWords(obligationsInCall(), SUBJECT);
       const entries: EditApplyEntry[] = plans.map((plan, i) => ({
-        node: plan.node, plan, instance: instances[i], component: components[i], subject: "editMany (entry " + i + ")", tag: "[" + i + "]",
+        node: plan.node, plan, instance: instances[i], component: components[i], site: { path: entryCall(i) }, tag: "[" + i + "]",
       }));
       // Per operation across the whole batch, against every entry's recorded words (edit-apply.ts).
       const schedule = scheduleEditEntries(entries, SUBJECT, { mains: mainsNow });

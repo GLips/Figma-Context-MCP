@@ -53,7 +53,7 @@ import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, fontDivergences, textStyleFont, FontMap } from "./fonts.js";
 import { writeKey, identityOf, type InstanceContextFacts } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
-import { MutatingVerbError, locateBuiltNodeFailure } from "./verb-error.js";
+import { locateBuiltNodeFailure } from "./verb-error.js";
 import { FlcmError, describeFailure } from "./flcm-error.js";
 import { unrotatedCornerOf } from "./pivot.js";
 
@@ -209,7 +209,7 @@ function stampKey(node: any, wn: BuiltNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   // No verb name: the same walk runs under render AND under every structural insert verb, and
   // naming the wrong one sends the agent looking at a call it didn't make.
-  if (ctx.keys.has(wn.key)) throw new FlcmError("authoring", 'duplicate key "' + wn.key + '" — keys must be unique within one call.');
+  if (ctx.keys.has(wn.key)) throw new FlcmError("authoring", 'another node in this call already has the key "' + wn.key + '". Keys must be unique within one call: rename one of them.');
   writeKey(node, wn.key);
   ctx.keys.add(wn.key);
 }
@@ -249,7 +249,7 @@ function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
   if (typeof b64 !== "string") {
     // Every url on a paint site (paintSitesOf) is prefetched before any node is built, so a miss is
     // a paint that reached here some other way — fail loud rather than paint a blank fill.
-    throw new FlcmError("internal", 'no fetched bytes for "' + paint.url + '" — the image was not resolved before render. This is a bug in flcm, not in your call.', { call: "flcm.image" });
+    throw new FlcmError("internal", 'the image at "' + paint.url + '" was not downloaded before the call built this layer.');
   }
   const img = figma.createImage(figma.base64Decode(b64));
   return { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: img.hash, ...imagePaintAdjustments(paint) };
@@ -334,7 +334,7 @@ function applyCornerRadii(node: any, r: CornerRadii<Bindable>, tokens: ResolvedT
     return;
   }
   if (!("topLeftRadius" in node)) {
-    throw new FlcmError("authoring", "a " + node.type + " has one radius for all four corners — per-corner borderRadius has no equivalent on it.");
+    throw new FlcmError("authoring", "a " + node.type + " has one radius for all four corners, so per-corner borderRadius can't apply to it. Give borderRadius one number.");
   }
   writeBindable(node, "topLeftRadius", r.topLeft, tokens);
   writeBindable(node, "topRightRadius", r.topRight, tokens);
@@ -575,7 +575,7 @@ function settlePercentSizing(parent: any, child: any, layout: AuthorizedLayout):
   const height = vertical.resize?.kind === "percent" ? vertical.resize.percent : undefined;
   if (width === undefined && height === undefined) return;
   const words = layout.child.layout;
-  assertPercentResolvable({ ...words, position: child.layoutPositioning === "ABSOLUTE" ? "absolute" : words.position }, parentHugFacts(parent), "flcm");
+  assertPercentResolvable({ ...words, position: child.layoutPositioning === "ABSOLUTE" ? "absolute" : words.position }, parentHugFacts(parent), undefined);
   if (textAutoResize) child.textAutoResize = textAutoResize;
   resizeToPlannedSize(child, layout, {
     width: Math.max(width !== undefined ? pctOf(width, parent.width) : child.width, 0.01),
@@ -809,9 +809,8 @@ function assertLayoutLandsUnderParent(
 // variant change re-points the instance before its root words land.
 export interface BecomesContainer { readonly mode: LayoutMode; readonly wrap: boolean }
 
-// Edit: the destination is where the node already sits. `subject` names the calling verb the way
-// the other two spellings take it — `edit` and `editMany` compile through one pipeline, and an
-// entry rejected inside a batch must say which verb the agent actually called. `deltas` is every
+// Edit: the destination is where the node already sits. `subject` is the delta's spec path
+// ("flcm.edit", "flcm.editMany[2]"), which a rejection is located at. `deltas` is every
 // layout delta THIS verb is applying, keyed by node id, so the ancestors this node is judged
 // against are the ones the call is creating (see projectedParentLayoutFacts); a lone `edit` passes
 // none and is judged against the live canvas. `becomes` is the node's OWN container after a
@@ -948,7 +947,7 @@ interface AttachParentFacts extends ParentFlowFacts {
   /** The call site of the built parent whose stretch `crossStretch` states. */
   stretchedBy?: string;
   widthIsBounded: boolean;
-  subject: string; // the verb name the shared legality rules prefix their rejections with
+  subject: string; // the spec path the shared legality rules locate their rejections at
   // Where a parent the walk is still assembling will sit: it is a page child until its own parent takes it.
   context?: InstanceContextFacts;
 }
@@ -991,7 +990,7 @@ function childFlowFactsFromPlan(plan: NodeSizingPlan, layout: WriteLayout): Pare
 export function assertBuiltInteriorLegal(tree: WriteNode): void {
   const facts = tree.liveId === undefined ? childFlowFactsOf(tree) : undefined;
   for (const child of tree.children ?? []) {
-    if (facts && child.liveId === undefined) legalChildLayout(child, child.layout || {}, { ...facts, subject: child.sourcePath ?? "flcm" });
+    if (facts && child.liveId === undefined) legalChildLayout(child, child.layout || {}, { ...facts, subject: child.sourcePath });
     assertBuiltInteriorLegal(child);
   }
 }
@@ -1000,7 +999,7 @@ export function assertBuiltInteriorLegal(tree: WriteNode): void {
 // child here — and flagged as flcm's own refusal, which their path-prefixed messages can't say. The
 // gate judges authored words (assertBuiltInteriorLegal), the walk words with the text-fill default:
 // that default is legal wherever it applies, so the verdict is the same.
-function legalChildLayout(wn: BuiltNode, words: WriteLayout, facts: ParentFlowFacts & { subject: string }): ChildLayout {
+function legalChildLayout(wn: BuiltNode, words: WriteLayout, facts: ParentFlowFacts & { subject: string | undefined }): ChildLayout {
   try {
     const context = childLayout(facts.mode, words, words.position === "absolute", facts.subject);
     const cl = context.layout;
@@ -1136,7 +1135,7 @@ function buildFrame(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout, enc
 // child-side words (position, fill, constraints) are attachBuiltChild's, after the caller places the node.
 function buildInstance(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const plan = ctx.instances.get(wn);
-  if (!plan) throw new FlcmError("internal", "an INSTANCE node reached the build walk without a resolved plan. This is a bug in flcm, not in your call.");
+  if (!plan) throw new FlcmError("internal", "this instance's component wasn't looked up before the call built it.");
   const inst = plan.component.createInstance();
   figma.currentPage.appendChild(inst); // enter the doc; reparented when appended to a parent frame
   if (Object.keys(plan.properties).length) inst.setProperties(plan.properties);
@@ -1335,7 +1334,7 @@ function buildLine(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any
 // Both fail loud on unparseable input rather than leaving a silent empty node.
 function buildVector(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedLayout): any {
   const source = wn.vector;
-  if (!source) throw new FlcmError("internal", "a VECTOR node carries no geometry (compileSvg/compilePath guarantee one). This is a bug in flcm, not in your call.");
+  if (!source) throw new FlcmError("internal", "this VECTOR reached the build with no svg markup or path data to build from.");
   return source.kind === "svg" ? buildSvg(wn, source.markup, ctx, layout) : buildPath(wn, source, ctx, layout);
 }
 
@@ -1344,7 +1343,7 @@ function buildSvg(wn: BuiltNode, markup: string, ctx: RenderCtx, layout: Authori
   try {
     frame = figma.createNodeFromSvg(markup);
   } catch (e) {
-    throw new FlcmError("figma", "VECTOR: Figma could not parse the SVG markup — " + describeFailure(e));
+    throw new FlcmError("figma", "Figma could not parse the svg markup (" + describeFailure(e) + "). Fix or simplify the markup, then re-run the call.");
   }
   figma.currentPage.appendChild(frame);
   // createNodeFromSvg returns a FrameNode, which inherits Figma's clipsContent=true default — so vector art
@@ -1400,7 +1399,10 @@ function buildPath(wn: BuiltNode, source: { paths: VectorPaths; scale?: number }
   } catch (e) {
     // Already normalized to Figma's absolute M/L/C/Q/Z subset at compile (compile-nodes.ts compilePath); reaching
     // here means the parser rejected something the normalizer emitted, so show what it actually sent.
-    throw new FlcmError("figma", 'VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + describeFailure(e));
+    throw new FlcmError(
+      "figma",
+      'Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" (' + describeFailure(e) + "). Fix the path data, or pass the shape as svg markup instead.",
+    );
   }
   applyPaint(v, wn, ctx);
   applyOwnSizing(v, layout, ctx.tokens);
@@ -1434,9 +1436,8 @@ export function buildNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuilt
   try { return buildCompiledNode(wn, ctx, layout, enclosingWidthBounded); }
   catch (cause) {
     // Innermost wins (locateFailure keeps a site already set): the deepest node that failed is the
-    // one the verb error should name. A nested verb error (slot content, a placed live child)
-    // already names it, so it passes through untouched.
-    if (cause instanceof MutatingVerbError || !wn.sourcePath) throw cause;
+    // one the error names.
+    if (!wn.sourcePath) throw cause;
     throw locateBuiltNodeFailure(cause, wn);
   }
 }
@@ -1444,7 +1445,7 @@ export function buildNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuilt
 function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuiltLayout, enclosingWidthBounded?: boolean): any {
   const build = own(BUILDERS, wn.type);
   if (!build) {
-    throw new FlcmError("authoring", 'cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
+    throw new FlcmError("authoring", 'flcm can\'t create a "' + wn.type + '" node. Use one of the types it creates: ' + Object.keys(BUILDERS).join(", ") + ".");
   }
   const node = build(wn, ctx, layout, enclosingWidthBounded);
   if (wn.source) ctx.placedIds.set(wn.source, node.id);
@@ -1476,8 +1477,8 @@ function buildCompiledNode(wn: BuiltNode, ctx: RenderCtx, layout: AuthorizedBuil
     if (!ctx.bindings) {
       throw new FlcmError(
         "internal",
-        "a node in this tree carries `componentPropertyReferences`, and this verb has no declaring component behind it for the binding to point at — that is flcm.component, or an insert landing inside a component. " +
-          "(The verb's prepare should have refused the tree; reaching the build walk is a bug.)",
+        "this layer binds `componentPropertyReferences`, and this call has no component for the binding to point at (flcm.component, or an insert inside a component), " +
+          "so the call should have been refused before it built anything.",
       );
     }
     ctx.bindings.push({ node, refs: wn.componentPropertyReferences });

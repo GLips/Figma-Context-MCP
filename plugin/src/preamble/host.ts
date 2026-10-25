@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { HostTraceStage, NativeOperation, TraceOperation } from "../protocol.js";
+import { RUN_INACTIVITY_DEADLINE_MS, type HostTraceStage, type NativeOperation, type TraceOperation } from "../protocol.js";
 import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 import { FlcmError } from "./flcm-error.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
@@ -89,11 +89,11 @@ export function currentHost(): FlcmHost | undefined {
 export async function requestHostImages(urls: string[]): Promise<Record<string, string>> {
   const host = currentHost();
   if (!host) {
-    throw new FlcmError("internal", "this runtime has no host (FlcmHost) — image fills need the live plugin bridge.", { call: "flcm.image" });
+    throw new FlcmError("internal", "images can only be fetched inside a run in the Figma plugin, and this one has no connection to it.");
   }
-  const payload = await serverCall(host, "flcm.image", "images.fetch", urls);
+  const payload = await serverCall(host, "images.fetch", urls);
   if (!payload || typeof payload !== "object") {
-    throw new FlcmError("internal", "the server's image reply was malformed.", { call: "flcm.image" });
+    throw new FlcmError("internal", "the server's reply to the image fetch was malformed.");
   }
   // Image policy belongs in the server-shipped preamble, not the installed host.
   const images: Record<string, string> = Object.create(null);
@@ -121,7 +121,7 @@ export async function requestHostCommentPins(): Promise<HostCommentPin[] | null>
   if (!host) return null;
   try {
     // No file key: the server reads the pins of the document this run was admitted for.
-    const reply = await serverCall(host, "flcm.read", "comments.pins", {});
+    const reply = await serverCall(host, "comments.pins", {});
     const pins = (reply as { pins?: unknown } | null)?.pins;
     if (!Array.isArray(pins)) return null;
     return pins.filter(
@@ -155,22 +155,21 @@ export function hostDeadlinePassed(): boolean {
  * Refuse when this runtime's own run has already replied: the agent kept `flcm` across calls (on
  * globalThis — session refuses functions). Nothing carries its reads out, nothing can cancel or wait
  * for its writes, and its server calls answer a request nobody holds. Fails OPEN like cancellation:
- * no host means no run to outlive. `action` names the verb the refusal is from.
+ * no host means no run to outlive.
  */
-export function refuseIfRunFinished(action: string): void {
+export function refuseIfRunFinished(): void {
   if (!currentHost()?.isRunFinished()) return;
   throw new FlcmError(
     "run-ended",
     "this flcm belongs to an earlier call that has already finished and replied, so " +
       "it can no longer read, write or fetch. Use the flcm your current call was given (store ids " +
       "and specs in `session`, never flcm itself).",
-    { call: action },
   );
 }
 
 /** Every server call: refused from a finished runtime, and bracketed for the deadline clock. */
-function serverCall(host: FlcmHost, action: string, capability: string, payload: unknown): Promise<unknown> {
-  refuseIfRunFinished(action);
+function serverCall(host: FlcmHost, capability: string, payload: unknown): Promise<unknown> {
+  refuseIfRunFinished();
   return withServerCall(() => host.callServer(capability, payload));
 }
 
@@ -191,8 +190,11 @@ const NATIVE_CALLS: Record<NativeOperation, string> = {
   "font-list": "figma.listAvailableFontsAsync",
 };
 
+// The server cancels for three reasons it doesn't send: its inactivity deadline, its total run
+// limit, or its caller giving up. The first is the one an agent's script causes and can fix.
 export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
-  server: "this run was cancelled by the server (its deadline passed)",
+  server: "the server cancelled this run, most often because the script held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
+    "s without reaching it (split long synchronous work across calls)",
   disconnected: "this run's server disconnected, so the run was cancelled",
   revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
 };
@@ -209,11 +211,14 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
   const host = currentHost();
   const abandoned = host
     ? host.whenCancelled().then((cause): never => {
+        const stalled = NATIVE_CALLS[operation] + " still hadn't returned after " + Math.round((Date.now() - started) / 1000) + "s when ";
+        // Only the server's own cancel is the stall's doing; a disconnect or a revoke says why it ended.
         throw new FlcmError(
           "run-ended",
-          NATIVE_CALLS[operation] + " still hadn't returned after " + Math.round((Date.now() - started) / 1000) +
-            "s when " + CANCELLED_BECAUSE[cause] + ", so the run stops here. Figma stalls its calls like this in a file " +
-            "whose window or tab is in the background: bring the file to the front in Figma before retrying.",
+          cause === "server"
+            ? stalled + "the server cancelled the run, so the run stops here. Figma stalls its calls like this in a file " +
+                "whose window or tab is in the background: bring the file to the front in Figma before retrying."
+            : stalled + CANCELLED_BECAUSE[cause] + ", so the run stops here.",
         );
       })
     : new Promise<never>(() => {});

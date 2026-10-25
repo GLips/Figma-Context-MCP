@@ -11,22 +11,22 @@ export function serializeGridTracks(tracks: readonly { type: "HUG" | "FIXED" | "
 }
 
 // REST may compress equal tracks with repeat/minmax; the plugin stores expanded tracks.
-export function parseGridTracks(raw: string, subject: string): GridTrack[] {
+export function parseGridTracks(raw: string, path: string): GridTrack[] {
   const tokens = raw.match(/repeat\(\s*\d+\s*,\s*(?:minmax\([^)]*\)|fit-content\([^)]*\)|[^()])+\)|minmax\([^)]*\)|fit-content\([^)]*\)|[^\s]+/g) ?? [];
   const tracks: GridTrack[] = [];
   for (const token of tokens) {
     const repeat = /^repeat\(\s*(\d+)\s*,\s*(.+)\)$/.exec(token);
     if (repeat) {
       const count = Number(repeat[1]);
-      if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw new FlcmError("authoring", "grid repeat count must be between 1 and 10000.", { call: subject });
-      const repeated = parseGridTracks(repeat[2], subject);
+      if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw new FlcmError("authoring", "a repeat() count must be between 1 and 10000 — got " + repeat[1] + ".", { path });
+      const repeated = parseGridTracks(repeat[2], path);
       for (let i = 0; i < count; i++) tracks.push(...repeated);
       continue;
     }
     if (token === "auto" || token === "fit-content(100%)") { tracks.push({ type: "HUG" }); continue; }
     const normalized = /^minmax\(\s*0(?:px)?\s*,\s*(\d+(?:\.\d+)?fr)\s*\)$/.exec(token)?.[1] ?? token;
     const match = /^(\d+(?:\.\d+)?)(px|fr)$/.exec(normalized);
-    if (!match || !Number.isFinite(Number(match[1])) || (match[2] === "fr" && Number(match[1]) <= 0)) throw new FlcmError("authoring", "unsupported grid track " + token + "; use Npx, Nfr, auto, fit-content(100%), repeat(N, tracks), or minmax(0, Nfr).", { call: subject });
+    if (!match || !Number.isFinite(Number(match[1])) || (match[2] === "fr" && Number(match[1]) <= 0)) throw new FlcmError("authoring", "unsupported grid track " + JSON.stringify(token) + "; use Npx, Nfr, auto, fit-content(100%), repeat(N, tracks), or minmax(0, Nfr).", { path });
     tracks.push({ type: match[2] === "px" ? "FIXED" : "FLEX", value: Number(match[1]) });
   }
   return tracks;
@@ -109,8 +109,8 @@ export function hugGridTracks(rows: number): GridTrack[] {
 }
 
 /** The author boundary uses one placement parser for canonical words and composed input aliases. */
-export function parseGridPlacement(raw: unknown, subject: string): { anchor?: number; span: number } {
+export function parseGridPlacement(raw: unknown, path: string): { anchor?: number; span: number } {
   const match = typeof raw === "string" ? /^(?:(\d+)(?: \/ span (\d+))?|span (\d+))$/.exec(raw.trim()) : null;
-  if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new FlcmError("authoring", subject + ' needs "N", "span N", or "N / span N".');
+  if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new FlcmError("authoring", 'must be "N", "span N", or "N / span N" (N from 1) — got ' + JSON.stringify(raw) + ".", { path });
   return { ...(match[1] ? { anchor: Number(match[1]) - 1 } : {}), span: Number(match[2] ?? match[3] ?? 1) };
 }

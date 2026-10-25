@@ -781,7 +781,7 @@ const LINE_BREAKS = /[\n\u2029]/;
  */
 function decodeSceneText(node: SceneNodeLike): SnapshotText {
   if (!node.getStyledTextSegments) {
-    throw new FlcmError("internal", "TEXT node without getStyledTextSegments (scene fixture missing segments?)");
+    throw new FlcmError("internal", "this text layer's styled text runs couldn't be read.", { node: { type: node.type, name: node.name, id: node.id } });
   }
   const characters = node.characters ?? "";
   const segments = node.getStyledTextSegments(TEXT_SEGMENT_FIELDS);

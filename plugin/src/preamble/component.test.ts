@@ -17,6 +17,18 @@ import { component, variants } from "./component.js";
 import { render, append } from "./structure.js";
 import { edit } from "./edit.js";
 
+// A refusal pinned by its fields and the words that make it actionable, not by its whole sentence.
+function refused(fields: { kind?: string; path?: string; node?: Record<string, unknown> }, reason: RegExp) {
+  return (err: any): boolean => {
+    for (const [key, value] of Object.entries(fields)) {
+      if (key === "node") for (const [k, v] of Object.entries(value as object)) assert.equal(err.node?.[k], v, "node." + k);
+      else assert.equal(err[key], value, key);
+    }
+    assert.match(err.reason, reason);
+    return true;
+  };
+}
+
 // A bare component to swap in — the value an `instance_swap` property points at.
 function badgeComponent(figma: ReturnType<typeof createFigmaMock>, name: string) {
   const comp = figma.createComponent();
@@ -336,11 +348,11 @@ test("what a component call refuses, with zero writes", async () => {
   // A binding naming a property this call doesn't declare, and one whose type doesn't match.
   await assert.rejects(
     component(body(), { propertyDefinitions: { Caption: { type: "text" } } }),
-    /names property "Label", which this call doesn't declare — its propertyDefinitions are "Caption"/,
+    refused({ kind: "authoring", path: "flcm.component.spec.children[0].componentPropertyReferences.text" }, /property "Label" isn't declared by this call — its propertyDefinitions are "Caption"/),
   );
   await assert.rejects(
     component(body(), { propertyDefinitions: { Label: { type: "boolean" } } }),
-    /`componentPropertyReferences\.text` drives a text property, and "Label" is declared "boolean"/,
+    refused({ path: "flcm.component.spec.children[0].componentPropertyReferences.text" }, /`text` is driven by a "text" property, and "Label" is declared "boolean"\. Bind it from `visible`/),
   );
   // A slot nobody binds would leave an unpositioned box in the component.
   await assert.rejects(
@@ -363,7 +375,7 @@ test("what a component call refuses, with zero writes", async () => {
       },
       { propertyDefinitions: { T: { type: "slot" } } },
     ),
-    /2 frames are bound to slot property "T", and a slot is one hole/,
+    /2 frames are bound to slot property "T" \(at flcm\.component\.spec\.children\[0\], flcm\.component\.spec\.children\[1\]\), and a slot is one hole/,
   );
   // A property nothing binds has no layer to read its default off — and none can be stated instead.
   await assert.rejects(
@@ -399,22 +411,22 @@ test("what a component call refuses, with zero writes", async () => {
   await assert.rejects(component(stamped.id), /Figma would WRAP it in a new component/);
   await assert.rejects(
     component(stamped.id + ";" + comp.children[1].id),
-    /no live node|has no sublayer|is inside component instance/,
+    /no live node|has no sublayer|is inside INSTANCE/,
   );
   // A component's own sublayer: live's createComponentFromNode throws on it, so flcm names it first.
   await assert.rejects(
     component(comp.children[0].id),
-    /is inside component "Chip".*createComponentFromNode throws/s,
+    refused({ kind: "figma", node: { id: comp.children[0].id } }, /is inside COMPONENT "Chip".*won't make a component out of a component's own sublayer/s),
   );
   // The compiled form gates its root the same way — a leaf root would be wrapped, not converted, and
   // the root's key would land on the wrapper rather than the node the author keyed.
   await assert.rejects(
     component({ type: "TEXT", text: "Hi", key: "t" }),
-    /the tree's root is a TEXT, and a component's root is a frame/,
+    refused({ node: { type: "TEXT" } }, /a component's root is a frame/),
   );
   await assert.rejects(
     component({ type: "INSTANCE", componentId: comp.id }),
-    /the tree's root is an INSTANCE.*WRAP/s,
+    refused({ node: { type: "INSTANCE" } }, /can't be an instance.*WRAP/s),
   );
   // A slot and a default-less property both need the compiled form, and the target form says so rather
   // than naming a compiler word the call has no authored tree to carry.
@@ -441,7 +453,7 @@ test("what a variants call refuses, with zero writes", async () => {
 
   await assert.rejects(
     variants([{ component: a, variant: { Size: "Small" } }] as never, {} as never),
-    /options\.name is required/,
+    refused({ path: "flcm.variants.options.name" }, /must be a non-empty string/),
   );
   await assert.rejects(
     variants(
@@ -461,7 +473,7 @@ test("what a variants call refuses, with zero writes", async () => {
       ],
       { name: "X" },
     ),
-    /entries\[0\] and entries\[1\] are both "Size=Small" — every combination in a set is unique/,
+    refused({ path: "flcm.variants.entries[1]" }, /entries\[0\] is "Size=Small" too, and every combination in a set is unique/),
   );
   await assert.rejects(
     variants([{ component: a, variant: { Size: "Sm, Lg" } }], { name: "X" }),
@@ -491,7 +503,7 @@ test("what a variants call refuses, with zero writes", async () => {
   // Combined once, a component belongs to that set — a second call names the set it is in.
   await assert.rejects(
     variants([{ component: a, variant: { Size: "Small" } }], { name: "Other" }),
-    /is already a variant of set "Button"/,
+    refused({ node: { id: a } }, /already a variant of COMPONENT_SET "Button"/),
   );
 });
 
@@ -528,11 +540,11 @@ test("component rejects binding fields that the node cannot bind", async () => {
       type: "FRAME",
       children: [{ type: "TEXT", text: "Hi", componentPropertyReferences: { slot: "T" } }],
     }),
-    /`slot` is not one of TEXT's binding fields \(visible, text\) — `slot` marks the FRAME that IS the slot/,
+    refused({ kind: "authoring", path: "flcm.component.spec.children[0].componentPropertyReferences" }, /`slot` is not one of a TEXT's binding fields \(visible, text\) — `slot` marks the FRAME that IS the slot/),
   );
   await assert.rejects(
     component({ type: "FRAME", componentPropertyReferences: { text: "Label" } }),
-    /`text` is not one of FRAME's binding fields \(visible, slot\) — `text` drives a TEXT node's content/,
+    refused({ kind: "authoring", path: "flcm.component.spec.componentPropertyReferences" }, /`text` is not one of a FRAME's binding fields \(visible, slot\) — `text` drives a TEXT node's content/),
   );
   await assert.rejects(
     component({

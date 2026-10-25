@@ -33,11 +33,11 @@ test("padding accepts numbers, CSS box shorthand and edge objects", async () => 
   }
   await assert.rejects(
     render({ type: "FRAME", layout: { padding: { x: "24em" } as never } }),
-    /pad\.x must be a number or "Npx"/,
+    { kind: "authoring", path: "flcm.render.spec.layout.padding.x", message: /must be a number or "Npx".*got "24em"/ },
   );
   await assert.rejects(
     render({ type: "FRAME", layout: { padding: [] as never } }),
-    /pad must be a number, a CSS box shorthand/,
+    { kind: "authoring", path: "flcm.render.spec.layout.padding", message: /must be a number, a CSS box shorthand/ },
   );
 });
 
@@ -52,7 +52,7 @@ test("strokeAlign accepts the read vocabulary and rejects unknown values", async
   }
   await assert.rejects(
     render({ type: "RECTANGLE", strokeAlign: "outer" as never }),
-    /strokeAlign is "inside", "outside" or "center"/,
+    { kind: "authoring", path: "flcm.render.spec.strokeAlign", message: /must be "inside", "outside" or "center".*got "outer"/ },
   );
 });
 
@@ -75,8 +75,8 @@ test("pixel metrics work for dimensions and position; unsupported units reject",
   const out = await render({ type: "FRAME", width: "320px", height: 200, left: "16px", top: 8 });
   const node = await figma.getNodeByIdAsync(out.id);
   assert.deepEqual([node.width, node.height, node.x, node.y], [320, 200, 16, 8]);
-  await assert.rejects(render({ type: "FRAME", width: "20em" }), /width\/height must be a number/);
-  await assert.rejects(render({ type: "FRAME", left: "20vw" }), /left must be a number/);
+  await assert.rejects(render({ type: "FRAME", width: "20em" }), { kind: "authoring", path: "flcm.render.spec.width", message: /must be a number, "Npx".*got "20em"/ });
+  await assert.rejects(render({ type: "FRAME", left: "20vw" }), { kind: "authoring", path: "flcm.render.spec.left", message: /must be a number/ });
 });
 
 test("root position lands on the page; an in-flow child's explicit constraint is stored", async () => {
@@ -130,11 +130,11 @@ test("a read root's fill takes its designed size on a page and stays fill under 
 test("mistyped scalar values reject before writing", async () => {
   await assert.rejects(
     render({ type: "RECTANGLE", opacity: "bad" as never }),
-    /`opacity` must be a number/,
+    { kind: "authoring", path: "flcm.render.spec.opacity", message: /must be a number — got "bad"/ },
   );
   await assert.rejects(
     render({ type: "LINE", rotation: "bad" as never }),
-    /`rotation` must be a number/,
+    { kind: "authoring", path: "flcm.render.spec.rotation", message: /must be a number/ },
   );
 });
 
@@ -157,7 +157,7 @@ test("alignment maps supported values and refuses unrealizable spacing", async (
   assert.equal((await figma.getNodeByIdAsync(out.id)).primaryAxisAlignItems, "SPACE_BETWEEN");
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "row", justifyContent: "space-around" as never } }),
-    /layout\.justifyContent must be one of/,
+    { kind: "authoring", path: "flcm.render.spec.layout.justifyContent", message: /must be one of .*got "space-around"/ },
   );
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "row", justifyContent: "space-evenly" as never } }),
@@ -165,7 +165,7 @@ test("alignment maps supported values and refuses unrealizable spacing", async (
   );
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "row", alignItems: "space-between" as never } }),
-    /layout\.alignItems must be one of/,
+    { kind: "authoring", path: "flcm.render.spec.layout.alignItems", message: /must be one of/ },
   );
 });
 
@@ -176,7 +176,7 @@ test("layout mode sets the native container mode and refuses missing grid templa
   assert.equal((await figma.getNodeByIdAsync(free.id)).layoutMode, "NONE");
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "grid" } }),
-    /grid.*requires.*gridTemplate/,
+    { kind: "authoring", path: "flcm.render.spec", message: /a new grid needs layout\.gridTemplateColumns/ },
   );
 });
 
@@ -185,7 +185,7 @@ test("text alignment maps supported values and refuses unknown ones", async () =
   assert.equal((await figma.getNodeByIdAsync(out.id)).textAlignHorizontal, "CENTER");
   await assert.rejects(
     render({ type: "TEXT", text: "t", textStyle: { textAlign: "middle" as never } }),
-    /textStyle\.textAlign must be one of/,
+    { kind: "authoring", path: "flcm.render.spec.textStyle.textAlign", message: /must be one of .*got "middle"/ },
   );
 });
 

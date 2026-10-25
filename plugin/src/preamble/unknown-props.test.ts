@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { render } from "./structure.js";
 // Unknown-prop rejection (ratified decision 1): the authoring surface fails loud on an unknown prop —
 // at the verb, before it touches the canvas. Pinned here:
 // the REJECT FIRES loud, with the offender + path named, at every verb and nested object. (Schema and
@@ -10,41 +9,40 @@ import { render } from "./structure.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { gradient, image, effects } from "./value-sugar.js";
-import { find } from "./read.js";
+import { render, gradient, image, effects, find } from "./runtime.js";
 import { compileTree } from "./compile-tree.js";
 
 createFigmaMock();
 
-test("verbs reject an unknown top-level prop, naming it and the verb", async () => {
+test("verbs reject an unknown top-level prop, naming it, the verb, and the node type's vocabulary", async () => {
   await assert.rejects(
     render({ type: "FRAME", background: "#fff" } as never),
-    /unknown prop "background" on FRAME/,
+    /flcm\.render: FRAME at spec: unknown prop "background" — a FRAME takes only /,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "hi", textTransform: "upper" } as never),
-    /unknown prop "textTransform" on TEXT/,
+    /spec: unknown prop "textTransform" — a TEXT takes only /,
   );
   await assert.rejects(
     render({ type: "RECTANGLE", radius: 4 } as never),
-    /unknown prop "radius" on RECTANGLE/,
+    /spec: unknown prop "radius" — a RECTANGLE takes only /,
   );
-  await assert.rejects(render({ type: "LINE", height: 10 }), /unknown prop "height" on LINE/);
+  await assert.rejects(render({ type: "LINE", height: 10 }), /spec: unknown prop "height" — a LINE takes only /);
   await assert.rejects(
     render({ type: "VECTOR", d: "M0 0 L1 1", borderRadius: 2 }),
-    /unknown prop "borderRadius" on VECTOR/,
+    /spec: unknown prop "borderRadius" — a VECTOR takes only /,
   );
   assert.throws(
     () => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never),
-    /unknown prop "colors" on flcm\.gradient/,
+    /flcm\.gradient: unknown prop "colors" — the props here are /,
   );
   assert.throws(
     () => image("https://x/y.png", { scale: "FILL" } as never),
-    /unknown prop "scale" on flcm\.image opts/,
+    /flcm\.image: opts: unknown prop "scale"/,
   );
   assert.throws(
     () => effects({ dropShadow: true } as never),
-    /unknown prop "dropShadow" on flcm\.effects/,
+    /flcm\.effects: unknown prop "dropShadow"/,
   );
 });
 
@@ -52,40 +50,40 @@ test("a non-object where a props/query object belongs names THAT mistake, not th
   // find refuses a bare string with steering (a query has no existence tiebreak, unlike a Target —
   // the ruling lives on read.ts's rejectStringQuery); the author's own value is echoed into the fix.
   await assert.rejects(find("TEXT" as never), (err: Error) => {
-    assert.match(err.message, /flcm\.find takes a query object; got a string/);
+    assert.match(err.message, /the query must be an object, not a string/);
     assert.match(err.message, /Did you mean flcm\.find\(\{ type: "TEXT" \}\)/);
     return true;
   });
-  await assert.rejects(render("red" as never), /plain node spec/);
-  await assert.rejects(render([1, 2] as never), /plain node spec/);
-  await assert.rejects(render(false as never), /plain node spec/);
+  await assert.rejects(render("red" as never), /flcm\.render: spec: must be a node spec object/);
+  await assert.rejects(render([1, 2] as never), /must be a node spec object/);
+  await assert.rejects(render(false as never), /must be a node spec object/);
 });
 
 test("nested authoring objects reject unknown keys with a path-threaded error", async () => {
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "row", flexWrap: "nowrap" } as never }),
-    /unknown prop "flexWrap" on FRAME\.layout/,
+    /spec\.layout: unknown prop "flexWrap" — a FRAME's layout takes only /,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "hi", textStyle: { fontVarient: "small-caps" } as never }),
-    /unknown prop "fontVarient" on TEXT\.textStyle/,
+    /spec\.textStyle: unknown prop "fontVarient"/,
   );
   await assert.rejects(
     render({ type: "FRAME", constraints: { z: "left" } as never }),
-    /unknown prop "z" on constraints/,
+    /spec\.constraints: unknown prop "z"/,
   );
 });
 
 test("an svg VECTOR's layout typo rejects exactly like a RECTANGLE's", () => {
   const layout = { alignSelff: "stretch" };
-  assert.throws(() => compileTree({ type: "RECTANGLE", layout }, "flcm.render"), /unknown prop "alignSelff" on RECTANGLE\.layout/);
-  assert.throws(() => compileTree({ type: "VECTOR", svg: "<svg></svg>", layout }, "flcm.render"), /unknown prop "alignSelff" on VECTOR\.layout/);
+  assert.throws(() => compileTree({ type: "RECTANGLE", layout }, "flcm.render"), /flcm\.render\.layout: unknown prop "alignSelff" — a RECTANGLE's layout/);
+  assert.throws(() => compileTree({ type: "VECTOR", svg: "<svg></svg>", layout }, "flcm.render"), /flcm\.render\.layout: unknown prop "alignSelff" — a VECTOR's layout/);
 });
 
 test("a run delta rejects an unknown key, naming the run index", async () => {
   await assert.rejects(
     render({ type: "TEXT", text: ["ok", ["styled", { textTransfrom: "uppercase" }] as never] }),
-    /unknown prop "textTransfrom" on TEXT run\[1\]/,
+    /spec\.text\[1\]\[1\]: unknown prop "textTransfrom"/,
   );
 });
 
@@ -97,11 +95,11 @@ test("the CSS effects bag rejects unknown keys", async () => {
   const shadow = "0px 4px 8px rgba(0,0,0,0.25)";
   await assert.rejects(
     render({ type: "FRAME", effects: { boxShadow: shadow, foo: 2 } as never }),
-    /unknown prop "foo" on effects/,
+    /spec\.effects: unknown prop "foo"/,
   );
   await assert.rejects(
     render({ type: "RECTANGLE", effects: { filter: "blur(4px)", bar: 1 } as never }),
-    /unknown prop "bar" on effects/,
+    /spec\.effects: unknown prop "bar"/,
   );
   // Both vocabularies in one bag still parse — the shape `get` hands back.
   await assert.doesNotReject(render({ type: "FRAME", effects: { boxShadow: shadow, blur: 4 } }));
@@ -110,7 +108,7 @@ test("the CSS effects bag rejects unknown keys", async () => {
 test("plural offenders are all named", async () => {
   await assert.rejects(
     render({ type: "FRAME", foo: 1, bar: 2 } as never),
-    /unknown props "foo", "bar" on FRAME/,
+    /spec: unknown props "foo", "bar" — a FRAME takes only /,
   );
 });
 

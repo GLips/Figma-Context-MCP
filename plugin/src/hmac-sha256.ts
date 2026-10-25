@@ -24,7 +24,7 @@ function asciiBytes(text: string): Uint8Array {
   const bytes = new Uint8Array(text.length);
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
-    if (code > 0x7f) throw new FlcmError("internal", "hmacSha256Hex signs ASCII only");
+    if (code > 0x7f) throw new FlcmError("internal", "the plugin can only sign plain ASCII text, and a link credential or project name it was given has other characters.");
     bytes[i] = code;
   }
   return bytes;

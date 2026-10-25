@@ -26,6 +26,7 @@ import { planComponentEdit, projectedBinderValue, ComponentEditPlan } from "./co
 import { scheduleEditEntries, runEditOperations, type EditApplyEntry } from "./edit-apply.js";
 import { captureReadDependencies, gateCallObligations, NO_READ_DEPENDENCIES } from "./call-obligations.js";
 import type { EditDelta } from "./schema.js";
+import { errorNodeOf, locateFailure } from "./flcm-error.js";
 
 const SUBJECT = "flcm.edit";
 
@@ -48,18 +49,23 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       changes = compileDeltaTrees(changes, SUBJECT);
       rejectNonDeltaWords(changes, SUBJECT);
       const node = await resolveTarget(target);
-      const hint = compileEditPlan(node, changes, SUBJECT);
-      const targets = createResolvedTargets();
-      const current = hint.instanceWords ? await resolveInstanceEditTargets(node, hint.instanceWords, targets) : null;
-      const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
-      let dependencies = NO_READ_DEPENDENCIES;
-      const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : [], (tokens) => {
-        dependencies = captureReadDependencies(deriveConcurrentEditObligations(hint, instance, tokens, liveObligationSite(node), SUBJECT));
-      });
-      // A swap binder's component is what its instance_swap property's default is judged against.
-      const refs = hint.componentWords?.componentPropertyReferences as Record<string, unknown> | undefined;
-      const main = node.type === "INSTANCE" && refs?.componentId != null ? await (node as InstanceNode).getMainComponentAsync() : null;
-      return { node, targets, current, loaded, dependencies, main };
+      // A failure names the target unless a layer of its own is more specific (innermost wins).
+      try {
+        const hint = compileEditPlan(node, changes, SUBJECT);
+        const targets = createResolvedTargets();
+        const current = hint.instanceWords ? await resolveInstanceEditTargets(node, hint.instanceWords, targets) : null;
+        const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
+        let dependencies = NO_READ_DEPENDENCIES;
+        const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : [], (tokens) => {
+          dependencies = captureReadDependencies(deriveConcurrentEditObligations(hint, instance, tokens, liveObligationSite(node), SUBJECT));
+        });
+        // A swap binder's component is what its instance_swap property's default is judged against.
+        const refs = hint.componentWords?.componentPropertyReferences as Record<string, unknown> | undefined;
+        const main = node.type === "INSTANCE" && refs?.componentId != null ? await (node as InstanceNode).getMainComponentAsync() : null;
+        return { node, targets, current, loaded, dependencies, main };
+      } catch (cause) {
+        throw locateFailure(cause, { node: errorNodeOf(node) });
+      }
     },
     // Gate — every decision that reads the document, made against it as it stands at the seal:
     // the compile, the instance and component halves, and the root's own layout gate, which reads
@@ -67,29 +73,33 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     // words land — `becomesContainer`). Every word is owed; which of them are written is decided
     // at each write point in apply.
     ({ node, targets, current, loaded, dependencies, main }) => {
-      assertNodeStillOnCanvas(node, SUBJECT);
-      const plan = compileEditPlan(node, changes, SUBJECT);
-      const planning = { targets, gate: loaded };
-      const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
-      const component: ComponentEditPlan | undefined = plan.componentWords
-        ? planComponentEdit(node, plan.componentWords, SUBJECT, (field) => projectedBinderValue(field, node, plan, instance, main, SUBJECT))
-        : undefined;
-      const authorized = authorizeEditPlan(plan, loaded, SUBJECT, { becomes: instance?.becomesContainer });
-      const site = liveObligationSite(node);
-      const owed = obligationsOnTarget(deriveEditObligations(plan, instance, loaded, site), { node }, SUBJECT);
-      recordObligations(owed);
-      const entry: EditApplyEntry = { node: authorized.node, plan: authorized, instance, component, subject: "edit", tag: SUBJECT };
-      gateCallObligations({
-        obligations: owed,
-        dependencies,
-        checks: [
-          ...withoutRetargetHeldChecks(realizeOnlyChecksOf(plan, authorized.realizeOnly, loaded, site, SUBJECT, authorized.context), instance),
-          ...(instance ? overrideRealizeOnlyChecks(instance.overrides, loaded, SUBJECT) : []),
-        ],
-        writes: instance ? instanceGeometryWrites(node, plan.patch, instance) : [],
-      }, SUBJECT);
-      const schedule = scheduleEditEntries([entry], SUBJECT);
-      return { entry, schedule, resources: gateEditResources(loaded, instance ? [instance.needs] : [], SUBJECT) };
+      try {
+        assertNodeStillOnCanvas(node, SUBJECT);
+        const plan = compileEditPlan(node, changes, SUBJECT);
+        const planning = { targets, gate: loaded };
+        const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
+        const component: ComponentEditPlan | undefined = plan.componentWords
+          ? planComponentEdit(node, plan.componentWords, SUBJECT, (field) => projectedBinderValue(field, node, plan, instance, main, SUBJECT))
+          : undefined;
+        const authorized = authorizeEditPlan(plan, loaded, SUBJECT, { becomes: instance?.becomesContainer });
+        const site = liveObligationSite(node);
+        const owed = obligationsOnTarget(deriveEditObligations(plan, instance, loaded, site), { node }, SUBJECT);
+        recordObligations(owed);
+        const entry: EditApplyEntry = { node: authorized.node, plan: authorized, instance, component, site: {}, tag: SUBJECT };
+        gateCallObligations({
+          obligations: owed,
+          dependencies,
+          checks: [
+            ...withoutRetargetHeldChecks(realizeOnlyChecksOf(plan, authorized.realizeOnly, loaded, site, SUBJECT, authorized.context), instance),
+            ...(instance ? overrideRealizeOnlyChecks(instance.overrides, loaded, SUBJECT) : []),
+          ],
+          writes: instance ? instanceGeometryWrites(node, plan.patch, instance) : [],
+        }, SUBJECT);
+        const schedule = scheduleEditEntries([entry], SUBJECT);
+        return { entry, schedule, resources: gateEditResources(loaded, instance ? [instance.needs] : [], SUBJECT) };
+      } catch (cause) {
+        throw locateFailure(cause, { node: errorNodeOf(node) });
+      }
     },
     // Apply — the sealed span: all writes, no awaits.
     ({ entry, schedule, resources }, span) => {

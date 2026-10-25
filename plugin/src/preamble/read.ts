@@ -235,9 +235,8 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   if (hits.length > FIND_MATERIALIZE_CAP) {
     throw new FlcmError(
       "authoring",
-      `the query matched ${hits.length} candidate nodes, over the ${FIND_MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
-        `Narrow the query so fewer nodes reach the predicate.`,
-      { call: "flcm.find" },
+      `the query matched ${hits.length} nodes, and a predicate can be run on at most ${FIND_MATERIALIZE_CAP}. ` +
+        `Narrow the query (type, name, key or within) so fewer nodes reach the predicate.`,
     );
   }
   if (!hits.length) return [];
@@ -262,7 +261,7 @@ function rejectStringQuery(query: unknown, verb: string): void {
   if (typeof query === "string") {
     throw new FlcmError(
       "authoring",
-      `${verb} takes a query object; got a string. Did you mean ${verb}({ type: ${JSON.stringify(query)} }) — ` +
+      `the query must be an object, not a string. Did you mean ${verb}({ type: ${JSON.stringify(query)} }) — ` +
         `or filter by name/key? The query keys are ${[...FIND_KEY_SET].map((k) => JSON.stringify(k)).join(", ")} ` +
         `(within is the target-shaped scope).`,
     );
@@ -281,22 +280,22 @@ function rejectStringQuery(query: unknown, verb: string): void {
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   invalidateSceneAccess();
   rejectStringQuery(query, "flcm.find");
-  rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key", FIND_PREDICATE_HINT);
-  if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new FlcmError("authoring", "hasAnnotations must be a boolean.", { call: "flcm.find" });
+  rejectUnknownKeys(query, FIND_KEY_SET, "the query", "query key", FIND_PREDICATE_HINT);
+  if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new FlcmError("authoring", "must be true or false — got " + showValue(query.hasAnnotations) + ".", { path: "hasAnnotations" });
   for (const key of ["type", "key"] as const) {
-    if (query[key] !== undefined && typeof query[key] !== "string") throw new FlcmError("authoring", key + " must be a string.", { call: "flcm.find" });
+    if (query[key] !== undefined && typeof query[key] !== "string") throw new FlcmError("authoring", "must be a string — got " + showValue(query[key]) + ".", { path: key });
   }
-  if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new FlcmError("authoring", "name must be a string (literal substring) or RegExp.", { call: "flcm.find" });
-  if (predicate !== undefined && typeof predicate !== "function") throw new FlcmError("authoring", "predicate must be a function.", { call: "flcm.find" });
+  if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new FlcmError("authoring", "must be a string (matched as a literal substring) or a RegExp — got " + showValue(query.name) + ".", { path: "name" });
+  if (predicate !== undefined && typeof predicate !== "function") throw new FlcmError("authoring", "the predicate (find's second argument) must be a function — got " + showValue(predicate) + ".");
   // A present-but-nullish `within` is almost always an unset variable (`within: copy.id` off a value that has
   // no id). Falling back to the page default would answer with someone else's nodes, so only an ABSENT key
   // means "the current page".
   if ("within" in query && query.within == null) {
     throw new FlcmError(
       "authoring",
-      `within is ${showValue(query.within)} — pass a container target (id, flcm/key or a handle), ` +
-        "or omit within to search the current page.",
-      { call: "flcm.find" },
+      `got ${showValue(query.within)}, which usually means an unset variable. Pass a container target ` +
+        "(id, flcm/key or a handle), or omit within to search the current page.",
+      { path: "within" },
     );
   }
   const root = await resolveScanRoot(query.within);
@@ -328,7 +327,6 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
       "authoring",
       `expected exactly one match for ${JSON.stringify(query)} but found ${hits.length}. ` +
         `Use flcm.find for zero-or-many, or narrow the query or predicate.`,
-      { call: "flcm.findOne" },
     );
   }
   return hits[0];

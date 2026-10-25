@@ -33,7 +33,7 @@ test("a not-found target throws, naming the target", async () => {
 
 test("an id-shaped target to a deleted/absent node fails loud", async () => {
   createFigmaMock();
-  await assert.rejects(() => resolveTarget("99:99"), /no live node with id.*99:99/s);
+  await assert.rejects(() => resolveTarget("99:99"), /no live node has the id "99:99".*flcm\.find/s);
 });
 
 test("a duplicated key throws, naming the key and the count", async () => {

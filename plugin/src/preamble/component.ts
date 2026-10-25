@@ -44,10 +44,10 @@ import { enterMutatingVerb, retargetReplacedNode, type VerbResultBuilder } from 
 import type { ApplySpan } from "./apply-span.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
 import { recordObligations, supersedeObligations } from "./obligation.js";
 import { deriveDeclarationObligations, obligationsOnTarget } from "./obligation-derivation.js";
-import { instanceAncestorOf, editableComponentOwnerOf, isComponentDefinition, variantSetOf, readKey, writeKey, describeNodeIdentity } from "./identity.js";
+import { instanceAncestorOf, editableComponentOwnerOf, isComponentDefinition, variantSetOf, readKey, writeKey } from "./identity.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
@@ -76,14 +76,14 @@ interface PreparedOptions {
 
 function compileComponentOptions(raw: unknown): PreparedOptions {
   if (raw == null) return { definitions: [] };
-  rejectUnknownKeys(raw, COMPONENT_OPTION_KEYS, SUBJECT + " options");
+  rejectUnknownKeys(raw, COMPONENT_OPTION_KEYS, SUBJECT + ".options");
   const bag = raw as Record<string, unknown>;
   const out: PreparedOptions = { definitions: compilePropertyDefinitions(bag.propertyDefinitions) };
   for (const word of ["name", "description"] as const) {
     const value = bag[word];
     if (value == null) continue;
     if (typeof value !== "string") {
-      throw new FlcmError("authoring", SUBJECT + " options." + word + " must be a string — got " + JSON.stringify(value) + ".");
+      throw new FlcmError("authoring", "must be a string — got " + JSON.stringify(value) + ".", { path: SUBJECT + ".options." + word });
     }
     out[word] = value;
   }
@@ -91,10 +91,10 @@ function compileComponentOptions(raw: unknown): PreparedOptions {
 }
 
 function compilePropertyDefinitions(raw: unknown): AuthoredDefinition[] {
-  const where = SUBJECT + " options.propertyDefinitions";
+  const where = SUBJECT + ".options.propertyDefinitions";
   if (raw == null) return [];
   if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", where + ' must be an object of definitions by property name, e.g. { Label: { type: "text" } } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must be an object of definitions by property name, e.g. { Label: { type: "text" } } — got ' + JSON.stringify(raw) + ".", { path: where });
   }
   const out: AuthoredDefinition[] = [];
   const seen = new Set<string>();
@@ -122,7 +122,8 @@ function compilePropertyDefinitions(raw: unknown): AuthoredDefinition[] {
 function collectChildBindings(tree: WriteNode, live: LiveBindings): BoundWriteNode[] {
   if (bindingsOf(tree, live)) {
     throw new FlcmError("authoring",
-      "the tree's ROOT carries `componentPropertyReferences`, and the root is what BECOMES the component — there is no outer component whose property could drive it. Bind a child instead.", { call: SUBJECT },
+      "the root is what BECOMES the component, so there is no outer component whose property could drive it. Move `componentPropertyReferences` onto a child.",
+      { path: tree.sourcePath + ".componentPropertyReferences" },
     );
   }
   const out: BoundWriteNode[] = [];
@@ -139,21 +140,26 @@ function collectChildBindings(tree: WriteNode, live: LiveBindings): BoundWriteNo
 // property's type. Document-blind: the properties don't exist yet, and neither do the nodes.
 function assertBindingsResolve(bound: readonly BoundWriteNode[], definitions: readonly AuthoredDefinition[]): void {
   const declared = definitions.map((d) => d.name);
-  for (const { refs } of bound) {
+  for (const { wn, refs } of bound) {
     for (const field of Object.keys(refs)) {
+      const at = wn.sourcePath + ".componentPropertyReferences." + field;
       const name = (refs as Record<string, string>)[field];
       const definition = definitions.find((d) => d.name === name);
       if (!definition) {
         throw new FlcmError("authoring",
-          "`componentPropertyReferences." + field + "` names property " + JSON.stringify(name) + ", which this call doesn't declare — " +
-            (declared.length ? "its propertyDefinitions are " + quoted(declared) : "the call declares no propertyDefinitions") + ".", { call: SUBJECT },
+          "property " + JSON.stringify(name) + " isn't declared by this call — " +
+            (declared.length ? "its propertyDefinitions are " + quoted(declared) : "the call declares no propertyDefinitions") +
+            ". Declare it in options.propertyDefinitions, or bind one that is declared.",
+          { path: at },
         );
       }
       const wants = BINDING_FIELD_WIRE_KEYS[field].type;
       if (definition.type !== wants) {
+        const matching = FIELD_FOR_TYPE[definition.type];
         throw new FlcmError("authoring",
-          "`componentPropertyReferences." + field + "` drives a " + wants + " property, and " + JSON.stringify(name) +
-            " is declared " + JSON.stringify(definition.type) + ".", { call: SUBJECT },
+          "`" + field + "` is driven by a " + JSON.stringify(wants) + " property, and " + JSON.stringify(name) + " is declared " + JSON.stringify(definition.type) +
+            ". Bind it from " + (matching ? "`" + matching + "`" : "a field of its type") + ", or declare it " + JSON.stringify(wants) + ".",
+          { path: at },
         );
       }
     }
@@ -170,12 +176,15 @@ function assertSlotsAreBound(bound: readonly BoundWriteNode[], definitions: read
     if (!binders.length) {
       throw new FlcmError("authoring",
         "slot property " + JSON.stringify(definition.name) + " is declared but no frame is bound to it. A slot IS a frame in the definition — give the frame that holds the slot's placeholder content " +
-          "`componentPropertyReferences: { slot: " + JSON.stringify(definition.name) + " }`, and every instance shows it as a SLOT.", { call: SUBJECT },
+          "`componentPropertyReferences: { slot: " + JSON.stringify(definition.name) + " }`, and every instance shows it as a SLOT.",
+        { path: SUBJECT + ".options.propertyDefinitions[" + JSON.stringify(definition.name) + "]" },
       );
     }
     if (binders.length > 1) {
       throw new FlcmError("authoring",
-        binders.length + " frames are bound to slot property " + JSON.stringify(definition.name) + ", and a slot is one hole. Bind the one frame the content goes into.", { call: SUBJECT },
+        binders.length + " frames are bound to slot property " + JSON.stringify(definition.name) + " (at " + binders.map((b) => b.wn.sourcePath).join(", ") +
+          "), and a slot is one hole. Bind only the frame the content goes into.",
+        { path: SUBJECT + ".options.propertyDefinitions[" + JSON.stringify(definition.name) + "]" },
       );
     }
   }
@@ -196,7 +205,7 @@ function resolveDefaults(
   definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, live: RenderResources["live"], targetForm: boolean,
 ): PreparedDefinition[] {
   return definitions.map((definition) => {
-    const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
+    const at = SUBJECT + ".options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
     // A slot's "value" is the empty string Figma wants; its content is the bound frame.
     if (definition.figmaType === "SLOT") return { name: definition.name, figmaType: "SLOT", defaultValue: "" };
     const nodes = bindersOf(bound, definition).map(({ wn }) => wn);
@@ -239,13 +248,15 @@ function assertPromotableBuiltRoot(tree: BuiltNode): void {
   if (tree.type === "VECTOR" && tree.vector?.kind === "svg") return;
   if (tree.type === "INSTANCE") {
     throw new FlcmError("authoring",
-      "the tree's root is an INSTANCE. " + WOULD_WRAP + " — author the body you want as the component " +
-        "(an instance's own layers aren't editable anyway), or flcm.render it, flcm.detach the result, and promote that.", { call: SUBJECT },
+      "a component's root can't be an instance. " + WOULD_WRAP + " — author the body you want as the component " +
+        "(an instance's own layers aren't editable anyway), or flcm.render it, flcm.detach the result, and promote that.",
+      { path: tree.sourcePath, node: { type: tree.type, name: tree.name } },
     );
   }
   throw new FlcmError("authoring",
-    "the tree's root is a " + tree.type + ", and a component's root is a frame. " + WOULD_WRAP +
-      " — wrap it yourself so the layout is yours: " + SUBJECT + "({ type: \"FRAME\", children: [node] }).", { call: SUBJECT },
+    "a component's root is a frame. " + WOULD_WRAP +
+      " — wrap it yourself so the layout is yours: " + SUBJECT + "({ type: \"FRAME\", children: [node] }).",
+    { path: tree.sourcePath, node: { type: tree.type, name: tree.name } },
   );
 }
 
@@ -253,41 +264,40 @@ function assertPromotableBuiltRoot(tree: BuiltNode): void {
 // than left to Figma (whose own refusals name neither the node nor the fix — and whose INSTANCE
 // behavior is not a refusal at all, but a silent wrapping).
 function assertPromotable(node: any): void {
-  const who = describeNodeIdentity(node);
+  const site = { node: { type: node.type, name: node.name, id: node.id } };
   if (isComponentDefinition(node)) {
     throw new FlcmError("authoring",
-      who + " is already a component — there is nothing to promote. Edit it with flcm.edit, stamp it with INSTANCE, or " +
-        (node.type === "COMPONENT" ? "make it a variant with flcm.variants." : "add to the set with flcm.variants."), { call: SUBJECT },
+      "this is already a component — there is nothing to promote. Edit it with flcm.edit, stamp it with INSTANCE, or " +
+        (node.type === "COMPONENT" ? "make it a variant with flcm.variants." : "add to the set with flcm.variants."), site,
     );
   }
   if (node.type === "INSTANCE") {
     throw new FlcmError("authoring",
-      who + " is an instance. " + WOULD_WRAP + " — flcm.detach it first (it becomes ordinary layers), or promote what you actually want inside it.", { call: SUBJECT },
+      "this is an instance. " + WOULD_WRAP + " — flcm.detach it first (it becomes ordinary layers), or promote what you actually want inside it.", site,
     );
   }
   if (node.type === "SLOT") {
-    throw new FlcmError("authoring", who + " is a SLOT — a hole an instance fills, not a node of its own to promote. Promote the frame that holds the content you mean.", { call: SUBJECT });
+    throw new FlcmError("authoring", "a SLOT is a hole an instance fills, not a node of its own to promote. Promote the frame that holds the content you mean.", site);
   }
   if (node.type === "PAGE") {
-    throw new FlcmError("authoring", "that is a PAGE, not a node on it — name the frame to promote (flcm.find locates it).", { call: SUBJECT });
+    throw new FlcmError("authoring", "this is a PAGE, not a node on it — name the frame to promote (flcm.find locates it).", site);
   }
   const host = instanceAncestorOf(node);
   if (host) {
     throw new FlcmError("figma",
-      who + " is inside component instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
-        "), whose child list Figma won't let a plugin change — promoting it would take it out of that list. Promote the same node in the main component it comes from (flcm never auto-detaches).", { call: SUBJECT },
+      "this layer is inside " + describeNodeIdentity(host) +
+        ", whose child list Figma won't let a plugin change — promoting it would take it out of that list. Promote the same layer in the main component it comes from (flcm never auto-detaches).", site,
     );
   }
   // Figma's own rule, stated in createComponentFromNode's docs: the node "cannot be inside a
   // component, component set, or instance", and reaching it throws a bare "Cannot create component
-  // from node" after the seal. Named here instead, because a component's sublayer is a node the
+  // from node" mid-write. Named here instead, because a component's sublayer is a node the
   // agent can see and address — and the fix depends on which of the two things they meant.
   const owner = editableComponentOwnerOf(node, false);
   if (owner) {
     throw new FlcmError("figma",
-      who + " is inside " + (owner.type === "COMPONENT_SET" ? "component set " : "component ") + JSON.stringify(owner.name) +
-        " (id " + JSON.stringify(owner.id) + ") — Figma won't make a component out of a component's own sublayer (createComponentFromNode throws). " +
-        "Edit the enclosing component, or clone the sublayer and promote that copy.", { call: SUBJECT },
+      "this layer is inside " + describeNodeIdentity(owner) + ", and Figma won't make a component out of a component's own sublayer. " +
+        "Edit the enclosing component, or clone the sublayer out of it and promote that copy.", site,
     );
   }
 }
@@ -330,7 +340,7 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     const prepared = compileComponentOptions(options);
     if (typeof specOrTarget !== "string" && (!specOrTarget || typeof specOrTarget !== "object" || Array.isArray(specOrTarget))) {
       throw new FlcmError("authoring",
-        SUBJECT + ' takes a node to promote: a spec ({ type: "FRAME", … }, or { id, children } for a live frame) or ' + COMPONENT_TARGET_HINT +
+        'the first argument must be the node to promote: a spec ({ type: "FRAME", … }, or { id, children } for a live frame) or ' + COMPONENT_TARGET_HINT +
           " — got " + JSON.stringify(specOrTarget) + ".",
       );
     }
@@ -375,7 +385,7 @@ function applyBuiltComponent({ tree, parent, place, resources, definitions, opti
   // The seal opens on the FRAME, before the conversion: createComponentFromNode is the likeliest
   // Figma refusal in this verb, and the frame is the identity the author authored and can act on
   // (the component it would have become doesn't exist to be named).
-  const fail = beginMutatingApply("component", root);
+  const fail = beginMutatingApply(root);
   try {
     // Read before the conversion: the frame's pluginData doesn't ride across (below).
     const key = readKey(root);
@@ -417,19 +427,20 @@ interface PreparedVariants {
 
 function compileVariantsOptions(raw: unknown): VariantsOptions {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new FlcmError("authoring", VARIANTS_SUBJECT + ' takes options naming the set: { name: "Button", description? } — got ' + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", 'must name the set: { name: "Button", description? } — got ' + JSON.stringify(raw) + ".", { path: VARIANTS_SUBJECT + ".options" });
   }
-  rejectUnknownKeys(raw, VARIANTS_OPTION_KEYS, VARIANTS_SUBJECT + " options");
+  rejectUnknownKeys(raw, VARIANTS_OPTION_KEYS, VARIANTS_SUBJECT + ".options");
   const bag = raw as Record<string, unknown>;
   if (typeof bag.name !== "string" || !bag.name.trim()) {
     throw new FlcmError("authoring",
-      VARIANTS_SUBJECT + " options.name is required — a set left unnamed takes the first member's axes as its name (\"Size=Large, State=Default\"), which is not a name anyone meant. Got " + JSON.stringify(bag.name) + ".",
+      "must be a non-empty string — a set left unnamed takes the first member's axes as its name (\"Size=Large, State=Default\"), which is not a name anyone meant. Got " + JSON.stringify(bag.name) + ".",
+      { path: VARIANTS_SUBJECT + ".options.name" },
     );
   }
   const options: VariantsOptions = { name: bag.name };
   if (bag.description != null) {
     if (typeof bag.description !== "string") {
-      throw new FlcmError("authoring", VARIANTS_SUBJECT + " options.description must be a string — got " + JSON.stringify(bag.description) + ".");
+      throw new FlcmError("authoring", "must be a string — got " + JSON.stringify(bag.description) + ".", { path: VARIANTS_SUBJECT + ".options.description" });
     }
     options.description = bag.description;
   }
@@ -455,28 +466,29 @@ function assertAxisWord(value: unknown, what: string, at: string): string {
 function compileVariantEntries(raw: unknown): AuthoredVariant[] {
   if (!Array.isArray(raw) || !raw.length) {
     throw new FlcmError("authoring",
-      VARIANTS_SUBJECT + ' takes a non-empty array of { component, variant }, e.g. [{ component: small, variant: { Size: "Small" } }, { component: large, variant: { Size: "Large" } }] — got ' + JSON.stringify(raw) + ".",
+      'must be a non-empty array of { component, variant }, e.g. [{ component: small, variant: { Size: "Small" } }, { component: large, variant: { Size: "Large" } }] — got ' + JSON.stringify(raw) + ".",
+      { path: VARIANTS_SUBJECT + ".entries" },
     );
   }
   const axes: string[] = [];
   const combinations = new Map<string, number>();
   const out: AuthoredVariant[] = [];
   for (let i = 0; i < raw.length; i++) {
-    const at = VARIANTS_SUBJECT + " entries[" + i + "]";
+    const at = VARIANTS_SUBJECT + ".entries[" + i + "]";
     const entry = raw[i];
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new FlcmError("authoring", at + " must be an object like { component, variant } — got " + JSON.stringify(entry) + ".");
+      throw new FlcmError("authoring", "must be an object like { component, variant } — got " + JSON.stringify(entry) + ".", { path: at });
     }
     rejectUnknownKeys(entry, VARIANT_ENTRY_KEYS, at);
     const { component: target, variant } = entry as { component?: unknown; variant?: unknown };
     if (!isTargetShaped(target)) {
-      throw new FlcmError("authoring", at + ".component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(target) + ".");
+      throw new FlcmError("authoring", "must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(target) + ".", { path: at + ".component" });
     }
     if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
-      throw new FlcmError("authoring", at + '.variant says which member of the set this component IS, in the set\'s axes: { Size: "Large", State: "Default" }. Got ' + JSON.stringify(variant) + ".");
+      throw new FlcmError("authoring", 'must say which member of the set this component IS, in the set\'s axes: { Size: "Large", State: "Default" }. Got ' + JSON.stringify(variant) + ".", { path: at + ".variant" });
     }
     const rawAxes = Object.keys(variant);
-    if (!rawAxes.length) throw new FlcmError("authoring", at + ".variant names no axes — a set is made OF its axes, so every entry names at least one.");
+    if (!rawAxes.length) throw new FlcmError("authoring", 'must name at least one axis — a set is made OF its axes, e.g. { Size: "Large" }.', { path: at + ".variant" });
     const values: Record<string, string> = {};
     for (const axis of rawAxes) {
       const name = assertAxisWord(axis, "axis name", at + ".variant");
@@ -489,7 +501,7 @@ function compileVariantEntries(raw: unknown): AuthoredVariant[] {
     const name = axes.map((axis) => axis + "=" + values[axis]).join(", ");
     const twin = combinations.get(name);
     if (twin !== undefined) {
-      throw new FlcmError("authoring", "entries[" + twin + "] and entries[" + i + "] are both " + JSON.stringify(name) + " — every combination in a set is unique.", { call: VARIANTS_SUBJECT });
+      throw new FlcmError("authoring", "entries[" + twin + "] is " + JSON.stringify(name) + " too, and every combination in a set is unique. Give one of them a different value.", { path: at });
     }
     combinations.set(name, i);
     out.push({ component: target, name });
@@ -524,22 +536,25 @@ function setIndexAmongSurvivors(members: readonly { node: any }[], parent: any):
 }
 
 function assertCombinable(node: any, at: string): void {
-  const who = describeNodeIdentity(node);
+  const site = { path: at, node: { type: node.type, name: node.name, id: node.id } };
   const set = variantSetOf(node);
   if (set) {
     throw new FlcmError("authoring",
-      who + " is already a variant of set " + JSON.stringify(set.name) + " (id " + JSON.stringify(set.id) +
-        ") — a component belongs to one set. Combine components that stand on their own, or edit the set it is in.", { path: at },
+      "this component is already a variant of " + describeNodeIdentity(set) +
+        " — a component belongs to one set. Combine components that stand on their own, or edit the set it is in.", site,
     );
   }
   if (node.type !== "COMPONENT") {
     throw new FlcmError("authoring",
-      who + " is not a component" +
-        (node.type === "COMPONENT_SET" ? " but a variant SET — its members are already variants; combine standalone components instead." : ". Make it one first: flcm.component(target), then combine.") , { path: at },
+      node.type === "COMPONENT_SET"
+        ? "this is a variant SET, not a component — its members are already variants. Combine standalone components instead."
+        : "this is not a component. Make it one first: flcm.component(target), then combine.", site,
     );
   }
   if (node.remote) {
-    throw new FlcmError("figma", who + " comes from a library, so this file only holds a reference to it — a set can only be built from components that live here.", { path: at });
+    throw new FlcmError("figma",
+      "this component comes from a library, so this file only holds a reference to it — a set can only be built from components that live here. Combine local components instead.", site,
+    );
   }
 }
 
@@ -563,7 +578,9 @@ export function variants(entries: VariantEntryInput[], options: VariantsOptions)
         const node: any = await resolveTarget(authored[i].component);
         const twin = members.findIndex((m) => m.node === node);
         if (twin !== -1) {
-          throw new FlcmError("authoring", "entries[" + twin + "] and entries[" + i + "] name the same component (" + describeNodeIdentity(node) + ") — one component is one variant.", { call: VARIANTS_SUBJECT });
+          throw new FlcmError("authoring", "entries[" + twin + "] names this component too, and one component is one variant. Drop one of the two entries.", {
+            path: VARIANTS_SUBJECT + ".entries[" + i + "].component", node: { type: node.type, name: node.name, id: node.id },
+          });
         }
         members.push({ node, name: authored[i].name });
       }
@@ -575,21 +592,22 @@ export function variants(entries: VariantEntryInput[], options: VariantsOptions)
     // and combinable, the first member's parent, and the set's index among the survivors.
     ({ members, pages, options: opts }): PreparedVariants => {
       members.forEach((member, i) => {
-        const at = VARIANTS_SUBJECT + " entries[" + i + "]";
+        const at = VARIANTS_SUBJECT + ".entries[" + i + "]";
         assertNodeStillOnCanvas(member.node, at);
         assertCombinable(member.node, at);
       });
       const parent = members[0].node.parent;
       if (!parent) {
-        throw new FlcmError("authoring",
-          describeNodeIdentity(members[0].node) + " has no parent for the set to land in — the set takes the first component's place. Put it on a page first.", { call: VARIANTS_SUBJECT },
-        );
+        const first = members[0].node;
+        throw new FlcmError("authoring", "this component has no parent for the set to land in — the set takes the first component's place. Put it on a page first.", {
+          path: VARIANTS_SUBJECT + ".entries[0].component", node: { type: first.type, name: first.name, id: first.id },
+        });
       }
       assertPageLoaded(parent, pages, VARIANTS_SUBJECT);
       return { members, parent, index: setIndexAmongSurvivors(members, parent), options: opts };
     },
     ({ members, parent, index, options: opts }) => {
-      const fail = beginMutatingApply("variants", members[0].node);
+      const fail = beginMutatingApply(members[0].node);
       try {
         // The names ARE the axes — combineAsVariants reads each member's layer name to build them.
         for (const member of members) member.node.name = member.name;

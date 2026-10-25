@@ -12,8 +12,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { image } from "./value-sugar.js";
-import { render } from "./structure.js";
-import { editMany } from "./edit-many.js";
+import { render, editMany } from "./runtime.js";
 import { FlcmError } from "./flcm-error.js";
 
 let figma = createFigmaMock();
@@ -92,8 +91,8 @@ test("one invalid delta mutates NOTHING, and the error names every failing entry
     ]),
     (err: Error) => {
       assert.match(err.message, /2 of 3 entries were rejected/);
-      assert.match(err.message, /\[1\].*`borderRadius` is not a TEXT word/s);
-      assert.match(err.message, /\[2\].*`clip` is not a TEXT word/s);
+      assert.match(err.message, /\n {2}\[1\] TEXT "Text" \(id "[^"]+"\) at borderRadius: a TEXT has no `borderRadius` to edit/);
+      assert.match(err.message, /\n {2}\[2\] TEXT "Text" \(id "[^"]+"\) at clip: a TEXT has no `clip` to edit/);
       return true;
     },
   );
@@ -314,8 +313,9 @@ test("a refusal names the identity the node had BEFORE the batch's first write, 
       { id: a.id, opacity: 0.5 },
       { id: host.id, name: "Renamed", left: "50%" },
     ]),
-    (err: Error) => {
-      assert.match(err.message, /key "host"/);
+    (err: FlcmError) => {
+      assert.deepEqual(err.node, { type: "FRAME", name: "Frame", id: host.id });
+      assert.match(err.message, /^flcm\.editMany: FRAME "Frame" \(id "[^"]+"\) at \[1\]: Figma refused/);
       assert.doesNotMatch(err.message, /Renamed/); // the name the rollback is about to erase
       return true;
     },
@@ -345,7 +345,7 @@ test("a node deleted during the resource round trip refuses the whole batch — 
         assert.ok(err instanceof FlcmError);
         assert.equal(err.kind, "concurrent-edit");
         // The entry line names its entry once, not the batch's call again.
-        assert.match(err.message, /\n {2}\[0\] the file was edited in Figma while this call ran \(.* was deleted\)/);
+        assert.match(err.message, /\n {2}\[0\] RECTANGLE "[^"]*" \(id "[^"]+"\): the file was edited in Figma while this call ran \(it was deleted\)/);
         return true;
       },
     );
@@ -369,7 +369,7 @@ test("failures from DIFFERENT stages report together — the batch is one round 
       assert.match(err.message, /3 of 4 entries were rejected/);
       assert.match(err.message, /\[0\].*unknown prop "colour"/s);
       assert.match(err.message, /\[1\].*"ghost"/s);
-      assert.match(err.message, /\[2\].*`borderRadius` is not a TEXT word/s);
+      assert.match(err.message, /\n {2}\[2\] TEXT .* at borderRadius: a TEXT has no `borderRadius` to edit/);
       return true;
     },
   );
@@ -382,7 +382,7 @@ test("two entries naming the same node reject as ambiguous — never last-wins",
       { id: a.id, opacity: 0.5 },
       { id: a.id, opacity: 0.9 },
     ]),
-    /resolves to the same node as entry \[0\]/,
+    /\n {2}\[1\] RECTANGLE "[^"]*" \(id "[^"]+"\): entry \[0\] edits this layer too/,
   );
   assert.equal(a.opacity, 1);
 });
@@ -442,7 +442,7 @@ test("a mid-apply Figma refusal seals the WHOLE batch as one step, pops it, and 
       { id: a.id, fill: "#0000ff" },
       { id: b.id, opacity: 0.5 },
     ]),
-    /flcm\.editMany \(entry 1\): Figma refused a write on/,
+    (err: FlcmError) => err.kind === "figma" && err.node?.id === b.id && /^flcm\.editMany: RECTANGLE .* at \[1\]: Figma refused a change to this layer/.test(err.message),
   );
   // commit-then-undo: the batch's own writes are sealed and popped as one step (invariant 2).
   assert.deepEqual(figma.undoLog.slice(-3), ["commit", "commit", "trigger"]);

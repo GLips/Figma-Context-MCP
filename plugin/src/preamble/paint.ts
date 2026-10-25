@@ -58,7 +58,7 @@ export function toFigmaPaint(paint: WritePaint): Paint {
     // paintOf is the SOLE WritePaint→Paint funnel there and routes every image paint to its own resolver, so a
     // pure image paint never reaches this figma-free path; this narrows the union and fails loud if that ever
     // breaks (e.g. a new paint consumer bypasses paintOf).
-    throw new FlcmError("internal", "internal — an image paint reached toFigmaPaint; route it through the bridge's paintOf so it resolves with fetched bytes.");
+    throw new FlcmError("internal", "an image paint was about to be written before its image was loaded.");
   }
   return {
     type: paint.type,

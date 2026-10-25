@@ -43,7 +43,7 @@ test("wrap and unequal CSS gaps create, edit, inherit and round-trip", async () 
   assert.equal(native.itemSpacing, 9);
   await edit(native.id, { layout: { wrap: false } });
   assert.equal((await get(native.id)).node.layout?.mode, "column");
-  await assert.rejects(edit(native.id, { layout: { gap: "4px 8px" } }), /unequal.*require/);
+  await assert.rejects(edit(native.id, { layout: { gap: "4px 8px" } }), /unequal row and column gaps need layout\.wrap: true/);
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "column", wrap: true } }),
     /requires.*row/,

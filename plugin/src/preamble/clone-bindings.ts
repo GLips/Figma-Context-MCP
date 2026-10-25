@@ -25,7 +25,10 @@ export function captureCloneBindings(root: any): CloneBindings {
       const source = definitionOwnerOf(node);
       const definitions = JSON.parse(JSON.stringify(source.componentPropertyDefinitions || {}));
       for (const def of Object.values(definitions) as Definition[]) {
-        if (def.type !== "VARIANT" && !supported.has(def.type)) throw new FlcmError("authoring", "unsupported component property type " + def.type + ". Nothing was applied.", { call: "flcm.clone" });
+        if (def.type !== "VARIANT" && !supported.has(def.type)) throw new FlcmError("authoring",
+          "this component declares a " + def.type + " property, which clone can't copy with its bindings. Clone an instance of it instead, or rebuild the copy with flcm.component.",
+          { node: { type: source.type, name: source.name, id: source.id } },
+        );
       }
       const owner: Owner = { path, source, definitions, layers: [] };
       function layers(layer: any, relative: Path): void {
@@ -35,7 +38,11 @@ export function captureCloneBindings(root: any): CloneBindings {
         const refs = { ...(layer.componentPropertyReferences || {}) };
         for (const key of Object.values(refs) as string[]) {
           const def = definitions[key];
-          if (!def || !supported.has(def.type)) throw new FlcmError("authoring", "cannot faithfully copy binding " + JSON.stringify(key) + "; unsupported or missing component property definition. Nothing was applied.", { call: "flcm.clone" });
+          if (!def || !supported.has(def.type)) throw new FlcmError("authoring",
+            "this layer is bound to component property " + JSON.stringify(bareName(key)) + ", which its component doesn't declare or clone can't copy, so the binding can't be copied. " +
+              "Unbind it first (componentPropertyReferences: { <field>: null }), or clone an instance of the component instead.",
+            { node: { type: layer.type, name: layer.name, id: layer.id } },
+          );
         }
         owner.layers.push({ path: relative, type: layer.type, refs });
         if (layer.type !== "INSTANCE") (layer.children || []).forEach((child: any, index: number) => layers(child, relative.concat(index)));
@@ -50,7 +57,7 @@ export type CreatedCloneProperties = { owner: any; id: string }[];
 export function restoreCloneBindings(copy: any, plan: CloneBindings, created: CreatedCloneProperties = []): void {
   for (const entry of plan.owners) {
     const root = at(copy, entry.path);
-    if (!root) throw new FlcmError("internal", "copied component structure changed during placement.", { call: "flcm.clone" });
+    if (!root) throw new FlcmError("internal", "the copy lost a component the original holds while it was being placed, so its bindings couldn't be restored.");
     const destination = definitionOwnerOf(root);
     const mapping = new Map<string, string>();
     // A duplicate variant temporarily makes the set definition getter reject. The source
@@ -59,7 +66,7 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
     const defs = sameOwner ? entry.definitions : destination.componentPropertyDefinitions || {};
     for (const layer of entry.layers) {
       const node = at(root, layer.path);
-      if (!node || node.type !== layer.type) throw new FlcmError("internal", "copied layer structure does not match its source.", { call: "flcm.clone" });
+      if (!node || node.type !== layer.type) throw new FlcmError("internal", "a layer of the copy doesn't match the original's layer at the same position, so its bindings couldn't be restored.");
       for (const [field, sourceId] of Object.entries(layer.refs)) {
         const copiedId = node.componentPropertyReferences?.[field];
         // Native clones may already preserve independent definitions. Structural correspondence
@@ -67,7 +74,10 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
         if (sameOwner) mapping.set(sourceId, sourceId);
         else if (copiedId && defs[copiedId] && JSON.stringify(defs[copiedId]) === JSON.stringify(entry.definitions[sourceId])) {
           const prior = mapping.get(sourceId);
-          if (prior && prior !== copiedId) throw new FlcmError("figma", "inconsistent native property mapping.", { call: "flcm.clone" });
+          if (prior && prior !== copiedId) throw new FlcmError("figma",
+            "Figma copied one component property of the original as two different properties, so the copy's bindings can't be restored. Clone the whole component or set instead, or into another destination.",
+            { node: { type: node.type, name: node.name } },
+          );
           mapping.set(sourceId, copiedId);
         }
       }
@@ -89,7 +99,10 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
       const refs = Object.fromEntries(Object.entries(layer.refs).map(([field, id]) => [field, mapping.get(id)]));
       node.componentPropertyReferences = refs;
       for (const [field, id] of Object.entries(refs)) {
-        if (!id || !samePropertyId(node.componentPropertyReferences?.[field], id)) throw new FlcmError("figma", "native binding restoration did not persist.", { call: "flcm.clone" });
+        if (!id || !samePropertyId(node.componentPropertyReferences?.[field], id)) throw new FlcmError("figma",
+          "Figma didn't keep this layer's binding to component property " + JSON.stringify(bareName(id ?? layer.refs[field])) + " on the copy. Clone the whole component or set instead, or bind the copied layer afterward with flcm.edit.",
+          { node: { type: node.type, name: node.name } },
+        );
       }
     }
   }

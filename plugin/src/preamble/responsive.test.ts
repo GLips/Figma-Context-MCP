@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 
 import { render } from "./structure.js";
+import { FlcmError } from "./flcm-error.js";
 
 createFigmaMock();
 
@@ -260,15 +261,15 @@ test("an ABSOLUTE child of an auto-layout parent honors constraints (out of flow
 test("a bad `constraints` value fails loud", async () => {
   await assert.rejects(
     render({ type: "RECTANGLE", constraints: { x: "middle" } } as never),
-    /constraints\.x must be one of/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "authoring" && /constraints\.x$/.test(err.path ?? "") && /must be one of/.test(err.reason),
   );
   await assert.rejects(
     render({ type: "RECTANGLE", constraints: { y: "left" } } as never),
-    /constraints\.y must be one of/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "authoring" && /constraints\.y$/.test(err.path ?? "") && /must be one of/.test(err.reason),
   );
   await assert.rejects(
     render({ type: "RECTANGLE", constraints: "right" } as never),
-    /constraints must be an object/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "authoring" && /constraints$/.test(err.path ?? "") && /must be an object/.test(err.reason),
   );
 });
 

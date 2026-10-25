@@ -234,7 +234,8 @@ test("refusals name the component's own vocabulary, with zero writes", async () 
   );
   await assert.rejects(
     render({ type: "INSTANCE", componentId: comp.id, overrides: { "999:999": { fill: "#000" } } }),
-    /"Chip" \(id .*\) has no sublayer at that path/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "authoring" && err.node?.type === "COMPONENT" && err.node.name === "Chip" &&
+      /overrides\["999:999"\]$/.test(err.path ?? "") && /has no sublayer at that path/.test(err.reason),
   );
   // Not a component at all.
   const plain = await render({ type: "RECTANGLE", width: 10, height: 10 });
@@ -247,7 +248,7 @@ test("refusals name the component's own vocabulary, with zero writes", async () 
   // The override's null: a removal word where one exists, a loud refusal where none does.
   await assert.rejects(
     render({ type: "INSTANCE", componentId: comp.id, overrides: { [label.id]: { text: null } } }),
-    /`text` is null\. .* no removal word for `text`/s,
+    /`text` is null\. .* can't remove `text`/s,
   );
   assert.equal(figma.currentPage.children.length, before + 2);
 });
@@ -257,11 +258,11 @@ test("render rejects instance shape errors before any component lookup", async (
   await assert.rejects(render({ type: "INSTANCE" }), /the component must be a component's node id/);
   await assert.rejects(
     render({ type: "INSTANCE", componentId: "1:2", fillz: "#000" } as never),
-    /unknown prop "fillz" on INSTANCE/,
+    /unknown prop "fillz"/,
   );
   await assert.rejects(
     render({ type: "INSTANCE", componentId: "1:2", overrides: { "1:3": { colour: "#000" } } }),
-    /unknown prop "colour" on INSTANCE.overrides\["1:3"\]/,
+    /unknown prop "colour"/,
   );
   await assert.rejects(
     render({ type: "INSTANCE", componentId: "1:2", overrides: { "1:3": { x: 3 } } }),

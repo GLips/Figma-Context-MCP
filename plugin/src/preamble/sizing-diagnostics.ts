@@ -120,8 +120,12 @@ export function resizeToPlannedSize(
     const actual = node[axis];
     if (Math.abs(actual - requested) <= 0.01) continue;
     if (bound && Math.abs(actual - node[bound]!) <= 0.01) continue;
-    const message = "requested " + axis + " " + Number(requested.toFixed(2)) + "; Figma realized " + Number(actual.toFixed(2));
-    if (layout.context.ownWritesLockedBy) throw new FlcmError("internal", message + " (instance write policy gap)");
+    const message = "asked for " + axis + " " + Number(requested.toFixed(2)) + "; Figma made it " + Number(actual.toFixed(2));
+    if (layout.context.ownWritesLockedBy) {
+      throw new FlcmError("internal", message + ", and inside an instance flcm should have known before writing that Figma wouldn't take this size.", {
+        node: { type: node.type, name: node.name, id: node.id },
+      });
+    }
     misses.push({ node, prop: axis, authored: requested, realized: actual, message });
     // The miss stays a warning; the finalizer accepts this value, and fails only if it moves again.
     concedeRealization(node, { kind: "write-time-resize-miss", axis, realized: actual });
@@ -206,7 +210,7 @@ export function finishSizingDiagnostics(verb: string): void {
       });
     }
   } catch (error) {
-    warnings.add({ id: null, message: "flcm." + verb + ": write succeeded; sizing diagnostics could not inspect the resulting layout: " + describeFailure(error) });
+    warnings.add({ id: null, message: "flcm." + verb + ": the change was made, but flcm could not check the sizes it ended with: " + describeFailure(error) });
   } finally {
     beginSizingDiagnostics();
   }

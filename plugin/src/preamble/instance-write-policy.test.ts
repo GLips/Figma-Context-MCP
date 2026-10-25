@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createFigmaMock, seedVariables } from "../../harness/figma-mock.mjs";
 import { specNode } from "../../harness/spec-node.js";
 import * as flcm from "./runtime.js";
+import type { FlcmError } from "./flcm-error.js";
 import { warnings as diagnostics } from "./warnings.js";
 import { mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { resizeToPlannedSize } from "./sizing-diagnostics.js";
@@ -336,18 +337,18 @@ test("a resize Figma ignores on an instance root is a warning, not a failure", a
   fx.inst.resize = () => {};
   await flcm.edit(fx.inst.id, { height: 48 });
   const said = diagnostics.summary().join("\n");
-  assert.match(said, /requested height 48; Figma realized 240/);
-  assert.doesNotMatch(said, /policy gap/);
+  assert.match(said, /asked for height 48; Figma made it 240/);
+  assert.doesNotMatch(said, /should have known/);
 });
 
 // On a locked layer the policy refuses every resize, so no route reaches the backstop there today;
 // it exists for the write the policy doesn't know about. Driven directly, with a minted layout.
-test("a planned resize Figma ignores on a locked layer throws as a policy gap", async () => {
+test("a planned resize Figma ignores on a locked layer throws as flcm's own bug", async () => {
   const fx = await cardFixture();
   const rowRect = layerOf(fx.inst, "RowRect");
   const layout = mintAuthorizedLiveLayout("test", rowRect, { child: { kind: "free", layout: {} }, sizingFacts: liveNodeSizingFacts(rowRect) }, instanceContextOf(rowRect));
   rowRect.resize = () => {};
-  assert.throws(() => resizeToPlannedSize(rowRect, layout, { width: 30, height: 24 }), /requested width 30; Figma realized 24 \(instance write policy gap\)/);
+  assert.throws(() => resizeToPlannedSize(rowRect, layout, { width: 30, height: 24 }), (err: FlcmError) => err.kind === "internal" && err.node?.id === rowRect.id && /asked for width 30; Figma made it 24, and inside an instance/.test(err.message));
 });
 
 test("outside any instance, a percent or aspect resize Figma doesn't honor is a warning, not a failure", async () => {
@@ -360,9 +361,9 @@ test("outside any instance, a percent or aspect resize Figma doesn't honor is a 
   await flcm.edit(box.id, { width: "50%" });
   await flcm.edit(box.id, { aspectRatio: 2 });
   const said = diagnostics.summary().join("\n");
-  assert.match(said, /requested width 100; Figma realized 40/);
-  assert.match(said, /requested height 20; Figma realized 40/);
-  assert.doesNotMatch(said, /policy gap/);
+  assert.match(said, /asked for width 100; Figma made it 40/);
+  assert.match(said, /asked for height 20; Figma made it 40/);
+  assert.doesNotMatch(said, /should have known/);
 });
 
 // The raw mutations the policy authorizes have one home each, so a new route can't reach Figma

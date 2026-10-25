@@ -40,11 +40,10 @@ import { CANCELLED_BECAUSE, hostDeadlinePassed, hostRunCancellation, refuseIfRun
 import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
 import { settleApplySpan } from "./bridge.js";
-import { recordCommittedVerb } from "./verb-error.js";
+import { committedVerbCount, recordCommittedVerb } from "./verb-error.js";
 import { beginObligationLedger, retargetObligationNode } from "./obligation.js";
 import { finalizeMutatingCall, type VerifiedStyleLinks } from "./call-finalizer.js";
-import { describeNodeIdentity } from "./identity.js";
-import { ConcurrentEditError, FlcmError, asFlcmError, describeFailure } from "./flcm-error.js";
+import { ConcurrentEditError, FlcmError, appendToFailure, asFlcmError, describeFailure, type FlcmErrorNode } from "./flcm-error.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -89,26 +88,23 @@ export function compensatedMutationFailure(cause: unknown): Error {
 // The mode is a live fact like any other, so it is read where every live fact is read: in the sync
 // stretch before the seal, never cached. A flip during the resource loads is caught here, and a
 // Dev Mode run leaves zero undo residue.
-function refuseIfDevMode(verb: string): void {
+function refuseIfDevMode(): void {
   if (figma.editorType === "dev") {
     throw new FlcmError(
       "figma",
       "Figma is in Dev Mode, where the plugin API is read-only — this write " +
         "cannot run. Switch the file back to Design mode to author. Reads are unaffected.",
-      { call: "flcm." + verb },
     );
   }
 }
 
 
-function refuseIfCancelled(verb: string): void {
+function refuseIfCancelled(): void {
   const cause = hostRunCancellation();
   if (cause) {
     throw new FlcmError(
       "run-ended",
-      CANCELLED_BECAUSE[cause] + " — no further mutating verbs start. The " +
-        "canvas holds what completed before the cancellation.",
-      { call: "flcm." + verb },
+      CANCELLED_BECAUSE[cause] + ", so no further call that changes the file starts.",
     );
   }
   // Worded apart from the CANCEL: with the thread held, the run can't know whether the server has
@@ -119,9 +115,8 @@ function refuseIfCancelled(verb: string): void {
     throw new FlcmError(
       "run-ended",
       "this run held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
-        "s without reaching the server, past the server's inactivity deadline — no further mutating verbs start. The canvas holds what " +
-        "completed before this point. Split long synchronous work across calls.",
-      { call: "flcm." + verb },
+        "s without reaching the server, past the server's inactivity deadline, so no further call that changes the file starts. " +
+        "Split long synchronous work across calls.",
     );
   }
 }
@@ -224,9 +219,9 @@ export function retargetReplacedNode(span: ApplySpan, from: any, to: any): void 
   warnings.retargetNode(from.id, to.id, verbWarningCheckpoint);
 }
 
-async function linkVerifiedStyles(verb: string, links: VerifiedStyleLinks): Promise<void> {
-  // Named before the first await: a node deleted in Figma meanwhile throws on every read but id.
-  const subjects = links.map((link) => describeNodeIdentity(link.node));
+async function linkVerifiedStyles(links: VerifiedStyleLinks): Promise<void> {
+  // Read before the first await: a node deleted in Figma meanwhile throws on every read but id.
+  const subjects = links.map(({ node }): FlcmErrorNode => ({ type: node.type, name: node.name, id: node.id }));
   for (const [i, { node, slot, styleId, styleName }] of links.entries()) {
     try {
       if (slot === "fill") await node.setFillStyleIdAsync(styleId);
@@ -235,15 +230,28 @@ async function linkVerifiedStyles(verb: string, links: VerifiedStyleLinks): Prom
       else await node.setTextStyleIdAsync(styleId);
     } catch (err) {
       // `removed` is the one read besides id a deleted node still answers.
-      if (node.removed) throw new ConcurrentEditError({ call: "flcm." + verb, changed: subjects[i] + " was deleted" });
+      if (node.removed) throw new ConcurrentEditError({ node: subjects[i], changed: "it was deleted" });
       throw new FlcmError(
         "figma",
-        "couldn't link the " + slot + " style " + JSON.stringify(styleName) + " (id " + JSON.stringify(styleId) + ") to " +
-          subjects[i] + ": " + describeFailure(err),
-        { call: "flcm." + verb },
+        "Figma refused to link the " + slot + " style " + JSON.stringify(styleName) + " (id " + JSON.stringify(styleId) + "): " +
+          describeFailure(err) + ". Set the " + slot + " as a literal value instead, or link a different style.",
+        { node: subjects[i] },
       );
     }
   }
+}
+
+// The one place a failed call says what of the run still stands; no throw site words it. Every
+// failure leaving the lock rolled back all of its call, except an unrolled concurrent edit.
+function sayWhatWasKept(cause: unknown): FlcmError {
+  const keptOnCanvas = cause instanceof ConcurrentEditError && cause.keptOnCanvas;
+  // A call whose changes stayed was counted already, and it isn't "before" itself.
+  const before = committedVerbCount() - (keptOnCanvas ? 1 : 0);
+  const earlier = before === 0 ? "no call before it in this run changed the file"
+    : before === 1 ? "the 1 call before it that changed the file was kept"
+    : "the " + before + " calls before it that changed the file were kept";
+  if (keptOnCanvas) return appendToFailure(cause, earlier[0].toUpperCase() + earlier.slice(1) + ".");
+  return appendToFailure(cause, "Nothing from this call was kept" + (before === 0 ? ", and " : "; ") + earlier + ".");
 }
 
 const UNDO_STEP_STAMP_KEY = "flcm/undo-step";
@@ -260,22 +268,23 @@ export function enterMutatingVerb<P, G, T>(
   apply: (gated: G, span: ApplySpan) => SyncOnly<VerbResultBuilder<T>>,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
-    refuseIfRunFinished("flcm." + verb);
-    refuseIfCancelled(verb);
-    traceVerb("verb-start", verb);
     // The verb's annotation-category slate, opened here rather than by prepare because its other
     // half is the failure path below: what a prepare created must be removable from a catch that
     // never sees the prepared value (annotation-categories.ts).
     beginAnnotationMutation();
     try {
+      // Inside the try, so a refusal at the turn says what was kept like every other failure.
+      refuseIfRunFinished();
+      refuseIfCancelled();
+      traceVerb("verb-start", verb);
       const prepared = await prepare();
       traceVerb("verb-prepared", verb);
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
       // during them is the same kind of fact, read at the same place.
-      refuseIfRunFinished("flcm." + verb);
-      refuseIfCancelled(verb);
-      refuseIfDevMode(verb);
+      refuseIfRunFinished();
+      refuseIfCancelled();
+      refuseIfDevMode();
       invalidateSceneAccess();
       beginObligationLedger();
       const gated = gate(prepared);
@@ -298,7 +307,7 @@ export function enterMutatingVerb<P, G, T>(
         // Before the await on purpose: a failure here rolls back over writes nothing else has touched.
         concedeSizeBoundClamps();
         const verified = finalizeMutatingCall(verb, span.styleLinks);
-        await linkVerifiedStyles(verb, verified);
+        await linkVerifiedStyles(verified);
         const result = build();
         figma.commitUndo();
         recordCommittedVerb();
@@ -316,14 +325,19 @@ export function enterMutatingVerb<P, G, T>(
         // The stamp is this step's first write, so it reverts only if the whole step did. If it
         // didn't, an edit made in Figma while the verb awaited its style links joined its undo step,
         // and Figma then undid none of it.
-        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) throw new ConcurrentEditError({ call: "flcm." + verb, unrolled: err });
+        if (figma.root.getPluginData(UNDO_STEP_STAMP_KEY) === stamp) {
+          // Its changes stay on the canvas, so it counts among the calls that changed the file.
+          recordCommittedVerb();
+          throw new ConcurrentEditError({ unrolled: err });
+        }
         throw err;
       }
     } catch (err) {
       // Wraps every phase: a category is created during the resource loads, so a gate that refuses
       // after them (or a write that fails inside the seal) both leave one to remove.
       traceVerb("verb-error", verb);
-      throw removeFailedAnnotationCategories(err);
+      // Kept-sentence first: a leftover category is the exception to it, said after it.
+      throw removeFailedAnnotationCategories(sayWhatWasKept(err));
     }
   });
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);

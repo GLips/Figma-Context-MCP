@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import type { SnapshotAnnotation } from "@framelink/core/snapshot";
-import { rejectUnknownKeys } from "./validate.js";
+import { rejectUnknownKeys, showValue } from "./validate.js";
 import { NESTED_WORDS } from "./vocabulary.js";
 import { FlcmError } from "./flcm-error.js";
 
@@ -29,23 +29,23 @@ function isAnnotationProperty(value: unknown): value is WriteAnnotationProperty 
 }
 
 export function compileAnnotations(value: unknown): WriteAnnotation[] {
-  if (!Array.isArray(value)) throw new FlcmError("authoring", "flcm.annotations must be an array.");
+  if (!Array.isArray(value)) throw new FlcmError("authoring", "annotations must be an array of { text?, category?, properties? } objects — got " + showValue(value) + ". Pass [] to clear every annotation.");
   return value.map((entry: unknown) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new FlcmError("authoring", "flcm.annotations entries must be objects.");
-    rejectUnknownKeys(entry, ANNOTATION_KEYS, "flcm.annotations");
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new FlcmError("authoring", "each annotation must be an object { text?, category?, properties? } — got " + showValue(entry) + ".");
+    rejectUnknownKeys(entry, ANNOTATION_KEYS, "an annotation");
     const { text, category, properties } = entry as Record<string, unknown>;
     const out: WriteAnnotation = {};
     if (text !== undefined) {
-      if (typeof text !== "string") throw new FlcmError("authoring", "flcm.annotations.text must be a string.");
+      if (typeof text !== "string") throw new FlcmError("authoring", "an annotation's text must be a string — got " + showValue(text) + ".");
       out.text = text;
     }
     if (category !== undefined) {
-      if (typeof category !== "string" || !category.trim()) throw new FlcmError("authoring", "flcm.annotations.category must be a non-blank name.");
+      if (typeof category !== "string" || !category.trim()) throw new FlcmError("authoring", "an annotation's category must be a non-blank name — got " + showValue(category) + ".");
       out.category = category.trim();
     }
     if (properties !== undefined) {
       if (!Array.isArray(properties) || !properties.every(isAnnotationProperty)) {
-        throw new FlcmError("authoring", "flcm.annotations.properties must be an array of pinned property names: " + ANNOTATION_PROPERTIES.join(", ") + ".");
+        throw new FlcmError("authoring", "an annotation's properties must be an array of these property names: " + ANNOTATION_PROPERTIES.join(", ") + " — got " + showValue(properties) + ".");
       }
       out.properties = [...properties];
     }

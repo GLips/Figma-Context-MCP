@@ -65,8 +65,8 @@ test("a retyped marker preserves live children and is never created as content",
   const marker = { elided: { children: 42 } };
   await flcm.render({ id: parent.id, children: [marker as any] });
   assert.deepEqual(live.children, [child]);
-  await assert.rejects(flcm.render(marker as any), /only valid inside a children array/);
-  await assert.rejects(flcm.render({ id: parent.id, children: [{ elided: {} } as any] }), /type must be/);
+  await assert.rejects(flcm.render(marker as any), { kind: "authoring", path: "flcm.render.spec", message: /an `elided` marker is valid only inside a children array/ });
+  await assert.rejects(flcm.render({ id: parent.id, children: [{ elided: {} } as any] }), { kind: "authoring", path: "flcm.render.spec.children[0].type", message: /must be FRAME, TEXT/ });
   assert.deepEqual(live.children, [child]);
 });
 

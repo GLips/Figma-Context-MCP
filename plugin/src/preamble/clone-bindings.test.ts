@@ -53,7 +53,12 @@ for (const context of ["same-set", "standalone", "different-set"]) {
 test("unsupported property definitions reject before native clone", async () => {
   const source = figma.createComponent(); figma.currentPage.appendChild(source); source.addComponentProperty("Content", "SLOT", "");
   let called = false; source.clone = () => { called = true; throw new Error("unexpected clone"); };
-  await assert.rejects(clone(source.id), /unsupported component property type SLOT/);
+  await assert.rejects(clone(source.id), (err: any) => {
+    assert.equal(err.kind, "authoring");
+    assert.equal(err.node.id, source.id);
+    assert.match(err.reason, /declares a SLOT property, which clone can't copy.*Clone an instance of it instead/);
+    return true;
+  });
   assert.equal(called, false);
 });
 test("restoration refusal compensates its copy before sealing the failed span", async () => {
@@ -115,7 +120,12 @@ for (const preservesIdentity of [true, false]) test("native collision-adjusted b
   if (!preservesIdentity) {
     const beforeChildren = destination.children.map(n => n.id);
     const beforeDefinitions = JSON.stringify(destination.componentPropertyDefinitions);
-    await assert.rejects(clone(source.id, destination.id), /native binding restoration did not persist/);
+    await assert.rejects(clone(source.id, destination.id), (err: any) => {
+      assert.equal(err.kind, "figma");
+      assert.deepEqual(err.node, { type: "TEXT", name: "duplicate" });
+      assert.match(err.reason, /Figma didn't keep this layer's binding to component property "Same" on the copy/);
+      return true;
+    });
     assert.deepEqual(destination.children.map(n => n.id), beforeChildren);
     assert.equal(JSON.stringify(destination.componentPropertyDefinitions), beforeDefinitions);
     return;
@@ -138,6 +148,6 @@ test("unknown native clone effects and incomplete compensation retain ordinary r
   destination.addComponentProperty = (...args: any[]) => { if (++count > 1) throw Error("second definition refused"); return add(...args); };
   destination.deleteComponentProperty = () => { throw Error("cleanup refused"); };
   figma.undoLog.length = 0;
-  await assert.rejects(clone(next.source.id, destination.id), /second definition refused.*Cleanup also failed.*cleanup refused/);
+  await assert.rejects(clone(next.source.id, destination.id), { kind: "figma", message: /second definition refused.*Removing the partial copy also failed: cleanup refused/ });
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });

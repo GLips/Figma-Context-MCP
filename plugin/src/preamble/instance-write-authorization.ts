@@ -17,7 +17,7 @@
 import type { BuiltNode, ComponentEditWords, InstanceEditWords, WriteLayout, WriteProps } from "./ir.js";
 import type { EditPlan, EditPlanLanding } from "./edit-plan.js";
 import { LAYOUT_MODES, AXES, type Axis, type ChildLayout, type LayoutMode } from "./layout-mode.js";
-import { describeNodeIdentity, instanceContextOf, instanceContextUnder, type InstanceContextFacts } from "./identity.js";
+import { instanceContextOf, instanceContextUnder, type InstanceContextFacts } from "./identity.js";
 import {
   planNodeSizing, builtNodeSizingFacts, liveNodeSizingFacts, type AxisResize, type NodeSizingPlan, type ResolvedLiveLayout,
 } from "./sizing-plan.js";
@@ -26,13 +26,13 @@ import {
   type InstanceWriteRuleId,
 } from "./instance-write-policy.js";
 import type { PatchFieldKey } from "./obligation.js";
-import { FlcmError } from "./flcm-error.js";
+import { describeNodeIdentity, FlcmError, type FlcmErrorNode } from "./flcm-error.js";
 
 // Only this module holds the token, so only its mint functions can construct the values below.
 const MINT: unique symbol = Symbol("instance-write-authorization");
 
 function assertMinted(token: typeof MINT): void {
-  if (token !== MINT) throw new FlcmError("internal", "an authorized write was constructed outside instance-write-authorization. This is a bug in flcm, not in your call.");
+  if (token !== MINT) throw new FlcmError("internal", "a write inside an instance went ahead without being checked against the instance's rules.");
 }
 
 /** A field the policy forbids writing where it lands: the rule, and the word as a refusal names it. */
@@ -154,18 +154,20 @@ function classifyInstanceWrites(node: any, patch: WriteProps, sizing: NodeSizing
   return { refused: [], realizeOnly };
 }
 
-/** The policy's refusal for `refused` words of `who`, in `context`. */
-export function instanceWriteRefusal(subject: string, who: string, context: InstanceContextFacts, refused: Refusals): FlcmError {
+/** The policy's refusal for the `refused` properties of `who`, in `context`, at spec path `path`. */
+export function instanceWriteRefusal(path: string | undefined, who: FlcmErrorNode, context: InstanceContextFacts, refused: Refusals): FlcmError {
   const owner = context.ownWritesLockedBy;
   const where = !owner
-    ? who + " is an instance, and an instance's own words follow its component where Figma keeps them"
-    : who + " sits inside " + (owner.projected ? "the instance of " + describeNodeIdentity(owner.node) + " this call creates or re-points" : "instance " + describeNodeIdentity(owner.node)) +
+    ? "this layer is an instance, and an instance's own properties follow its component where Figma keeps them"
+    : "this layer sits inside " + (owner.projected ? "the instance of " + describeNodeIdentity(owner.node) + " this call creates or re-points" : "instance " + describeNodeIdentity(owner.node)) +
       ", where a layer's look is yours to override and its geometry is the component's";
   const parts = refused.map(({ rule: id, words }) => words.join(", ") + ": " + describeInstanceWriteRule(id) + ".");
-  return new FlcmError("figma", where + ". " + parts.join(" ") + " Nothing was applied.", { call: subject });
+  return new FlcmError("figma", where + ". " + parts.join(" "), { path, node: who });
 }
 
-function classifyOrRefuse(subject: string, who: string, node: any, patch: WriteProps, sizing: NodeSizingPlan, context: InstanceContextFacts): InstanceWriteClassification {
+const errorNodeOf = (node: SceneNode): FlcmErrorNode => ({ type: node.type, name: node.name, id: node.id });
+
+function classifyOrRefuse(subject: string | undefined, who: FlcmErrorNode, node: any, patch: WriteProps, sizing: NodeSizingPlan, context: InstanceContextFacts): InstanceWriteClassification {
   const classification = classifyInstanceWrites(node, patch, sizing, context);
   if (classification.refused.length) throw instanceWriteRefusal(subject, who, context, classification.refused);
   return classification;
@@ -202,7 +204,7 @@ const NO_LAYOUT: ChildLayout = { kind: "free", layout: {} };
 export function preflightInstanceWrites(subject: string, plan: EditPlan, resolved: ResolvedLiveLayout | null, context: InstanceContextFacts): InstanceWriteClassification {
   const sizing = planNodeSizing(resolved ? resolved.child : NO_LAYOUT, resolved ? resolved.sizingFacts : liveNodeSizingFacts(plan.node));
   const patch = resolved ? { ...plan.patch, layout: resolved.child.layout } : plan.patch;
-  return classifyOrRefuse(subject, describeNodeIdentity(plan.node), plan.node, patch, sizing, context);
+  return classifyOrRefuse(subject, errorNodeOf(plan.node), plan.node, patch, sizing, context);
 }
 
 /**
@@ -213,17 +215,17 @@ export function assertInstanceRootLayoutMode(subject: string, node: SceneNode | 
   const word = mode === undefined ? null : rootModeRefusal(mode, componentMode);
   if (!word) return;
   const context: InstanceContextFacts = { basis: "live", ownWritesLockedBy: null, childListClosedBy: null, isInstanceRoot: true };
-  throw instanceWriteRefusal(subject, node ? describeNodeIdentity(node) : "the INSTANCE this call creates", context, [{ rule: "instance.root-layout-mode", words: [word] }]);
+  throw instanceWriteRefusal(subject, node ? errorNodeOf(node) : { type: "INSTANCE" }, context, [{ rule: "instance.root-layout-mode", words: [word] }]);
 }
 
 function mintPlan(
   subject: string, source: EditPlan, patch: WriteProps, resolved: ResolvedLiveLayout | null, context: InstanceContextFacts, landing: EditPlanLanding,
 ): AuthorizedEditPlan {
-  if (context.basis !== "live") throw new FlcmError("internal", "an edit plan is minted only against a live node; a projected plan is preflight. This is a bug in flcm, not in your call.");
+  if (context.basis !== "live") throw new FlcmError("internal", "a change was checked against a component's layer instead of the layer it writes.");
   const node = source.node;
   const facts = resolved ? resolved.sizingFacts : liveNodeSizingFacts(node);
   const child = resolved ? resolved.child : NO_LAYOUT;
-  const { realizeOnly } = classifyOrRefuse(subject, describeNodeIdentity(node), node, { ...patch, layout: child.layout }, planNodeSizing(child, facts), context);
+  const { realizeOnly } = classifyOrRefuse(subject, errorNodeOf(node), node, { ...patch, layout: child.layout }, planNodeSizing(child, facts), context);
   const writable: WriteProps = { ...patch };
   delete writable.layout;
   for (const key of Object.keys(writable) as (keyof WriteProps)[]) if (realizeOnly.has(`prop:${key}`)) delete writable[key];
@@ -261,7 +263,7 @@ export function mintAuthorizedWriteSubset(plan: AuthorizedEditPlan, patch: Write
 
 /** Authorize a live node's layout words alone: what a moved or placed node re-applies where it lands. */
 export function mintAuthorizedLiveLayout(subject: string, node: SceneNode, resolved: ResolvedLiveLayout, context: InstanceContextFacts): AuthorizedLiveLayout {
-  const { realizeOnly } = classifyOrRefuse(subject, describeNodeIdentity(node), node, { layout: resolved.child.layout }, planNodeSizing(resolved.child, resolved.sizingFacts), context);
+  const { realizeOnly } = classifyOrRefuse(subject, errorNodeOf(node), node, { layout: resolved.child.layout }, planNodeSizing(resolved.child, resolved.sizingFacts), context);
   const kept: ChildLayout = { ...resolved.child, layout: withoutRealizeOnlyLayout(resolved.child.layout, realizeOnly) };
   return new AuthorizedLiveLayout(MINT, kept, planNodeSizing(kept, resolved.sizingFacts), context, node);
 }
@@ -271,11 +273,11 @@ export function mintAuthorizedLiveLayout(subject: string, node: SceneNode, resol
  * the walk is still assembling). `componentMode` is an INSTANCE's component's direction.
  */
 export function mintAuthorizedBuiltLayout(
-  subject: string, wn: BuiltNode, child: ChildLayout, parent: (BaseNode & ChildrenMixin) | InstanceContextFacts, componentMode?: LayoutMode,
+  subject: string | undefined, wn: BuiltNode, child: ChildLayout, parent: (BaseNode & ChildrenMixin) | InstanceContextFacts, componentMode?: LayoutMode,
 ): AuthorizedBuiltLayout {
   const context = instanceContextUnder(parent as any, wn) as InstanceContextFacts;
   const facts = builtNodeSizingFacts(wn, componentMode);
-  const who = wn.type + (wn.name ? " " + JSON.stringify(wn.name) : "");
+  const who: FlcmErrorNode = { type: wn.type, name: wn.name };
   const { realizeOnly } = classifyOrRefuse(subject, who, null, { layout: child.layout, rotation: wn.rotation }, planNodeSizing(child, facts), context);
   // A fresh node holds nothing yet, so only the root direction its component already has can hold.
   const unheld = [...realizeOnly].filter(([key]) => key !== "layout:mode" || !context.isInstanceRoot);

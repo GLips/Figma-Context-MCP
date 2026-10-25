@@ -84,7 +84,7 @@ export function finishMovedOutDiagnostics(verb: string): void {
       });
     }
   } catch (error) {
-    warnings.add({ id: null, message: "flcm." + verb + ": write succeeded; the moved-node check could not inspect the result: " + describeFailure(error) });
+    warnings.add({ id: null, message: "flcm." + verb + ": the change was made, but flcm could not check which layers it moved out of their parents: " + describeFailure(error) });
   } finally {
     beginMovedOutDiagnostics();
   }

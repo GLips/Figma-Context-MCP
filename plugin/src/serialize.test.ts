@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { safeSerialize, guardReturnValue } from "./serialize.js";
+import type { FlcmError } from "./preamble/flcm-error.js";
 import { looksLikeNode } from "./preamble/live-node.js";
 
 // A live node is anything carrying id + type + `removed` (present on every BaseNode). We fake the SHAPE the
@@ -53,13 +54,16 @@ test("a long array round-trips whole — no 100-element truncation", () => {
 test("cycles fail loudly while shared references remain complete", () => {
   const a: Record<string, unknown> = { name: "cycle" };
   a.self = a;
-  assert.throws(() => safeSerialize(a), /cyclic/);
+  assert.throws(() => safeSerialize(a), /contains itself \(a cycle\)/);
   const shared = { fill: "#FFF" };
   assert.deepEqual(safeSerialize([shared, shared]), [shared, shared]);
 });
 
 test("guardReturnValue rejects a returned live node, naming its path and the id fix", () => {
-  assert.throws(() => guardReturnValue({ ok: true, node: liveNode }), /live Figma node.*\.node.*return node\.id/s);
+  assert.throws(
+    () => guardReturnValue({ ok: true, node: liveNode }),
+    (err: FlcmError) => err.path === "return value.node" && err.node?.id === liveNode.id && /live Figma node.*return node\.id/s.test(err.reason),
+  );
 });
 
 test("guardReturnValue passes a pure read POJO through (no `removed` anywhere)", () => {
@@ -70,5 +74,5 @@ test("guardReturnValue passes a pure read POJO through (no `removed` anywhere)",
 test("deep returned live nodes fail with their path rather than silently collapsing", () => {
   let value: unknown = liveNode;
   for (let i = 0; i < 12; i++) value = { child: value };
-  assert.throws(() => guardReturnValue(value), /live Figma node.*child/s);
+  assert.throws(() => guardReturnValue(value), (err: FlcmError) => err.path === "return value" + ".child".repeat(12));
 });

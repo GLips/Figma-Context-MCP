@@ -64,8 +64,12 @@ export async function resolveTarget(target: Target, within?: Target): Promise<Sc
   invalidateSceneAccess();
   if (typeof target === "string") return resolveString(target, within);
   if (hasId(target)) {
+    // An `id` field is live identity only: a key there (an editMany entry's id) is never searched for.
+    if (!isNodeIdShaped(target.id)) {
+      throw new FlcmError("authoring", `${JSON.stringify(target.id)} isn't a node id (ids look like "12:34"). An id field takes the layer's id, not its key: look the id up with flcm.findOne({ key: ${JSON.stringify(target.id)} }).`);
+    }
     const node = await byId(target.id);
-    if (!node) throw new FlcmError("authoring", `no live node with id ${JSON.stringify(target.id)} — it may have been deleted.`);
+    if (!node) throw new FlcmError("authoring", `no live node has the id ${JSON.stringify(target.id)}: it may have been deleted. Find it again with flcm.find.`);
     return node;
   }
   throw new FlcmError("authoring", `cannot resolve target ${JSON.stringify(target)} — pass a node id, an flcm/key, or a handle.`);
@@ -80,7 +84,7 @@ async function resolveString(target: string, within?: Target): Promise<SceneNode
   }
   if (isNodeIdShaped(target)) {
     const node = await byId(target);
-    if (!node) throw new FlcmError("authoring", `no live node with id ${JSON.stringify(target)} — it may have been deleted.`);
+    if (!node) throw new FlcmError("authoring", `no live node has the id ${JSON.stringify(target)}: it may have been deleted. Find it again with flcm.find.`);
     return node;
   }
   const byKey = scanKey(target, await resolveScanRoot(within));
@@ -94,7 +98,8 @@ async function resolveString(target: string, within?: Target): Promise<SceneNode
   }
   throw new FlcmError(
     "authoring",
-    `no node found for target ${JSON.stringify(target)} — no node carries it as an flcm/key on the searched root, and it isn't spelled like a node id.`,
+    `no node found for target ${JSON.stringify(target)}: it isn't spelled like a node id, and no node in the searched scope carries it as an flcm/key. ` +
+      "Check the spelling, or find the node with flcm.find.",
   );
 }
 
@@ -114,7 +119,7 @@ async function resolveString(target: string, within?: Target): Promise<SceneNode
 export interface ResolvedTargets {
   resolve(target: Target): Promise<void>;
   /** Sync. Throws the resolution's own error, or a freshness refusal for a target prepare never asked for. */
-  node(target: Target, subject: string): SceneNode;
+  node(target: Target, path: string): SceneNode;
 }
 
 // The cache key is the target's FORM plus its value: a bare string may be a key, so it is a different
@@ -137,18 +142,18 @@ export function createResolvedTargets(): ResolvedTargets {
         entries.set(key, { error });
       }
     },
-    node(target, subject) {
+    node(target, path) {
       const entry = entries.get(targetCacheKey(target));
       // Prepare decides WHICH values are targets from the document as it stood then (a property's
       // declared type, a definition's). A miss here means that decision no longer holds at the seal.
       if (!entry) {
         throw new ConcurrentEditError({
-          call: subject,
-          changed: "the definitions " + JSON.stringify(target) + " depends on changed, so it was never resolved",
+          path,
+          changed: "a definition that decides what " + JSON.stringify(target) + " refers to changed",
         });
       }
       if ("error" in entry) throw entry.error;
-      assertNodeStillOnCanvas(entry.node, subject);
+      assertNodeStillOnCanvas(entry.node, path);
       return entry.node;
     },
   };

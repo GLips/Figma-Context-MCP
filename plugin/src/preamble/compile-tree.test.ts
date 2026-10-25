@@ -10,6 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { compileTree } from "./compile-tree.js";
+import type { FlcmError } from "./flcm-error.js";
 import { component } from "./component.js";
 import { render, append } from "./structure.js";
 import { get } from "./read.js";
@@ -48,7 +49,12 @@ test("a child edit and an explicit override disagreeing on one word refuse namin
       },
       "flcm.append",
     ),
-    /overrides\["4:5"\]\.text and the inherited child at that path give different values/,
+    (err: FlcmError) => {
+      assert.equal(err.kind, "authoring");
+      assert.equal(err.path, 'flcm.append.overrides["4:5"].text');
+      assert.match(err.reason, /inherited child .* give different values for text/);
+      return true;
+    },
   );
   // The two AGREEING is the ordinary read shape — a read states an override both ways — so it merges.
   const merged = compileTree(

@@ -23,7 +23,6 @@
 // component's edit before an instance layer restating the old value. Each operation is a write
 // point (write-point.ts): it observes what the earlier ones left and writes only what is still owed.
 
-import { describeNodeIdentity } from "./identity.js";
 import type { RenderCtx } from "./bridge.js";
 import {
   applyEditPlanPhase, trackEditPlanSizing, openEditPlanApply, EDIT_PLAN_PHASES, type EditPlanFailure, type EditPlanPhase,
@@ -41,6 +40,7 @@ import type { Obligation, PatchFieldKey } from "./obligation.js";
 import type { WriteProps } from "./ir.js";
 import { obligationsOnNode } from "./write-point.js";
 import { beginMutatingApply } from "./verb-error.js";
+import { describeNodeIdentity, type FlcmLocation } from "./flcm-error.js";
 import { liveSublayerId } from "@framelink/core";
 
 /** One gated edit, as the gate schedules it and apply lands it. */
@@ -50,8 +50,8 @@ export interface EditApplyEntry {
   plan?: AuthorizedEditPlan;
   instance?: InstanceEditPlan;
   component?: ComponentEditPlan;
-  /** How the span names the entry ("editMany (entry 2)"), and so how its failures read. */
-  subject: string;
+  /** Where the entry's failures say they happened: an editMany entry's call, a placed node's spec path. */
+  site: FlcmLocation;
   /** How a cycle refusal tags its words: `[2]` in a batch, a tree's source path. */
   tag: string;
   /** Opened by the caller when it already began the entry's apply (a placed live node); otherwise apply opens it. */
@@ -157,11 +157,20 @@ function phaseReads(shape: EditEntryShape, phase: EditPlanPhase): GeometryEffect
   return reads;
 }
 
-// `[0] "Card" width`: the entry, the layer, and the words this phase writes.
+// `[0] FRAME "Card" (id "1:2") width`: the entry, the layer, and the properties this phase writes.
 function labelOf(shape: EditEntryShape, phase: EditOperationPhase): string {
   const words = [...new Set(obligationsOnNode(shape.node, shape.obligations).filter((o) => o.writePoint === phase).map((o) => o.source.path))];
-  return shape.tag + " " + describeNodeIdentity(shape.node) + " " + (words.length ? words.join(", ") : "(" + phase + ")");
+  return shape.tag + " " + describeNodeIdentity(shape.node) + " " + (words.length ? words.join(", ") : "(" + PHASE_LABELS[phase] + ")");
 }
+
+// A phase as the agent wrote it, for a label with no property of its own to name.
+const PHASE_LABELS: { readonly [P in EditOperationPhase]: string } = {
+  "binding-release": "unbinding componentPropertyReferences", retarget: "componentId", definitions: "propertyDefinitions",
+  "vector-path": "path data", appearance: "appearance", text: "text", container: "layout", placement: "position",
+  "own-size": "width/height", cover: "width/height", constraints: "constraints", "bound-defaults": "componentProperties",
+  binding: "componentPropertyReferences", "after-binding": "key", "slot-content": "slot children", "percent-size": "percent width/height",
+  "aspect-ratio": "aspectRatio", "text-clamp": "lineClamp", "percent-position": "percent left/top",
+};
 
 /** Land `schedule`'s operations, in order. `walk` builds the overrides' slot content. */
 export function runEditOperations(entries: readonly EditApplyEntry[], schedule: EditSchedule, walk: RenderCtx): void {
@@ -192,7 +201,7 @@ function openEditRun(walk: RenderCtx): EditRun {
   const open = (entry: EditApplyEntry): EditPlanFailure => {
     let fail = fails.get(entry);
     if (fail) return fail;
-    fail = entry.fail ?? (entry.plan ? openEditPlanApply(entry.subject, entry.plan, walk.span) : beginMutatingApply(entry.subject, entry.node));
+    fail = entry.fail ?? (entry.plan ? openEditPlanApply(entry.plan, walk.span, entry.site) : beginMutatingApply(entry.node, entry.site));
     fails.set(entry, fail);
     if (entry.plan) trackEditPlanSizing(entry.plan);
     return fail;
@@ -204,7 +213,7 @@ function openEditRun(walk: RenderCtx): EditRun {
       const { node, plan, instance, component } = entry;
       if (operation.override) {
         let land = overrides.get(entry);
-        if (!land) overrides.set(entry, (land = beginOverrideApply(node, walk, entry.subject)));
+        if (!land) overrides.set(entry, (land = beginOverrideApply(node, walk, entry.site)));
         land(operation);
         return;
       }

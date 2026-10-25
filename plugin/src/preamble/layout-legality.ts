@@ -13,8 +13,8 @@
 // What Figma does with a word inside an INSTANCE is not legality but write policy:
 // instance-write-policy.ts, applied by instance-write-authorization.ts.
 //
-// Convention: `subject` (the rejecting verb's name for the error prefix) is always the LAST
-// parameter. The parent-relative rules judge a built tree's interior in the verb's GATE
+// Convention: `path` (the spec path of the node judged, undefined for the call's own target) is
+// always the LAST parameter. The parent-relative rules judge a built tree's interior in the verb's GATE
 // (bridge.assertBuiltInteriorLegal), from the same authored-parent facts the build walk derives
 // (childFlowFactsOf), so a bad child refuses with zero writes. Accepted cost: it pays prepare's
 // font/image loads before rejecting.
@@ -35,27 +35,27 @@ export interface ParentFlowFacts {
 // name a mode inherits the live one); create passes undefined — the authored mode decides, and a
 // node with no mode is never a container. `willBeAuto` is derived here, not passed, so a caller
 // can't hand in a value that contradicts the very layout it also passes.
-export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, subject: string, liveWrap = false): void {
+export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, path: string | undefined, liveWrap = false): void {
   const mode = effectiveLayoutMode(wl, { layoutMode: liveMode });
   const willBeAuto = mode.kind !== "free";
   if (wl.alignItems === "baseline" && mode.word !== "row") {
-    throw new FlcmError("authoring", 'layout.alignItems "baseline" requires layout.mode "row" (horizontal auto-layout).', { call: subject });
+    throw new FlcmError("authoring", 'layout.alignItems "baseline" needs layout.mode "row". Set mode "row" in the same call, or use another alignItems.', { path });
   }
   const effectiveMode = mode.word;
-  if ((wl.gridTemplateColumns || wl.gridTemplateRows) && effectiveMode !== "grid") throw new FlcmError("authoring", "grid templates require layout.mode grid.", { call: subject });
+  if ((wl.gridTemplateColumns || wl.gridTemplateRows) && effectiveMode !== "grid") throw new FlcmError("authoring", 'layout.gridTemplateColumns and gridTemplateRows need layout.mode "grid". Set mode "grid" in the same call, or drop the templates.', { path });
   if (effectiveMode === "grid") {
-    if (nodeType === "SLOT") throw new FlcmError("figma", "Figma does not support GRID on slots.", { call: subject });
-    if (wl.wrap !== undefined || wl.justifyContent || wl.alignItems) throw new FlcmError("authoring", "grid uses child justifySelf/alignSelf; wrap, justifyContent and alignItems require row/column.", { call: subject });
+    if (nodeType === "SLOT") throw new FlcmError("figma", 'Figma does not support layout.mode "grid" on a slot. Use "row" or "column".', { path });
+    if (wl.wrap !== undefined || wl.justifyContent || wl.alignItems) throw new FlcmError("authoring", "a grid places children with their own justifySelf/alignSelf; wrap, justifyContent and alignItems need mode \"row\" or \"column\". Drop them, or use row/column.", { path });
     // Negative space: grid gaps don't bind variables — the contract scopes gap binding to flex.
-    if (gapSides(wl.gap).some(isTokenRef)) throw new FlcmError("authoring", "a grid gap can't bind a variable; give a number. Variables bind flex (row/column) gaps.", { call: subject });
-    if (gapSides(wl.gap).some((v) => (v as number) < 0)) throw new FlcmError("authoring", "grid gaps must be non-negative.", { call: subject });
+    if (gapSides(wl.gap).some(isTokenRef)) throw new FlcmError("authoring", "a grid gap can't bind a variable; give a number. Variables bind flex (row/column) gaps.", { path });
+    if (gapSides(wl.gap).some((v) => (v as number) < 0)) throw new FlcmError("authoring", "a grid gap must be 0 or more. Give a non-negative number.", { path });
 
   }
   const wraps = wl.wrap ?? liveWrap;
-  if (wraps && effectiveMode !== "row") throw new FlcmError("authoring", 'layout.wrap requires layout.mode "row"; disable wrap in the same call before changing direction.', { call: subject });
-  if (isGapPair(wl.gap) && !wraps && effectiveMode !== "grid") throw new FlcmError("authoring", 'unequal row/column gaps require layout.wrap: true on a horizontal row.', { call: subject });
+  if (wraps && effectiveMode !== "row") throw new FlcmError("authoring", 'layout.wrap requires layout.mode "row"; disable wrap in the same call before changing direction.', { path });
+  if (isGapPair(wl.gap) && !wraps && effectiveMode !== "grid") throw new FlcmError("authoring", 'unequal row and column gaps need layout.wrap: true on a row. Add wrap: true, or give one gap for both.', { path });
   const rowGap = isGapPair(wl.gap) ? wl.gap.row : wl.gap;
-  if (wraps && typeof rowGap === "number" && rowGap < 0) throw new FlcmError("authoring", "wrapped row gap must be non-negative.", { call: subject });
+  if (wraps && typeof rowGap === "number" && rowGap < 0) throw new FlcmError("authoring", "a wrapped row's row gap must be 0 or more. Give a non-negative number.", { path });
   const s = wl.sizing || {};
   if ((s.horizontal === "hug" || s.vertical === "hug") && !willBeAuto && nodeType !== "TEXT") {
     // The remedy is type-gated: `layout` is a FRAME-only word, so prescribing a mode to a shape
@@ -67,7 +67,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
         (nodeType === "FRAME" || nodeType === "INSTANCE"
           ? 'Use pixel dimensions, or set layout: { mode: "row"|"column" } in the same call.'
           : "Use a pixel size (only a row/column frame or a text can measure content)."),
-      { call: subject },
+      { path },
     );
   }
   // A TEXT that hugs its width also grows its height (Figma has no auto-width, fixed-height text
@@ -78,7 +78,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
     throw new FlcmError(
       "authoring",
       'a TEXT that hugs its width also follows its content in height — a fixed height needs a fixed, "fill" or "N%" width beside it, or drop the height.',
-      { call: subject },
+      { path },
     );
   }
   if ((wl.gap != null || wl.padding || wl.justifyContent || wl.alignItems) && !willBeAuto) {
@@ -91,7 +91,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
           ? 'mode "none" (which is also the default when layout.mode is omitted) leaves this frame free-form'
           : "this " + (nodeType === "INSTANCE" ? "instance" : "frame") + " isn't one") +
         '. Name layout: { mode: "row" } (or "column") in the same call.',
-      { call: subject },
+      { path },
     );
   }
 }
@@ -99,7 +99,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
 // "fill" and "N%" resolve against a parent frame's bounded size, and a page has none. `isRoot` is
 // flcm.component's root check, which judges a root before it has a destination; every other caller
 // judges a node against the page it lands under.
-export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: boolean, subject: string): void {
+export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: boolean, path: string | undefined): void {
   const s = wl.sizing || {};
   if (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos) {
     throw new FlcmError(
@@ -110,7 +110,7 @@ export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: 
         // isRoot doubles as the verb tell: only flcm.component's root check passes true, so the
         // remedy can speak to a node being authored vs one already on the canvas.
         (isRoot ? "nest the node inside a frame." : "move the node into a frame first."),
-      { call: subject },
+      { path },
     );
   }
 }
@@ -133,14 +133,14 @@ export function foldDesignedSizeForPage(wl: WriteLayout): WriteLayout {
 // in WIDTH_AND_HEIGHT ignores: the height silently doesn't stick, so reject instead.
 // Self-triggering (type + words checked here, not at the call sites), so widening the trigger
 // can never happen on one verb and not the other.
-export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, parentIsAuto: boolean, isAbsolute: boolean, subject: string): void {
+export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, parentIsAuto: boolean, isAbsolute: boolean, path: string | undefined): void {
   if (nodeType !== "TEXT" || (wl.sizing || {}).vertical !== "fill") return;
   if (!parentIsAuto || isAbsolute) {
     throw new FlcmError(
       "authoring",
       "a TEXT can only fill its height as an in-flow child of an auto-layout parent — " +
         "out of flow nothing supplies that height. Set `width` (the height follows the wrap), give it a numeric height, or place it in-flow in an auto-layout frame.",
-      { call: subject },
+      { path },
     );
   }
 }
@@ -150,17 +150,17 @@ export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, pa
 // on it — a true cycle, so fail loud rather than snapshot a bogus number. Everything else
 // resolves against the parent's realized size (bridge resolvePercentLayout): a fixed/`fill` auto
 // parent, ANY free-form parent, and an ABSOLUTE child (out of flow — it doesn't feed the hug).
-export function assertPercentResolvable(childLayout: WriteLayout, facts: ParentFlowFacts, subject: string): void {
+export function assertPercentResolvable(childLayout: WriteLayout, facts: ParentFlowFacts, path: string | undefined): void {
   const ps = childLayout.percentSize;
   if (!ps) return;
   if (facts.mode.kind === "free" || childLayout.position === "absolute") return;
-  if (facts.mode.kind === "grid") throw new FlcmError("authoring", 'percent sizes on in-flow GRID children need cell geometry; use fixed pixels or "fill", or position the child absolutely.', { call: subject });
+  if (facts.mode.kind === "grid") throw new FlcmError("authoring", 'percent sizes on in-flow GRID children need cell geometry; use fixed pixels or "fill", or position the child absolutely.', { path });
   if ((ps.width != null && facts.hugW) || (ps.height != null && facts.hugH)) {
     throw new FlcmError(
       "authoring",
       'a percent w/h ("N%") on an in-flow child of an auto-layout (row/column/grid) parent that HUGS that axis is a cycle — ' +
         'the child\'s size both sets and depends on the parent\'s. Give the parent a fixed or "fill" size on that axis, use "fill"/"hug" on the child, or lift it out of the flow with `left`/`top`.',
-      { call: subject },
+      { path },
     );
   }
 }
@@ -169,14 +169,14 @@ export function assertPercentResolvable(childLayout: WriteLayout, facts: ParentF
 // The one non-numeric length Figma realizes is FILL under a row or column — the commonest line in
 // any design is a divider spanning its column — where the parent's flow supplies the number.
 // Out of flow nothing would, so the refusal stands there.
-export function assertLineSizingInFlow(nodeType: string, wl: WriteLayout, parentMode: LayoutMode, isAbsolute: boolean, subject: string): void {
+export function assertLineSizingInFlow(nodeType: string, wl: WriteLayout, parentMode: LayoutMode, isAbsolute: boolean, path: string | undefined): void {
   if (nodeType !== "LINE") return;
   const s = wl.sizing || {};
   if (s.vertical !== undefined) {
-    throw new FlcmError("authoring", "a LINE has no height — it is a length along its `width` alone. Rotate it 90° to stand it up.", { call: subject });
+    throw new FlcmError("authoring", "a LINE has no height — it is a length along its `width` alone. Rotate it 90° to stand it up.", { path });
   }
   if (s.horizontal === "fill" && (parentMode.kind !== "flow" || isAbsolute)) {
-    throw new FlcmError("authoring", 'a LINE fills only as an in-flow child of a row or column, where the parent supplies the length. Give it a numeric `width` here.', { call: subject });
+    throw new FlcmError("authoring", 'a LINE fills only as an in-flow child of a row or column, where the parent supplies the length. Give it a numeric `width` here.', { path });
   }
 }
 
@@ -187,13 +187,13 @@ export function assertLineSizingInFlow(nodeType: string, wl: WriteLayout, parent
 // intent, and the honest construction is a 1px-wide RECTANGLE with height: "fill".
 // Self-triggering on type, like the rules above; the callers state the EFFECTIVE fill and rotation
 // (authored word, else the live node's) so neither verb can be the one that forgets.
-export function assertLineFillUnrotated(nodeType: string, fillsWidth: boolean, rotation: number | undefined, subject: string): void {
+export function assertLineFillUnrotated(nodeType: string, fillsWidth: boolean, rotation: number | undefined, path: string | undefined): void {
   if (nodeType !== "LINE" || !fillsWidth || !rotation) return;
   throw new FlcmError(
     "authoring",
     'a rotated LINE cannot use width: "fill" — the parent\'s flow supplies the length along its OWN axis, and the rotation turns that length across it. ' +
       "Give this line a numeric `width`, or build a rule across the parent's flow as a RECTANGLE 1px wide with height: \"fill\" (no rotation).",
-    { call: subject },
+    { path },
   );
 }
 
@@ -204,17 +204,17 @@ export function assertGridSizing(layout: WriteLayout, live: {
   layoutSizingVertical?: string;
   gridColumnSizes?: readonly { type: string }[];
   gridRowSizes?: readonly { type: string }[];
-} | undefined, subject: string): void {
+} | undefined, path: string | undefined): void {
   if (effectiveLayoutMode(layout, live).kind !== "grid") return;
   // Figma flows a grid row-wise, so the columns are the axis no one can infer. Rows are implicit
   // (hug tracks, one per row the children need) until a template names them.
-  if (live?.layoutMode !== "GRID" && !layout.gridTemplateColumns) throw new FlcmError("authoring", "creating a grid requires gridTemplateColumns. Rows are implicit hug tracks unless gridTemplateRows names them.", { call: subject });
+  if (live?.layoutMode !== "GRID" && !layout.gridTemplateColumns) throw new FlcmError("authoring", "a new grid needs layout.gridTemplateColumns. Name the columns in the same call; rows grow to fit the children unless gridTemplateRows names them.", { path });
   for (const axis of ["horizontal", "vertical"] as const) {
     const fields = AXES[axis];
     const tracks = layout[fields.template] ?? live?.[fields.tracks];
     const size = layout.sizing?.[axis] ?? (live?.[fields.sizing]?.toLowerCase() || "hug");
     if (tracks?.some(t => t.type === "FLEX") && size !== "fixed" && size !== "fill") {
-      throw new FlcmError("authoring", "fractional grid tracks require explicit fixed or fill " + fields.dimension + "; a hugging axis cannot become fixed implicitly.", { call: subject });
+      throw new FlcmError("authoring", "fr grid tracks divide the frame's own " + fields.dimension + ", and a hugging " + fields.dimension + " has none to divide. Give " + fields.dimension + ' a number or "fill" in the same call.', { path });
     }
   }
 }

@@ -35,9 +35,9 @@ import {
 import { resolvePropertyName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, noDeclaringComponentError } from "./compile-component-words.js";
 import { bindableFieldsOf } from "./vocabulary.js";
-import { instanceAncestorOf, editableComponentOwnerOf, variantSetOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
+import { instanceAncestorOf, editableComponentOwnerOf, variantSetOf, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
 import { realizeAtWritePoint } from "./write-point.js";
 import { propertyBindingHolds } from "./obligation-observers.js";
 
@@ -94,9 +94,9 @@ function assertNotVariantMember(node: any, where: string): void {
   if (set) {
     throw new FlcmError(
       "authoring",
-      describeNodeIdentity(node) + " is a VARIANT, and a set's properties live on the SET — Figma keeps them there, and a change reaches every variant. " +
+      "this component is a VARIANT, and a set's properties live on the SET — Figma keeps them there, and a change reaches every variant. " +
         "Edit the set instead: flcm.edit(" + JSON.stringify(set.id) + ", { propertyDefinitions: … }).",
-      { path: where },
+      { path: where, node: { type: node.type, name: node.name, id: node.id } },
     );
   }
 }
@@ -136,7 +136,7 @@ function survivingDefinitions(
     const at = where + "[" + JSON.stringify(name) + "]";
     const full = resolvePropertyName(name, live, where);
     assertNotVariantAxis(live[full], full, at, node);
-    if (deletes.some((d) => d.full === full)) throw new FlcmError("authoring", "another entry of this bag already deletes " + JSON.stringify(full) + " — name each property once.", { path: at });
+    if (deletes.some((d) => d.full === full)) throw new FlcmError("authoring", "another entry of propertyDefinitions already deletes " + JSON.stringify(bareName(full)) + " — name each property once. Drop one of the two.", { path: at });
     deletes.push({ full, name });
   }
   const definitions: Record<string, any> = {};
@@ -172,7 +172,7 @@ export function planComponentDefinitionEdit(
     }
     const full = resolvePropertyName(name, definitions, where);
     const twin = changed.get(full);
-    if (twin !== undefined) throw new FlcmError("authoring", twin + " already names " + JSON.stringify(full) + " — name each property once.", { path: at });
+    if (twin !== undefined) throw new FlcmError("authoring", "the entry at " + twin + " already names " + JSON.stringify(bareName(full)) + " — name each property once. Merge the two entries.", { path: at });
     changed.set(full, at);
     const rename = planChangedDefinition(full, definitions[full], entry, at, node);
     if (rename === undefined) continue; // restates what the property already is: nothing to write
@@ -196,8 +196,8 @@ function assertNoIntroducedDuplicate(
     if (!kept.has(name) && !alsoIntroduced) return;
     throw new FlcmError(
       "authoring",
-      (kept.has(name) ? "this component already has a property named " : "another entry of this bag also lands on ") + JSON.stringify(name) +
-        ". Figma allows the duplicate (the #suffix is the identity) but flcm doesn't — every later reference names a property by name and a duplicate has no way to say which.",
+      (kept.has(name) ? "this component already has a property named " : "another entry of propertyDefinitions also lands on ") + JSON.stringify(name) +
+        ". Figma allows the duplicate but flcm doesn't — every later reference names a property by name and a duplicate has no way to say which. Pick a name nothing else uses.",
       { path: at },
     );
   });
@@ -211,9 +211,9 @@ function assertNotVariantAxis(definition: any, full: string, at: string, node: a
   throw new FlcmError(
     "authoring",
     JSON.stringify(bareName(full)) + " is a VARIANT axis, and a set's axes ARE its member components' names — " +
-      "there is no definition to change. Rename the members of " + describeNodeIdentity(node) +
+      "there is no definition to change. Rename this set's members" +
       ' (flcm.edit(variantId, { name: "Size=Huge, State=Default" })) to change the axis, or remove the variants you don\'t want.',
-    { path: at },
+    { path: at, node: { type: node.type, name: node.name, id: node.id } },
   );
 }
 
@@ -245,12 +245,15 @@ function planChangedDefinition(
   if (definition.type === "VARIANT" && entry.name == null && restatesVariantAxis(definition, entry)) return undefined;
   assertNotVariantAxis(definition, full, at, node);
   if (entry.variantOptions != null) {
-    throw new FlcmError("authoring", "`variantOptions` belongs to a set's variant axis, and " + JSON.stringify(bareName(full)) + " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[definition.type] || definition.type) + ".", { path: at });
+    throw new FlcmError("authoring",
+      "`variantOptions` belongs to a set's variant axis, and " + JSON.stringify(bareName(full)) + " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[definition.type] || definition.type) + ". Drop `variantOptions`.",
+      { path: at },
+    );
   }
   if (entry.type != null) {
     const figmaType = typeof entry.type === "string" ? own(PROPERTY_TYPES, entry.type) : undefined;
     if (!figmaType) {
-      throw new FlcmError("authoring", at + ".type must be one of " + quoted(Object.keys(PROPERTY_TYPES)) + " — got " + JSON.stringify(entry.type) + ".");
+      throw new FlcmError("authoring", "must be one of " + quoted(Object.keys(PROPERTY_TYPES)) + " — got " + JSON.stringify(entry.type) + ".", { path: at + ".type" });
     }
     if (figmaType !== definition.type) {
       throw new FlcmError(
@@ -264,7 +267,7 @@ function planChangedDefinition(
   }
   if (entry.name != null) {
     if (typeof entry.name !== "string" || !entry.name.trim()) {
-      throw new FlcmError("authoring", at + ".name is the property's new name — a non-empty string. Got " + JSON.stringify(entry.name) + ".");
+      throw new FlcmError("authoring", "must be a non-empty string, the property's new name — got " + JSON.stringify(entry.name) + ".", { path: at + ".name" });
     }
     const rename = entry.name.trim();
     if (rename !== bareName(full)) return rename;
@@ -365,17 +368,17 @@ export function prepareComponentBindingEdit(
   if (host) {
     throw new FlcmError(
       "figma",
-      describeNodeIdentity(node) + " is inside component instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
-        "). A binding belongs to the DEFINITION — every instance gets it from there — so bind the same layer in the main component instead (flcm never auto-detaches).",
-      { path: where },
+      "this layer is inside " + describeNodeIdentity(host) +
+        ". A binding belongs to the DEFINITION — every instance gets it from there — so bind the same layer in the main component instead (flcm never auto-detaches).",
+      { path: where, node: { type: node.type, name: node.name, id: node.id } },
     );
   }
   if (!component) {
     throw new FlcmError(
       "authoring",
-      describeNodeIdentity(node) + " is not inside a component, so no component declares a property for this to point at. " +
+      "this layer is not inside a component, so no component declares a property for this to point at. " +
         "Make one first (flcm.component(target, { propertyDefinitions: … })), or bind a layer that is already inside one.",
-      { path: where },
+      { path: where, node: { type: node.type, name: node.name, id: node.id } },
     );
   }
   const owner = definitionOwnerOf(component);
@@ -393,11 +396,11 @@ export function prepareComponentBindingEdit(
       if (current === undefined) {
         throw new FlcmError(
           "authoring",
-          "nothing to unbind — this node's `" + field + "` isn't driven by a component property. " +
+          "nothing to unbind — this layer's `" + field + "` isn't driven by a component property. " +
             (Object.keys(live).length
-              ? "It is driven by " + quoted(Object.keys(live).map((k) => bareName(String(live[k])))) + "."
-              : "No property drives any of its fields."),
-          { path: at },
+              ? "Its bound properties are " + quoted(Object.keys(live).map((k) => bareName(String(live[k])))) + "."
+              : "No property drives any of its fields.") + " Drop `" + field + ": null`.",
+          { path: at, node: { type: node.type, name: node.name, id: node.id } },
         );
       }
       // A slot with no frame is the state flcm.component refuses to create: Figma would have nowhere
@@ -409,7 +412,7 @@ export function prepareComponentBindingEdit(
           "this is the only frame in " + describeNodeIdentity(component) + " bound to slot property " + JSON.stringify(bareName(current)) +
             ", and a slot property with no frame has nowhere to put an instance's content. Delete the property instead — it frees this frame in the same move: " +
             "flcm.edit(" + JSON.stringify(owner.id) + ", { propertyDefinitions: { " + JSON.stringify(bareName(current)) + ": null } }).",
-          { path: at },
+          { path: at, node: { type: node.type, name: node.name, id: node.id } },
         );
       }
       writes.push({ field, wire, full: null });
@@ -435,10 +438,12 @@ function bindingsAllHold(node: any, refs: Record<string, string | null>): boolea
 function assertBindingFieldMatchesType(field: string, figmaType: string, name: string, at: string): void {
   const { type } = BINDING_FIELD_WIRE_KEYS[field];
   if (figmaType === PROPERTY_TYPES[type]) return;
+  const word = PROPERTY_TYPE_WORD_FOR[figmaType] || figmaType;
+  const matching = FIELD_FOR_TYPE[word];
   throw new FlcmError(
     "authoring",
-    "`" + field + "` is driven by a " + type + " property, and " + JSON.stringify(bareName(name)) +
-      " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[figmaType] || figmaType) + ".",
+    "`" + field + "` is driven by a " + JSON.stringify(type) + " property, and " + JSON.stringify(bareName(name)) + " is " + JSON.stringify(word) +
+      ". Bind `" + field + "` to a " + JSON.stringify(type) + " property" + (matching ? ", or bind " + JSON.stringify(bareName(name)) + " from `" + matching + "`" : "") + ".",
     { path: at },
   );
 }
@@ -523,7 +528,7 @@ export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan
 // definition before any binding — so a miss is an order bug, refused before it writes an unbound reference.
 function mintedNameOf(minted: MintedPropertyNames, add: AddedDefinition): string {
   const name = minted.get(add);
-  if (name === undefined) throw new FlcmError("internal", "flcm internal: " + JSON.stringify(add.name) + " was bound before it was added.");
+  if (name === undefined) throw new FlcmError("internal", "a layer was bound to property " + JSON.stringify(add.name) + " before the property was added, so the binding had nothing to point at.");
   return name;
 }
 
@@ -752,14 +757,13 @@ function planInsertBindingGroup(
   const plan: InsertBindingPlan = { component, owner, resolved: {}, declaresSlots: [], defaults: [] };
   const existing: ExistingPropertyBinding[] = [];
   const binderNodes: { wn: WriteNode; full: string }[] = [];
-  const where = subject + ".componentPropertyReferences";
   // A slot is one hole, and the second claim on it can come from this same tree — where neither
   // frame is on the canvas yet for the live count to see. Declared names and full names never
   // collide (a full name carries Figma's #suffix), so one list holds both.
   const claimedSlots: string[] = [];
   const claimSlot = (name: string, at: string): void => {
     if (claimedSlots.indexOf(name) !== -1) {
-      throw new FlcmError("authoring", "two frames in this tree claim slot " + JSON.stringify(bareName(name)) + ", and a slot is one hole. Bind the one the content goes into.", { path: at });
+      throw new FlcmError("authoring", "another frame in this tree also claims slot " + JSON.stringify(bareName(name)) + ", and a slot is one hole. Bind only the frame the content goes into.", { path: at });
     }
     claimedSlots.push(name);
   };
@@ -768,7 +772,7 @@ function planInsertBindingGroup(
     const live = wn.liveId === undefined ? undefined : resources.live.get(wn)!.node;
     for (const field of Object.keys(refs)) {
       const authored = (refs as Record<string, string>)[field];
-      const at = where + "." + field;
+      const at = (wn.sourcePath ?? subject) + ".componentPropertyReferences." + field;
       if (!matchPropertyNames(authored, definitions).length && field === "slot") {
         // The one DECLARING insert. Everywhere else a binding names a property that must already
         // exist; a slot has no other birth, because the frame being inserted IS the slot.

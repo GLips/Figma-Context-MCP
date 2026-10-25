@@ -17,12 +17,13 @@ import { createServerCallTable } from "./server-calls.js";
 import type { FigmaPauseWatch } from "./figma-pause.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import type {
-  HostTraceStage,
-  NotGrantedReason,
-  RunPhase,
-  ServerFrame,
-  TraceOperation,
+import {
+  RUN_INACTIVITY_DEADLINE_MS,
+  type HostTraceStage,
+  type NotGrantedReason,
+  type RunPhase,
+  type ServerFrame,
+  type TraceOperation,
 } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
@@ -31,7 +32,7 @@ import type { FlcmHost, RunCancelCause } from "./preamble/host.js";
 // Likewise type-only: the factory result types both agent bindings without bundling their implementation.
 import type * as SandboxRuntime from "./preamble/sandbox.js";
 // The one value import from preamble/: flcm-error imports nothing, so it bundles alone.
-import { FlcmError, formatFailureForConsole } from "./preamble/flcm-error.js";
+import { FlcmError, formatFailureForAgent } from "./preamble/flcm-error.js";
 
 // What a run cancelled before it started tells its (late) reply, by cause.
 const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
@@ -42,9 +43,9 @@ const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
 
 // Why a connection's suspended server calls were abandoned, by cause.
 const CALLS_ABANDONED: Record<Exclude<RunCancelCause, "server">, string> = {
-  disconnected: "flcm: the server disconnected mid-run — the server call was abandoned and the script stops here.",
+  disconnected: "the server disconnected mid-run, so the request to it was abandoned and the script stops here.",
   revoked:
-    "flcm: the human revoked this project's grant in Figma — the server call was abandoned and the script stops here.",
+    "the human revoked this project's grant in Figma, so the request to the server was abandoned and the script stops here.",
 };
 
 export function createRunExecutor({
@@ -168,7 +169,7 @@ export function createRunExecutor({
         type: "EXECUTE_CODE_RESULT",
         result: null,
         console: [],
-        errors: `flcm: ${reason} — no code was executed.`,
+        errors: `${reason}, so none of your code ran.`,
         documentChanged: false,
       }),
     );
@@ -248,10 +249,9 @@ export function createRunExecutor({
         typeof built.projectForEgress !== "function"
       ) {
         throw new FlcmError(
-          "internal",
-          "the flcm std-lib the server sent doesn't match this plugin — it lacks the mutation queue " +
-            "or the read egress this host drives. Update the server (`npx figma-developer-mcp@latest`) " +
-            "and the plugin, then restart.",
+          "run-ended",
+          "the flcm the server sent doesn't fit this version of the Figma plugin, so none of your code ran. " +
+            "Update the server (`npx figma-developer-mcp@latest`) and the plugin, then restart.",
         );
       }
       runtime = built;
@@ -267,7 +267,7 @@ export function createRunExecutor({
       try { session.last = raw; } catch { session.last = undefined; }
     } catch (err) {
       trace("code-returned");
-      errorMessage = formatFailureForConsole(err);
+      errorMessage = formatFailureForAgent(err);
     } finally {
       // Drain before anything else in here, and the order of the three is load-bearing:
       //   • BEFORE the console restore, so a queued verb's warnings still reach the agent's reply;
@@ -307,10 +307,9 @@ export function createRunExecutor({
     }
     if (landedAfterReturn > 0) {
       runtime!.warnings.add({ id: null, message:
-        `${landedAfterReturn} write(s) finished after your code returned — flcm reserves a ` +
-          `verb's slot the moment it is called, so an unawaited verb (or a sibling of one that ` +
-          `rejected in Promise.all) still lands. This reply waited for them; await every verb to keep ` +
-          `your result and the canvas in step.`,
+        `${landedAfterReturn} write(s) finished after your code returned: a write is queued the moment ` +
+          `its verb is called, so an unawaited verb (or a sibling of one that rejected in Promise.all) ` +
+          `still lands. This reply waited for them; await every verb to keep your result and the canvas in step.`,
       });
     }
     if (runtime) consoleLog.push(...runtime.warnings.summary());
@@ -337,7 +336,7 @@ export function createRunExecutor({
     options: CaptureOptions,
   ): Promise<void> {
     const admitted = await admitAtDequeue(to, documentId, (reason) =>
-      reply(to, { type: "SCREENSHOT_RESULT", errors: `flcm: ${reason} — no screenshot was taken.` }),
+      reply(to, { type: "SCREENSHOT_RESULT", errors: `${reason}, so no screenshot was taken.` }),
     );
     if (!admitted) return;
     beginRun(to);
@@ -348,7 +347,7 @@ export function createRunExecutor({
       reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
     } catch (err) {
       activity.advance(to.id, cancelledRuns.cancellation(to) !== null ? "cancelled" : "failed");
-      reply(to, { type: "SCREENSHOT_RESULT", errors: formatFailureForConsole(err) });
+      reply(to, { type: "SCREENSHOT_RESULT", errors: formatFailureForAgent(err) });
     } finally {
       cancelledRuns.settle(to);
     }
@@ -394,7 +393,8 @@ export function createRunExecutor({
       });
       serverCalls.reject(
         (call) => call.executionId === executionId && call.connKey === connKey,
-        "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
+        "the server cancelled this run, most often because the script held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
+          "s without reaching it, so the script stops here. Split long synchronous work across calls.",
       );
     },
 

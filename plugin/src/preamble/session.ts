@@ -12,7 +12,12 @@ import { FlcmError } from "./flcm-error.js";
 export function createSession(): Record<string, unknown> {
   const owned = new WeakSet<object>();
   const fail = (path: string): never => {
-    throw new FlcmError("authoring", `session: ${path} must contain plain data only (strings, finite numbers, booleans, null, undefined, arrays and plain objects). Functions, live nodes, accessors, symbols, class instances and cycles are not supported.`);
+    throw new FlcmError(
+      "authoring",
+      "a session value must be plain data only: strings, finite numbers, booleans, null, undefined, arrays and plain objects. " +
+        "Functions, live nodes, getters, symbols, class instances and cycles are refused; store ids and specs instead.",
+      { path },
+    );
   };
 
   function copy(value: unknown, path: string, destination?: object, retainOwned = true, ancestors = new Set<object>(), copies = new WeakMap<object, object>()): unknown {

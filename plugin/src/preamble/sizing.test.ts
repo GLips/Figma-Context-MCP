@@ -74,7 +74,7 @@ test("same-edit bounds clamp successfully and warnings report requested, bound a
     assert.equal((await figma.getNodeByIdAsync(handle.id)).opacity, 0.5);
     assert.match(
       warnings().join("\n"),
-      new RegExp(key + " " + bound + ".*" + axis + ": authored " + requested + ", realized " + bound),
+      new RegExp(key + " " + bound + ".*" + axis + ": asked for " + requested + ", Figma made it " + bound),
     );
     assert.doesNotMatch(warnings().join("\n"), /rollback|failed/);
   }
@@ -94,7 +94,7 @@ test("instance-only bounds persist through resize and clear without changing the
   assert.equal(resized.width, 160);
   assert.equal(node.minWidth, 160);
   assert.equal(component.minWidth, null);
-  assert.match(warnings().join("\n"), /minWidth 160.*width: authored 145, realized 160/);
+  assert.match(warnings().join("\n"), /minWidth 160.*width: asked for 145, Figma made it 160/);
   await edit(built, { minWidth: "none", width: 145 });
   assert.equal(node.width, 145);
   assert.equal(node.minWidth, null);
@@ -311,7 +311,7 @@ test("a resize Figma ignores outside an instance warns instead of failing", asyn
   diagnostics.discardFrom(0);
   node.resize = () => {};
   await edit(built, { height: 48 });
-  assert.match(warnings().join("\n"), /flcm\.edit: requested height 48; Figma realized 60/);
+  assert.match(warnings().join("\n"), /flcm\.edit: asked for height 48; Figma made it 60/);
 });
 
 // A built node is sized before its words are recorded; the clamp and the miss still excuse them.
@@ -329,5 +329,5 @@ test("a node render builds keeps its clamp and resize-miss warnings instead of r
   };
   const missed = await render({ type: "FRAME", width: 100, height: 100, children: [{ type: "RECTANGLE", width: 50, height: 10 }] });
   assert.equal((await figma.getNodeByIdAsync(missed.children![0].id)).width, 30);
-  assert.match(warnings().join("\n"), /requested width 50; Figma realized 30/);
+  assert.match(warnings().join("\n"), /asked for width 50; Figma made it 30/);
 });

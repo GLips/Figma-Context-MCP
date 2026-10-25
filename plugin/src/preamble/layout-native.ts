@@ -7,7 +7,7 @@ import { writeBindable, type ResolvedTokens } from "./tokens.js";
 import type { WriteLayout } from "./ir.js";
 import { AXES, LAYOUT_MODES, layoutModeOf, type LayoutMode, type Axis, type ChildLayout } from "./layout-mode.js";
 import { hugGridTracks, rowsForGridClaims, type GridClaim, type GridTrack } from "./grid-tracks.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
 
 // Native layout policy owns mode-dependent writes. Bridge orchestration only chooses a policy.
 interface LayoutBehavior {
@@ -144,7 +144,7 @@ const GRID: LayoutBehavior = {
       const columns = layout.gridTemplateColumns?.length ?? node.gridColumnCount;
       layout = { ...layout, gridTemplateRows: hugGridTracks(rowsForGridClaims(columns, liveGridClaims(node, wasGrid))) };
     }
-    assertGridSizing(layout, node, "flcm");
+    assertGridSizing(layout, node, undefined);
     for (const axis of ["horizontal", "vertical"] as const) {
       const requested = layout[AXES[axis].template];
       if (requested) writeGridTracks(node, axis, requested);
@@ -210,8 +210,13 @@ export function applySiblingOrder(parent: any, edits: readonly { child: any; ind
   const slots: any[] = new Array(parent.children.length);
   const named = new Set(edits.map(edit => edit.child));
   for (const { child, index } of edits) {
-    if (index >= slots.length) throw new FlcmError("authoring", "zIndex must be within the parent's sibling count.");
-    if (slots[index]) throw new FlcmError("authoring", "zIndex must name a distinct sibling index in one operation.");
+    const node = { type: child.type, name: child.name, id: child.id };
+    if (index >= slots.length) {
+      throw new FlcmError("authoring", "zIndex " + index + " is past the last sibling: the grid has " + slots.length + " children. Use 0 to " + (slots.length - 1) + ".", { node });
+    }
+    if (slots[index]) {
+      throw new FlcmError("authoring", "zIndex " + index + " is also given to " + describeNodeIdentity(slots[index]) + " in this call. Give each child a different zIndex.", { node });
+    }
     slots[index] = child;
   }
   const rest = parent.children.filter((child: any) => !named.has(child));

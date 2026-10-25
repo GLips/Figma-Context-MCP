@@ -22,8 +22,8 @@ import type { WriteNode } from "./ir.js";
  * EXECUTE_CODE_RESULT would be a protocol bump (a manual manifest re-import) for an advisory;
  * ADR-0010 buys exactly this — placement feedback ships with the server.
  */
-export function landTree(parent: any, place: (node: any) => void, tree: WriteNode, ctx: RenderCtx, subject: string, noteOverlap: boolean): any {
-  const root = attachBuiltChild(parent, tree, ctx, liveParentAttachFacts(parent, subject), place);
+export function landTree(parent: any, place: (node: any) => void, tree: WriteNode, ctx: RenderCtx, path: string, noteOverlap: boolean): any {
+  const root = attachBuiltChild(parent, tree, ctx, liveParentAttachFacts(parent, path), place);
   // The live nodes the walk placed land their geometry and children in the tree's schedule.
   landPlacedLiveOperations(ctx);
   settleApplySpan(ctx.span);

@@ -268,7 +268,7 @@ test("a word that didn't land fails before the style links are awaited, so nothi
       return () => { built = true; return "handle"; };
     }),
     // Nothing explains the miss but flcm's own write order, so it is flcm's bug.
-    (err: unknown) => err instanceof FlcmError && err.kind === "internal" && /didn't realize 1 of its words.*opacity: asked 0\.5, ended 0\.2/s.test(err.message),
+    (err: unknown) => err instanceof FlcmError && err.kind === "internal" && /didn't come out as written.*opacity: asked 0\.5, ended 0\.2/s.test(err.message),
   );
   assert.equal(linked, false);
   assert.equal(built, false);
@@ -293,7 +293,9 @@ test("a link that fails after an edit joined the call's undo step names the link
     }),
     (err: unknown) =>
       err instanceof ConcurrentEditError &&
-      /^flcm\.edit: this call failed \(couldn't link the fill style "Brand" \(id "S:brand"\) to RECTANGLE "Card" \(id "[^"]+"\): style not found\), .*writes are still on the canvas/s.test(err.message),
+      err.keptOnCanvas &&
+      /this call failed \(RECTANGLE "Card" \(id "[^"]+"\): Figma refused to link the fill style "Brand" \(id "S:brand"\): style not found.*changes are still on the canvas/s.test(err.message) &&
+      !err.message.includes("Nothing from this call was kept"),
   );
 });
 
@@ -324,7 +326,7 @@ test("a cancelled run is refused at the lock, before preparation or any undo cal
         return () => undefined;
       },
     ),
-    /cancelled by the server/,
+    /the server cancelled this run/,
   );
   assert.equal(ran, false);
   // Refusal precedes the entry seal — a refused verb must not mint an empty undo step.
@@ -350,7 +352,7 @@ test("cancellation arriving DURING preparation refuses before the seal — no zo
         return () => undefined;
       },
     ),
-    /cancelled by the server/,
+    /the server cancelled this run/,
   );
   assert.equal(applied, false);
   assert.deepEqual(figma.undoLog, []);
@@ -367,12 +369,12 @@ test("cancellation arriving mid-apply lets it finish but refuses the queued next
   });
   const second = enterMutatingVerb("render", noPrep, noGate, () => () => "ran");
   assert.equal(await first, "done");
-  await assert.rejects(second, /cancelled by the server/);
+  await assert.rejects(second, /the server cancelled this run/);
 });
 
 test("render enters the lock: a cancelled run creates no node", async () => {
   installCancelFlag(() => true);
-  await assert.rejects(render({ type: "FRAME", width: 10, height: 10 }), /cancelled by the server/);
+  await assert.rejects(render({ type: "FRAME", width: 10, height: 10 }), /the server cancelled this run/);
   assert.equal(figma.currentPage.children.length, 0);
 });
 
@@ -442,10 +444,29 @@ test("a resource load rejecting with `undefined` still fails prepare — never a
       height: 10,
       fill: image("https://cdn.example.com/a.jpg"),
     }),
-    (err: unknown) => err === undefined,
+    // Nothing to quote, but still a failure the agent can see, said as Figma's.
+    (err: unknown) => err instanceof FlcmError && err.kind === "figma" && err.reason.startsWith("Figma failed without saying why (it threw undefined)"),
   );
   // A sentinel-based settle would read this as success and fail INSIDE the sealed apply span:
   // undoLog would show commit/commit/trigger instead of staying empty.
   assert.deepEqual(figma.undoLog, []);
   assert.equal(figma.currentPage.children.length, 0);
+});
+
+test("a failing verb names the call and what was kept, and its stack points only at the caller", async () => {
+  const flcm = await import("./runtime.js");
+  await flcm.render({ type: "RECTANGLE", width: 10, height: 10 });
+  const out = await flcm.render({ type: "RECTANGLE", width: 10, height: 10 });
+  // Two at least, so the count is plural however many earlier tests committed.
+  const kept = committedVerbCount();
+  await assert.rejects(flcm.edit(out, { opacity: "bad" } as never), (err: unknown) => {
+    assert(err instanceof FlcmError);
+    assert.equal(err.call, "flcm.edit");
+    assert.match(err.message, /^flcm\.edit: /);
+    assert(err.message.endsWith("Nothing from this call was kept; the " + kept + " calls before it that changed the file were kept."));
+    // flcm's own frames are cut; what's left is the line that called the verb.
+    assert.match(err.stack ?? "", /mutation-lock\.test\.ts/);
+    assert.doesNotMatch(err.stack ?? "", /preamble\/(?!mutation-lock\.test)[\w-]+\.ts/);
+    return true;
+  });
 });

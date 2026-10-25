@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { createWarningRegistry } from "./preamble/warnings.js";
+import { formatFailureForAgent } from "./preamble/flcm-error.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
@@ -307,7 +308,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
     ),
   );
   assert(
-    h.sent.some(({ frame: f }) => f.id === "queued" && String(f.errors).includes("no code was executed")),
+    h.sent.some(({ frame: f }) => f.id === "queued" && String(f.errors).includes("none of your code ran")),
   );
 });
 
@@ -840,7 +841,7 @@ test("revoking a project's grant cancels its runs: a queued one never starts, a 
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "queued", preamble: await realPreamble, code: "globalThis.queuedRan = true;" });
   h.sendControl({ type: "UI_REVOKE", credentialId: CREDENTIAL.id, project: "/proj" });
   assert.match((await running).errors!, /revoked this project's grant/);
-  assert.match((await h.result("queued")).errors, /revoked this project's grant .* no code was executed/);
+  assert.match((await h.result("queued")).errors, /revoked this project's grant .* none of your code ran/);
   assert.equal(h.context.resumed, undefined);
   assert.equal(h.context.queuedRan, undefined);
 });
@@ -997,7 +998,7 @@ test("node warnings follow extracted children, reads and measures; only unseen r
   const summaries = reply.console.filter((line: string) => line.startsWith("[warn]"));
   assert.equal(summaries.length, 2);
   assert.ok(summaries.includes("[warn] agent warning"));
-  assert.ok(summaries.some((line: string) => line.includes(reply.result.own.id) && line.includes("authored 20")));
+  assert.ok(summaries.some((line: string) => line.includes(reply.result.own.id) && line.includes("asked for 20")));
 });
 
 test("full get projections retain node warnings through SVG collapse", async () => {
@@ -1024,7 +1025,7 @@ test("a warning after an earlier echo is still reported, and diagnostics do not 
     await flcm.edit(r, { width: 50, minWidth: 80 });
   `) as any;
   assert.equal(reply.errors, null);
-  assert.ok(reply.console.some((line: string) => line.includes("authored 50, realized 80")));
+  assert.ok(reply.console.some((line: string) => line.includes("asked for 50, Figma made it 80")));
   const next = await execute(h, "return await flcm.get(figma.currentPage.children[0].id);") as any;
   assert.equal(next.errors, null);
   assert.equal(next.result.node.warnings, undefined);
@@ -1040,7 +1041,7 @@ test("failed serialization does not suppress warnings", async () => {
     const cyclic = { r }; cyclic.self = cyclic;
     return cyclic;
   `) as any;
-  assert.match(reply.errors, /cyclic/);
+  assert.match(reply.errors, /contains itself \(a cycle\)/);
   assert.equal(reply.console.filter((line: string) => line.startsWith("[warn]")).length, 1);
 });
 
@@ -1112,4 +1113,16 @@ test("server refusals reject the suspended image await", async () => {
   h.sendFrame(1, { type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "run no longer active" });
   assert.match((await result).errors!, /run no longer active/);
   assert.equal(h.context.resumed, undefined);
+});
+
+test("a failed run's error keeps only the frames from the agent's own code", () => {
+  // QuickJS names every frame of the eval'd agent code <input>, and the plugin's own PLUGIN_<n>_SOURCE.
+  const err = new TypeError("x is undefined");
+  err.stack = [
+    "TypeError: x is undefined",
+    "    at edit (PLUGIN_3_SOURCE:812:14)",
+    "    at <anonymous> (<input>:4:20)",
+    "    at runCode (PLUGIN_3_SOURCE:90:3)",
+  ].join("\n");
+  assert.equal(formatFailureForAgent(err), "TypeError: x is undefined\n    at <anonymous> (<input>:4:20)");
 });

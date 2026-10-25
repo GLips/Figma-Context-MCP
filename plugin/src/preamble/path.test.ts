@@ -141,8 +141,8 @@ test("a huge-radius (near-straight) arc still reaches its commanded endpoint", (
 test("pathological arc radii/rotation fail loud instead of silently vanishing", () => {
   // A rotation so large the trig is meaningless, and denormal radii that can't be scaled, both drive the
   // arc math non-finite — these must throw, not drop the arc (the plan's never-silent-no-op invariant).
-  assert.throws(() => normalizePathData("M0 0 A5 5 1e308 0 1 10 0"), /cannot be realized/);
-  assert.throws(() => normalizePathData("M0 0 A1e-160 1e-160 0 0 1 1 0"), /cannot be realized/);
+  assert.throws(() => normalizePathData("M0 0 A5 5 1e308 0 1 10 0"), /can't be drawn as a finite curve/);
+  assert.throws(() => normalizePathData("M0 0 A1e-160 1e-160 0 0 1 1 0"), /can't be drawn as a finite curve/);
 });
 
 test("malformed path data fails loud", () => {

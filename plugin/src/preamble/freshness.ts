@@ -15,13 +15,9 @@ import { ConcurrentEditError } from "./flcm-error.js";
  * and reporting them as success, so this is the one existence check that cannot be left to the
  * apply span's own refusals.
  */
-export function assertNodeStillOnCanvas(node: SceneNode, subject: string): void {
+export function assertNodeStillOnCanvas(node: SceneNode, path: string): void {
   if (!node.removed) return;
-  throw new ConcurrentEditError({
-    call: subject,
-    node: { type: node.type, name: node.name, id: node.id },
-    changed: JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") was deleted",
-  });
+  throw new ConcurrentEditError({ path, node: { type: node.type, name: node.name, id: node.id }, changed: "it was deleted" });
 }
 
 /**
@@ -46,10 +42,10 @@ export async function loadPageForWrite(node: any, pages: LoadedPages): Promise<v
 }
 
 /** The gate's half: `parent` is a scene node, or a page prepare loaded. */
-export function assertPageLoaded(parent: any, pages: LoadedPages, subject: string): void {
+export function assertPageLoaded(parent: any, pages: LoadedPages, path: string): void {
   if (!parent || parent.type !== "PAGE" || pages.has(parent.id)) return;
   throw new ConcurrentEditError({
-    call: subject,
+    path,
     changed: "the destination moved to page " + JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) + "), which this call didn't load",
   });
 }

@@ -14,13 +14,13 @@
 // else — a render Handle, a read POJO, an agent's own data — round-trips WHOLE.
 
 import { looksLikeNode } from "./preamble/live-node.js";
-import { FlcmError } from "./preamble/flcm-error.js";
+import { FlcmError, type FlcmErrorNode } from "./preamble/flcm-error.js";
 
-function findLiveNode(value: unknown, path: string, seen: Set<object>): { path: string; type: string } | null {
+function findLiveNode(value: unknown, path: string, seen: Set<object>): { path: string; node: FlcmErrorNode } | null {
   if (value === null || typeof value !== "object" || seen.has(value)) return null;
   seen.add(value);
   // Stop at a node — never recurse into its (huge, circular) internals.
-  if (looksLikeNode(value)) return { path, type: value.type };
+  if (looksLikeNode(value)) return { path, node: { type: value.type, name: typeof value.name === "string" ? value.name : undefined, id: value.id } };
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
       const hit = findLiveNode(value[i], `${path}[${i}]`, seen);
@@ -43,14 +43,17 @@ function findLiveNode(value: unknown, path: string, seen: Set<object>): { path: 
 export function guardReturnValue(value: unknown): void {
   const hit = findLiveNode(value, "", new Set());
   if (!hit) return;
-  const where = hit.path ? ` (at return value ${hit.path.startsWith("[") ? hit.path : `.${hit.path}`})` : "";
   throw new FlcmError(
     "authoring",
-    `You returned a live Figma node${where}: a ${hit.type}. Live nodes can't cross the bridge — ` +
-      `they collapse to { id } and you lose every other property. Return the id string instead: ` +
-      "`return node.id` (or `return { id: node.id }`, or an array of ids).",
+    "your code returned a live Figma node, which can't be sent back: it would arrive as a bare { id } with every other " +
+      "property lost. Return the id string instead: `return node.id` (or `return { id: node.id }`, or an array of ids).",
+    { path: "return value" + (hit.path === "" ? "" : hit.path.startsWith("[") ? hit.path : "." + hit.path), node: hit.node },
   );
 }
+
+// The agent's own value contains itself; only it can break the cycle.
+const CYCLIC_VALUE_REFUSAL = "a value your code returned or logged contains itself (a cycle), so it can't be sent back. " +
+  "Return or log a copy without the cycle, such as just the ids you need.";
 
 /** Serialize whole values. Ancestors detect cycles without corrupting shared references. */
 export function safeSerialize(value: unknown, ancestors = new Set<object>()): unknown {
@@ -71,7 +74,7 @@ export function safeSerialize(value: unknown, ancestors = new Set<object>()): un
     };
   }
 
-  if (ancestors.has(value)) throw new FlcmError("authoring", "Cannot serialize cyclic return or console data.");
+  if (ancestors.has(value)) throw new FlcmError("authoring", CYCLIC_VALUE_REFUSAL);
   ancestors.add(value);
   try {
     if (Array.isArray(value)) return value.map(item => safeSerialize(item, ancestors));

@@ -175,21 +175,21 @@ test("escaped emphasis renders literally", async () => {
 test("unrealizable fontStyle / textDecoration values fail loud naming the set", async () => {
   await assert.rejects(
     render({ type: "TEXT", text: "x", textStyle: { fontStyle: "oblique" as never } }),
-    /fontStyle must be one of/,
+    /textStyle\.fontStyle: must be one of/,
   );
   await assert.rejects(
     render({ type: "TEXT", text: "x", textStyle: { textDecoration: "overline" as never } }),
-    /textDecoration must be one of/,
+    /textDecoration: must be one of/,
   );
 });
 
 test("read-artifact and malformed run inputs fail loud", async () => {
   // figma-mcp style-ref tokens are rejected on both the plain-string and the run-text forms.
-  await assert.rejects(render({ type: "TEXT", text: "a {ts1}bold{/ts1} b" }), /style-ref tokens/);
-  await assert.rejects(render({ type: "TEXT", text: ["{ts1}bold{/ts1}"] }), /style-ref tokens/);
+  await assert.rejects(render({ type: "TEXT", text: "a {ts1}bold{/ts1} b" }), /spec\.text: this text carries style-reference tokens/);
+  await assert.rejects(render({ type: "TEXT", text: ["{ts1}bold{/ts1}"] }), /spec\.text\[0\]: this text carries style-reference tokens/);
   await assert.rejects(
     render({ type: "TEXT", characters: "hi" } as never),
-    /unknown prop "characters" on TEXT/,
+    /unknown prop "characters" — a TEXT takes only/,
   );
   // Malformed runs.
   await assert.rejects(render({ type: "TEXT", text: [] }), /non-empty/);

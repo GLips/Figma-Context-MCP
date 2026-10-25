@@ -44,6 +44,6 @@ test("a Figma call that never returns is abandoned when the run is cancelled, na
   try {
     const stuck = awaitNative("font-load", () => new Promise<never>(() => {}));
     cancel("server");
-    await assert.rejects(stuck, /figma\.loadFontAsync still hadn't returned .* cancelled by the server .* bring the file to the front/s);
+    await assert.rejects(stuck, /figma\.loadFontAsync still hadn't returned .* the server cancelled the run.* bring the file to the front/s);
   } finally { delete globals.__flcmHost; }
 });

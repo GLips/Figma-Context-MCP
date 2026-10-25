@@ -48,7 +48,7 @@ export async function resolveAnnotationCategories(): Promise<void> {
   for (const name of requestedCategories) {
     const matches = categories.filter((category) => category.label.trim() === name);
     if (matches.length > 1) {
-      throw new FlcmError("authoring", `category ${JSON.stringify(name)} is ambiguous: ${matches.map((category) => `${JSON.stringify(category.label)} (${category.id})`).join(", ")}. Rename the duplicate categories.`, { call: "flcm.annotations" });
+      throw new FlcmError("authoring", `annotation category ${JSON.stringify(name)} is ambiguous: this file has ${matches.length} categories with that name (${matches.map((category) => `${JSON.stringify(category.label)} (${category.id})`).join(", ")}). Rename the duplicates in Figma, or pick another category name.`);
     }
     if (matches.length) resolvedCategories.set(name, matches[0].id);
   }
@@ -82,20 +82,24 @@ export function removeFailedAnnotationCategories(cause: unknown): unknown {
   }
   createdCategories = [];
   if (!unremoved.length) return cause;
-  return appendToFailure(cause, `flcm.annotations: the annotation category this call created could not be removed and is still in the file: ${unremoved.join(", ")}.`);
+  return appendToFailure(cause, `The exception is annotation categories this call created that could not be removed, so these are still in the file: ${unremoved.join(", ")}; delete them in Figma if unwanted.`);
 }
 
 /** The id a category name resolved to in this call's prepare. */
 export function annotationCategoryId(category: string): string {
   const id = resolvedCategories.get(category);
   // prepare resolves every category the call names, so a miss here is flcm's own.
-  if (!id) throw new FlcmError("internal", `unresolved category ${JSON.stringify(category)}.`, { call: "flcm.annotations" });
+  if (!id) throw new FlcmError("internal", `annotation category ${JSON.stringify(category)} was never looked up before it was used.`);
   return id;
 }
 
 export function applyAnnotations(node: SceneNode, annotations: readonly WriteAnnotation[] | undefined): void {
   if (annotations === undefined) return;
-  if (!("annotations" in node)) throw new FlcmError("figma", `${node.type} cannot carry annotations.`, { call: "flcm.annotations" });
+  if (!("annotations" in node)) {
+    throw new FlcmError("figma", "Figma doesn't allow annotations on this type of layer. Drop annotations here, or annotate a parent frame.", {
+      node: { type: node.type, name: node.name, id: node.id },
+    });
+  }
   node.annotations = annotations.map(({ text, category, properties }) => {
     const out: { labelMarkdown?: string; categoryId?: string; properties?: AnnotationProperty[] } = {};
     if (text !== undefined) out.labelMarkdown = text;

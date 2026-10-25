@@ -45,11 +45,9 @@ function nameList(): string {
     .join(", ");
 }
 
-function assertPageName(verb: string, name: unknown): string {
+function assertPageName(name: unknown): string {
   if (typeof name !== "string" || !name.trim()) {
-    throw new FlcmError("authoring", "needs a page name (a non-empty string), got " + JSON.stringify(name) + ".", {
-      call: "flcm.page." + verb,
-    });
+    throw new FlcmError("authoring", "the page name must be a non-empty string — got " + JSON.stringify(name) + ".");
   }
   return name;
 }
@@ -77,7 +75,7 @@ export async function pageCurrent(): Promise<PageInfo> {
  * back, which is a better answer than a new empty page.
  */
 export async function pageUse(target: string): Promise<PageInfo> {
-  const wanted = assertPageName("use", target);
+  const wanted = assertPageName(target);
   const all = pages();
   const byId = all.filter((p) => p.id === wanted);
   const byName = all.filter((p) => p.name === wanted);
@@ -86,7 +84,6 @@ export async function pageUse(target: string): Promise<PageInfo> {
     throw new FlcmError(
       "authoring",
       "no page with id or name " + JSON.stringify(wanted) + " — this file has " + nameList() + ". flcm.page.new(name) makes one.",
-      { call: "flcm.page.use" },
     );
   }
   // Figma allows duplicate page names, so a name can be ambiguous where an id never is.
@@ -95,7 +92,6 @@ export async function pageUse(target: string): Promise<PageInfo> {
       "authoring",
       hits.length + " pages are named " + JSON.stringify(wanted) +
         " — pass one of their ids instead: " + hits.map((p) => JSON.stringify(p.id)).join(", ") + ".",
-      { call: "flcm.page.use" },
     );
   }
   await awaitNative("page-switch", () => figma.setCurrentPageAsync(hits[0]));
@@ -112,7 +108,7 @@ export async function pageUse(target: string): Promise<PageInfo> {
  * nothing behind.
  */
 export async function pageNew(name: string): Promise<PageInfo> {
-  const wanted = assertPageName("new", name);
+  const wanted = assertPageName(name);
   const taken = pages().find((p) => p.name === wanted);
   if (taken) {
     throw new FlcmError(
@@ -120,7 +116,6 @@ export async function pageNew(name: string): Promise<PageInfo> {
       "this file already has a page named " + JSON.stringify(wanted) + " (id " +
         JSON.stringify(taken.id) + ") — flcm.page.use(name) switches to it, or pick another name. " +
         "Nothing was created.",
-      { call: "flcm.page.new" },
     );
   }
   traceNative("native-start", "page-create");

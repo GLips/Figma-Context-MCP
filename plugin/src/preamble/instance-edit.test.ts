@@ -178,7 +178,7 @@ test("componentId swaps the component; overrides in the same delta land on the N
   // A path from the OUTGOING component is refused by name, with nothing applied.
   await assert.rejects(
     edit(inst.id, { componentId: compB.id, overrides: { "999:999": { fill: "#000" } } }),
-    /"Chip B" \(id .*\) has no sublayer at that path/,
+    (err: unknown) => err instanceof FlcmError && err.kind === "authoring" && err.node?.name === "Chip B" && /has no sublayer at that path/.test(err.reason),
   );
 });
 
@@ -207,7 +207,7 @@ test("the main component is proven at the seal: a swap during the font load refu
   try {
     await assert.rejects(
       inNextRun(() => edit(inst.id, { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } })),
-      (err: unknown) => err instanceof FlcmError && err.kind === "concurrent-edit" && /the main component of INSTANCE .* changed; it was COMPONENT "Chip"/.test(err.reason),
+      (err: unknown) => err instanceof FlcmError && err.kind === "concurrent-edit" && err.node?.id === inst.id && /its main component changed; it was COMPONENT "Chip"/.test(err.reason),
     );
   } finally {
     figma.loadFontAsync = loadFontAsync;
@@ -226,14 +226,14 @@ test("the component words are INSTANCE-only — every other type rejects them by
   });
   await assert.rejects(
     edit("card", { componentProperties: { Size: "Large" } }),
-    /`componentProperties` is not a FRAME word/,
+    /a FRAME has no `componentProperties`/,
   );
   await assert.rejects(
     edit("card", { overrides: { "1:2": { fill: "#000" } } }),
-    /`overrides` is not a FRAME word/,
+    /a FRAME has no `overrides`/,
   );
-  await assert.rejects(edit("card", { componentId: "1:2" }), /`componentId` is not a FRAME word/);
-  await assert.rejects(edit("t", { componentId: "1:2" }), /`componentId` is not a TEXT word/);
+  await assert.rejects(edit("card", { componentId: "1:2" }), /a FRAME has no `componentId`/);
+  await assert.rejects(edit("t", { componentId: "1:2" }), /a TEXT has no `componentId`/);
   assert.equal((await figma.getNodeByIdAsync(specNode(out, "card").id)).width, 100);
 });
 
@@ -345,8 +345,9 @@ test("detach refuses a NESTED instance, naming the outer one, and anything that 
   const outer = await figma.getNodeByIdAsync(stamped.id);
   const nested = outer.children[0];
   assert.equal(nested.type, "INSTANCE");
-  await assert.rejects(detach(nested.id), (err: Error) => {
-    assert.match(err.message, /is nested inside instance "Panel"/);
+  await assert.rejects(detach(nested.id), (err: unknown) => {
+    assert.ok(err instanceof FlcmError && err.kind === "authoring" && err.node?.id === nested.id);
+    assert.match(err.reason, /this instance is nested inside INSTANCE "Panel"/);
     assert.match(
       err.message,
       /Detach "?i?[^"]*"? \(the whole outer instance becomes editable layers\)/,
@@ -397,9 +398,9 @@ test("an empty component bag is refused rather than minting an undo step for zer
   const before = [...figma.undoLog];
   await assert.rejects(
     edit(inst.id, { componentProperties: {} }),
-    /the delta compiled to nothing/,
+    /this delta changes nothing/,
   );
-  await assert.rejects(edit(inst.id, { overrides: {} }), /the delta compiled to nothing/);
+  await assert.rejects(edit(inst.id, { overrides: {} }), /this delta changes nothing/);
   assert.deepEqual(figma.undoLog, before);
   // Riding beside a real word it is simply inert — the delta still has work to do.
   await edit(inst.id, { componentProperties: {}, opacity: 0.5 });

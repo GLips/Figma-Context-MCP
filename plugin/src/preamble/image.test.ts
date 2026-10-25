@@ -14,6 +14,7 @@ import { image, gradient as flcmGradient } from "./value-sugar.js";
 import { compilePaintWord } from "./compile-nodes.js";
 import { get } from "./read.js";
 import { render } from "./structure.js";
+import type { FlcmError } from "./flcm-error.js";
 
 createFigmaMock();
 
@@ -63,7 +64,7 @@ test("flcm.image rejects a non-string/empty url and a bad scaleMode (fail loud)"
   assert.throws(() => image("   "), /expected an image url, local file path, or upload handle/);
   assert.throws(
     () => image("https://x/y.jpg", { scaleMode: "STRETCH" } as never),
-    /scaleMode must be one of/,
+    /opts\.scaleMode: must be one of/,
   );
 });
 
@@ -122,7 +123,7 @@ test("render without a host fails loud naming what is missing", async () => {
       height: 10,
       fill: image("https://cdn.example.com/a.jpg"),
     }),
-    /no host \(FlcmHost\)/,
+    (err: FlcmError) => err.kind === "internal" && /images can only be fetched inside a run/.test(err.reason),
   );
 });
 
@@ -244,11 +245,11 @@ test("a blended, adjusted paint stack survives get → render", async () => {
 
 test("paint adjustments Figma can't realize fail loud by name", () => {
   assert.equal(image("https://cdn.example.com/a.jpg", { rotation: 180, blendMode: "plus-lighter" }).blendMode, "LINEAR_DODGE");
-  assert.throws(() => image("https://cdn.example.com/a.jpg", { rotation: 45 as 90 }), /rotation must be 0, 90, 180 or 270/);
-  assert.throws(() => image("https://cdn.example.com/a.jpg", { filters: { exposure: 2 } }), /filters\.exposure must be a number -1–1/);
+  assert.throws(() => image("https://cdn.example.com/a.jpg", { rotation: 45 as 90 }), /opts\.rotation: must be 0, 90, 180 or 270/);
+  assert.throws(() => image("https://cdn.example.com/a.jpg", { filters: { exposure: 2 } }), /opts\.filters\.exposure: must be a number -1–1/);
   assert.throws(
     () => compilePaintWord({ type: "IMAGE", imageRef: "x", scaleMode: "FILL", filters: { blur: 1 } } as never, "fill"),
-    /fill filters has no "blur"/,
+    /fill\.filters: has no "blur"/,
   );
   assert.throws(() => compilePaintWord({ type: "SOLID", color: "#000", blendMode: "pass-through" }, "fill"), /unsupported blend "pass-through"/);
 });
@@ -270,7 +271,7 @@ test("a paint slot takes an array — the stack, top first — and reverses it i
   assert.equal(fills[0].type, "SOLID", "the last authored entry is the bottom paint");
   assert.equal(fills[1].type, "GRADIENT_LINEAR", "the first authored entry paints on top");
   // A bad entry is named by its AUTHORED index, not by where it lands in Figma's storage order.
-  await assert.rejects(render({ type: "RECTANGLE", fill: ["#000", 42] }), /fill\[1\] must be a color string/);
+  await assert.rejects(render({ type: "RECTANGLE", fill: ["#000", 42] }), /spec\.fill\[1\]: must be a color string/);
 });
 
 test("a scrim over a photo keeps the photo's provenance, wherever it sits in the stack", async () => {

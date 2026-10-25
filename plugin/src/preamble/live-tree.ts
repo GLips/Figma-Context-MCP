@@ -25,14 +25,14 @@ import { planInstanceEdit, overrideRealizeOnlyChecks, instanceGeometryWrites, wi
 import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component-properties.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { instanceContextOf, instanceContextUnder, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
+import { instanceContextOf, instanceContextUnder, writeKey, isInheritedSlotContent, slotOwnerOf } from "./identity.js";
 import { assertInstanceRootLayoutMode, mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { layoutModeOf } from "./layout-mode.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath, carriedFillAxes } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
-import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
+import { beginMutatingApply } from "./verb-error.js";
 import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
 
 // Inherited slot content moves only into another slot of its own instance, where Figma copies it
@@ -42,13 +42,12 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
   if (!isInheritedSlotContent(node)) return;
   const owner = slotOwnerOf(node, false)!;
   if (parent.type !== "PAGE" && slotOwnerOf(parent as SceneNode, true)?.id === owner.id) return;
-  throw refusedBeforeWrite(
+  throw new FlcmError(
     "figma",
-    describeNodeIdentity(node) + " is inherited slot content: an enclosing component's definition put it in a slot of instance " +
-      JSON.stringify(owner.name) + " (id " + JSON.stringify(owner.id) + "), not an override on the instance. Figma can move it only into another slot of " +
-      JSON.stringify(owner.name) + "; anywhere else it leaves a node that renders but can't be read or removed. To put it elsewhere, copy it with flcm.clone(" +
-      JSON.stringify(node.id) + ", destination); the slot keeps the original.",
-    { path: at },
+    "this layer is inherited slot content: an enclosing component's definition put it in a slot of " + describeNodeIdentity(owner) +
+      ", not an override on the instance. Figma can move it only into another slot of that instance; anywhere else it leaves a layer that renders but can't be read or removed. " +
+      "To put it elsewhere, copy it with flcm.clone(" + JSON.stringify(node.id) + ", destination); the slot keeps the original.",
+    { path: at, node: { type: node.type, name: node.name, id: node.id } },
   );
 }
 
@@ -83,11 +82,11 @@ export interface GatedLiveTrees {
 
 /**
  * Gate every live node `trees` name against the document at the seal, and schedule their
- * operations across all of them. `subject` prefixes a refusal of words that depend on each other in
- * a cycle; every refusal here leaves zero writes. `destination` is where a tree's root lands, when
+ * operations across all of them. `path` locates a refusal of words that depend on each other in a
+ * cycle; every refusal here leaves zero writes. `destination` is where a tree's root lands, when
  * the verb places it.
  */
-export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: RenderResources, subject: string, destination?: BaseNode): GatedLiveTrees {
+export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: RenderResources, path: string, destination?: BaseNode): GatedLiveTrees {
   const entries = trees.flatMap((live) => [...live.entries.values()].map((entry) => ({ entry, dependencies: live.dependencies })));
   const moved = new Set<WriteNode>();
   for (const live of trees) collectMovedLiveNodes(live.tree, destination, live, moved);
@@ -115,10 +114,24 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
     const at = ref.sourcePath;
     assertNodeStillOnCanvas(node, at);
     const context = instanceContextOf(node);
-    if (context.ownWritesLockedBy) throw new FlcmError("figma", "cannot move a component instance's sublayer; edit its main component.", { path: at });
-    if (ref.children?.length && (!("appendChild" in node) || context.childListClosedBy)) {
-      // A node type with no children is the call's mistake; an instance's closed child list is Figma's rule.
-      throw new FlcmError(context.childListClosedBy ? "figma" : "authoring", "this live node's child list cannot be authored.", { path: at + ".children" });
+    const site = { path: at, node: { type: node.type, name: node.name, id: node.id } };
+    const locked = context.ownWritesLockedBy?.node;
+    if (locked) {
+      throw new FlcmError("figma",
+        "this layer is inside " + describeNodeIdentity(locked) + ", and Figma won't let a plugin move an instance's sublayer. Edit the main component it comes from, or detach the instance with flcm.detach.",
+        site,
+      );
+    }
+    const closed = context.childListClosedBy?.node;
+    if (ref.children?.length && closed) {
+      throw new FlcmError("figma",
+        "Figma won't let a plugin change the children of " + (closed === node ? "an instance" : "a layer inside " + describeNodeIdentity(closed)) +
+          ". Edit the main component it comes from, or detach the instance with flcm.detach.",
+        { ...site, path: at + ".children" },
+      );
+    }
+    if (ref.children?.length && !("appendChild" in node)) {
+      throw new FlcmError("authoring", "a " + node.type + " has no children. Drop `children` here.", { ...site, path: at + ".children" });
     }
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     const planning = { targets, gate: resources };
@@ -162,7 +175,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
       assertInheritedSlotContentStays(at, node, parent);
       // Inherited slot content lands as Figma's copy, leaving the original where it was: not a move.
       const from = intoNewNode && !isInheritedSlotContent(node) ? node.parent : null;
-      const fail = beginMutatingApply(at, node);
+      const fail = beginMutatingApply(node, { path: at });
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new FlcmError("authoring", "a node cannot move inside itself or its descendant.", { path: at });
         const becomes = instance?.becomesContainer;
@@ -187,7 +200,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
           releaseRewiredBindings(node, Object.keys(refs).filter((field) => rebinds.has(`word:binding:${field}`)).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
         }
         landAttachedLiveNode(holder.landing!, index, {
-          node, fail, plan: authorized, instance, component, subject: at, tag: at,
+          node, fail, plan: authorized, instance, component, site: { path: at }, tag: at,
           vectorPath: !vector ? undefined : () => {
             const at = realizeAtWritePoint(node, ["prop:vector"]);
             if (!at.writes.size) return;
@@ -198,7 +211,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
             const keyed = key === undefined ? undefined : realizeAtWritePoint(node, ["prop:key"]);
             if (keyed?.writes.size) { writeKey(node, key as string); keyed.landed(); }
             if (refs) {
-              if (!ctx.bindings) throw new FlcmError("authoring", "componentPropertyReferences has no declaring component.", { path: at });
+              if (!ctx.bindings) throw new FlcmError("authoring", "componentPropertyReferences binds a layer to a property of the component it is in, and this layer won't be inside a component. Drop componentPropertyReferences, or place the layer inside a component.", { ...site, path: at + ".componentPropertyReferences" });
               ctx.bindings.push({ node, refs });
             }
             if ("appendChild" in node) for (const child of ref.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
@@ -214,6 +227,6 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
     } });
   });
   // After every node is gated: an ancestor's slot paths are known only once its instance half is planned.
-  holder.landing = scheduleLiveTree(shapes.map((shape, i) => ({ ...shape, attachedBy: attachedBy[i] })), subject, mains);
+  holder.landing = scheduleLiveTree(shapes.map((shape, i) => ({ ...shape, attachedBy: attachedBy[i] })), path, mains);
   return { nodes, landing: holder.landing };
 }

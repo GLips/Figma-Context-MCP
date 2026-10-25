@@ -111,7 +111,7 @@ export function scheduleEditOperations<Op extends EditOperation>(operations: rea
     order.push(operations[i]);
     for (const j of after[i]) if (--waiting[j] === 0) ready.push(j);
   }
-  if (order.length < n) throw new FlcmError("authoring", describeCycle(operations, after, waiting), { call: subject });
+  if (order.length < n) throw new FlcmError("authoring", describeCycle(operations, after, waiting), { path: subject });
   return order;
 }
 
@@ -132,7 +132,7 @@ function describeCycle(operations: readonly EditOperation[], after: readonly Set
   }
   const cycle = [...path.slice(path.indexOf(at)), at].map((i) => operations[i].label);
   const labels = cycle.filter((label, k) => k === 0 || label !== cycle[k - 1]);
-  return "these words depend on each other in an order one call can't satisfy: " + labels.join(" ← ") + ". Split them across two calls.";
+  return "these values depend on each other in an order one call can't satisfy: " + labels.join(" ← ") + ". Split them across two calls.";
 }
 
 // ---- inheritance: which main components a layer's values come from ----

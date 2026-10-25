@@ -45,7 +45,7 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
         return Promise.reject(
           new FlcmError(
             "run-ended",
-            "flcm: the server for this run is not connected — the server call cannot be issued and the script stops here.",
+            "the server for this run is no longer connected, so the request to it can't be sent and the script stops here.",
           ),
         );
       }
@@ -83,7 +83,7 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
           : msg.error && typeof msg.error === "object" && "message" in msg.error && typeof msg.error.message === "string"
             // eslint-disable-next-line no-restricted-syntax -- a wire field, not an error's text
             ? msg.error.message
-            : "flcm: the server capability failed.",
+            : "the server couldn't complete the request.",
       );
       (error as Error & { detail?: unknown }).detail = msg.error;
       call.reject(error);

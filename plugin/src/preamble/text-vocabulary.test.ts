@@ -52,7 +52,7 @@ test("textTransform and fontVariant are two CSS words for ONE Figma slot", async
       text: "x",
       textStyle: { textTransform: "uppercase", fontVariant: "small-caps" },
     }),
-    /textTransform and fontVariant are two CSS words for Figma's ONE textCase slot/,
+    /textStyle: textTransform and fontVariant are two CSS properties for Figma's one text-case setting/,
   );
   const smallCaps = await render({
     type: "TEXT",
@@ -102,7 +102,7 @@ test("a read textStyle renders derived font identity and refuses unwritable fiel
   // opentypeFlags is real state with no setter anywhere in the plugin API — named, with the reason.
   await assert.rejects(
     render({ type: "TEXT", text: "x", textStyle: { opentypeFlags: { LNUM: 1 } } as never }),
-    /`opentypeFlags` is a read-only field — OpenType features are read-only to a plugin/,
+    /textStyle\.opentypeFlags: flcm can't write this — OpenType features are read-only to a plugin/,
   );
   // A genuinely unknown key still fails loud: tolerating the read leaves didn't open the closed set.
   await assert.rejects(

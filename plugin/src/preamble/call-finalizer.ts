@@ -5,7 +5,8 @@
 // call-finalizer — the last phase of every mutating call: once every write has landed, the span
 // has settled and the style links are linked, observe every obligation the call recorded. Any word
 // the canvas doesn't hold as asked fails the call inside the lock's rollback, so a call either
-// realizes every authored word or applies nothing.
+// realizes every authored word or applies nothing. The message speaks of "values", never "words":
+// the agent wrote a spec, not the obligation ledger.
 
 import { concessionsOnNode, describeObligationTarget, obligationsInCall, resolveObligationTarget, type Obligation } from "./obligation.js";
 import { describeObligationRequest, observeObligation, type PendingStyleLink } from "./obligation-observers.js";
@@ -30,9 +31,9 @@ const LISTED_WORDS = 20;
  */
 export function finalizeMutatingCall(verb: string, pendingLinks: readonly PendingStyleLink[]): VerifiedStyleLinks {
   const subject = "flcm." + verb;
-  const lines: string[] = [];
+  const unmet: { line: string; kind: FlcmErrorKind }[] = [];
   let unrealized = 0;
-  let kind: FlcmErrorKind = "authoring";
+  let kind: FlcmErrorKind = "internal";
   const all = obligationsInCall();
   for (const obligation of all) {
     const seen = observeObligation(obligation, pendingLinks);
@@ -40,26 +41,35 @@ export function finalizeMutatingCall(verb: string, pendingLinks: readonly Pendin
     unrealized++;
     const why = whyOf(obligation, all, subject);
     kind = blameOf(kind, why.kind);
-    if (lines.length === LISTED_WORDS) continue;
+    if (unmet.length === LISTED_WORDS) continue;
     // The call site minus the verb: "[2]" for an editMany entry, nothing for a lone edit.
     const site = obligation.source.subject.startsWith(subject) ? obligation.source.subject.slice(subject.length) : obligation.source.subject;
-    lines.push(
-      "  " + (site ? site + " " : "") + describeObligationTarget(obligation.target) + " " + obligation.source.path +
-        ": asked " + describeObligationRequest(obligation) + ", ended " + seen.ended + why.text + ".",
-    );
+    unmet.push({
+      line: "  " + (site ? site + " " : "") + describeObligationTarget(obligation.target) + " " + obligation.source.path +
+        ": asked " + describeObligationRequest(obligation) + ", ended " + seen.ended + why.text,
+      kind: why.kind,
+    });
   }
   if (unrealized === 0) return pendingLinks as VerifiedStyleLinks;
+  // The bug advice is the error's own when the whole call is flcm's; beside the agent's lines it is said per line.
+  const lines = unmet.map(({ line, kind: own }) => line + (own === "internal" && kind !== "internal" ? " (a bug in flcm, not in your script)" : "") + ".");
   if (unrealized > LISTED_WORDS) lines.push("  and " + (unrealized - LISTED_WORDS) + " more.");
+  const values = unrealized === 1 ? "1 value it set" : unrealized + " values it set";
   throw new FlcmError(
     kind,
-    "this call didn't realize " + unrealized + " of its words, so it rolled back and nothing was applied.\n" + lines.join("\n"),
-    { call: subject },
+    "this call didn't come out as written: " + values + " ended differently than asked." + (NEXT_STEP[kind] ? " " + NEXT_STEP[kind] : "") + "\n" + lines.join("\n"),
   );
 }
 
-// One kind for the whole call: a word flcm can't explain is flcm's bug and outranks the rest, so it
-// gets reported; a Figma limit outranks the agent's own mistake.
-const BLAME_RANK: Partial<Record<FlcmErrorKind, number>> = { authoring: 0, figma: 1, internal: 2 };
+// The kind is the whole call's (blameOf), so the step is too. A bug's advice is the error's own.
+const NEXT_STEP: Partial<Record<FlcmErrorKind, string>> = {
+  authoring: "Fix the values below, then re-run the call.",
+  figma: "Figma can't set the values below here: change or drop them, then re-run the call.",
+};
+
+// One kind for the whole call, the most actionable: the agent's own mistake outranks a Figma limit,
+// and the call reads as flcm's bug only when every unmet value is one.
+const BLAME_RANK: Partial<Record<FlcmErrorKind, number>> = { internal: 0, figma: 1, authoring: 2 };
 function blameOf(so: FlcmErrorKind, word: FlcmErrorKind): FlcmErrorKind {
   return (BLAME_RANK[word] ?? 0) > (BLAME_RANK[so] ?? 0) ? word : so;
 }

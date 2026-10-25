@@ -45,7 +45,7 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
     const target = parent.children![0].id;
     for (const alignSelf of ["flex-start", "center", "flex-end", "auto", "start", "end"]) {
       const layout = { alignSelf } as never;
-      const reason = /layout\.alignItems.*parent.*every child.*fill-sized frame.*alignItems/;
+      const reason = /alignSelf.*layout\.alignItems on the parent.*every child.*"fill"-sized frame/;
       await assert.rejects(edit(target, { layout }), reason);
       await assert.rejects(editMany([{ id: parent.children![0].id, layout }]), reason);
       await assert.rejects(render({ type: "FRAME", layout: { mode }, children: [{ type: "RECTANGLE", layout }] }), reason);
@@ -59,14 +59,14 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
   assert.deepEqual([stretched.width, stretched.height], ["fill", "fill"]);
   const cellBox = await measure(cell);
   assert.deepEqual([cellBox.width, cellBox.height], [290, 60]); // the 1fr column of a 400 grid, row 0
-  await assert.rejects(edit(cell, { height: 20, layout: { alignSelf: "stretch" } }), /alignSelf "stretch" conflicts with the authored height/);
-  await assert.rejects(edit(cell, { width: 20, layout: { justifySelf: "stretch" } }), /justifySelf "stretch" conflicts with the authored width/);
+  await assert.rejects(edit(cell, { height: 20, layout: { alignSelf: "stretch" } }), /alignSelf "stretch" means height "fill", and this node also sets a different height/);
+  await assert.rejects(edit(cell, { width: 20, layout: { justifySelf: "stretch" } }), /justifySelf "stretch" means width "fill", and this node also sets a different width/);
   // Authored at create, and out of any flow it still has no cell to fill.
   const stretchedAtCreate = await render({ type: "FRAME", width: 200, height: 100, layout: { mode: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "100px" },
     children: [{ type: "RECTANGLE", layout: { alignSelf: "stretch", justifySelf: "stretch" } }] });
   const filled = (await get(stretchedAtCreate)).node.children![0];
   assert.deepEqual([filled.width, filled.height], ["fill", "fill"]);
-  await assert.rejects(render({ type: "FRAME", width: 90, height: 90, children: [{ type: "RECTANGLE", width: 10, height: 10, layout: { alignSelf: "stretch" } }] }), /requires an in-flow row\/column or grid parent/);
+  await assert.rejects(render({ type: "FRAME", width: 90, height: 90, children: [{ type: "RECTANGLE", width: 10, height: 10, layout: { alignSelf: "stretch" } }] }), /needs an in-flow child of a row, column or grid/);
 });
 
 test("grid spans and template edits use read words and refuse unresolved layout before changing it", async () => {
@@ -84,11 +84,11 @@ test("grid spans and template edits use read words and refuse unresolved layout 
   assert.equal((await get(built)).node.layout!.gridTemplateRows, "fit-content(100%) 30px 30px");
   await assert.rejects(edit(child, { width: "50%" }), /percent sizes on in-flow GRID/);
   await assert.rejects(render({ type: "FRAME", width: 120, height: 90, layout, children: [{ type: "RECTANGLE", width: "50%" }] }), /percent sizes on in-flow GRID/);
-  await assert.rejects(edit(built, { layout: { gridTemplateColumns: "1fr 1fr 1fr 1fr" } }), /fractional grid tracks require explicit/);
+  await assert.rejects(edit(built, { layout: { gridTemplateColumns: "1fr 1fr 1fr 1fr" } }), /fr grid tracks divide the frame's own width.*Give width a number or "fill"/);
   await assert.rejects(edit(child, { layout: { mode: "none" } }), /unknown prop "mode"/);
   await assert.rejects(editMany([{ id: built.children![0].id, layout: { padding: 4 } }]), /unknown prop "padding"/);
-  await assert.rejects(edit(child, { layout: { overflowScroll: ["x"] } } as never), /has no authored form/);
-  await assert.rejects(render({ type: "FRAME", layout: { mode: "grid" } }), /requires.*gridTemplate/);
+  await assert.rejects(edit(child, { layout: { overflowScroll: ["x"] } } as never), /layout\.overflowScroll: flcm can't write this — scroll behavior/);
+  await assert.rejects(render({ type: "FRAME", layout: { mode: "grid" } }), /a new grid needs layout\.gridTemplateColumns/);
   await edit(built, { width: 200, layout: { gridTemplateColumns: "1fr 1fr 1fr 1fr" } });
   assert.equal((await get(built)).node.layout!.gridTemplateColumns, "1fr 1fr 1fr 1fr");
 });

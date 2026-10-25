@@ -9,7 +9,7 @@
 // Defaults a verb injects to execute a word are not obligations; only authored words are.
 
 import { liveSublayerId } from "@framelink/core";
-import { describeNodeIdentity } from "./identity.js";
+import { describeNodeIdentity } from "./flcm-error.js";
 import type { Align, CornerRadii, Edges, Justify, WriteLayout, WriteProps } from "./ir.js";
 import type { GridTrack } from "./grid-tracks.js";
 import type { Axis } from "./layout-mode.js";

@@ -91,9 +91,10 @@ export function createAgentSessions({
       let notice: string | null = null;
       session.bytes = measure(session);
       if (session.bytes > sessionBudgetBytes && session.store?.last !== undefined) {
+        const held = session.bytes;
         delete session.store.last;
         session.bytes = measure(session);
-        notice = `flcm: session.last was dropped: this session held ${megabytes(session.bytes)} with it, over the ${megabytes(sessionBudgetBytes)} a session may keep.`;
+        notice = `session.last was dropped: this session held ${megabytes(held)} with it, over the ${megabytes(sessionBudgetBytes)} a session may keep.`;
       }
       if (session.bytes > sessionBudgetBytes && session.pins === 0) {
         evict(session);
@@ -117,7 +118,7 @@ export function createAgentSessions({
 export type AgentSessions = ReturnType<typeof createAgentSessions>;
 
 function sessionClearedNotice(why: string): string {
-  return `flcm: this session was cleared after the run because ${why}. Its handle no longer resumes: start a new session, and keep ids and small specs in session rather than whole reads.`;
+  return `this session was cleared after the run because ${why}. Its handle no longer resumes: start a new session, and keep ids and small specs in session rather than whole reads.`;
 }
 
 function megabytes(bytes: number): string {

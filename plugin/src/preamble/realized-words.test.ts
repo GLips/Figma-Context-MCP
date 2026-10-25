@@ -23,7 +23,7 @@ function capOpacity(node: any): void {
   Object.defineProperty(node, "opacity", { configurable: true, get: () => opacity, set: (v: number) => { opacity = Math.min(v, 0.2); } });
 }
 
-const UNREALIZED_OPACITY = /didn't realize 1 of its words, so it rolled back.*opacity: asked 0\.5, ended 0\.2/s;
+const UNREALIZED_OPACITY = /didn't come out as written: 1 value it set ended differently than asked\.[^\n]* Nothing from this call was kept[^\n]*\n.*opacity: asked 0\.5, ended 0\.2/s;
 
 test("edit: an authored word that didn't land rolls the call back before its style link, earlier calls kept", async () => {
   const figma = setup();
@@ -201,7 +201,7 @@ test("a definition edit and an instance restating its old value both land, in ei
     const { mainBox, instanceBox } = await inheritedBox(figma);
     figma.undoLog.length = 0;
     const entries = [{ id: mainBox.id, left: 20 }, { id: instanceBox.id, left: 10 }];
-    await assert.rejects(flcm.editMany(bothOrders(entries)[order] as never), /didn't realize 1 of its words.*left: asked 10, ended 20.*\(instance\.transform\)/s);
+    await assert.rejects(flcm.editMany(bothOrders(entries)[order] as never), /didn't come out as written: 1 value it set.*left: asked 10, ended 20.*\(instance\.transform\)/s);
     assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
   }
 });
@@ -314,9 +314,10 @@ test("a restated word that changes while the call loads fonts is refused, keepin
     const run = verb === "edit" ? flcm.edit(text.id, words as never) : verb === "editMany" ? flcm.editMany([{ id: text.id, ...words }] as never) : flcm.render({ id: text.id, ...words } as never);
     await assert.rejects(run, (err: FlcmError) => {
       assert.equal(err.kind, "concurrent-edit", verb);
-      assert.match(err.message, /fill went from "#ff0000" to "#00FF00"/, verb);
+      if (verb !== "editMany") assert.equal(err.node?.id, text.id, verb);
+      assert.match(err.message, /at [^:]*fill: the file was edited in Figma while this call ran \(it went from "#ff0000" to "#00FF00"/, verb);
       // A batch names the entry once, and asks for a fresh read rather than a fix.
-      if (verb === "editMany") assert.match(err.message, /Read those layers again and re-run it\.\n {2}\[0\] the file was edited in Figma/);
+      if (verb === "editMany") assert.match(err.message, /Read those layers again and re-run it\. Nothing from this call was kept[^\n]*\n {2}\[0\] TEXT "[^"]*" \(id "[^"]+"\) at fill: the file was edited in Figma/);
       return true;
     });
     assert.deepEqual(text.fills[0].color, { r: 0, g: 1, b: 0 }, verb);
@@ -329,7 +330,7 @@ test("an override and the same sublayer by its own id asking different values ar
   figma.undoLog.length = 0;
   await assert.rejects(
     flcm.editMany([{ id: instanceBox.parent.id, overrides: { [mainBox.id]: { fill: "#ff0000" } } }, { id: instanceBox.id, fill: "#00ff00" }] as never),
-    /\[0\] overrides\["[^"]+"\]\.fill and \[1\] fill both state RECTANGLE "Box".*'s fill \("#ff0000" vs "#00ff00"\); state it once/,
+    /RECTANGLE "Box" \(id "[^"]+"\): \[0\] overrides\["[^"]+"\]\.fill and \[1\] fill both set this layer's fill, differently \("#ff0000" vs "#00ff00"\)\. Set it in one place/,
   );
   assert.deepEqual(figma.undoLog, []);
   assert.deepEqual(instanceBox.fills[0].color, { r: 0, g: 0, b: 1 });

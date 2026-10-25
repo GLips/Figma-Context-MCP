@@ -118,7 +118,7 @@ async function usedTokens(query: DesignTokenUsedQuery): Promise<UsedDesignTokens
       const names = [...new Set(named.filter((n): n is string => n !== undefined))];
       throw new FlcmError("authoring", "no used library variable" + (query.type === undefined ? "" : " of type " + query.type) +
         " is in a collection named " + JSON.stringify(query.collection) + ". " +
-        (names.length ? "Used collections: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "The file uses no library variables" + (query.type === undefined ? "" : " of that type") + "."), DESIGN_TOKENS_CALL);
+        (names.length ? "Pass one of the collections it uses: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "The file uses no library variables" + (query.type === undefined ? "" : " of that type") + ": drop collection."));
     }
     variables = inCollection;
   }
@@ -139,29 +139,28 @@ function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {
   return items.filter((item) => !seen.has(key(item)) && !!seen.add(key(item)));
 }
 
-const DESIGN_TOKENS_CALL = { call: "flcm.designTokens" };
-
 const LIBRARY_QUERY_KEYS: ReadonlySet<string> = new Set(["library", "collection", "type"]);
 const USED_QUERY_KEYS: ReadonlySet<string> = new Set(["used", "collection", "type"]);
 
 // Hand-rolled: the preamble is zod-free. Fails loud on anything it doesn't know, like every flcm verb.
 function parseTokenQuery(from: unknown): DesignTokenUsedQuery | DesignTokenLibraryQuery {
-  const usage = "pass nothing for the file's own tokens, { used: true, collection?, type? } for the library tokens it uses, " +
-    "or { library, collection?, type? } to load one enabled library's variables";
-  if (typeof from !== "object" || from === null || Array.isArray(from)) throw new FlcmError("authoring", usage + ".", DESIGN_TOKENS_CALL);
+  const usage = "Pass nothing for the file's own tokens, { used: true, collection?, type? } for the library tokens it uses, " +
+    "or { library, collection?, type? } to load one enabled library's variables.";
+  const refuse = (problem: string) => new FlcmError("authoring", problem + " " + usage);
+  if (typeof from !== "object" || from === null || Array.isArray(from)) throw refuse("the query must be an object.");
   const query = from as Record<string, unknown>;
   const used = "used" in query;
-  if (used && query.used !== true) throw new FlcmError("authoring", usage + "; used must be true.", DESIGN_TOKENS_CALL);
-  if (used && "library" in query) throw new FlcmError("authoring", usage + "; used and library are two different loads — pass one.", DESIGN_TOKENS_CALL);
+  if (used && query.used !== true) throw refuse("used must be true.");
+  if (used && "library" in query) throw refuse("used and library are two different loads — pass one.");
   const known = used ? USED_QUERY_KEYS : LIBRARY_QUERY_KEYS;
   const unknown = Object.keys(query).filter((k) => !known.has(k));
-  if (unknown.length) throw new FlcmError("authoring", usage + "; unknown key " + unknown.map((k) => JSON.stringify(k)).join(", ") + ".", DESIGN_TOKENS_CALL);
-  if (!used && typeof query.library !== "string") throw new FlcmError("authoring", usage + "; library must be the library's name, as the default call's libraries list it.", DESIGN_TOKENS_CALL);
-  if (query.collection !== undefined && typeof query.collection !== "string") throw new FlcmError("authoring", usage + "; collection must be a collection name.", DESIGN_TOKENS_CALL);
+  if (unknown.length) throw refuse("unknown key " + unknown.map((k) => JSON.stringify(k)).join(", ") + ".");
+  if (!used && typeof query.library !== "string") throw refuse("library must be the library's name, as flcm.designTokens() lists it under libraries.");
+  if (query.collection !== undefined && typeof query.collection !== "string") throw refuse("collection must be a collection name.");
   const types = used ? [...LISTED_VARIABLE_TYPES, ...LISTED_STYLE_TYPES] : [...LISTED_VARIABLE_TYPES];
-  if (query.type !== undefined && !types.includes(query.type as string)) throw new FlcmError("authoring", usage + "; type must be one of " + types.join(", ") + ".", DESIGN_TOKENS_CALL);
+  if (query.type !== undefined && !types.includes(query.type as string)) throw refuse("type must be one of " + types.join(", ") + ".");
   if (used && query.collection !== undefined && LISTED_STYLE_TYPES.has(query.type as string)) {
-    throw new FlcmError("authoring", usage + "; a collection holds variables, so it can't be narrowed to a style type.", DESIGN_TOKENS_CALL);
+    throw refuse("a collection holds variables, so it can't be narrowed to a style type.");
   }
   return query as unknown as DesignTokenUsedQuery | DesignTokenLibraryQuery;
 }
@@ -198,12 +197,12 @@ async function libraryTokens(query: DesignTokenLibraryQuery): Promise<LibraryDes
   if (!inLibrary.length) {
     const names = [...new Set(listed.map(({ collection: c }) => c.libraryName))];
     throw new FlcmError("authoring", "no enabled library with variables is named " + JSON.stringify(query.library) + ". " +
-      (names.length ? "Enabled: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "This file has none enabled."), DESIGN_TOKENS_CALL);
+      (names.length ? "Pass one of the enabled libraries: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "This file has no library with variables enabled; enable one in Figma first."));
   }
   const chosen = query.collection === undefined ? inLibrary : inLibrary.filter(({ collection: c }) => c.name === query.collection);
   if (!chosen.length) {
     throw new FlcmError("authoring", JSON.stringify(query.library) + " has no collection named " + JSON.stringify(query.collection) +
-      ". Its collections: " + inLibrary.map(({ collection: c }) => JSON.stringify(c.name)).join(", ") + ".", DESIGN_TOKENS_CALL);
+      ". Pass one of its collections: " + inLibrary.map(({ collection: c }) => JSON.stringify(c.name)).join(", ") + ".");
   }
   // The type filter runs on the listing, before any import, which is what makes it worth having.
   const wanted = chosen.flatMap(({ variables }) => variables)

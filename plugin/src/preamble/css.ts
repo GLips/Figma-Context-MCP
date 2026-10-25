@@ -22,7 +22,7 @@ import { rejectUnknownKeys } from "./validate.js";
 import { NESTED_WORDS } from "./vocabulary.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, locateFailure } from "./flcm-error.js";
 
 // FillInput / WriteGradientFill / WriteCssEffects moved to ir.ts (the figma-free type hub) so the schema
 // module can source them without importing this module's parsers. parseFill/parseCssEffects below still
@@ -70,7 +70,7 @@ export function parseColor(input: string): Rgba {
 }
 
 // ---- Fills (color string | gradient string | read-form { type, gradient }) -> WritePaint ----
-// Takes ONE leaf. flcm.compilePaintWord owns the stack: it splits an array into leaves and calls this
+// Takes ONE leaf; `field` is its spec path. compilePaintWord owns the stack: it splits an array into leaves and calls this
 // per entry, so a parser that also un-nested would have to own paint ORDER too — and order is settled
 // in exactly two places (compilePaintWord authors it, bridge.toFigmaPaintStack flips it for Figma).
 export function parseFill(value: FillLeaf, field: string): WritePaint {
@@ -79,7 +79,7 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
     if (isImageFill(value)) return readImagePaint(value, field);
     if (isVariableInput(value)) return boundSolid(compileVariableRef(value, field, "COLOR"), 1);
     if (isStyleInput(value)) {
-      throw new FlcmError("authoring", field + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }` on its own, never as one layer of a stack, a run's color, or an imported SVG's paint.");
+      throw new FlcmError("authoring", "a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }` on its own, never as one layer of a stack, a run's color, or an imported SVG's paint.", { path: field });
     }
     const leaf = value as { type?: unknown; color?: unknown; gradient?: unknown; blendMode?: unknown; opacity?: unknown };
     if (leaf.type === "SOLID" && typeof leaf.color === "string") {
@@ -88,7 +88,7 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
     if (leaf.type === "SOLID" && isVariableInput(leaf.color)) {
       rejectUnknownKeys(leaf, BOUND_SOLID_KEYS, field);
       const opacity = leaf.opacity ?? 1;
-      if (typeof opacity !== "number" || !(opacity >= 0 && opacity <= 1)) throw new FlcmError("authoring", field + " opacity must be a number 0–1 — got " + JSON.stringify(leaf.opacity) + ".");
+      if (typeof opacity !== "number" || !(opacity >= 0 && opacity <= 1)) throw new FlcmError("authoring", "must be a number 0–1 — got " + JSON.stringify(leaf.opacity) + ".", { path: field + ".opacity" });
       return withPaintBlend(boundSolid(compileVariableRef(leaf.color, field + ".color", "COLOR"), opacity), leaf.blendMode);
     }
     if (typeof leaf.gradient === "string" && typeof leaf.type === "string" && leaf.type.indexOf("GRADIENT_") === 0) {
@@ -109,7 +109,7 @@ function boundSolid(colorVariable: VariableRef, opacity: number): WriteSolid {
 }
 
 function badFill(field: string, value: unknown): FlcmError {
-  return new FlcmError("authoring", field + ' must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, a blended solid { type: "SOLID", color, blendMode }, a color variable { variable }, or a bound solid { type: "SOLID", color: { variable }, opacity?, blendMode? }. Got ' + JSON.stringify(value) + ".");
+  return new FlcmError("authoring", 'must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, a blended solid { type: "SOLID", color, blendMode }, a color variable { variable }, or a bound solid { type: "SOLID", color: { variable }, opacity?, blendMode? }. Got ' + JSON.stringify(value) + ".", { path: field });
 }
 
 // A read-form leaf's optional `blendMode` (a CSS keyword) onto its parsed solid/gradient.
@@ -120,41 +120,45 @@ function withPaintBlend(paint: WritePaint, blendMode: unknown): WritePaint {
 // ---- Image paint adjustments: the read's image-fill words, and flcm.image's matching options. ----
 const IMAGE_FILTER_KEYS: readonly string[] = NESTED_WORDS.imageFilters;
 
-// `where` names the input in every refusal ("fill", "flcm.image opts"). Out-of-range values fail here
+// `where` is the input's path ("flcm.render.spec.fill[0]", "opts"). Out-of-range values fail here
 // rather than at Figma's set_fills, whose error names neither the node nor the word.
 export function parseImageAdjustments(
   o: { blendMode?: unknown; opacity?: unknown; rotation?: unknown; filters?: unknown },
   where: string,
 ): WriteImageAdjustments {
   const out: WriteImageAdjustments = {};
-  if (o.blendMode != null) out.blendMode = parseBlendMode(String(o.blendMode));
+  if (o.blendMode != null) {
+    try {
+      out.blendMode = parseBlendMode(String(o.blendMode));
+    } catch (cause) { throw locateFailure(cause, { path: where + ".blendMode" }); }
+  }
   if (o.opacity != null) {
     if (typeof o.opacity !== "number" || !(o.opacity >= 0 && o.opacity <= 1)) {
-      throw new FlcmError("authoring", where + " opacity must be a number 0–1 — got " + JSON.stringify(o.opacity) + ".");
+      throw new FlcmError("authoring", "must be a number 0–1 — got " + JSON.stringify(o.opacity) + ".", { path: where + ".opacity" });
     }
     out.opacity = o.opacity;
   }
   if (o.rotation != null && o.rotation !== 0) {
     if (o.rotation !== 90 && o.rotation !== 180 && o.rotation !== 270) {
-      throw new FlcmError("authoring", where + " rotation must be 0, 90, 180 or 270 — Figma turns an image paint only in quarter turns. Got " + JSON.stringify(o.rotation) + ".");
+      throw new FlcmError("authoring", "must be 0, 90, 180 or 270 — Figma turns an image paint only in quarter turns. Got " + JSON.stringify(o.rotation) + ".", { path: where + ".rotation" });
     }
     out.rotation = o.rotation;
   }
-  if (o.filters != null) out.filters = parseImageFilters(o.filters, where);
+  if (o.filters != null) out.filters = parseImageFilters(o.filters, where + ".filters");
   return out;
 }
 
 function parseImageFilters(input: unknown, where: string): WriteImageFilters {
   if (typeof input !== "object" || Array.isArray(input)) {
-    throw new FlcmError("authoring", where + " filters must be an object of { " + IMAGE_FILTER_KEYS.join(", ") + " } — got " + JSON.stringify(input) + ".");
+    throw new FlcmError("authoring", "must be an object of { " + IMAGE_FILTER_KEYS.join(", ") + " } — got " + JSON.stringify(input) + ".", { path: where });
   }
   const filters: Record<string, number> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     if (IMAGE_FILTER_KEYS.indexOf(key) === -1) {
-      throw new FlcmError("authoring", where + ' filters has no "' + key + '" — use ' + IMAGE_FILTER_KEYS.join(", ") + ".");
+      throw new FlcmError("authoring", 'has no "' + key + '" — use ' + IMAGE_FILTER_KEYS.join(", ") + ".", { path: where });
     }
     if (typeof value !== "number" || !(value >= -1 && value <= 1)) {
-      throw new FlcmError("authoring", where + " filters." + key + " must be a number -1–1 (0 is untouched) — got " + JSON.stringify(value) + ".");
+      throw new FlcmError("authoring", "must be a number -1–1 (0 is untouched) — got " + JSON.stringify(value) + ".", { path: where + "." + key });
     }
     filters[key] = value;
   }
@@ -186,20 +190,23 @@ function readImagePaint(value: object, field: string): WriteImageHash {
   // hash to point a new paint at (the GIF's own bytes live behind gifRef, which is not an image hash).
   if (typeof o.gifRef === "string" && o.gifRef) {
     throw new FlcmError("authoring",
-      field + " is an animated GIF fill, and its `imageRef` is only the static snapshot frame — rebuilding from it would drop the animation. Duplicate the node with flcm.clone to keep the GIF.",
+      "this is an animated GIF fill, and its `imageRef` is only the static snapshot frame — rebuilding from it would drop the animation. Duplicate the node with flcm.clone to keep the GIF.",
+      { path: field },
     );
   }
   const hash = typeof o.imageRef === "string" && o.imageRef ? o.imageRef : undefined;
   if (!hash) {
     throw new FlcmError("figma",
-      field + " is an image fill with no imageRef — Figma reports a null ref for an asset that lives in a file you don't own, so there is nothing to point the new paint at (" +
+      "this image fill has no imageRef — Figma reports a null ref for an asset that lives in a file you don't own, so there is nothing to point the new paint at (" +
         JSON.stringify(value) + "). Duplicate the node with flcm.clone instead, or author your own image with flcm.image(url).",
+      { path: field },
     );
   }
   const scaleMode = ownEntry(READ_SCALE_MODES, String(o.scaleMode));
   if (!scaleMode) {
     throw new FlcmError("authoring",
-      field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which flcm has no word to author, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
+      'this is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which flcm has no property to author, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
+      { path: field },
     );
   }
   const paint: WriteImageHash = { kind: "image", hash, scaleMode, ...parseImageAdjustments(o, field) };
@@ -411,6 +418,14 @@ export function length(v: number | string): number {
   return parseFloat(m[1]);
 }
 
+// Each part of a shorthand rides `length`, which doesn't know the word it reads, so its refusal is
+// located here.
+function lengthsAt(parts: string[], field: string): number[] {
+  try {
+    return parts.map((p) => length(p));
+  } catch (cause) { throw locateFailure(cause, { path: field }); }
+}
+
 // A CSS 1–4 value box shorthand ("12px" | "12px 16px" | "12px 16px 8px" | "12px 16px 8px 4px") -> typed
 // Edges, following CSS's own fill-in rules. The READ shape spells padding and a per-side strokeWidth this
 // way (one string, per core/utils generateCSSShorthand), so this decode is what lets both re-author.
@@ -419,9 +434,9 @@ export function length(v: number | string): number {
 export function boxShorthand(value: string, field: string): Edges {
   const parts = String(value).trim().split(/\s+/).filter((p) => p.length);
   if (!parts.length || parts.length > 4) {
-    throw new FlcmError("authoring", field + ' must be a CSS box shorthand of 1–4 values (e.g. "12px" or "12px 16px") — got ' + JSON.stringify(value) + ".");
+    throw new FlcmError("authoring", 'must be a CSS box shorthand of 1–4 values (e.g. "12px" or "12px 16px") — got ' + JSON.stringify(value) + ".", { path: field });
   }
-  const n = parts.map((p) => length(p));
+  const n = lengthsAt(parts, field);
   const top = n[0];
   const right = n.length > 1 ? n[1] : top;
   return { top, right, bottom: n.length > 2 ? n[2] : top, left: n.length > 3 ? n[3] : right };
@@ -440,18 +455,20 @@ export function cornerRadii(value: number | string, field: string): CornerRadii 
   // second half of an elliptical `x / y` shorthand, so it rejects instead of silently dropping it.
   if (raw.indexOf("/") !== -1) {
     throw new FlcmError("authoring",
-      field + " is " + JSON.stringify(value) +
+      "got " + JSON.stringify(value) +
         ' — Figma corners are circular, so the elliptical "horizontal / vertical" border-radius form has no equivalent. Give one radius per corner.',
+      { path: field },
     );
   }
   const parts = raw.split(/\s+/).filter((p) => p.length);
   if (!parts.length || parts.length > 4) {
     throw new FlcmError("authoring",
-      field + ' must be a number, "Npx", or a CSS border-radius shorthand of 1–4 values (e.g. "8px 8px 0px 0px") — got ' +
+      'must be a number, "Npx", or a CSS border-radius shorthand of 1–4 values (e.g. "8px 8px 0px 0px") — got ' +
         JSON.stringify(value) + ".",
+      { path: field },
     );
   }
-  const n = parts.map((p) => length(p));
+  const n = lengthsAt(parts, field);
   const topLeft = n[0];
   const topRight = n.length > 1 ? n[1] : topLeft;
   return { topLeft, topRight, bottomRight: n.length > 2 ? n[2] : topLeft, bottomLeft: n.length > 3 ? n[3] : topRight };

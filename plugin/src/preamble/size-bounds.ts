@@ -11,22 +11,22 @@ import type { AuthorizedLayout } from "./instance-write-authorization.js";
 type Bounds = NonNullable<WriteLayout["bounds"]>;
 type LiveBounds = Partial<Record<typeof BOUND_WORDS[number], number | null>>;
 
-export function compileBounds(props: Partial<Record<typeof BOUND_WORDS[number], unknown>>): Bounds | undefined {
+export function compileBounds(props: Partial<Record<typeof BOUND_WORDS[number], unknown>>, at: string): Bounds | undefined {
   const bounds: Bounds = {};
   for (const key of BOUND_WORDS) {
     const value = props[key];
     if (value === undefined) continue;
-    if (isVariableInput(value)) { bounds[key] = compileVariableRef(value, key, "FLOAT"); continue; }
+    if (isVariableInput(value)) { bounds[key] = compileVariableRef(value, at + "." + key, "FLOAT"); continue; }
     if (value !== "none" && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) {
-      throw new FlcmError("authoring", '' + key + ' must be a finite positive number, { variable }, or "none" to clear it.');
+      throw new FlcmError("authoring", 'must be a finite positive number, { variable }, or "none" to clear it — got ' + JSON.stringify(value) + ".", { path: at + "." + key });
     }
     bounds[key] = value;
   }
-  assertBounds(bounds, {}, "flcm");
+  assertBounds(bounds, {}, at);
   return Object.keys(bounds).length ? bounds : undefined;
 }
 
-export function assertBounds(bounds: Bounds | undefined, live: LiveBounds, subject: string): void {
+export function assertBounds(bounds: Bounds | undefined, live: LiveBounds, path: string | undefined): void {
   if (!bounds) return;
   // A bound value is the variable's to decide (per mode), so it can't be ordered here; it's skipped.
   const effective = (key: typeof BOUND_WORDS[number]) => {
@@ -36,7 +36,7 @@ export function assertBounds(bounds: Bounds | undefined, live: LiveBounds, subje
   for (const [min, max] of [["minWidth", "maxWidth"], ["minHeight", "maxHeight"]] as const) {
     const low = effective(min), high = effective(max);
     if (low != null && high != null && low > high) {
-      throw new FlcmError("authoring", min + " " + low + " exceeds " + max + " " + high + ". Change or clear the opposing bound in the same edit. Nothing was applied.", { call: subject });
+      throw new FlcmError("authoring", min + " " + low + " exceeds " + max + " " + high + ". Change or clear the opposing bound in the same call.", { path });
     }
   }
 }

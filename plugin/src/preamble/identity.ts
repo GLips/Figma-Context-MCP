@@ -241,11 +241,6 @@ interface IdentifiableNode {
   getPluginData(key: string): string;
 }
 
-// The one-line spelling every refusal names a node by: `TEXT "Label" (id "12:3")`.
-export function describeNodeIdentity(node: { type: string; name: string; id: string }): string {
-  return node.type + " " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ")";
-}
-
 // Pull a node's stable identity — the fields render's Handle and the read verbs' SlimHandle share. ONE place
 // reads name/key/text so the two consumers can't drift. `key` comes from pluginData (present only on stamped
 // nodes); `text` only from TEXT nodes. Reads no geometry — the two spell it alike but source it differently

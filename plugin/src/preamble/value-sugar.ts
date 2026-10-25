@@ -11,7 +11,7 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseImageAdjustments, parseCssEffects, length, percent } from "./css.js";
 import { rejectUnknownKeys, words } from "./validate.js";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, locateFailure } from "./flcm-error.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -48,18 +48,20 @@ function gradient(a: GradientSugar | "linear" | "radial", b?: GradientStopInput[
     const y = sugar.at && sugar.at.y != null ? sugar.at.y : 50;
     return radialGradient("GRADIENT_RADIAL", x, y, stops);
   }
-  throw new FlcmError("authoring", 'type must be "linear" or "radial" — got ' + JSON.stringify(sugar.type) + ".", { call: "flcm.gradient" });
+  throw new FlcmError("authoring", 'must be "linear" or "radial" — got ' + JSON.stringify(sugar.type) + ".", { path: "type" });
 }
 
 // stops: ['#000','#fff'] | [{ color, pos }] -> typed stops, even spread when pos is omitted.
 function gradientStops(stops: GradientStopInput[] | undefined): GradientStop[] {
   if (!Array.isArray(stops) || !stops.length) {
-    throw new FlcmError("authoring", 'needs a non-empty stops array, e.g. ["#000","#fff"].', { call: "flcm.gradient" });
+    throw new FlcmError("authoring", 'must be a non-empty array of colors, e.g. ["#000","#fff"] — got ' + JSON.stringify(stops) + ".", { path: "stops" });
   }
   const n = stops.length;
   return stops.map((st, i) => {
     const raw = typeof st === "string" ? { color: st } : st;
-    return { position: stopPercent(raw, i, n) / 100, color: parseColor(raw.color) };
+    try {
+      return { position: stopPercent(raw, i, n) / 100, color: parseColor(raw.color) };
+    } catch (cause) { throw locateFailure(cause, { path: "stops[" + i + "]" }); }
   });
 }
 
@@ -85,18 +87,17 @@ function image(url: unknown, opts: ImageOpts = {}): WritePaint {
     throw new FlcmError(
       "authoring",
       "expected an image url, local file path, or upload handle string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".",
-      { call: "flcm.image" },
     );
   }
   opts = opts ?? {};
-  rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");
+  rejectUnknownKeys(opts, IMAGE_KEYS, "opts");
   const scaleMode = opts.scaleMode != null ? opts.scaleMode : "FILL";
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {
-    throw new FlcmError("authoring", "scaleMode must be one of " + words(IMAGE_SCALE_MODES) + " — got " + JSON.stringify(scaleMode) + ".", { call: "flcm.image" });
+    throw new FlcmError("authoring", "must be one of " + words(IMAGE_SCALE_MODES) + " — got " + JSON.stringify(scaleMode) + ".", { path: "opts.scaleMode" });
   }
   return {
     kind: "image", url: url.trim(), scaleMode, placeholder: opts.placeholder === true,
-    ...parseImageAdjustments(opts, "flcm.image opts"),
+    ...parseImageAdjustments(opts, "opts"),
   };
 }
 
@@ -109,7 +110,6 @@ function effects(sugar: EffectsSugar): WriteEffect[] {
     throw new FlcmError(
       "authoring",
       "expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur?, progressiveBackgroundBlur? } — got " + JSON.stringify(sugar) + ".",
-      { call: "flcm.effects" },
     );
   }
   rejectUnknownKeys(sugar, EFFECTS_KEYS, "flcm.effects");
@@ -206,17 +206,19 @@ function blurRadius(b: BlurSugar): number {
 // ONCE over the union first — parseCssEffects reads a positive list, so without a gate a typo beside a real
 // CSS key would vanish silently; and gating after the split would name the half the typo fell into rather
 // than `effects`, where it was written, with only half the legal vocabulary listed.
-export function normalizeEffects(v: EffectsInput): WriteEffect[] {
+export function normalizeEffects(v: EffectsInput, at: string): WriteEffect[] {
   if (Array.isArray(v)) return v;
-  if (!v || typeof v !== "object") throw new FlcmError("authoring", "effects must be an object — got " + JSON.stringify(v) + ".");
-  rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, "effects");
+  if (!v || typeof v !== "object") throw new FlcmError("authoring", 'must be an object like { boxShadow: "0px 4px 8px rgba(0,0,0,0.25)" } or { shadow, blur }, flcm.effects(…), or "none" — got ' + JSON.stringify(v) + ".", { path: at });
+  rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, at);
   const bag = v as Record<string, unknown>;
   const css: Record<string, unknown> = {};
   const sugar: Record<string, unknown> = {};
   for (const k of Object.keys(bag)) (CSS_EFFECTS_KEYS.has(k) ? css : sugar)[k] = bag[k];
   const out: WriteEffect[] = [];
-  if (Object.keys(css).length) out.push(...parseCssEffects(css as WriteCssEffects));
-  if (Object.keys(sugar).length) out.push(...effects(sugar as EffectsSugar));
+  try {
+    if (Object.keys(css).length) out.push(...parseCssEffects(css as WriteCssEffects));
+    if (Object.keys(sugar).length) out.push(...effects(sugar as EffectsSugar));
+  } catch (cause) { throw locateFailure(cause, { path: at }); }
   return out;
 }
 

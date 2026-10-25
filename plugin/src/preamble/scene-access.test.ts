@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSceneAccess } from "./scene-access.js";
+import type { FlcmError } from "./flcm-error.js";
 
 function fixture() {
   const base = (id: string, type: string) => ({ id, type, parent: null as any, removed: false, name: type, getPluginData() { return ""; } });
@@ -91,7 +92,7 @@ test("page and document anchors enumerate without acquiring descendants", () => 
 test("incomplete indexed coverage fails before publishing a partial traversal", async () => {
   const f = fixture();
   f.root.findAllWithCriteria = () => [f.inner];
-  await assert.rejects(f.api.getNodeByIdAsync(f.textAlias.id), /complete indexed scene access/);
+  await assert.rejects(f.api.getNodeByIdAsync(f.textAlias.id), (err: FlcmError) => err.kind === "figma" && err.node?.type === "INSTANCE" && /left out layers/.test(err.reason));
 });
 
 

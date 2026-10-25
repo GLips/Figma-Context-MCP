@@ -9,7 +9,7 @@ import { isElision, outermostInstanceId, sublayerPrefix } from "@framelink/core"
 import { assertNoComponentPropertyBindings } from "./compile-component-words.js";
 import { compileFrame, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./compile-nodes.js";
 import { compileText } from "./compile-text.js";
-import { acceptAuthoringProps, withoutReadRecords, CLONE_REMEDY, type Accepted } from "./authoring-input.js";
+import { acceptAuthoringProps, withoutReadRecords, type Accepted } from "./authoring-input.js";
 import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, wordsOf, type WordGroup } from "./vocabulary.js";
 import { own, showValue } from "./validate.js";
 import { FlcmError, locateFailure } from "./flcm-error.js";
@@ -21,9 +21,10 @@ interface NodeEntry {
   /** The type the prelude matches a read's `type` against. */
   type: WriteType;
   known: ReadonlySet<string>;
-  compile(props: Accepted<Record<string, unknown>>): BuiltNode;
+  /** `at` is the node's spec path, rooted at the call; every refusal inside names its word under it. */
+  compile(props: Accepted<Record<string, unknown>>, at: string): BuiltNode;
 }
-function nodeEntry<P>(type: WriteType, row: readonly WordGroup[], compile: (props: Accepted<P>) => BuiltNode): NodeEntry {
+function nodeEntry<P>(type: WriteType, row: readonly WordGroup[], compile: (props: Accepted<P>, at: string) => BuiltNode): NodeEntry {
   return { type, known: wordsOf(row), compile: compile as NodeEntry["compile"] };
 }
 const NODE_ENTRY = {
@@ -38,26 +39,28 @@ const NODE_ENTRY = {
   SVG: nodeEntry<SvgProps>("VECTOR", SVG_WORD_GROUPS, compileSvg),
 } satisfies Record<WriteType | "SVG", NodeEntry>;
 
-function nodeEntryFor(type: unknown, words: Record<string, unknown>): NodeEntry {
+function nodeEntryFor(type: unknown, words: Record<string, unknown>, at: string): NodeEntry {
   if (type === "VECTOR") {
     if ([words.svg, words.d, words.vectorPaths].filter((value) => value !== undefined).length !== 1) {
-      throw new FlcmError("authoring", "VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.");
+      throw new FlcmError("authoring", "a VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.", { path: at });
     }
     return words.svg !== undefined ? NODE_ENTRY.SVG : NODE_ENTRY.VECTOR;
   }
   const entry = typeof type === "string" && type !== "SVG" ? own<NodeEntry>(NODE_ENTRY, type) : undefined;
-  if (!entry) throw new FlcmError("authoring", "type must be FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. " + CLONE_REMEDY);
+  if (!entry) {
+    throw new FlcmError("authoring", "must be FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE — got " + showValue(type) + ". To copy a layer of another type, use flcm.clone(target).", { path: at + ".type" });
+  }
   return entry;
 }
 
 /** Copy author data so compilation and returned identities never mutate a reusable template. */
 function copySpec<T>(value: T, path = "spec", ancestors = new Set<object>()): T {
   if (value === null || typeof value !== "object") {
-    if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") throw new FlcmError("authoring", "expected plain data.", { path });
+    if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") throw new FlcmError("authoring", "must be plain data (objects, arrays, strings, numbers, booleans) — got a " + typeof value + ".", { path });
     return value;
   }
-  if (ancestors.has(value)) throw new FlcmError("authoring", "cyclic data is not a tree.", { path });
-  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) throw new FlcmError("authoring", "expected a plain object.", { path });
+  if (ancestors.has(value)) throw new FlcmError("authoring", "this object contains itself, so it isn't a tree. Build each node as its own object.", { path });
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) throw new FlcmError("authoring", "must be a plain object, not a class instance. Copy its fields into a plain object.", { path });
   ancestors.add(value);
   const result = Array.isArray(value)
     ? value.map((v, i) => copySpec(v, path + "[" + i + "]", ancestors))
@@ -72,20 +75,20 @@ export function compileTree(input: unknown, subject: string): WriteNode {
   const copied = copySpec(input, subject);
   return visit(copied, subject);
   function visit(raw: unknown, at: string): WriteNode {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new FlcmError("authoring", "expected a plain node spec.", { path: at });
-    if (isElision(raw)) throw new FlcmError("authoring", "an elision marker is only valid inside a children array; it preserves existing children.", { path: at });
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new FlcmError("authoring", "must be a node spec object like { type: \"FRAME\", … } — got " + showValue(raw) + ".", { path: at });
+    if (isElision(raw)) throw new FlcmError("authoring", "an `elided` marker is valid only inside a children array, where it keeps the live children it stands for. Replace it with a node spec.", { path: at });
     const src = raw as Record<string, unknown>;
     // A present-but-undefined id is an unset variable, not "create": reading it as absent would build a new
     // node where the agent meant to edit a live one. Strip an id with `delete`, not by assigning undefined.
     if ("id" in src && (typeof src.id !== "string" || !src.id.trim())) {
-      throw new FlcmError("authoring", at + ".id must be a non-empty live node id — got " + showValue(src.id) + ". Omit id to create a node.");
+      throw new FlcmError("authoring", "must be a non-empty live node id — got " + showValue(src.id) + ". Omit id to create a node.", { path: at + ".id" });
     }
     if (typeof src.id === "string") {
-      if (ids.has(src.id)) throw new FlcmError("authoring", "duplicate live identity " + src.id + ".", { path: at + ".id" });
+      if (ids.has(src.id)) throw new FlcmError("authoring", "the id " + JSON.stringify(src.id) + " appears twice in this tree; a layer can be placed only once. Drop one of them.", { path: at + ".id" });
       ids.add(src.id);
     }
     if (typeof src.key === "string" && src.key) {
-      if (keys.has(src.key)) throw new FlcmError("authoring", "duplicate key " + JSON.stringify(src.key) + ".", { path: at + ".key" });
+      if (keys.has(src.key)) throw new FlcmError("authoring", "the key " + JSON.stringify(src.key) + " appears twice in this tree. Give each node its own key.", { path: at + ".key" });
       keys.add(src.key);
     }
     delete src.warnings;
@@ -93,7 +96,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
     // Inherited instance layers are edited through path overrides; they cannot be moved as children.
     const liftedChildEdits = type === "INSTANCE" ? liftInheritedChildEdits(id, readChildren, at) : undefined;
     const children = liftedChildEdits ? undefined : readChildren;
-    if (children !== undefined && !Array.isArray(children)) throw new FlcmError("authoring", at + ".children must be an array of node specs.");
+    if (children !== undefined && !Array.isArray(children)) throw new FlcmError("authoring", "must be an array of node specs — got " + showValue(children) + ".", { path: at + ".children" });
     const props = withoutReadRecords(words);
     if (liftedChildEdits) props.overrides = mergeLiftedChildEdits(props.overrides, liftedChildEdits, at);
     const compiledChildren = (children as unknown[] | undefined)?.flatMap((child, i) => isElision(child) ? [] : [visit(child, at + ".children[" + i + "]")]);
@@ -111,18 +114,24 @@ export function compileTree(input: unknown, subject: string): WriteNode {
     }
     try {
       if (id !== undefined) {
-        if (type !== undefined && typeof type !== "string") throw new FlcmError("authoring", "type must be a string.");
+        if (type !== undefined && typeof type !== "string") throw new FlcmError("authoring", "must be a string — got " + showValue(type) + ".", { path: at + ".type" });
         // The authored words only: what the live node resolves to is the loaded live tree's (live-tree.ts).
         return { liveId: id as string, authoring: props, ...(children !== undefined && { children: compiledChildren }), source: src as NodeSpec, sourcePath: at };
       }
-      const entry = nodeEntryFor(type, props);
-      const tree = entry.compile(acceptAuthoringProps(props, { type: entry.type, verb: "create", known: entry.known, subject: entry.type }));
-      if (compiledChildren?.length && type !== "FRAME") throw new FlcmError("authoring", String(type) + " does not accept children; instance content belongs in slot overrides.");
+      const entry = nodeEntryFor(type, props, at);
+      const tree = entry.compile(acceptAuthoringProps(props, { type: entry.type, verb: "create", known: entry.known, path: at }), at);
+      if (compiledChildren?.length && type !== "FRAME") {
+        throw new FlcmError("authoring", "a " + String(type) + " can't have children; only a FRAME can. Wrap them in a FRAME, or put an instance's content in its slot overrides.", { path: at + ".children" });
+      }
       if (children !== undefined) tree.children = compiledChildren;
       tree.source = src as NodeSpec;
       tree.sourcePath = at;
       return tree;
-    } catch (cause) { throw locateFailure(cause, { path: at }); }
+    } catch (cause) {
+      // Named as the agent wrote it: a node being created has no id yet, only its type and name.
+      const node = typeof type === "string" ? { type, name: typeof words.name === "string" ? words.name : undefined, id: id as string | undefined } : undefined;
+      throw locateFailure(cause, { path: at, node });
+    }
   }
 }
 
@@ -185,7 +194,7 @@ const ECHO_IDENTITY_WORDS = ["componentPropertyReferences"];
  */
 function liftInheritedChildEdits(id: unknown, children: unknown, at: string): Record<string, Record<string, unknown>> | undefined {
   if (children === undefined) return undefined;
-  if (!Array.isArray(children)) throw new FlcmError("authoring", at + ".children must be an array of node specs.");
+  if (!Array.isArray(children)) throw new FlcmError("authoring", "must be an array of node specs — got " + showValue(children) + ".", { path: at + ".children" });
   // Removing an instance's root id makes a template; its echo still names one source instance.
   const first = children.find(child => !isElision(child));
   const sourceId = id ?? (first && typeof first.id === "string" ? outermostInstanceId(first.id) : undefined);
@@ -227,21 +236,22 @@ function mergeLiftedChildEdits(authored: unknown, lifted: Record<string, Record<
   const paths = Object.keys(lifted);
   if (!paths.length) return authored;
   if (authored !== undefined && (typeof authored !== "object" || authored === null || Array.isArray(authored))) {
-    throw new FlcmError("authoring", at + ".overrides must be an object keyed by component-relative sublayer path.");
+    throw new FlcmError("authoring", "must be an object keyed by component-relative sublayer path — got " + showValue(authored) + ".", { path: at + ".overrides" });
   }
   const merged: Record<string, unknown> = { ...(authored as Record<string, unknown> | undefined) };
   for (const path of paths) {
     const explicit = merged[path];
     if (explicit === undefined) { merged[path] = lifted[path]; continue; }
-    if (!explicit || typeof explicit !== "object" || Array.isArray(explicit)) throw new FlcmError("authoring", at + ".overrides[" + JSON.stringify(path) + "] must be a delta object.");
+    if (!explicit || typeof explicit !== "object" || Array.isArray(explicit)) {
+      throw new FlcmError("authoring", "must be an object of props to change — got " + showValue(explicit) + ".", { path: at + ".overrides[" + JSON.stringify(path) + "]" });
+    }
     const delta = explicit as Record<string, unknown>;
     for (const [word, value] of Object.entries(lifted[path])) {
       if (Object.prototype.hasOwnProperty.call(delta, word) && !sameAuthoredData(delta[word], value)) {
         throw new FlcmError(
           "authoring",
-          "overrides[" + JSON.stringify(path) + "]." + word + " and the inherited child at that path " +
-            "give different values for the same word. Keep one of them — the child word, or the override.",
-          { path: at },
+          "this override and the inherited child at that sublayer path give different values for " + word + ". Keep one of them — the child's value, or the override.",
+          { path: at + ".overrides[" + JSON.stringify(path) + "]." + word },
         );
       }
       delta[word] = value;

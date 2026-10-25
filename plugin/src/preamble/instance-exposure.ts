@@ -12,7 +12,10 @@ export interface ExposureContext { destination?: BaseNode; componentRoot?: boole
 // Exposure is a definition fact: only an instance a component definition owns directly can carry it.
 export function assertExposureTarget(node: SceneNode, subject: string): void {
   if (node.type !== "INSTANCE" || !editableComponentOwnerOf(node, false)) {
-    throw new FlcmError("figma", "exposed is writable only on a primary nested instance inside a component or component set; edit that definition's nested instance.", { call: subject });
+    throw new FlcmError("figma",
+      "exposed is writable only on a primary nested instance, one a component or component set owns directly, and this layer isn't one. Edit the nested instance inside the main component instead, or drop exposed.",
+      { path: subject + ".exposed", node: { type: node.type, name: node.name, id: node.id } },
+    );
   }
 }
 
@@ -24,7 +27,7 @@ export function assertExposureTree(tree: WriteNode, context: ExposureContext = {
       for (const child of node.children || []) visit(child, owner);
       return;
     }
-    if (node.exposed !== undefined && !owner) throw new FlcmError("figma", "exposed needs an instance inside a component definition, and this one isn't — build it with flcm.component or insert it into an existing component.", { path: node.sourcePath ?? "INSTANCE" });
+    if (node.exposed !== undefined && !owner) throw new FlcmError("figma", "exposed needs an instance inside a component, and this one isn't — build it with flcm.component, insert it into an existing component, or drop exposed.", { path: (node.sourcePath ?? "INSTANCE") + ".exposed" });
     for (const child of node.children || []) if (child && typeof child === "object") visit(child, owner && node.type !== "INSTANCE");
     for (const delta of Object.values(node.overrides || {})) {
       if (Array.isArray(delta.children)) for (const child of delta.children) if (child && typeof child === "object") visit(child as WriteNode, false);

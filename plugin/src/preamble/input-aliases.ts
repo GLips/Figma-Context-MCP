@@ -6,51 +6,66 @@ import { FlcmError } from "./flcm-error.js";
 import { parseGridPlacement, parseGridTracks, serializeGridTracks, type GridTrack } from "./grid-tracks.js";
 
 type Bag = Record<string, unknown>;
+// Where an alias is folded: the canonical word's path, and the alias keys that fed it.
+interface AliasSite { path: string; keys: readonly string[]; canonical: string }
 interface AliasRule {
   keys: readonly string[];
   path: readonly [string] | readonly [string, string];
   types?: readonly string[];
   group?: "child" | "container";
-  combine?: (values: readonly unknown[], canonical: unknown, subject: string) => unknown;
+  combine?: (values: readonly unknown[], canonical: unknown, site: AliasSite) => unknown;
 }
 const cellAlignment = { AUTO: "auto", MIN: "start", CENTER: "center", MAX: "end" } as const;
-function conflict(subject: string): never { throw new FlcmError("authoring", "conflicting alias and canonical values; supply one value or equivalent duplicates.", { call: subject }); }
-function mergeValue(value: unknown, canonical: unknown, subject: string): unknown {
-  if (canonical !== undefined && !Object.is(canonical, value)) conflict(subject);
+function conflict(site: AliasSite): never {
+  throw new FlcmError("authoring", site.keys.join("/") + " and " + site.canonical + " give different values. Supply one of them, or the same value in both.", { path: site.path });
+}
+function mergeValue(value: unknown, canonical: unknown, site: AliasSite): unknown {
+  if (canonical !== undefined && !Object.is(canonical, value)) conflict(site);
   return value;
 }
-function placementAlias([anchor, span]: readonly unknown[], canonical: unknown, subject: string): string {
-  if (anchor !== undefined && (typeof anchor !== "number" || !Number.isSafeInteger(anchor) || anchor < 0 || !Number.isSafeInteger(anchor + 1))) throw new FlcmError("authoring", "anchor index must be a non-negative integer.", { call: subject });
-  if (span !== undefined && (typeof span !== "number" || !Number.isSafeInteger(span) || span < 1)) throw new FlcmError("authoring", "span must be a positive integer.", { call: subject });
-  const placement = canonical === undefined ? undefined : parseGridPlacement(canonical, subject);
-  if (anchor !== undefined && placement?.anchor !== undefined && anchor !== placement.anchor) conflict(subject);
-  if (span !== undefined && placement && span !== placement.span) conflict(subject);
+function placementAlias([anchor, span]: readonly unknown[], canonical: unknown, site: AliasSite): string {
+  if (anchor !== undefined && (typeof anchor !== "number" || !Number.isSafeInteger(anchor) || anchor < 0 || !Number.isSafeInteger(anchor + 1))) {
+    throw new FlcmError("authoring", site.keys[0] + " must be a non-negative integer — got " + JSON.stringify(anchor) + ".", { path: site.path });
+  }
+  if (span !== undefined && (typeof span !== "number" || !Number.isSafeInteger(span) || span < 1)) {
+    throw new FlcmError("authoring", site.keys[1] + " must be a positive integer — got " + JSON.stringify(span) + ".", { path: site.path });
+  }
+  const placement = canonical === undefined ? undefined : parseGridPlacement(canonical, site.path);
+  if (anchor !== undefined && placement?.anchor !== undefined && anchor !== placement.anchor) conflict(site);
+  if (span !== undefined && placement && span !== placement.span) conflict(site);
   const line = anchor === undefined ? placement?.anchor : anchor as number;
   const extent = span === undefined ? placement?.span ?? 1 : span as number;
   return line === undefined ? "span " + extent : String(line + 1) + (extent === 1 ? "" : " / span " + extent);
 }
-function alignmentAlias([value]: readonly unknown[], canonical: unknown, subject: string): unknown {
-  if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(cellAlignment, value)) throw new FlcmError("authoring", "native cell alignment must be AUTO, MIN, CENTER or MAX.", { call: subject });
-  return mergeValue(cellAlignment[value as keyof typeof cellAlignment], canonical, subject);
+function alignmentAlias([value]: readonly unknown[], canonical: unknown, site: AliasSite): unknown {
+  if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(cellAlignment, value)) {
+    throw new FlcmError("authoring", site.keys[0] + ' must be "AUTO", "MIN", "CENTER" or "MAX" — got ' + JSON.stringify(value) + ".", { path: site.path });
+  }
+  return mergeValue(cellAlignment[value as keyof typeof cellAlignment], canonical, site);
 }
-function nativeTracks(raw: unknown, subject: string): GridTrack[] {
-  if (!Array.isArray(raw) || !raw.length) throw new FlcmError("authoring", "native tracks must be a non-empty array.", { call: subject });
+function nativeTracks(raw: unknown, site: AliasSite): GridTrack[] {
+  const key = site.keys[1];
+  if (!Array.isArray(raw) || !raw.length) throw new FlcmError("authoring", key + " must be a non-empty array of tracks — got " + JSON.stringify(raw) + ".", { path: site.path });
   return raw.map(track => {
-    if (!track || typeof track !== "object" || !["HUG", "FIXED", "FLEX"].includes(track.type)) throw new FlcmError("authoring", "native tracks need type HUG, FIXED or FLEX.", { call: subject });
+    if (!track || typeof track !== "object" || !["HUG", "FIXED", "FLEX"].includes(track.type)) {
+      throw new FlcmError("authoring", key + ' tracks need type "HUG", "FIXED" or "FLEX" — got ' + JSON.stringify(track) + ".", { path: site.path });
+    }
     if (track.type === "HUG") return { type: "HUG" };
     const value = track.type === "FLEX" ? track.value ?? 1 : track.value;
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (track.type === "FLEX" && value === 0)) throw new FlcmError("authoring", "FIXED/FLEX tracks need a finite size, positive for FLEX.", { call: subject });
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (track.type === "FLEX" && value === 0)) {
+      throw new FlcmError("authoring", key + " FIXED/FLEX tracks need a finite non-negative value, positive for FLEX — got " + JSON.stringify(track) + ".", { path: site.path });
+    }
     return { type: track.type, value };
   });
 }
-function templateAlias([sizing, tracks]: readonly unknown[], canonical: unknown, subject: string): string {
+function templateAlias([sizing, tracks]: readonly unknown[], canonical: unknown, site: AliasSite): string {
   const text = (value: unknown) => {
-    if (typeof value !== "string" || !value.trim()) throw new FlcmError("authoring", "sizing needs a track template string.", { call: subject });
-    return serializeGridTracks(parseGridTracks(value, subject));
+    if (typeof value !== "string" || !value.trim()) throw new FlcmError("authoring", 'needs a track template string, e.g. "1fr 1fr" — got ' + JSON.stringify(value) + ".", { path: site.path });
+    return serializeGridTracks(parseGridTracks(value, site.path));
   };
   let template = canonical === undefined ? undefined : text(canonical);
-  for (const value of [sizing === undefined ? undefined : text(sizing), tracks === undefined ? undefined : serializeGridTracks(nativeTracks(tracks, subject))]) {
-    if (value !== undefined) template = mergeValue(value, template, subject) as string;
+  for (const value of [sizing === undefined ? undefined : text(sizing), tracks === undefined ? undefined : serializeGridTracks(nativeTracks(tracks, site))]) {
+    if (value !== undefined) template = mergeValue(value, template, site) as string;
   }
   return template!;
 }
@@ -76,7 +91,7 @@ function sameInput(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(b).length && keys.every(key => Object.prototype.hasOwnProperty.call(b, key) && sameInput((a as Bag)[key], (b as Bag)[key]));
 }
 
-export function normalizeInputAliases(bag: Bag, subject: string, type?: string): Bag {
+export function normalizeInputAliases(bag: Bag, path: string, type?: string): Bag {
   const out = { ...bag };
   for (const rule of rules) {
     const [root, leaf] = rule.path;
@@ -85,12 +100,15 @@ export function normalizeInputAliases(bag: Bag, subject: string, type?: string):
     const sources = rule.group && inner ? [out, inner] : [out];
     if (!sources.some(source => rule.keys.some(key => Object.prototype.hasOwnProperty.call(source, key)))) continue;
     const label = rule.keys.join("/");
-    if (type && rule.types && !rule.types.includes(type)) throw new FlcmError("authoring", label + " is not supported on " + type + ".", { call: subject });
-    if (leaf && nested !== undefined && !inner) throw new FlcmError("authoring", root + " must be an object when using " + label + ".", { call: subject });
+    const site: AliasSite = { path: path + "." + rule.path.join("."), keys: rule.keys, canonical: rule.path.join(".") };
+    if (type && rule.types && !rule.types.includes(type)) throw new FlcmError("authoring", label + " is not supported on a " + type + ". Drop it.", { path });
+    if (leaf && nested !== undefined && !inner) throw new FlcmError("authoring", "must be an object when " + label + " is set — got " + JSON.stringify(nested) + ".", { path: path + "." + root });
     const target = leaf ? { ...inner } : out;
     const values = rule.keys.map(key => {
       const a = out[key], b = rule.group ? inner?.[key] : undefined;
-      if (a !== undefined && b !== undefined && !sameInput(a, b)) conflict(subject + ": " + key);
+      if (a !== undefined && b !== undefined && !sameInput(a, b)) {
+        throw new FlcmError("authoring", key + " is given both beside layout and inside it, with different values. Give it once.", { path: path + "." + key });
+      }
       delete out[key];
       if (rule.group) delete target[key];
       return a !== undefined ? a : b;
@@ -101,12 +119,9 @@ export function normalizeInputAliases(bag: Bag, subject: string, type?: string):
     }
     if (leaf) out[root] = target;
     const key = leaf ?? root;
-    const at = subject + ": " + label + " and " + rule.path.join(".");
-    if (rule.combine) target[key] = rule.combine(values, target[key], at);
-    else {
-      if (target[key] !== undefined && !Object.is(target[key], values[0])) throw new FlcmError("authoring", "conflicting " + label + " and " + rule.path.join(".") + "; supply one value or equivalent duplicates.", { call: subject });
-      target[key] = values[0];
-    }
+    if (rule.combine) target[key] = rule.combine(values, target[key], site);
+    else if (target[key] !== undefined && !Object.is(target[key], values[0])) conflict(site);
+    else target[key] = values[0];
   }
   return out;
 }

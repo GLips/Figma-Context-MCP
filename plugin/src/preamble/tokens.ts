@@ -65,8 +65,9 @@ function tokenIdentity(raw: unknown, token: "variable" | "style", word: string):
   }
   throw new FlcmError(
     "authoring",
-    word + ": `" + token + "` names a " + token + ' by name, id or key — "color/primary", { name }, { id }, or the read\'s { id, name }. Got ' +
-      JSON.stringify(raw) + ".",
+    "`" + token + "` names a " + token + " by name, id or key — got " + JSON.stringify(raw) +
+      '. Write "color/primary", { name }, { id }, or the read\'s { id, name }.',
+    { path: word },
   );
 }
 
@@ -79,8 +80,9 @@ export function compileVariableRef(input: { variable: unknown }, word: string, r
   if (extra.length) {
     throw new FlcmError(
       "authoring",
-      word + ": a variable reference is { variable } (and a read's `value`) alone — " + extra.map((k) => "`" + k + "`").join(", ") +
-        " can't ride beside it." + (resolvedType === "COLOR" ? ' For a bound solid with its own opacity or blend, write { type: "SOLID", color: { variable }, opacity, blendMode }.' : ""),
+      "a variable reference is { variable } (and a read's `value`) alone — drop " + extra.map((k) => "`" + k + "`").join(", ") + "." +
+        (resolvedType === "COLOR" ? ' For a bound solid with its own opacity or blend, write { type: "SOLID", color: { variable }, opacity, blendMode }.' : ""),
+      { path: word },
     );
   }
   return { token: "variable", ...tokenIdentity(input.variable, "variable", word), word, resolvedType };
@@ -99,14 +101,14 @@ export function compileStyleRef(raw: unknown, word: string, styleType: StyleType
 export function compileBindable<T>(value: unknown, word: string, resolvedType: VariableType, literal: (v: never) => T): Bindable<T> {
   if (isVariableInput(value)) return compileVariableRef(value, word, resolvedType);
   if (isStyleInput(value)) {
-    throw new FlcmError("authoring", word + ": a style names a whole paint, effect or text slot, so it can't stand for one value. Bind a variable ({ variable }) or give the literal.");
+    throw new FlcmError("authoring", "a style names a whole paint, effect or text slot, so it can't stand for one value. Bind a variable ({ variable }) or give the literal.", { path: word });
   }
   return literal(value as never);
 }
 
 /** Refuse a token input where none can bind, naming the word and why (the contract's negative space). */
 export function refuseTokenInput(value: unknown, word: string, why: string): void {
-  if (isVariableInput(value) || isStyleInput(value)) throw new FlcmError("authoring", word + ": " + why + ". Give the literal value.");
+  if (isVariableInput(value) || isStyleInput(value)) throw new FlcmError("authoring", why + ". Give the literal value.", { path: word });
 }
 
 // ---- prepare ----
@@ -230,7 +232,7 @@ export class TokenLookups {
         ? await figma.variables.getVariableByIdAsync(ref.id)
         : await figma.variables.importVariableByKeyAsync(ref.id).catch(() => null);
       if (byId) return this.checkVariableKind(byId, ref);
-      if (ref.name === undefined) throw new FlcmError("authoring", ref.word + ": no variable has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
+      if (ref.name === undefined) throw new FlcmError("authoring", "no variable has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.", { path: ref.word });
     }
     const name = ref.name!;
     const named = await this.variablesNamed(name);
@@ -239,18 +241,20 @@ export class TokenLookups {
     if (fitting.length > 1) {
       throw new FlcmError(
         "authoring",
-        ref.word + ": " + fitting.length + " " + ref.resolvedType + " variables are named " + JSON.stringify(name) + " — name one by id: " +
+        fitting.length + " " + ref.resolvedType + " variables are named " + JSON.stringify(name) + " — name one by id: " +
           capped(await Promise.all(fitting.map((v) => v.describe()))) + ".",
+        { path: ref.word },
       );
     }
-    if (named.length) throw new FlcmError("authoring", ref.word + ": the variable " + JSON.stringify(name) + " is " + named[0].resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
+    if (named.length) throw new FlcmError("authoring", "the variable " + JSON.stringify(name) + " is " + named[0].resolvedType + ", and this property needs a " + ref.resolvedType + " variable. Name one of that type, or give the literal.", { path: ref.word });
     const all = [...(await this.localVars()), ...(await this.page()).variables].filter((v) => v.resolvedType === ref.resolvedType);
     const near = nearestNames(name, all.map((v) => v.name));
     throw new FlcmError(
       "authoring",
-      ref.word + ": no " + ref.resolvedType + " variable is named " + JSON.stringify(name) + " in this file's variables, on this page or in its enabled libraries" +
+      "no " + ref.resolvedType + " variable is named " + JSON.stringify(name) + " in this file's variables, on this page or in its enabled libraries" +
         (ref.id !== undefined ? " (and its id " + JSON.stringify(ref.id) + " is gone)" : "") +
-        (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : "") + ".",
+        (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : ". Call flcm.designTokens() to list the variables you can bind") + ".",
+      { path: ref.word },
     );
   }
 
@@ -258,7 +262,7 @@ export class TokenLookups {
     if (ref.id !== undefined) {
       const byId = STYLE_ID.test(ref.id) ? await figma.getStyleByIdAsync(ref.id) : await this.styleByKey(ref.id);
       if (byId) return this.checkStyleKind(byId, ref);
-      if (ref.name === undefined) throw new FlcmError("authoring", ref.word + ": no style has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
+      if (ref.name === undefined) throw new FlcmError("authoring", "no style has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.", { path: ref.word });
     }
     const name = ref.name!;
     const named = await this.stylesNamed(name);
@@ -267,8 +271,9 @@ export class TokenLookups {
     if (fitting.length > 1) {
       throw new FlcmError(
         "authoring",
-        ref.word + ": " + fitting.length + " " + STYLE_TYPE_NOUN[ref.styleType] + " styles are named " + JSON.stringify(name) + " — name one by id: " +
+        fitting.length + " " + STYLE_TYPE_NOUN[ref.styleType] + " styles are named " + JSON.stringify(name) + " — name one by id: " +
           capped(fitting.map((s) => JSON.stringify(s.name) + " (id " + s.key + ")")) + ".",
+        { path: ref.word },
       );
     }
     if (named.length) throw this.wrongStyleKind(named[0], ref);
@@ -276,9 +281,10 @@ export class TokenLookups {
     const near = nearestNames(name, all.map((s) => s.name));
     throw new FlcmError(
       "authoring",
-      ref.word + ": no " + STYLE_TYPE_NOUN[ref.styleType] + " style is named " + JSON.stringify(name) + " in this file's styles or on this page" +
+      "no " + STYLE_TYPE_NOUN[ref.styleType] + " style is named " + JSON.stringify(name) + " in this file's styles or on this page" +
         (ref.id !== undefined ? " (and its id " + JSON.stringify(ref.id) + " is gone)" : "") +
-        (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : "") + ".",
+        (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : ". Call flcm.designTokens() to list the styles you can link") + ".",
+      { path: ref.word },
     );
   }
 
@@ -348,7 +354,11 @@ export class TokenLookups {
   }
 
   private wrongVariableKind(v: Variable, ref: VariableRef): FlcmError {
-    return new FlcmError("authoring", ref.word + ": the variable " + JSON.stringify(v.name) + " (id " + v.id + ") is " + v.resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
+    return new FlcmError(
+      "authoring",
+      "the variable " + JSON.stringify(v.name) + " (id " + v.id + ") is " + v.resolvedType + ", and this property needs a " + ref.resolvedType + " variable. Name one of that type, or give the literal.",
+      { path: ref.word },
+    );
   }
 
   private checkStyleKind(s: BaseStyle, ref: StyleRef): BaseStyle {
@@ -357,7 +367,11 @@ export class TokenLookups {
   }
 
   private wrongStyleKind(s: BaseStyle, ref: StyleRef): FlcmError {
-    return new FlcmError("authoring", ref.word + ": the style " + JSON.stringify(s.name) + " (id " + s.key + ") is a " + s.type + " style, and this word needs a " + ref.styleType + " style.");
+    return new FlcmError(
+      "authoring",
+      "the style " + JSON.stringify(s.name) + " (id " + s.key + ") is a " + s.type + " style, and this property needs a " + ref.styleType + " style. Name one of that type.",
+      { path: ref.word },
+    );
   }
 
   private async describeVariable(v: Variable): Promise<string> {
@@ -473,7 +487,7 @@ async function describeVariable(variable: Variable): Promise<ResolvedVariable> {
 // value the target can take.
 async function followAliases(value: VariableValue, depth: number): Promise<VariableValue[]> {
   if (!isPlainObject(value) || value.type !== "VARIABLE_ALIAS") return [value];
-  if (depth > 16) throw new FlcmError("figma", "variable alias chain through " + String(value.id) + " is too deep (a cycle?).");
+  if (depth > 16) throw new FlcmError("figma", "the variable alias chain through " + String(value.id) + " is too deep to follow (a cycle?). Bind a variable further down the chain, or give the literal.");
   const target = await figma.variables.getVariableByIdAsync(value.id as string);
   if (!target) return [];
   const out: VariableValue[] = [];
@@ -485,7 +499,7 @@ async function followAliases(value: VariableValue, depth: number): Promise<Varia
 
 function resolvedVariable(ref: VariableRef, tokens: ResolvedTokens | undefined): ResolvedVariable {
   const hit = tokens?.variables.get(tokenKey(ref));
-  if (!hit) throw new FlcmError("internal", ref.word + ": the variable was not resolved before the write. This is a bug in flcm, not in your call.");
+  if (!hit) throw new FlcmError("internal", "the variable this property names was not looked up before the call wrote it.", { path: ref.word });
   return hit;
 }
 
@@ -505,7 +519,7 @@ export function variableValues(ref: VariableRef, tokens: ResolvedTokens | undefi
 
 export function styleFor(ref: StyleRef, tokens: ResolvedTokens | undefined): BaseStyle {
   const hit = tokens?.styles.get(tokenKey(ref));
-  if (!hit) throw new FlcmError("internal", ref.word + ": the style was not resolved before the write. This is a bug in flcm, not in your call.");
+  if (!hit) throw new FlcmError("internal", "the style this property names was not looked up before the call wrote it.", { path: ref.word });
   return hit;
 }
 

@@ -34,8 +34,9 @@ export const showValue = (v: unknown): string => {
 // Fail loud when `obj` isn't a plain object, or on any own key outside `allowed`, naming the
 // offender(s) and the allowed set. ONE gate for every agent-input boundary in the preamble: the
 // authoring compilers validate a `prop`, the locate verbs a `query key` — same scan, each
-// boundary keeping its own vocabulary via `noun` and locating itself via `subject` ("FRAME",
-// "TEXT.textStyle", "flcm.find"). The non-object branch is the BACKSTOP: a call site with a
+// boundary keeping its own vocabulary via `noun` and locating itself via `path`, the bag's spec
+// path ("flcm.render.spec.textStyle", "flcm.find"). `owner` names what takes the set ("a FRAME")
+// where the path alone doesn't say. The non-object branch is the BACKSTOP: a call site with a
 // richer shape to show (pad's number form, absolute's "none", find's did-you-mean) pre-empts it
 // with its own tailored guard — keep those, don't fold them in here. The known set is passed
 // pre-built (callers hold it at module scope) and the message lists are built only in the throw
@@ -43,14 +44,15 @@ export const showValue = (v: unknown): string => {
 // `hint` names the NEGATIVE SPACE of a closed set — where the word you wanted lives, when the set itself
 // is the answer to "what can I say here" but not to "so where do I say the rest". Appended verbatim to the
 // unknown-key message; omit it where the closed set really is the whole world.
-export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, subject: string, noun = "prop", hint = ""): void {
+export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, path: string, noun = "prop", hint = "", owner?: string): void {
   if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
     // Object.keys on a string enumerates its character indices — without this branch a string
     // here rejects as unknown keys "0", "1", "2"…: every word true, none naming the actual
     // object-vs-value mistake.
     throw new FlcmError(
       "authoring",
-      `${subject} takes an object (${noun}s: ${listKeys(allowed)}) — got ${showValue(obj)}.`,
+      `must be an object (${noun}s: ${listKeys(allowed)}) — got ${showValue(obj)}.`,
+      { path },
     );
   }
   const unknown = Object.keys(obj).filter((k) => !allowed.has(k));
@@ -58,8 +60,9 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
     const label = noun + (unknown.length > 1 ? "s" : "");
     throw new FlcmError(
       "authoring",
-      `unknown ${label} ${unknown.map((k) => JSON.stringify(k)).join(", ")} on ${subject} — ` +
-        `${subject} takes only ${listKeys(allowed)}.${hint ? " " + hint : ""}`,
+      `unknown ${label} ${unknown.map((k) => JSON.stringify(k)).join(", ")} — ` +
+        (owner ? `${owner} takes only ` : `the ${noun}s here are `) + `${listKeys(allowed)}.${hint ? " " + hint : ""}`,
+      { path },
     );
   }
 }
@@ -70,23 +73,24 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
 // targets). Shared by flcm.edit and by an instance's `overrides` entries, which are deltas in the
 // same vocabulary judged at construction. `key` and bare `x`/`y` get steering messages ahead of
 // the generic closed-set reject — they're the two mistakes an agent is most likely to make, and
-// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (the compilers own it).
-export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, subject: string): void {
+// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (the compilers own it);
+// `path` is where the changes sit, rooted at the call ("flcm.edit", "flcm.editMany[2]").
+export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, path: string): void {
   if (changes == null || typeof changes !== "object") {
-    throw new FlcmError("authoring", "changes must be an object of props to apply — got " + showValue(changes) + ".", { call: subject });
+    throw new FlcmError("authoring", "the changes must be an object of props to apply — got " + showValue(changes) + ".", { path });
   }
   if ("key" in changes) {
     throw new FlcmError(
       "authoring",
-      "`key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
-      { call: subject },
+      "`key` can't be edited — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Drop `key`, or set it in the render that creates the node.",
+      { path: path + ".key" },
     );
   }
   if ("x" in changes || "y" in changes) {
     throw new FlcmError(
       "authoring",
       "position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
-      { call: subject },
+      { path: path + ("x" in changes ? ".x" : ".y") },
     );
   }
   // The read shape's non-authoring words (`type`, `children`, a root's `designedWidth`, a refused
@@ -97,17 +101,17 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
     const disposition = nodeWordDisposition(key);
     if (disposition === undefined || disposition === "author") foreign[key] = (changes as Record<string, unknown>)[key];
   }
-  rejectUnknownKeys(normalizeInputAliases(foreign, subject), known, subject);
-  assertDeltaNotEmpty(changes, known, subject);
+  rejectUnknownKeys(normalizeInputAliases(foreign, path), known, path);
+  assertDeltaNotEmpty(changes, known, path);
 }
 
-export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>, subject: string): void {
+export function assertDeltaNotEmpty(changes: object, known: ReadonlySet<string>, path: string): void {
   if (Object.keys(changes).length === 0) {
     throw new FlcmError(
       "authoring",
-      "the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
+      "the changes object is empty, so there is nothing to apply. Name at least one of: " +
         [...known].join(", ") + ".",
-      { call: subject },
+      { path },
     );
   }
 }
@@ -121,9 +125,9 @@ export function words(set: ReadonlySet<string>): string {
   return [...set].map((w) => '"' + w + '"').join(", ");
 }
 
-export function assertEnum<T extends string>(name: string, raw: unknown, set: ReadonlySet<T>): T {
+export function assertEnum<T extends string>(path: string, raw: unknown, set: ReadonlySet<T>): T {
   if (typeof raw !== "string" || !oneOf(set, raw)) {
-    throw new FlcmError("authoring", name + " must be one of " + words(set) + " — got " + JSON.stringify(raw) + ".");
+    throw new FlcmError("authoring", "must be one of " + words(set) + " — got " + JSON.stringify(raw) + ".", { path });
   }
   return raw;
 }

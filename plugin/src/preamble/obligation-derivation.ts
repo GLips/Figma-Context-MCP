@@ -26,7 +26,7 @@ import { CONSTRAINT_H, CONSTRAINT_V, effectiveLayoutMode, layoutModeOf, type Axi
 import { expectedSublayerIds } from "./obligation-observers.js";
 import { overrideWordPath, wordPathsOf } from "./authored-words.js";
 import { BINDING_FIELD_WIRE_KEYS, PROPERTY_TYPES, bareName, matchPropertyNames } from "./component-properties.js";
-import { describeNodeIdentity, instanceContextOf, propertyDefinitionsOf, type InstanceContextFacts } from "./identity.js";
+import { instanceContextOf, propertyDefinitionsOf, type InstanceContextFacts } from "./identity.js";
 import type { RealizeOnlyFields } from "./instance-write-authorization.js";
 import type { RealizeOnlyCheck } from "./call-obligations.js";
 import type { ScenePaint } from "./node-to-snapshot.js";
@@ -688,7 +688,7 @@ export function realizeOnlyChecksOf(
   plan: EditPlan, realizeOnly: RealizeOnlyFields, gate: GateResources, site: ObligationDerivationSite, subject: string, context: InstanceContextFacts,
 ): RealizeOnlyCheck[] {
   if (!realizeOnly.size) return [];
-  const who = describeNodeIdentity(plan.node);
+  const who = { type: plan.node.type, name: plan.node.name, id: plan.node.id };
   return deriveEditPlanObligations(plan, gate, site).flatMap((d) => {
     const field = d.carries.map(patchFieldKey).find((key) => realizeOnly.has(key));
     if (!field) return [];

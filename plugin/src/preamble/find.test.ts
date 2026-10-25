@@ -13,6 +13,7 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { find, findOne, get, selection } from "./read.js";
 import { render } from "./structure.js";
 import { warnings } from "./warnings.js";
+import type { FlcmError } from "./flcm-error.js";
 
 test("find returns matching nodes as slim handles with in-context sizing intent", async () => {
   createFigmaMock();
@@ -284,14 +285,14 @@ test("findOne threads the predicate and keeps its cardinality guard", async () =
   );
 });
 
-test("a predicate-only find fails loud past the materialization cap, naming it", async () => {
+test("a predicate-only find fails loud past the predicate cap, naming it", async () => {
   const figma = createFigmaMock();
   // Exercise the actual indexed acquisition boundary with a large candidate set.
   for (let i = 0; i < 5001; i++) figma.currentPage.appendChild(figma.createRectangle());
 
   await assert.rejects(
     find({}, () => true),
-    /5001 candidate nodes, over the 5000-node materialization cap/s,
+    /matched 5001 nodes.*at most 5000.*Narrow the query/s,
   );
 });
 
@@ -328,7 +329,9 @@ test("an explicitly undefined or null within refuses, naming it; an omitted one 
   assert.equal((await find({ type: "RECTANGLE" })).length, 1);
   // An unset variable (`within: copy.id` off a value with no id) must not widen the search to the page.
   for (const within of [undefined, null]) {
-    await assert.rejects(find({ type: "RECTANGLE", within }), /flcm\.find: within is (undefined|null)/);
-    await assert.rejects(findOne({ type: "RECTANGLE", within }), /flcm\.find: within is (undefined|null)/);
+    for (const verb of [find, findOne]) {
+      await assert.rejects(verb({ type: "RECTANGLE", within }), (err: FlcmError) =>
+        err.kind === "authoring" && err.path === "within" && err.reason.includes("got " + String(within)));
+    }
   }
 });

@@ -66,7 +66,7 @@ test("noise: duotone gets a default secondaryColor, multitone a default opacity;
   assert.equal(typeof multi.opacity, "number");
 
   // @ts-expect-error — an out-of-set noise type must fail loud, not silently pass to the runtime.
-  assert.throws(() => effects({ noise: { type: "sepia" } }), /monotone \| duotone \| multitone/);
+  assert.throws(() => effects({ noise: { type: "sepia" } }), /noise\.type must be "monotone", "duotone" or "multitone"/);
 });
 
 test("glass: depth < 1 fails loud (the runtime silently clamps it, so we reject to stay faithful)", () => {

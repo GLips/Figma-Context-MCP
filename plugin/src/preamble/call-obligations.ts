@@ -15,14 +15,14 @@
 // rule. Advisory: the finalizer decides every word again once the call has landed.
 
 import { stableStringify } from "@framelink/core";
-import { describeNodeIdentity, type InstanceContextFacts } from "./identity.js";
+import type { InstanceContextFacts } from "./identity.js";
 import { instanceWriteRefusal } from "./instance-write-authorization.js";
 import type { InstanceWriteRuleId } from "./instance-write-policy.js";
 import { concessionsOnNode, resolveObligationTarget, type Obligation, type ObligationKind } from "./obligation.js";
 import { OBLIGATION_OBSERVERS, observeObligation, type ObligationObserver } from "./obligation-observers.js";
 import { geometryProducedBy, type GeometryEffect, type GeometryProjection } from "./geometry-dependency.js";
 import { definitionsInheritedBy, type InstanceMains } from "./operation-schedule.js";
-import { ConcurrentEditError, FlcmError } from "./flcm-error.js";
+import { ConcurrentEditError, describeNodeIdentity, FlcmError, type FlcmErrorNode } from "./flcm-error.js";
 
 /** A realize-only word, observed against its basis: the live node, or the definition sublayer a projected plan compiled on. */
 export interface RealizeOnlyCheck {
@@ -30,7 +30,7 @@ export interface RealizeOnlyCheck {
   readonly rule: InstanceWriteRuleId;
   /** The word as a refusal names it ("height (a fixed size where the layer hugs)"). */
   readonly word: string;
-  readonly who: string;
+  readonly who: FlcmErrorNode;
   readonly context: InstanceContextFacts;
 }
 
@@ -83,11 +83,11 @@ export interface CallObligations {
 
 /** Refuse the call before any write when a word was edited in Figma under it, or a realize-only word can't come to hold. */
 export function gateCallObligations(call: CallObligations, subject: string): void {
-  assertNoConcurrentEdit(call.obligations ?? [], call.dependencies ?? NO_READ_DEPENDENCIES, subject);
+  assertNoConcurrentEdit(call.obligations ?? [], call.dependencies ?? NO_READ_DEPENDENCIES);
   assertRealizeOnlyWordsCanHold(call.checks ?? [], (obligation) => producedLater(obligation, call), subject);
 }
 
-function assertNoConcurrentEdit(obligations: readonly Obligation[], dependencies: ReadDependencies, subject: string): void {
+function assertNoConcurrentEdit(obligations: readonly Obligation[], dependencies: ReadDependencies): void {
   if (!dependencies.readings.size) return;
   for (const { key, obligation, node } of keyed(obligations)) {
     const before = dependencies.readings.get(key);
@@ -98,10 +98,9 @@ function assertNoConcurrentEdit(obligations: readonly Obligation[], dependencies
     // It held at prepare, so what it was is the request itself: a holding reading may carry no description.
     const asked = observer.describeRequest(obligation.request);
     throw new ConcurrentEditError({
-      call: subject,
+      path: obligation.source.subject + "." + obligation.source.path,
       node: { type: node.type, name: node.name, id: node.id },
-      changed: describeNodeIdentity(node) + " " + obligation.source.path + " went from " + asked + " to " + observer.describeReading(now) +
-        ", and this call restates " + asked + ", which would undo that edit",
+      changed: "it went from " + asked + " to " + observer.describeReading(now) + ", and this call sets " + asked + " again, which would undo that edit",
     });
   }
 }
@@ -110,8 +109,9 @@ function assertRealizeOnlyWordsCanHold(checks: readonly RealizeOnlyCheck[], prod
   const refused = new Map<string, { check: RealizeOnlyCheck; byRule: Map<InstanceWriteRuleId, Set<string>> }>();
   for (const check of checks) {
     if (observeObligation(check.obligation).realized || producible(check.obligation)) continue;
-    const entry = refused.get(check.who) ?? { check, byRule: new Map() };
-    refused.set(check.who, entry);
+    const who = describeNodeIdentity(check.who);
+    const entry = refused.get(who) ?? { check, byRule: new Map() };
+    refused.set(who, entry);
     entry.byRule.set(check.rule, (entry.byRule.get(check.rule) ?? new Set()).add(check.word));
   }
   const [first] = [...refused.values()];
@@ -173,17 +173,22 @@ export function contradictingObligation(obligation: Obligation, among: readonly 
  * the same sublayer by its own id): both can't hold, so the call would only roll back.
  */
 export function assertNoContradictoryWords(obligations: readonly Obligation[], subject: string): void {
-  const site = (obligation: Obligation) => (obligation.source.subject.startsWith(subject) ? obligation.source.subject.slice(subject.length) : obligation.source.subject);
+  // The call site minus the verb ("[2]" in a batch), then the property: what the agent wrote.
+  const site = (obligation: Obligation) => {
+    const { subject: at, path } = obligation.source;
+    const within = at.startsWith(subject) ? at.slice(subject.length) : at;
+    return within ? within + " " + path : path;
+  };
   for (const obligation of obligations) {
     const other = contradictingObligation(obligation, obligations);
     if (!other) continue;
     const node = resolveObligationTarget(obligation.target)!;
     throw new FlcmError(
       "authoring",
-      site(obligation) + " " + obligation.source.path + " and " + site(other) + " " + other.source.path + " both state " +
-        describeNodeIdentity(node) + "'s " + other.source.path.split(".").pop() + " (" + observerOf(obligation.kind).describeRequest(obligation.request) + " vs " +
-        observerOf(other.kind).describeRequest(other.request) + "); state it once. Nothing was applied.",
-      { call: subject },
+      site(obligation) + " and " + site(other) + " both set this layer's " +
+        other.source.path.split(".").pop() + ", differently (" + observerOf(obligation.kind).describeRequest(obligation.request) + " vs " +
+        observerOf(other.kind).describeRequest(other.request) + "). Set it in one place and drop the other.",
+      { node: { type: node.type, name: node.name, id: node.id } },
     );
   }
 }

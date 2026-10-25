@@ -58,7 +58,7 @@ test("scale multiplies the path's natural box, uniformly", async () => {
 
 test("scale must be a positive number — the word exists so art can't stretch", async () => {
   for (const scale of [0, -2, "2" as never, Infinity]) {
-    await assert.rejects(render({ type: "VECTOR", d: "M0 0 L10 10", scale }), /`scale` must be a positive number/);
+    await assert.rejects(render({ type: "VECTOR", d: "M0 0 L10 10", scale }), /spec\.scale: must be a positive number/);
   }
 });
 

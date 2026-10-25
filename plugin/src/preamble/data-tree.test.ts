@@ -97,7 +97,7 @@ test("deep malformed trees and duplicate live ids refuse before writes with thei
   );
   await assert.rejects(
     flcm.render({ type: "FRAME", children: [{ id: old.id }, { id: old.id }] }),
-    /children\[1\].id.*duplicate/,
+    /spec\.children\[1\]\.id: the id "[^"]+" appears twice in this tree/,
   );
   await assert.rejects(
     flcm.render({ type: "FRAME", children: [{ id: "bad:id" }] }),
@@ -115,7 +115,7 @@ test("read-only vocabulary refuses by field and annotations survive a data copy"
   ]) {
     await assert.rejects(
       flcm.render({ type: "FRAME", ...words }),
-      /strokeDashes|REFERENCE|grid/,
+      /strokeDashes|styles-table reference|grid/,
     );
   }
   const original = await flcm.render({
@@ -198,7 +198,7 @@ test("IR words are rejected and no node constructors, fromRead or move are expor
   await assert.rejects(flcm.render({ type: "RECTANGLE", fills: [] }), /fills/);
   const cycle: NodeSpec = { type: "FRAME" };
   cycle.children = [cycle];
-  await assert.rejects(flcm.render(cycle), /children\[0\].*cyclic/);
+  await assert.rejects(flcm.render(cycle), /spec\.children\[0\]: this object contains itself/);
 });
 
 test("replace can wrap the target it retains as an id-bearing child", async () => {
@@ -239,7 +239,7 @@ test("duplicate authored keys across live and new nodes fail before writing", as
         { type: "TEXT", text: "Hi", key: "same" },
       ],
     }),
-    /children\[1\].key.*duplicate/,
+    /spec\.children\[1\]\.key: the key "same" appears twice in this tree/,
   );
   assert.deepEqual(figma.undoLog, before);
 });
@@ -279,7 +279,7 @@ test("a promoted frame's returned data can be placed again", async () => {
   assert.equal(result.children![0].id, spec.children![0].id);
   await assert.rejects(
     flcm.append(parent, { ...spec, type: "FRAME" }),
-    /type FRAME does not match live COMPONENT/,
+    /COMPONENT "[^"]*" \(id "[^"]+"\) at spec\.type: this layer is a COMPONENT, not a FRAME/,
   );
 });
 

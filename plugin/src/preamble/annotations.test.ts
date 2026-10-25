@@ -9,9 +9,10 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 
 import { get, find, selection } from "./read.js";
 import { resolveTarget } from "./target.js";
-import { edit } from "./edit.js";
+import { edit } from "./runtime.js";
 import { editMany } from "./edit-many.js";
 import { render, clone } from "./structure.js";
+import type { FlcmError } from "./flcm-error.js";
 
 test("a deeply nested task is found and completed, preserving the same-text survivor and its pins", async () => {
   createFigmaMock();
@@ -122,7 +123,7 @@ test("invalid edits and ambiguous categories create nothing; a failed apply remo
     /missing/,
   );
   await assert.rejects(edit(out, { annotations: [{ text: "bad", category: " " }] }), /non-blank/);
-  await assert.rejects(edit(out, { annotations: [{ properties: ["fake"] }] }), /pinned property/);
+  await assert.rejects(edit(out, { annotations: [{ properties: ["fake"] }] }), /properties must be an array of these property names.*got \["fake"\]/);
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 0);
   const a = await figma.annotations.addAnnotationCategoryAsync({ label: "Agent", color: "red" });
   const b = await figma.annotations.addAnnotationCategoryAsync({ label: "Agent", color: "blue" });
@@ -204,7 +205,7 @@ test("the documented node matrix admits polygon, star and SLOT but refuses group
   }
   for (const type of ["GROUP", "SECTION"]) {
     node.type = type;
-    await assert.rejects(edit(node, { annotations: [] }), /not a .* word/);
+    await assert.rejects(edit(node, { annotations: [] }), (err: FlcmError) => err.kind === "authoring" && /at annotations: .*has no `annotations`/.test(err.message));
   }
 });
 
@@ -251,10 +252,10 @@ test("a category that refuses removal never becomes the failure the agent sees, 
         { text: "Intent", category: "Fine" },
       ],
     }),
-    (err: Error) =>
-      err.message.startsWith("flcm.edit") &&
-      err.message.includes("Figma refused annotations") &&
-      err.message.includes('"Stuck"'),
+    (err: FlcmError) =>
+      err.call === "flcm.edit" &&
+      err.reason.includes("Figma refused annotations") &&
+      /Nothing from this call was kept.*The exception is annotation categories .*still in the file: "Stuck"/.test(err.reason),
   );
   assert.deepEqual(
     (await figma.annotations.getAnnotationCategoriesAsync()).map((category) => category.label),

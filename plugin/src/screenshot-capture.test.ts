@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { captureScreenshot, contextualBounds } from "./screenshot-capture.js";
+import type { FlcmError } from "./preamble/flcm-error.js";
 
 function fixture(exporter: () => Promise<Uint8Array> = async () => new Uint8Array([1])) {
   const page = { type: "PAGE", parent: null };
@@ -52,8 +53,8 @@ test("cleanup runs after export rejection, resize failure and mid-export cancell
 
 test("invalid context and queued cancellation create no slice", async () => {
   const f = fixture();
-  await assert.rejects(captureScreenshot(f.node, { margin: 4 }), /requires context/);
+  await assert.rejects(captureScreenshot(f.node, { margin: 4 }), (err: FlcmError) => err.path === "margin" && /only applies with context: true/.test(err.reason));
   await assert.rejects(captureScreenshot(f.node, { context: true }, () => true), /cancelled/);
-  await assert.rejects(captureScreenshot(f.page as unknown as BaseNode, { context: true }), /scene node/);
+  await assert.rejects(captureScreenshot(f.page as unknown as BaseNode, { context: true }), /no position there/);
   assert.equal(f.count(), 0);
 });

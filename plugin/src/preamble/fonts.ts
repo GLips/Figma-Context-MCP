@@ -160,7 +160,7 @@ function styleKey(ref: StyleRef): string {
 /** The font a text style lands in, loaded by the prepare that resolved the style. */
 export function textStyleFont(fonts: FontMap, ref: StyleRef): { family: string; style: string } {
   const font = fonts[styleKey(ref)];
-  if (!font) throw new FlcmError("internal", ref.word + ": the text style's font was not loaded before the write. This is a bug in flcm, not in your call.");
+  if (!font) throw new FlcmError("internal", "the text style's font was not loaded before the call wrote it.", { path: ref.word });
   return font;
 }
 
@@ -257,46 +257,41 @@ function liveFontsOf(node: TextNode): FontName[] {
  * writes rather than left to resolveFont's silent default-family fallback, the one outcome this
  * surface never allows.
  */
-export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fonts: FontMap, subject: string): void {
+export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fonts: FontMap, path: string): void {
   if (node.type !== "TEXT" || !textEditReflows(patch)) return;
   const t = node as TextNode;
-  const who = JSON.stringify(t.name) + " (id " + JSON.stringify(t.id) + ")";
+  const site = { path, node: { type: t.type, name: t.name, id: t.id } };
   for (const font of liveFontsOf(t)) {
     // Only a write needs it, and whether one is due is decided where it would land (assertTextFontsAvailable).
     if (loadedFonts.has(fontLabel(font)) || unavailableFonts.has(fontLabel(font))) continue;
-    throw new ConcurrentEditError({
-      call: subject,
-      node: { type: t.type, name: t.name, id: t.id },
-      changed: "the font of " + who + " became " + font.family + " " + font.style,
-    });
+    throw new ConcurrentEditError({ ...site, changed: "its font became " + font.family + " " + font.style });
   }
   const authored: FontNeed[] = [];
   if (namesFontIdentity(patch.textStyle)) authored.push(needOf(patch.textStyle!));
   for (const run of patch.runs || []) if (run.style && namesFontIdentity(run.style)) authored.push(needOf(run.style));
   const style = patch.textStyle?.style;
   if (style && !fonts[styleKey(style)]) {
-    throw new FlcmError("internal", who + " sets a text style whose font this call did not load. This is a bug in flcm, not in your call.", { call: subject });
+    throw new FlcmError("internal", "the call sets a text style on this layer whose font it did not load.", site);
   }
   for (const need of authored) {
     if (fonts[key(need.family, need.weight, !!need.italic)]) continue;
     throw new ConcurrentEditError({
-      call: subject,
-      node: { type: t.type, name: t.name, id: t.id },
-      changed: "the font of " + who + " changed, so the " + (isTokenRef(need.family) ? "bound family" : need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
+      ...site,
+      changed: "its font changed, so the " + (isTokenRef(need.family) ? "bound family" : need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
         ") it now needs was never loaded",
     });
   }
 }
 
 /** At a text write point: every live font the rewrite reflows must be one this machine has. */
-export function assertTextFontsAvailable(node: TextNode, patch: WriteProps, subject: string): void {
+export function assertTextFontsAvailable(node: TextNode, patch: WriteProps, path: string): void {
   if (!textEditReflows(patch)) return;
   for (const font of liveFontsOf(node)) {
     if (!unavailableFonts.has(fontLabel(font))) continue;
     throw new FlcmError(
       "figma",
-      "the font " + font.family + " " + font.style + " isn't available here, so this text can't be rewritten — " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ") uses it. Install the font, or set textStyle.fontFamily to one this file has.",
-      { call: subject, node: { type: node.type, name: node.name, id: node.id } },
+      "this text uses the font " + font.family + " " + font.style + ", which isn't available here, so it can't be rewritten. Install the font, or set textStyle.fontFamily to one this file has.",
+      { path, node: { type: node.type, name: node.name, id: node.id } },
     );
   }
 }
@@ -398,7 +393,11 @@ export function fontDivergences(family: Bindable<string> | undefined, weight: Bi
 export function resolveFontStrict(fonts: FontMap, family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic = false): { family: string; style: string } {
   const font = fonts[key(family, weight, italic)];
   if (!font) {
-    throw new FlcmError("internal", "TEXT: a run's font (" + (isTokenRef(family) ? "bound family" : family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is a bug in flcm, not in your call.");
+    throw new FlcmError(
+      "internal",
+      "a text run's font (" + (isTokenRef(family) ? "bound family" : family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") +
+        ") was not loaded before the call wrote it, so the run would have shown in the text's base font instead.",
+    );
   }
   return font;
 }

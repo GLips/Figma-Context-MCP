@@ -29,7 +29,7 @@ export interface ScreenshotTarget {
 export async function resolveScreenshotTarget({ nodeId, key }: ScreenshotTarget): Promise<BaseNode> {
   if (nodeId !== undefined) {
     const node = await figma.getNodeByIdAsync(nodeId);
-    if (!node) throw new FlcmError("authoring", `No node found with id ${nodeId}`);
+    if (!node) throw new FlcmError("authoring", `no node has the id ${JSON.stringify(nodeId)}: it may have been deleted. Find it again with flcm.find in figma_execute_code.`);
     return node;
   }
   if (key === undefined) {
@@ -45,14 +45,14 @@ export async function resolveScreenshotTarget({ nodeId, key }: ScreenshotTarget)
   if (!matches.length) {
     throw new FlcmError(
       "authoring",
-      `No node on the current page carries the flcm key "${key}". Keys are stamped by render() from a ` +
-        `node's \`key\` prop — check the spelling, or screenshot by nodeId instead.`,
+      `no node on the current page carries the key ${JSON.stringify(key)}. A key comes from a node's \`key\` prop ` +
+        `when it is rendered: check the spelling, or screenshot by nodeId instead.`,
     );
   }
   if (matches.length > 1) {
     throw new FlcmError(
       "authoring",
-      `${matches.length} nodes on the current page carry the flcm key "${key}", so the target is ` +
+      `${matches.length} nodes on the current page carry the key ${JSON.stringify(key)}, so the target is ` +
         `ambiguous (duplicating a node copies its key). Screenshot by nodeId instead, or re-render with ` +
         `unique keys.`,
     );

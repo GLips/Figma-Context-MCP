@@ -21,6 +21,18 @@ import { editMany } from "./edit-many.js";
 import { render, append } from "./structure.js";
 import { get } from "./read.js";
 
+// A refusal pinned by its fields and the words that make it actionable, not by its whole sentence.
+function refused(fields: { kind?: string; path?: string; node?: Record<string, unknown> }, reason: RegExp) {
+  return (err: any): boolean => {
+    for (const [key, value] of Object.entries(fields)) {
+      if (key === "node") for (const [k, v] of Object.entries(value as object)) assert.equal(err.node?.[k], v, "node." + k);
+      else assert.equal(err[key], value, key);
+    }
+    assert.match(err.reason, reason);
+    return true;
+  };
+}
+
 let figma = createFigmaMock();
 
 beforeEach(() => {
@@ -137,7 +149,7 @@ test("`description` is a component word, and no other node type takes it", async
   await edit(comp.id, { description: "A compact labelled chip." });
   assert.equal(comp.description, "A compact labelled chip.");
   const plain = await render({ type: "FRAME", key: "plain", width: 10, height: 10 });
-  await assert.rejects(edit("plain", { description: "nope" }), /`description` is not a FRAME word/);
+  await assert.rejects(edit("plain", { description: "nope" }), refused({ kind: "authoring", node: { type: "FRAME", id: plain.id } }, /has no `description` to edit/));
   assert.equal((await figma.getNodeByIdAsync(plain.id)).description, undefined);
 });
 
@@ -232,7 +244,7 @@ test("a bag that lands two properties on one name refuses whatever its key order
   ]) {
     await assert.rejects(
       editMany([{ id: comp.id, propertyDefinitions: bag }, { id: icon.id, componentPropertyReferences: { visible: "Caption" } }]),
-      /another entry of this bag also lands on "Caption"/,
+      /another entry of propertyDefinitions also lands on "Caption"/,
     );
   }
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -589,7 +601,7 @@ test("an instance's SLOT takes gap, padding and fills; its direction stays the c
   await assert.rejects(edit(slot.id, { layout: { mode: "column" } }), /\(instance\.layout-mode-change\)/);
   assert.equal(slot.layoutMode, "HORIZONTAL");
   // Still a slot, not a text: the words are a frame's, not everything.
-  await assert.rejects(edit(slot.id, { text: "nope" }), /`text` is not a SLOT word/);
+  await assert.rejects(edit(slot.id, { text: "nope" }), refused({ kind: "authoring", node: { type: "SLOT", id: slot.id } }, /has no `text` to edit/));
 });
 
 test("editMany refuses a batch that both renames a property and binds to it, naming both entries", async () => {
@@ -724,11 +736,11 @@ test("every definition refusal names the cause and writes nothing", async () => 
   // The definition words reach a COMPONENT, not one of its layers or an instance.
   await assert.rejects(
     edit(icon.id, { propertyDefinitions: { Icon: null } }),
-    /`propertyDefinitions` is not a RECTANGLE word/,
+    refused({ kind: "authoring", node: { type: "RECTANGLE", id: icon.id } }, /has no `propertyDefinitions` to edit/),
   );
   await assert.rejects(
     edit(inst.id, { propertyDefinitions: { Icon: null } }),
-    /`propertyDefinitions` is not an? INSTANCE word/,
+    /has no `propertyDefinitions` to edit/,
   );
 
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -839,7 +851,7 @@ test("every binding refusal names the cause and writes nothing", async () => {
   const liveLabel = inst.findOne((n: { name: string }) => n.name === "Label");
   await assert.rejects(
     edit(liveLabel.id, { componentPropertyReferences: { visible: "Icon" } }),
-    /is inside component instance .* A binding belongs to the DEFINITION/s,
+    refused({ kind: "figma", node: { id: liveLabel.id } }, /this layer is inside INSTANCE "Chip".* A binding belongs to the DEFINITION/s),
   );
   // Per-type field legality, exactly as at construction — read off the LIVE node's type.
   await assert.rejects(
@@ -849,7 +861,7 @@ test("every binding refusal names the cause and writes nothing", async () => {
   // A field drives one property TYPE.
   await assert.rejects(
     edit(icon.id, { componentPropertyReferences: { visible: "Label" } }),
-    /`visible` is driven by a boolean property, and "Label" is "text"/,
+    /`visible` is driven by a "boolean" property, and "Label" is "text"\. Bind `visible` to a "boolean" property, or bind "Label" from `text`/,
   );
   // An unknown name lists the component's own.
   await assert.rejects(
@@ -909,7 +921,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
         { type: "FRAME", width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } },
       ],
     }),
-    /two frames in this tree claim slot "Twin"/i,
+    refused({ path: "flcm.append.spec.children[1].componentPropertyReferences.slot" }, /another frame in this tree also claims slot "Twin"/),
   );
 
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -938,7 +950,7 @@ test("an insert into a COMPONENT_SET is refused — its children are its variant
   const before = figma.undoLog.length;
   await assert.rejects(
     append(set.id, { type: "RECTANGLE", width: 10, height: 10 }),
-    /is a COMPONENT_SET, and a set's children are its VARIANTS/,
+    refused({ kind: "authoring", node: { type: "COMPONENT_SET", name: "Button" } }, /a COMPONENT_SET's children are its variants/),
   );
   assert.deepEqual(figma.undoLog.slice(before), []);
   assert.equal(setNode.children.length, 2);

@@ -18,7 +18,7 @@
 // warning about byte-equality is for a future read side, not the render path.
 
 import { rejectUnknownKeys } from "./validate.js";
-import { FlcmError, type FlcmErrorKind } from "./flcm-error.js";
+import { FlcmError, locateFailure, type FlcmErrorKind } from "./flcm-error.js";
 import { NESTED_WORDS, WORD_VALUES } from "./vocabulary.js";
 
 // Returns [c1x, c1y, c2x, c2y, endX, endY] cubic segments approximating the arc from (x1,y1) to (x2,y2).
@@ -146,8 +146,7 @@ export function normalizePathData(d: string): string {
   let i = 0;
 
   const fail = (msg: string, kind: FlcmErrorKind = "authoring"): never => {
-    const reason = 'VECTOR: could not parse the SVG path data "' + d + '" — ' + msg + " (at index " + i + ").";
-    throw new FlcmError(kind, kind === "internal" ? reason + " This is a bug in flcm, not in your call." : reason);
+    throw new FlcmError(kind, 'could not parse the SVG path data "' + d + '" — ' + msg + " (at character " + i + ").");
   };
   const isWs = (ch: string): boolean => ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
   const skipSep = (): void => {
@@ -386,7 +385,7 @@ export function normalizePathData(d: string): string {
           const cubics = arcToCubics(cx, cy, rx, ry, rot, large, sweep, x, y);
           // Empty means the arc math went non-finite (pathological radii/rotation Figma can't realize) —
           // fail loud rather than dropping the segment silently.
-          if (cubics.length === 0) fail("arc radii/rotation cannot be realized as a finite curve");
+          if (cubics.length === 0) fail("arc radii/rotation can't be drawn as a finite curve");
           for (const c of cubics) {
             out.push(
               "C" + fmt(c[0]) + " " + fmt(c[1]) + " " + fmt(c[2]) + " " + fmt(c[3]) + " " + fmt(c[4]) + " " + fmt(c[5]),
@@ -414,7 +413,7 @@ export function normalizePathData(d: string): string {
         // is guarded before the switch. This guards the one remaining path — adding a letter to CMD
         // without a matching case here — which would otherwise spin (that command consumes no numbers, so
         // the cursor never advances). Fail loud instead.
-        fail('command "' + cmd + '" has no handler', "internal");
+        fail('flcm does not handle the "' + cmd + '" command', "internal");
     }
     skipSep();
   }
@@ -427,10 +426,12 @@ const VECTOR_PATH_KEYS: ReadonlySet<string> = new Set(NESTED_WORDS.vectorPath);
 const WINDING_RULES: readonly unknown[] = WORD_VALUES.windingRule;
 
 /** Validate every path before a verb starts mutating the document. */
-export function normalizeVectorPaths(value: unknown): VectorPaths {
-  if (!Array.isArray(value) || !value.length) throw new FlcmError("authoring", "VECTOR.vectorPaths must be a non-empty path array.");
+export function normalizeVectorPaths(value: unknown, where: string): VectorPaths {
+  if (!Array.isArray(value) || !value.length) {
+    throw new FlcmError("authoring", 'must be a non-empty array of { data, windingRule } paths, e.g. [{ data: "M0 0 L10 10", windingRule: "NONZERO" }] — got ' + JSON.stringify(value) + ".", { path: where });
+  }
   return value.map((path, index) => {
-    const at = "VECTOR.vectorPaths[" + index + "]";
+    const at = where + "[" + index + "]";
     rejectUnknownKeys(path, VECTOR_PATH_KEYS, at, "field");
     if (typeof path.data !== "string") throw new FlcmError("authoring", "must be SVG path data (a string) — got " + JSON.stringify(path.data) + ".", { path: at + ".data" });
     if (!WINDING_RULES.includes(path.windingRule)) {
@@ -438,6 +439,8 @@ export function normalizeVectorPaths(value: unknown): VectorPaths {
         path: at + ".windingRule",
       });
     }
-    return { data: normalizePathData(path.data), windingRule: path.windingRule };
+    try {
+      return { data: normalizePathData(path.data), windingRule: path.windingRule };
+    } catch (cause) { throw locateFailure(cause, { path: at + ".data" }); }
   });
 }

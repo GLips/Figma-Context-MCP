@@ -73,7 +73,7 @@ export function createWarningRegistry() {
       return records.filter(record => !emitted.has(record)).map(record =>
         // eslint-disable-next-line no-restricted-syntax -- a warning record's field, not an error's text
         "[warn] " + (record.id === null ? "" : record.id + " ") + record.message +
-        (record.prop === undefined ? "" : " " + record.prop + ": authored " + JSON.stringify(record.authored) + ", realized " + JSON.stringify(record.realized) + "."));
+        (record.prop === undefined ? "" : " " + record.prop + ": asked for " + JSON.stringify(record.authored) + ", Figma made it " + JSON.stringify(record.realized) + "."));
     },
   };
 }

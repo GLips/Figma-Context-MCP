@@ -70,7 +70,7 @@ function unchangedSinceRead(value: object): boolean {
  * reading on must fail loud rather than look like it works.
  */
 export function registerRead(value: object, project: () => unknown, nodeId?: string): void {
-  refuseIfRunFinished("flcm.read");
+  refuseIfRunFinished();
   warnings.observe(value, nodeId);
   registrations.set(value, { project });
   captureFrom(value);
@@ -126,7 +126,13 @@ interface DroppedFields {
 
 function walk(value: unknown, ancestors: Set<object>, channel: EgressChannel, dropped: DroppedFields | undefined): unknown {
   if (value === null || typeof value !== "object" || looksLikeNode(value)) return value;
-  if (ancestors.has(value)) throw new FlcmError("authoring", "Cannot serialize cyclic return or console data.");
+  if (ancestors.has(value)) {
+    throw new FlcmError(
+      "authoring",
+      "a value your code " + (channel === "result" ? "returned" : "logged") + " contains itself (a cycle), so it can't be sent back. " +
+        "Break the cycle, such as by sending just the ids you need.",
+    );
+  }
   ancestors.add(value);
   const pathOf = (key: string | number): string =>
     typeof key === "number" ? `${dropped!.at}[${key}]` : dropped!.at ? `${dropped!.at}.${key}` : key;
