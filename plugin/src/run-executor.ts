@@ -425,9 +425,11 @@ export function createRunExecutor({
 }
 
 
-// Figma hands back the identical object for a live node. Asked only with a node-shaped id
-// (serialize.ts), which getNodeByIdAsync answers promptly.
-const isFigmaNode: IsFigmaNode = async (value) => (await figma.getNodeByIdAsync(value.id)) === value;
+// Figma hands back the identical object for a live node. A removed one it answers null for, yet the
+// object is still the one Figma made, and its own `removed` says so: read after the answer, so a node
+// removed while Figma was asked counts too. Asked only with a node-shaped id (serialize.ts), which
+// getNodeByIdAsync answers promptly.
+const isFigmaNode: IsFigmaNode = async (value) => (await figma.getNodeByIdAsync(value.id)) === value || value.removed === true;
 
 function stringifyArg(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);

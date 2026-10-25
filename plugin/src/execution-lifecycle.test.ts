@@ -827,6 +827,18 @@ test("a live node is told apart from node-shaped data by Figma's own identity, r
   assert.deepEqual([...logged.console], [`[log] {"id":"${logged.result.id}","name":"Card","type":"FRAME"} {"step":1}`]);
 });
 
+test("the frame a component replaced is a node named by its id: collapsed when logged, refused when returned", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const setup = `const old = figma.createFrame(); old.name = "Old"; figma.createComponentFromNode(old);`;
+  const logged = await execute(h, `${setup} console.log(old); return old.id;`);
+  assert.equal(logged.errors, null);
+  assert.deepEqual([...logged.console], [`[log] {"id":"${logged.result}","removed":true}`]);
+  const returned = await execute(h, `${setup} return { old };`);
+  assert.match(returned.errors!, /removed node \(id "[^"]+"\) at return value\.old: your code returned a live Figma node/);
+});
+
 test("a logged node reports the name it had when logged, not one it was given afterwards", async () => {
   const { createFigmaMock } = await import("../harness/figma-mock.mjs");
   const h = host(createFigmaMock());

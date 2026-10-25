@@ -28,16 +28,19 @@ export interface CommentPinRecord {
 export function createCommentPinsCapability(): CapabilityHandler {
   return async (_payload, { signal, run }) => {
     const { fileKey } = run;
-    // Kind "figma" for both: the call is fine, and Figma won't hand over this file's comments here.
+    // Kind "figma" for both: the call is fine, and this file's comments can't be read here. Neither fix
+    // is in the agent's code, so each names the step that does fix it.
     if (fileKey === null)
       throw new CapabilityFailure(
         "figma",
-        "this run's plugin reported no file key, so its file's comments can't be read.",
+        "Figma doesn't give this build of the Framelink plugin the file's key, so reads here carry no comment counts. " +
+          "To read this file's comments, call get_figma_comments with the file's URL.",
       );
     if (!run.figma)
       throw new CapabilityFailure(
         "figma",
-        "this run has no Figma credentials to read comments with.",
+        "the server has no Figma token to read this file's comments with. Set FIGMA_API_KEY (a token with File comments: Read) " +
+          "or pass --figma-api-key where the server runs, or send X-Figma-Token on the HTTP request.",
       );
     const { comments } = await run.figma.withSignal(signal).getComments(fileKey);
     const pins: CommentPinRecord[] = [];

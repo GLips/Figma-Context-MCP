@@ -443,7 +443,7 @@ describe("saved-script CLI using production plugin services", () => {
     expect(await finished).toBe(0);
     expect(pinsReply).toMatchObject({
       ok: false,
-      error: { kind: "figma", message: expect.stringMatching(/reported no file key/) },
+      error: { kind: "figma", message: expect.stringMatching(/file.s key.*get_figma_comments/) },
     });
     expect(figmaCalls).toEqual([]);
   });

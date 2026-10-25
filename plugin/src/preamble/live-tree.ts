@@ -19,7 +19,7 @@ import { gateCallObligations } from "./call-obligations.js";
 import { realizeAtWritePoint } from "./write-point.js";
 import type { LoadedLiveTree } from "./verb-resources.js";
 import { scheduleLiveTree, landAttachedLiveNode, type EditEntryShape, type LiveTreeLanding } from "./edit-apply.js";
-import { childTreeNodes } from "./compile-tree.js";
+import { childTreeNodes, childrenRefusal } from "./compile-tree.js";
 import { provenInstanceMains, definitionsEditedAt, type OperationRef } from "./operation-schedule.js";
 import { planInstanceEdit, overrideRealizeOnlyChecks, instanceGeometryWrites, withoutRetargetHeldChecks, instanceStillShows } from "./instance.js";
 import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
@@ -34,7 +34,6 @@ import type { RenderCtx, RenderResources } from "./bridge.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
-import { aNodeOfType } from "./vocabulary.js";
 
 // Inherited slot content moves only into another slot of its own instance, where Figma copies it
 // and placement returns the copy's id. Anywhere else Figma leaves a node that renders but throws on
@@ -132,7 +131,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
       );
     }
     if (ref.children?.length && !("appendChild" in node)) {
-      throw new FlcmError("authoring", aNodeOfType(node.type) + " has no children. Drop `children` here.", { ...site, path: at + ".children" });
+      throw childrenRefusal(node.type, { ...site, path: at + ".children" });
     }
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     const planning = { targets, gate: resources };

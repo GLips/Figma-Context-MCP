@@ -358,3 +358,11 @@ test("promoting a live keyed frame keeps its key on the component", async () => 
   assert.equal(comp.getPluginData("flcm/key"), "card");
   assert.equal(result.children![0].id, frame.children![0].id);
 });
+
+test("children on a node that can't hold them refuse in one wording, created or live", async () => {
+  createFigmaMock();
+  const refusal = /an ELLIPSE can't have children\. Wrap them in a FRAME/;
+  await assert.rejects(flcm.render({ type: "ELLIPSE", children: [{ type: "RECTANGLE" }] } as never), refusal);
+  const dot = await flcm.render({ type: "ELLIPSE" });
+  await assert.rejects(flcm.render({ type: "FRAME", children: [{ id: dot.id, children: [{ type: "RECTANGLE" }] }] } as never), refusal);
+});

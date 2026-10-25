@@ -59,7 +59,7 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
   const node = await renderKeyedRowFrame();
   const logBefore = [...figma.undoLog];
   await assert.rejects(edit("card", { wat: 1 } as never), /flcm\.edit: unknown prop "wat"/);
-  await assert.rejects(edit("card", { key: "rekeyed" } as never), /`key` can't be edited/);
+  await assert.rejects(edit("card", { key: "rekeyed" } as never), /a FRAME doesn't take the prop "key": it is set only when the node is created — .*set it in the render that creates the node/);
   await assert.rejects(edit("card", { x: 10 } as never), /use `left`\/`top`/);
   await assert.rejects(edit("card", {}), /empty/);
   // A mistyped scalar rejects the WHOLE delta — the valid fill beside it must not land as a

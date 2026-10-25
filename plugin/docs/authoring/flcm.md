@@ -686,7 +686,7 @@ An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves i
 
 Create words that edit refuses:
 
-- `key` — immutable, since re-keying could mint a duplicate address; rename with `name`.
+- `key` — it is how later calls address the node, and re-keying could mint a duplicate address; set it in the render that creates the node, or rename the node with `name`.
 - `vectorPaths`, `d`, `scale` (VECTOR) — path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values).
 - `svg` (VECTOR) — imported markup becomes a frame of vectors; to change the art, `replace` the node with a new svg VECTOR.
 

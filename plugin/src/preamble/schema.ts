@@ -905,13 +905,8 @@ export { TYPE_WORD_GROUPS, CREATE_ONLY_WORDS, editWordsOf, wordsOf } from "./voc
 // The instance write policy, for the reference's "What an instance takes" section: the rules the
 // authorization refuses with, and the words verified to land. Pure data, figma-free.
 export { INSTANCE_WRITE_RULES, instanceWordsVerifiedToLand } from "./instance-write-policy.js";
-/**
- * A section of the flcm reference, by the id both channels take (get_flcm_reference's `sections`, the
- * `reference` CLI command) and the preamble's refusals name ("the \"props\" section"). The server keys
- * its section table by this, so a section added, renamed or dropped on either side fails typecheck.
- */
-export type FlcmReferenceSection =
-  | "mental-model" | "layout" | "reads" | "verbs" | "props" | "annotations" | "values" | "edit" | "components" | "recipes";
+// The reference's section ids, for the server's section table (reference.ts keys it by them).
+export type { FlcmReferenceSection } from "./vocabulary.js";
 
 // ---- Field-group registry — one field table per vocabulary group (exactly those, plus edit's flat
 // table). The reference renders them as its prop tables (shared/size tables once, verb-specific tables

@@ -184,6 +184,31 @@ test("a word another node type takes refuses at edit in the same shape as at cre
   await assert.rejects(render({ type: "RECTANGLE", fontSize: 12 } as never), refusal);
 });
 
+// Edit's type-blind gate leaves every node word to the typed prelude, which knows the target: a
+// nested word isn't sent to a bag the type lacks, nor a create-only word given another type's reason.
+test("a node word refuses at edit exactly as at create, judged by the target's own type", async () => {
+  await render({ type: "RECTANGLE", key: "plate" });
+  for (const word of ["lineHeight", "padding"]) {
+    const refusal = new RegExp(`a RECTANGLE doesn't take the prop "${word}"; drop it\\. Every prop a RECTANGLE takes`);
+    await assert.rejects(edit("plate", { [word]: 2 } as never), refusal);
+    await assert.rejects(render({ type: "RECTANGLE", [word]: 2 } as never), refusal);
+  }
+  await render({ type: "FRAME", key: "panel" });
+  await assert.rejects(edit("panel", { d: "M0 0" } as never), (err: Error) => {
+    assert.match(err.message, /a FRAME doesn't take the prop "d"; drop it\./);
+    assert.doesNotMatch(err.message, /path geometry/);
+    return true;
+  });
+});
+
+test("a misspelled word leads its own sentence, and a nested bag's word is offered by its bag", async () => {
+  await assert.rejects(
+    render({ type: "FRAME", component: true, propertyDefinitions: {} } as never),
+    /spec: unknown prop "component" — every prop a FRAME takes is in the "props" section of the flcm reference\. A FRAME doesn't take the prop "propertyDefinitions"; drop it\./,
+  );
+  await assert.rejects(render({ type: "FRAME", paddng: 2 } as never), /unknown prop "paddng" — did you mean "padding" \(in layout\)\?/);
+});
+
 // The mistakes agents make most are real flcm words in the wrong place. Spelled against the gated set
 // alone they drew a wrong "fix" (lineHeight → minHeight), so the vocabulary places them first.
 test("a word a nested bag takes is sent there, at create and at edit, instead of spelled as a typo", async () => {
@@ -230,4 +255,10 @@ test("CSS and Figma spellings are told the flcm word, at create and at edit alik
   await assert.rejects(edit("moved", { x: 4 } as never), /"x" is no flcm word: position is not spelled with bare x\/y — use `left`\/`top`/);
   await assert.rejects(render({ type: "FRAME", y: 4 } as never), /"y" is no flcm word: position is not spelled with bare x\/y/);
   await assert.rejects(render({ type: "TEXT", text: "hi", color: "#000" } as never), /"color" is no flcm word: .*`fill`/);
+  // Words sharing one explanation are named in one clause, so the sentence is said once.
+  await assert.rejects(edit("moved", { x: 1, y: 2 } as never), (err: Error) => {
+    assert.match(err.message, /"x", "y" are no flcm words: position is not spelled/);
+    assert.equal(err.message.split("position is not spelled").length, 2);
+    return true;
+  });
 });

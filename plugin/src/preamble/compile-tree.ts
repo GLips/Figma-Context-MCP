@@ -10,10 +10,10 @@ import { assertNoComponentPropertyBindings } from "./compile-component-words.js"
 import { compileFrame, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./compile-nodes.js";
 import { compileText } from "./compile-text.js";
 import { acceptAuthoringProps, withoutReadRecords, type Accepted } from "./authoring-input.js";
-import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, wordsOf, type WordGroup } from "./vocabulary.js";
+import { TYPE_WORD_GROUPS, SVG_WORD_GROUPS, aNodeOfType, wordsOf, type WordGroup } from "./vocabulary.js";
 import { own, showValue } from "./validate.js";
 import { isPlainData } from "./plain-data.js";
-import { FlcmError, locateFailure } from "./flcm-error.js";
+import { FlcmError, locateFailure, type FlcmErrorSite } from "./flcm-error.js";
 
 // ---- NODE_ENTRY: how a new node of each type is built. Every entry runs the same prelude
 // (acceptAuthoringProps) over its type's row, ONCE, in visit(); a compiler receives only the bag it
@@ -122,7 +122,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       const entry = nodeEntryFor(type, props, at);
       const tree = entry.compile(acceptAuthoringProps(props, { type: entry.type, verb: "create", known: entry.known, path: at }), at);
       if (compiledChildren?.length && type !== "FRAME") {
-        throw new FlcmError("authoring", "a " + String(type) + " can't have children; only a FRAME can. Wrap them in a FRAME, or put an instance's content in its slot overrides.", { path: at + ".children" });
+        throw childrenRefusal(entry.type, { path: at + ".children" });
       }
       if (children !== undefined) tree.children = compiledChildren;
       tree.source = src as NodeSpec;
@@ -134,6 +134,14 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       throw locateFailure(cause, { path: at, node });
     }
   }
+}
+
+/**
+ * The refusal of `children` on a node that can't hold them, created or live. Wrapping in a FRAME is
+ * the one fix both cases share; an instance's content goes in its slot overrides instead.
+ */
+export function childrenRefusal(type: string, site: FlcmErrorSite): FlcmError {
+  return new FlcmError("authoring", aNodeOfType(type) + " can't have children. Wrap them in a FRAME, or put an instance's content in its slot overrides.", site);
 }
 
 /** The nodes placed directly into `tree`: its children, then the slot content its overrides state. */

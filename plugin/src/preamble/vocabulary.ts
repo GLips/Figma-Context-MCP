@@ -11,7 +11,6 @@
 // compile error at every depth, so no drift test mirrors one list against another.
 import type { SimplifiedLayout, SimplifiedNode } from "@framelink/core";
 import type { EditableType, WriteType } from "./ir.js";
-import type { FlcmReferenceSection } from "./schema.js";
 import { INPUT_ALIASES } from "./input-aliases.js";
 
 // ---- Native grid spellings (input-aliases.ts). The rule table owns them; they join the groups below
@@ -157,7 +156,7 @@ export const SVG_WORD_GROUPS = ["annotation", "shared", "size", "svg", "binding"
 
 // The words a create row has and edit refuses, each with why. The reference prints these reasons.
 export const CREATE_ONLY_WORDS = {
-  key: "immutable, since re-keying could mint a duplicate address; rename with `name`",
+  key: "it is how later calls address the node, and re-keying could mint a duplicate address; set it in the render that creates the node, or rename the node with `name`",
   d: "path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values)",
   vectorPaths: "path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values)",
   scale: "path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values)",
@@ -209,6 +208,14 @@ export function hasContainerLayout(type: string): boolean {
   return typeRow(type)?.includes("frame") ?? false;
 }
 
+/**
+ * A section of the flcm reference, by the id both channels take (get_flcm_reference's `sections`, the
+ * `reference` CLI command) and the preamble's refusals name ("the \"props\" section"). The server keys
+ * its section table by this, so a section added, renamed or dropped on either side fails typecheck.
+ */
+export type FlcmReferenceSection =
+  | "mental-model" | "layout" | "reads" | "verbs" | "props" | "annotations" | "values" | "edit" | "components" | "recipes";
+
 // Where the reference lists a type's words: a type flcm creates has its own table in props; one it
 // only edits is described against FRAME's in edit, beside the floor every row-less type gets.
 const TYPE_REFERENCE_SECTION: { [T in EditableType]: T extends WriteType ? "props" : "edit" } = {
@@ -250,16 +257,17 @@ const NODE_BAG_WORDS: ReadonlySet<string> = new Set([
   ...TEXT_STYLE_WORDS, ...LAYOUT_WORDS,
 ]);
 
-/**
- * A node's own bag. `type` is the node's, absent at edit's document-blind gate, where any type's layout
- * words may still be right; `edit` marks an edit delta, where a create-only word says why it isn't taken.
- */
-export function nodeBagVocabulary(type: string | undefined, verb: "create" | "edit"): WordVocabulary {
-  return NODE_BAG_VOCABULARIES[verb][type === undefined || hasContainerLayout(type) ? "container" : "child"];
+/** A node's own bag, as a node of this type takes it under this verb. */
+export function nodeBagVocabulary(type: string, verb: "create" | "edit"): WordVocabulary {
+  if (verb === "create") return NODE_BAG_CREATE_VOCABULARIES[hasContainerLayout(type) ? "container" : "child"];
+  return Object.prototype.hasOwnProperty.call(NODE_BAG_EDIT_VOCABULARIES, type) ? NODE_BAG_EDIT_VOCABULARIES[type as EditableType] : ROWLESS_EDIT_VOCABULARY;
 }
 
-const createOnlyReason = (word: string): string | undefined =>
-  Object.prototype.hasOwnProperty.call(CREATE_ONLY_WORDS, word) ? "it is set only when the node is created — " + CREATE_ONLY_WORDS[word as CreateOnlyWord] : undefined;
+/** Whether a word is a node's at all — some type's bag word, or a word the read shape emits. */
+export function isNodeWord(word: string): boolean {
+  return NODE_BAG_WORDS.has(word) || nodeWordDisposition(word) !== undefined;
+}
+
 // The mistakes an agent most often makes on a node, said the flcm way at create and edit alike:
 // "unknown prop" would misdiagnose them, and no spelling near them is the word they mean.
 const POSITION_SPELLING = "position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize";
@@ -273,10 +281,24 @@ const NODE_FOREIGN_SPELLINGS: Readonly<Record<string, string>> = {
 };
 // Built once: every props-taking entry asks for one, and the gate's happy path allocates nothing.
 const nodeBag = (layout: ReadonlySet<string>, why?: WordVocabulary["why"]): WordVocabulary => ({ every: NODE_BAG_WORDS, nested: { textStyle: TEXT_STYLE_WORDS, layout }, why, foreign: NODE_FOREIGN_SPELLINGS });
-const NODE_BAG_VOCABULARIES: Record<"create" | "edit", Record<"container" | "child", WordVocabulary>> = {
-  create: { container: nodeBag(LAYOUT_WORDS), child: nodeBag(CHILD_LAYOUT_WORDS) },
-  edit: { container: nodeBag(LAYOUT_WORDS, createOnlyReason), child: nodeBag(CHILD_LAYOUT_WORDS, createOnlyReason) },
-};
+const NODE_BAG_CREATE_VOCABULARIES = { container: nodeBag(LAYOUT_WORDS), child: nodeBag(CHILD_LAYOUT_WORDS) };
+// A create-only word says why only on a type whose create rows have it: `d` on a FRAME is a word a
+// FRAME lacks, not path geometry it could have had. A row-less type's create row is the shared floor.
+const createOnlyReasonOn = (created: ReadonlySet<string>) => (word: string): string | undefined =>
+  created.has(word) && Object.prototype.hasOwnProperty.call(CREATE_ONLY_WORDS, word)
+    ? "it is set only when the node is created — " + CREATE_ONLY_WORDS[word as CreateOnlyWord]
+    : undefined;
+const editBag = (layout: ReadonlySet<string>, created: readonly WordGroup[]): WordVocabulary => nodeBag(layout, createOnlyReasonOn(wordsOf(created)));
+const NODE_BAG_EDIT_VOCABULARIES = Object.fromEntries(
+  (Object.keys(TYPE_WORD_GROUPS) as EditableType[]).map((type) => [type, editBag(hasContainerLayout(type) ? LAYOUT_WORDS : CHILD_LAYOUT_WORDS, type === "VECTOR" ? [...TYPE_WORD_GROUPS.VECTOR, ...SVG_WORD_GROUPS] : TYPE_WORD_GROUPS[type])]),
+) as Record<EditableType, WordVocabulary>;
+const ROWLESS_EDIT_VOCABULARY = editBag(CHILD_LAYOUT_WORDS, ["shared"]);
+
+/**
+ * The bag edit's type-blind gate judges against (validate.ts rejectNonDeltaWords). It sees only words
+ * that are no node word at all, so only the spellings and the nearest words matter here.
+ */
+export const TYPE_BLIND_NODE_VOCABULARY: WordVocabulary = NODE_BAG_CREATE_VOCABULARIES.container;
 
 /** A node's `layout` bag: a container word on a node that only sits in a flow is real, not a typo. */
 export const LAYOUT_VOCABULARY: WordVocabulary = { every: LAYOUT_WORDS };

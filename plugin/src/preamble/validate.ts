@@ -12,9 +12,7 @@
 // reaches Object.prototype: `{ type: "toString" }` would pass a type gate and `{ compiler: 1 }` a
 // field gate, both silently. Own-property only — a closed set has to actually be closed.
 import { FlcmError } from "./flcm-error.js";
-import { normalizeInputAliases } from "./input-aliases.js";
-import { nodeWordDisposition, nodeBagVocabulary, type WordVocabulary } from "./vocabulary.js";
-import type { FlcmReferenceSection } from "./schema.js";
+import { isNodeWord, TYPE_BLIND_NODE_VOCABULARY, type FlcmReferenceSection, type WordVocabulary } from "./vocabulary.js";
 
 export function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
@@ -61,12 +59,10 @@ function describeWordSet(allowed: ReadonlySet<string>, description: WordSetDescr
 const sentence = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
- * `candidates` close to `word`, fewest edits first. A typo is about one edit per four letters; anything
- * farther is a different word, and suggesting it ("foo" → "top") would steer the agent wrong. A word of
- * one or two letters is matched only whole (case aside): one edit from "t" is every one-letter word.
- * A word inside a candidate, or around it, is close however many letters it lacks ("radius" →
- * "borderRadius"). A token name is a path of "/"-segments, and one segment is enough to mean it
- * ("blue" → "color/blue/500"), so each segment is judged like a whole name.
+ * `candidates` close to `word`, fewest edits first. A typo is about one edit per four letters; farther
+ * is a different word ("foo" → "top" would mislead). One- and two-letter words match only whole. A
+ * word inside a candidate, or around it, is close ("radius" → "borderRadius"), and so is one "/"-segment
+ * of a token name ("blue" → "color/blue/500").
  */
 export function closestWords(word: string, candidates: Iterable<string>): string[] {
   const want = word.toLowerCase();
@@ -124,17 +120,20 @@ export function unknownWordsMessage(unknown: readonly string[], allowed: Readonl
   const noun = options.noun ?? "prop";
   const { vocabulary } = options;
   const misspelled: string[] = [], notTaken: string[] = [], placed: string[] = [];
+  // Foreign spellings sharing one explanation ("x", "y") are named in one clause.
+  const foreign = new Map<string, string[]>();
   const nested = vocabulary?.nested ?? {};
+  const takenBags = Object.keys(nested).filter((bag) => allowed.has(bag));
   let listed = false;
   for (const word of unknown) {
-    const bag = Object.keys(nested).find((key) => allowed.has(key) && nested[key].has(word));
+    const bag = takenBags.find((key) => nested[key].has(word));
     if (bag) {
       placed.push(JSON.stringify(word) + " goes in " + bag + ": { " + bag + ": { " + word + ": … } }.");
       continue;
     }
-    const foreign = vocabulary?.foreign && Object.prototype.hasOwnProperty.call(vocabulary.foreign, word) ? vocabulary.foreign[word] : undefined;
-    if (foreign) {
-      placed.push(JSON.stringify(word) + " is no flcm word: " + foreign + ".");
+    const explanation = vocabulary?.foreign && Object.prototype.hasOwnProperty.call(vocabulary.foreign, word) ? vocabulary.foreign[word] : undefined;
+    if (explanation) {
+      foreign.set(explanation, [...(foreign.get(explanation) ?? []), word]);
       continue;
     }
     listed = true;
@@ -145,17 +144,33 @@ export function unknownWordsMessage(unknown: readonly string[], allowed: Readonl
       else notTaken.push(word);
     }
   }
-  const suggested = [...new Set(misspelled.flatMap((k) => closestWords(k, allowed).slice(0, 1)))];
-  const clauses = [
-    ...(suggested.length ? ["did you mean " + suggested.map((k) => JSON.stringify(k)).join(", ") + "?"] : []),
+  for (const [explanation, spelled] of foreign) {
+    placed.push(spelled.map((k) => JSON.stringify(k)).join(", ") + (spelled.length > 1 ? " are no flcm words: " : " is no flcm word: ") + explanation + ".");
+  }
+  const suggested = [...new Set(misspelled.flatMap((k) => nearestWord(k, allowed, takenBags.map((bag) => [bag, nested[bag]]))))];
+  const others = [
     ...placed,
     ...(notTaken.length ? [takerOf(options, noun, notTaken) + "; drop " + (notTaken.length > 1 ? "them." : "it.")] : []),
-    ...(listed ? [describeWordSet(allowed, options)] : []),
   ];
-  // The first clause stays lowercase, continuing "unknown prop …" or the caller's "verb: path:" lead.
-  const body = clauses.map((c, i) => (i === 0 ? c : sentence(c))).join(" ") + (options.hint ? " " + options.hint : "");
-  if (!misspelled.length) return body;
-  return "unknown " + noun + (misspelled.length > 1 ? "s " : " ") + misspelled.map((k) => JSON.stringify(k)).join(", ") + " — " + body;
+  const set = listed ? describeWordSet(allowed, options) : undefined;
+  const hint = options.hint ? " " + options.hint : "";
+  // The first clause stays lowercase, continuing the caller's "verb: path:" lead.
+  if (!misspelled.length) return [...others, ...(set ? [set] : [])].map((c, i) => (i === 0 ? c : sentence(c))).join(" ") + hint;
+  // The unknown words lead with their own remedy, so no clause about another word reads as theirs.
+  const lead = "unknown " + noun + (misspelled.length > 1 ? "s " : " ") + misspelled.map((k) => JSON.stringify(k)).join(", ") + " — " +
+    (suggested.length ? "did you mean " + suggested.join(", ") + "?" : set);
+  return [lead, ...others.map(sentence), ...(suggested.length && set ? [sentence(set)] : [])].join(" ") + hint;
+}
+
+// The closest word to `word` in `allowed`, or else in a bag this owner takes: `"padding" (in layout)`.
+function nearestWord(word: string, allowed: ReadonlySet<string>, bags: readonly [string, ReadonlySet<string>][]): string[] {
+  const inAllowed = closestWords(word, allowed)[0];
+  if (inAllowed !== undefined) return [JSON.stringify(inAllowed)];
+  for (const [bag, bagWords] of bags) {
+    const inBag = closestWords(word, bagWords)[0];
+    if (inBag !== undefined) return [JSON.stringify(inBag) + " (in " + bag + ")"];
+  }
+  return [];
 }
 
 // "a TEXT doesn't take the prop "strokeWidth"", or with no owner to name, "the prop "d" isn't taken here".
@@ -165,12 +180,9 @@ function takerOf(options: UnknownKeyOptions, noun: string, taken: readonly strin
 }
 
 // Fail loud when `obj` isn't a plain object, or on any own key outside `allowed`: the one gate every
-// unknown-word refusal in the preamble comes from. It names the offender(s), judged by the set's
-// vocabulary first (unknownWordsMessage), and the set itself (describeWordSet). `path` is the bag's spec path ("flcm.render.spec.textStyle",
-// "flcm.find"). The non-object branch is the BACKSTOP: a call site with a richer shape to show (pad's
-// number form, absolute's "none", find's did-you-mean) pre-empts it with its own tailored guard. The
-// known set is passed pre-built (callers hold it at module scope) and messages are built only in the
-// throw paths, so the happy path adds no per-call allocation.
+// unknown-word refusal comes from (unknownWordsMessage). `path` is the bag's spec path. The non-object
+// branch is a BACKSTOP that richer call-site guards pre-empt (pad's number form, find's did-you-mean).
+// Sets come pre-built and messages are built only on throw, so the happy path allocates nothing.
 export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, path: string, options: UnknownKeyOptions): void {
   const noun = options.noun ?? "prop";
   if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
@@ -183,34 +195,18 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, pa
   if (unknown.length) throw new FlcmError("authoring", unknownWordsMessage(unknown, allowed, options), { path });
 }
 
-// The pure, document-blind half of a DELTA's validation (invariant 2's validate-then-mutate: this
-// runs before any target is resolved, so a misspelled word reads "unknown prop" no matter what it
-// targets). Shared by flcm.edit and by an instance's `overrides` entries, which are deltas in the
-// same vocabulary judged at construction. `key` gets a steering message ahead of the closed-set
-// reject, since it IS a node word, just never an editable one. `known` is the caller's edit vocabulary (the compilers own it);
-// `path` is where the changes sit, rooted at the call ("flcm.edit", "flcm.editMany[2]").
+// The pure, document-blind half of a DELTA's validation, run before any target is resolved (by
+// flcm.edit, and by an instance's `overrides` entries at construction). It judges only words that are
+// no node word at all (typos, foreign spellings): every node word waits for the typed prelude, which
+// knows the target's type and so answers as create does. `known` is the caller's edit vocabulary.
 export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, path: string): void {
   if (changes == null || typeof changes !== "object") {
     throw new FlcmError("authoring", "the changes must be an object of props to apply — got " + showValue(changes) + ".", { path });
   }
-  if ("key" in changes) {
-    throw new FlcmError(
-      "authoring",
-      "`key` can't be edited — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Drop `key`, or set it in the render that creates the node.",
-      { path: path + ".key" },
-    );
-  }
-  // The read shape's non-authoring words (`type`, `children`, a root's `designedWidth`, a refused
-  // `strokeDashes`) are judged later, by the prelude, where the live node's TYPE is known. They pass
-  // this document-blind gate unjudged; everything else is judged now, against the edit vocabulary alone.
-  const foreign: Record<string, unknown> = {};
-  for (const key of Object.keys(changes)) {
-    const disposition = nodeWordDisposition(key);
-    if (disposition === undefined || disposition === "author") foreign[key] = (changes as Record<string, unknown>)[key];
-  }
+  const unknown = Object.keys(changes).filter((word) => !isNodeWord(word));
   // A delta's words are node props, which the props section lists node type by node type.
   const described: WordSetDescription = { reference: "props" };
-  rejectUnknownKeys(normalizeInputAliases(foreign, path), known, path, { ...described, vocabulary: nodeBagVocabulary(undefined, "edit") });
+  if (unknown.length) throw new FlcmError("authoring", unknownWordsMessage(unknown, known, { ...described, vocabulary: TYPE_BLIND_NODE_VOCABULARY }), { path });
   assertDeltaNotEmpty(changes, known, path, described);
 }
 
