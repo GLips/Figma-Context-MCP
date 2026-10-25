@@ -3,9 +3,8 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // HMAC-SHA256 (RFC 2104 over FIPS 180-4) in plain TypeScript, because the plugin host runs in a
-// sandbox with no crypto API. It signs link proofs only: inputs are server-minted base64url and a
-// fixed context, so they are ASCII by construction, and anything else is refused rather than encoded.
-import { FlcmError } from "./preamble/flcm-error.js";
+// sandbox with no crypto API (and no TextEncoder). Text is hashed as its UTF-8 bytes, as Node's
+// HMAC hashes a string, so a link proof matches the server's and a project path may be any text.
 
 const ROUND_CONSTANTS = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -20,14 +19,25 @@ const ROUND_CONSTANTS = new Uint32Array([
 
 const BLOCK_BYTES = 64;
 
-function asciiBytes(text: string): Uint8Array {
-  const bytes = new Uint8Array(text.length);
+// A lone surrogate becomes U+FFFD, as Node encodes it, so both sides hash the same bytes.
+function utf8Bytes(text: string): Uint8Array {
+  const bytes: number[] = [];
   for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code > 0x7f) throw new FlcmError("internal", "the plugin can only sign plain ASCII text, and a link credential or project name it was given has other characters.");
-    bytes[i] = code;
+    let code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+        i++;
+      }
+    }
+    if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+    if (code < 0x80) bytes.push(code);
+    else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    else if (code < 0x10000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
   }
-  return bytes;
+  return new Uint8Array(bytes);
 }
 
 function sha256(message: Uint8Array): Uint8Array {
@@ -84,9 +94,9 @@ function rotr(value: number, bits: number): number {
   return (value >>> bits) | (value << (32 - bits));
 }
 
-/** HMAC-SHA256 of an ASCII message under an ASCII key, as lowercase hex. */
+/** HMAC-SHA256 of a message under a key, both hashed as UTF-8, as lowercase hex. */
 export function hmacSha256Hex(key: string, message: string): string {
-  let keyBytes = asciiBytes(key);
+  let keyBytes = utf8Bytes(key);
   if (keyBytes.length > BLOCK_BYTES) keyBytes = sha256(keyBytes);
   const inner = new Uint8Array(BLOCK_BYTES);
   const outer = new Uint8Array(BLOCK_BYTES);
@@ -95,7 +105,7 @@ export function hmacSha256Hex(key: string, message: string): string {
     inner[i] = k ^ 0x36;
     outer[i] = k ^ 0x5c;
   }
-  const messageBytes = asciiBytes(message);
+  const messageBytes = utf8Bytes(message);
   const innerInput = new Uint8Array(BLOCK_BYTES + messageBytes.length);
   innerInput.set(inner);
   innerInput.set(messageBytes, BLOCK_BYTES);

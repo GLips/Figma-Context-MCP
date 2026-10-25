@@ -20,3 +20,9 @@ test("matches Node's HMAC-SHA256 across key and message lengths that straddle bl
       );
     }
 });
+
+// A grant is keyed by a digest of the project path, which can be any text a filesystem allows.
+test("matches Node's HMAC-SHA256 on non-ASCII text, astral characters and lone surrogates included", () => {
+  for (const text of ["/Users/zoë/プロジェクト", "café 🎨 design", "lone \ud800 high", "lone \udc00 low", "end \ud83c"])
+    assert.equal(hmacSha256Hex(text, text), createHmac("sha256", text).update(text).digest("hex"), JSON.stringify(text));
+});
