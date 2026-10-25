@@ -6,10 +6,10 @@ import type { FlcmErrorKind } from "../protocol.js";
 
 // flcm-error — the one error type flcm throws, in the preamble and the plugin host alike. Code that
 // needs to know WHY something failed branches on `kind`, never on message text: a reworded sentence
-// must not change who gets blamed. Anything thrown that is NOT an FlcmError came from Figma or the
-// platform, and that is decided by type alone: asFlcmError wraps it as a FigmaRefusalError, the one
-// type that means Figma itself threw (isFigmaRefusal). The agent's own code is the exception: flcm
-// calls it only through callAgentCode, which marks what it throws as the agent's.
+// must not change who gets blamed. Anything thrown that is NOT an FlcmError is decided by type
+// alone: a JS engine error (TypeError and kin) is flcm's own bug, and anything else came from Figma
+// or the platform, which asFlcmError wraps as a FigmaRefusalError (isFigmaRefusal). The agent's own
+// code is the exception: flcm calls it only through callAgentCode, which marks what it throws.
 //
 // Where a failure happened lives in fields, not in text someone has to slice back off: `call` is
 // the public verb the agent called ("flcm.edit"), `path` the spec path inside it, `node` the layer
@@ -151,19 +151,30 @@ export function describeFigmaRefusal(cause: unknown, subject: string): string {
   return "Figma refused" + (subject ? " " + subject : "") + ": " + JSON.stringify(describeFailure(cause)) + ".";
 }
 
-/** Any thrown value as an FlcmError: itself, or a FigmaRefusalError around what Figma threw. */
+// Figma refuses with a plain Error ("in set_fills: …") when it throws and a bare string when it
+// rejects; the JS engine's own error types come only from code calling something wrongly, and
+// agent code never reaches here (callAgentCode), so one of those is flcm's bug. Live-checked over 25
+// bad writes on 2026-10-25: the one TypeError was flcm-style misuse ("not a function").
+const ENGINE_ERRORS = [TypeError, ReferenceError, RangeError, SyntaxError];
+function isEngineError(cause: unknown): boolean {
+  return ENGINE_ERRORS.some((type) => cause instanceof type);
+}
+
+/** Any thrown value as an FlcmError: itself, flcm's own bug, or a FigmaRefusalError around what Figma threw. */
 export function asFlcmError(cause: unknown): FlcmError {
-  return cause instanceof FlcmError ? cause : new FigmaRefusalError(cause);
+  if (cause instanceof FlcmError) return cause;
+  if (isEngineError(cause)) return new FlcmError("internal", "flcm's own code failed: " + JSON.stringify(describeFailure(cause)) + ".");
+  return new FigmaRefusalError(cause);
 }
 
 /** Whose failure any thrown value is. */
 export function failureKindOf(cause: unknown): FlcmErrorKind {
-  return cause instanceof FlcmError ? cause.kind : "figma";
+  return asFlcmError(cause).kind;
 }
 
 /** Figma itself threw this, as opposed to flcm detecting a limit of Figma's (also kind "figma"). */
 export function isFigmaRefusal(cause: unknown): boolean {
-  return !(cause instanceof FlcmError) || cause instanceof FigmaRefusalError;
+  return cause instanceof FigmaRefusalError || (!(cause instanceof FlcmError) && !isEngineError(cause));
 }
 
 /** The text of any thrown value, for quoting in a message. Never branch on what it returns. */
@@ -226,7 +237,7 @@ export async function callAgentCode<A extends unknown[], R>(fn: (...args: A) => 
  * at call time, and an await here would break the invocation order that guarantees.
  *
  * What the agent's own code threw (callAgentCode) leaves as thrown. Anything else that isn't an
- * FlcmError came from Figma or the platform during the verb's own work: a FigmaRefusalError.
+ * FlcmError goes through asFlcmError: flcm's bug if the JS engine threw it, Figma's otherwise.
  */
 export function publicVerb<F extends (...args: never[]) => unknown>(call: string, verb: F): F {
   return function (this: unknown, ...args: Parameters<F>) {

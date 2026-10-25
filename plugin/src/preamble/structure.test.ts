@@ -610,6 +610,20 @@ test("replace removal failure stays inside one rollback boundary", async () => {
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });
 
+test("a JS engine error mid-call is flcm's bug, not Figma refusing", async () => {
+  await render({ type: "RECTANGLE", key: "engine-failure", width: 20, height: 30 });
+  const target = await figma.getNodeByIdAsync((await get("engine-failure")).node.id);
+  // Figma refuses with a plain Error; a TypeError only comes from code calling something wrongly.
+  target.remove = () => {
+    throw new TypeError("not a function");
+  };
+  await assert.rejects(
+    replace("engine-failure", { type: "RECTANGLE", width: 30 }),
+    (err: unknown) => err instanceof FlcmError && err.kind === "internal" && !/Figma refused/.test(err.message) &&
+      /bug in flcm/.test(err.message) && /Nothing from this call was kept/.test(err.message),
+  );
+});
+
 test("an explicitly undefined or null anchor, clone destination or spec id refuses with zero writes instead of defaulting", async () => {
   const row = await renderRow();
   const pageChildren = figma.currentPage.children.length;
