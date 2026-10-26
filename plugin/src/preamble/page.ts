@@ -19,13 +19,17 @@ import { FlcmError } from "./flcm-error.js";
 // a page on a typo — silently doing the opposite of what was meant, which is the class of failure
 // this DSL rejects everywhere else. `new` means new, `use` means it must already be there.
 //
+// `new` never switches: Figma can hold a switch to a page created this session for minutes (fig-139),
+// while appending onto that page by id works at once. So `new` hands back the id and leaves the
+// current page alone; `use` is the one verb that navigates.
+//
 // No mutation lock: the lock's apply span is synchronous by type (so nothing interleaves between an
 // entry seal and its commit) and the page switch is async, and an undo scaffold around a page
 // create/switch is meaningless anyway — Figma's undo doesn't step over page navigation. Page verbs
 // take effect immediately: switch, THEN render. A page switch racing a queued render (Promise.all)
 // lands the render wherever the switch left the document.
 
-import type { PageInfo, PageSummary } from "./ir.js";
+import type { PageCreated, PageInfo, PageSummary } from "./ir.js";
 
 // A page's identity as every page verb reports it — the same two fields a Figma page URL is built
 // from, so an agent can hand `id` back to `use` or quote `name` to the human.
@@ -53,9 +57,9 @@ function nameList(): string {
  */
 export const PAGE_SWITCH_PATIENCE_MS = 5_000;
 
-// Figma has held a switch to a page created in the same session for minutes, with switches to other
-// pages still settling; it cleared on its own, cause unknown. The held request isn't cancelled.
-function switchTo(target: PageNode, created: boolean): Promise<void> {
+// Figma has held a switch to a just-created page for minutes, with switches to other pages still
+// settling; it cleared on its own, cause unknown. The held request isn't cancelled.
+function switchTo(target: PageNode): Promise<void> {
   // Read now: the page can be deleted while the switch waits, and its getters throw then.
   const name = JSON.stringify(target.name);
   const id = JSON.stringify(target.id);
@@ -65,10 +69,9 @@ function switchTo(target: PageNode, created: boolean): Promise<void> {
       new FlcmError(
         "figma",
         "Figma didn't finish switching to page " + name + " (id " + id + ") within " + PAGE_SWITCH_PATIENCE_MS / 1000 +
-          "s, so the run stops here. " + (created ? "The page was created; " : "") + "the current page is still " +
-          JSON.stringify(figma.currentPage.name) + ". The switch wasn't cancelled and may still finish later, so pass " +
-          "parents by id rather than relying on the current page: flcm.append(" + id + ", spec) writes onto that page" +
-          (created ? ", and flcm.page.use(" + id + ") retries the switch (page.new would refuse the taken name)." : "."),
+          "s, so the run stops here. The current page is still " + JSON.stringify(figma.currentPage.name) +
+          ". The switch wasn't cancelled and may still finish later, so pass parents by id rather than relying on " +
+          "the current page: flcm.append(" + id + ", spec) writes onto that page.",
       ),
   });
 }
@@ -122,12 +125,14 @@ export async function pageUse(target: string): Promise<PageInfo> {
         " — pass one of their ids instead: " + hits.map((p) => JSON.stringify(p.id)).join(", ") + ".",
     );
   }
-  await switchTo(hits[0], false);
+  await switchTo(hits[0]);
   return pageCurrent();
 }
 
 /**
- * Make a page and switch to it.
+ * Make a page WITHOUT switching to it. The current page stays where it was, so the answer says so in
+ * words as well as fields: an agent that expects `new` to move it would otherwise render onto the
+ * old page.
  *
  * Refuses when the name is already taken, which is what makes a retry safe: a call that crashed
  * after creating the page (or an agent that lost track of its own earlier call) re-runs into a
@@ -135,7 +140,7 @@ export async function pageUse(target: string): Promise<PageInfo> {
  * splitting the work across both. The name check happens BEFORE the create, so a refusal leaves
  * nothing behind.
  */
-export async function pageNew(name: string): Promise<PageInfo> {
+export async function pageNew(name: string): Promise<PageCreated> {
   const wanted = assertPageName(name);
   const taken = pages().find((p) => p.name === wanted);
   if (taken) {
@@ -150,8 +155,16 @@ export async function pageNew(name: string): Promise<PageInfo> {
   const created = figma.createPage();
   traceNative("native-end", "page-create");
   created.name = wanted;
-  await switchTo(created, true);
-  return pageCurrent();
+  const current = figma.currentPage;
+  const id = JSON.stringify(created.id);
+  return {
+    created: summarize(created),
+    currentPage: summarize(current),
+    note:
+      "Created page " + JSON.stringify(wanted) + " (id " + id + ") in the background. The current page is still " +
+      JSON.stringify(current.name) + ", so render and other verbs without a parent keep landing there. Write onto " +
+      "the new page with flcm.append(" + id + ", spec), or call flcm.page.use(" + id + ") if you really need to switch.",
+  };
 }
 
 // The `flcm.page` namespace. A namespace rather than three top-level verbs because these are the

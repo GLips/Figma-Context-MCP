@@ -38,7 +38,7 @@ export { INPUT_ALIASES };
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, Handle,
   ConstraintX, ConstraintY, Target, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult, ReadNode,
-  PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
+  PageInfo, PageCreated, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
   VariableInput, StyleInput, TokenIdentityInput, DesignTokens, DesignTokenLibraryQuery, LibraryDesignTokens, DesignTokenUsedQuery, UsedDesignTokens,
 } from "./ir.js";
@@ -846,8 +846,9 @@ export interface Flcm {
     current(): Promise<PageInfo>;
     // Switch to a page that already exists, by id or name. A miss lists the file's pages; it never creates.
     use(target: string): Promise<PageInfo>;
-    // Make a page and switch to it. Refuses a name the file already uses (so a retry can't mint a twin).
-    new: (name: string) => Promise<PageInfo>;
+    // Make a page in the background: the current page does NOT change. Write onto it by its returned id
+    // (flcm.append(created.id, spec)), or page.use it. Refuses a name the file already uses (so a retry can't mint a twin).
+    new: (name: string) => Promise<PageCreated>;
   };
 }
 
@@ -895,7 +896,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "value", "signature": "flcm.effects(sugar)", "builds": "effect values[]", "args": "CSS and Figma effect values for an effects prop."},
   {"category": "page", "signature": "await flcm.page.current()", "builds": "{ fileName, page, pages }", "args": "Current page and available pages."},
   {"category": "page", "signature": "await flcm.page.use(nameOrId)", "builds": "{ fileName, page, pages }", "args": "Switch to an existing page."},
-  {"category": "page", "signature": "await flcm.page.new(name)", "builds": "{ fileName, page, pages }", "args": "Create a uniquely named page and switch to it."},
+  {"category": "page", "signature": "await flcm.page.new(name)", "builds": "{ created, currentPage, note }", "args": "Create a uniquely named page in the background. The current page does not change; write onto the new page with flcm.append(created.id, spec), or flcm.page.use(created.id) to switch."},
 ];
 
 // Re-exported for the doc generator: the composition rows and create-only words the runtime gates

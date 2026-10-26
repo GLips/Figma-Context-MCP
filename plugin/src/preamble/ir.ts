@@ -656,6 +656,10 @@ export interface PageSummary { id: string; name: string }
 // What every page verb answers with: the file, where you are, and what else is in the document.
 export interface PageInfo { fileName: string; page: PageSummary; pages: PageSummary[] }
 
+// What page.new answers with. `currentPage` is unchanged by the call; `note` says so in prose, because
+// an agent skimming the fields could read `created` as where it now is.
+export interface PageCreated { created: PageSummary; currentPage: PageSummary; note: string }
+
 // flcm.designTokens — the tokens a write can bind. Each entry's `reference` is the exact value a read
 // emits for a prop bound to that token, so it pastes into a write as-is. Values use the read's
 // spellings: hex/rgba colors, rounded numbers, and an alias as the reference to the variable it points at.

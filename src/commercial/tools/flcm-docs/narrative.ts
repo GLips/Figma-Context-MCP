@@ -250,11 +250,11 @@ ${sample("rawFigma")}
 
 Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended), so use it for plumbing and come back to \`flcm\` to author.`;
 
-export const PAGES = `The current page is the default scope: \`render\` places roots on it, and \`selection\`, a key lookup and a \`find\` without \`within\` search it. An id or handle reaches its node on any page of the open file, and \`within\` can name another page. \`flcm.page\` reads and switches the current page:
+export const PAGES = `The current page is the default scope: \`render\` places roots on it, and \`selection\`, a key lookup and a \`find\` without \`within\` search it. An id or handle reaches its node on any page of the open file, and \`within\` can name another page. \`flcm.page\` reads and switches the current page, and makes pages without switching to them:
 
 ${sample("pages")}
 
-Switch **before** you render: a render lands on whatever page is current. Don't assign \`figma.currentPage\`; under \`documentAccess: "dynamic-page"\` it is read-only and throws.`;
+\`page.new\` creates the page in the background and returns its id; the current page does not change, so a \`render\` after it still lands on the old page. Write onto a new page with \`flcm.append(created.id, spec)\`, or \`page.use\` it first: a render lands on whatever page is current. Don't assign \`figma.currentPage\`; under \`documentAccess: "dynamic-page"\` it is read-only and throws.`;
 
 export const CSS_SUBSET = `Leaf values are CSS-familiar, but only a **documented subset** is supported. Anything outside it throws a specific error naming what went wrong — it never renders wrong pixels.
 

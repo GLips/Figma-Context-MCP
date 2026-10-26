@@ -195,7 +195,7 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `flcm.effects(sugar)` | effect values[] | CSS and Figma effect values for an effects prop. |
 | `await flcm.page.current()` | { fileName, page, pages } | Current page and available pages. |
 | `await flcm.page.use(nameOrId)` | { fileName, page, pages } | Switch to an existing page. |
-| `await flcm.page.new(name)` | { fileName, page, pages } | Create a uniquely named page and switch to it. |
+| `await flcm.page.new(name)` | { created, currentPage, note } | Create a uniquely named page in the background. The current page does not change; write onto the new page with flcm.append(created.id, spec), or flcm.page.use(created.id) to switch. |
 
 Nodes are data with type FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR or INSTANCE. gradient, image and effects produce reusable values for props.
 
@@ -229,15 +229,16 @@ clone duplicates the live subtree faithfully and clears its keys. It returns the
 
 ### Pages
 
-The current page is the default scope: `render` places roots on it, and `selection`, a key lookup and a `find` without `within` search it. An id or handle reaches its node on any page of the open file, and `within` can name another page. `flcm.page` reads and switches the current page:
+The current page is the default scope: `render` places roots on it, and `selection`, a key lookup and a `find` without `within` search it. An id or handle reaches its node on any page of the open file, and `within` can name another page. `flcm.page` reads and switches the current page, and makes pages without switching to them:
 
 ```js
 await flcm.page.current();          // { fileName, page: { id, name }, pages: [ … ] } — where am I?
-await flcm.page.new("pricing");     // make it and switch to it; a name already in the file fails loud
+const { created } = await flcm.page.new("pricing"); // made in the background: the current page stays put
+await flcm.append(created.id, { type: "FRAME", name: "Hero" }); // writes onto the new page, no switch
 await flcm.page.use("pricing");     // switch to one that exists (name or id); never creates
 ```
 
-Switch **before** you render: a render lands on whatever page is current. Don't assign `figma.currentPage`; under `documentAccess: "dynamic-page"` it is read-only and throws.
+`page.new` creates the page in the background and returns its id; the current page does not change, so a `render` after it still lands on the old page. Write onto a new page with `flcm.append(created.id, spec)`, or `page.use` it first: a render lands on whatever page is current. Don't assign `figma.currentPage`; under `documentAccess: "dynamic-page"` it is read-only and throws.
 
 ## Props by node
 

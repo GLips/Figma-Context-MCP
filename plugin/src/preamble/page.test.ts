@@ -10,16 +10,18 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { pageCurrent, pageNew, pageUse } from "./page.js";
 
-test("page.new creates, switches, and reports the file it landed in", async () => {
+test("page.new creates the page without switching, and says where the agent still is", async () => {
   createFigmaMock();
 
-  const info = await pageNew("pricing");
-  assert.equal(info.page.name, "pricing");
-  assert.equal(info.fileName, "Untitled");
-  // Switched — a render issued next lands here, which is the entire point of the verb.
-  assert.equal(figma.currentPage.name, "pricing");
+  const made = await pageNew("pricing");
+  assert.equal(made.created.name, "pricing");
+  // Not switched: Figma can hold a switch to a fresh page for minutes, so new leaves navigation to use.
+  assert.equal(figma.currentPage.name, "Page 1");
+  assert.deepEqual(made.currentPage, { id: "0:1", name: "Page 1" });
+  assert.match(made.note, /in the background\. The current page is still "Page 1"/);
+  assert.ok(made.note.includes(`flcm.append(${JSON.stringify(made.created.id)}, spec)`), made.note);
   assert.deepEqual(
-    info.pages.map((p) => p.name),
+    (await pageCurrent()).pages.map((p) => p.name),
     ["Page 1", "pricing"],
   );
 });
@@ -38,11 +40,13 @@ test("page.new refuses a name the file already uses, and creates nothing", async
 test("page.use switches to an existing page and never creates one", async () => {
   createFigmaMock();
   const made = await pageNew("pricing");
+  await pageUse("pricing");
+  assert.equal(figma.currentPage.name, "pricing");
   await pageUse("Page 1");
   assert.equal(figma.currentPage.name, "Page 1");
 
   // By id as well as by name — an id is the unambiguous address when names repeat.
-  const back = await pageUse(made.page.id);
+  const back = await pageUse(made.created.id);
   assert.equal(back.page.name, "pricing");
 
   await assert.rejects(pageUse("checkout"), /no page with id or name "checkout"/);

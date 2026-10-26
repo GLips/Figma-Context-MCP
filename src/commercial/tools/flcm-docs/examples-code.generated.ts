@@ -328,7 +328,8 @@ const live = await figma.getNodeByIdAsync(out.id);         // drop out for docum
 figma.viewport.scrollAndZoomIntoView([live]);
 return out.id;`,
   pages: `await flcm.page.current();          // { fileName, page: { id, name }, pages: [ … ] } — where am I?
-await flcm.page.new("pricing");     // make it and switch to it; a name already in the file fails loud
+const { created } = await flcm.page.new("pricing"); // made in the background: the current page stays put
+await flcm.append(created.id, { type: "FRAME", name: "Hero" }); // writes onto the new page, no switch
 await flcm.page.use("pricing");     // switch to one that exists (name or id); never creates`,
   editMany: `const cards = await flcm.find({ type: "FRAME", name: /^Card$/ });
 await flcm.editMany(cards.map((card) => ({ id: card.id, fill: "#F6F7F9", borderRadius: 12 })));`,
