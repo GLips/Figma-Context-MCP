@@ -4,7 +4,7 @@
  */
 import { warnings } from "./warnings.js";
 import { registerResult } from "./egress.js";
-import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
+import { sceneFigma as figma, invalidateSceneAccess, settleSceneMovedIds } from "./scene-access.js";
 import { beginSizingDiagnostics, concedeSizeBoundClamps, finishSizingDiagnostics, retargetSizingDiagnostics } from "./sizing-diagnostics.js";
 import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDiagnostics } from "./moved-out-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
@@ -311,6 +311,7 @@ export function enterMutatingVerb<P, G, T>(
         const result = build();
         figma.commitUndo();
         recordCommittedVerb();
+        settleSceneMovedIds(true);
         finishSizingDiagnostics(verb);
         finishMovedOutDiagnostics(verb);
         registerResult(result);
@@ -318,6 +319,7 @@ export function enterMutatingVerb<P, G, T>(
         return result;
       } catch (err) {
         warnings.discardFrom(warningCheckpoint);
+        settleSceneMovedIds(false);
         figma.commitUndo();
         // Explicit clone compensation already restored its writes; undo would reverse that cleanup.
         if (err instanceof Error && compensatedFailures.has(err)) throw err;

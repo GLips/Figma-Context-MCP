@@ -17,10 +17,18 @@
  * One edge is not an alias: moving inherited slot content into a sibling slot makes
  * Figma copy it, and the slot's child list keeps naming the original. A compound
  * edge whose last segment (the node's own guid) differs from the indexed node's is
- * that retired original, so the copy reads under its own id and the old one refuses.
+ * that retired original, so the copy reads under its own id.
+ *
+ * Moved anywhere else, inherited slot content leaves a node that renders but can't be read or
+ * removed (live, 2026-10-26), so a move out of its instance lands a copy and removes the original.
+ * Either way a held view follows the copy, and its old id resolves to the copy for the session.
  */
 import { componentPath, guidOf, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
-import { FlcmError } from "./flcm-error.js";
+import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
+import { isInheritedSlotContent, slotOwnerOf } from "./identity.js";
+import { warnings } from "./warnings.js";
+import { runSession } from "./run-session.js";
+import { movedIdsOf } from "./session.js";
 type Container = BaseNode & ChildrenMixin;
 
 function identityOf(node: BaseNode): { type: string; name: string; id: string } {
@@ -65,16 +73,22 @@ const API_TOPOLOGY_METHODS: ReadonlySet<string> = new Set([
   "createPage", "createSection", "createBooleanOperation", "createNodeFromSvg",
 ] satisfies (keyof PluginAPI)[]);
 
-export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; invalidate(): void } {
+/**
+ * `moved` maps each id a committed verb's placements retired to the copy that replaced it (session.ts
+ * movedIdsOf). A verb's own entries wait in `pending` until it commits: its rollback restores them.
+ */
+export function createSceneAccess(source: () => PluginAPI, moved: Record<string, string> = {}): {
+  api: PluginAPI; invalidate(): void; settleMovedIds(committed: boolean): void;
+} {
   let generation = 0;
+  let pending: Record<string, string> = {};
+  const copyOf = (id: string): string | undefined => pending[id] ?? moved[id];
   const states = new Map<string, State>();
-  // Ids this run's placements retired, mapped to the copy that replaced each.
-  const copies = new Map<string, string>();
   let views = new WeakMap<object, State>();
   let currentApi: PluginAPI | undefined;
   function nativeApi(): PluginAPI {
     const api = source();
-    if (currentApi !== api) { currentApi = api; states.clear(); copies.clear(); views = new WeakMap(); generation++; }
+    if (currentApi !== api) { currentApi = api; states.clear(); views = new WeakMap(); generation++; }
     return api;
   }
   const invalidate = (): void => { generation++; };
@@ -154,8 +168,9 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
         if (!edge) throw inconsistentInstanceTree(root, "it searched more layers than the children lists hold");
         const child = edge.ids[edge.next++];
         if (child.type !== node.type) throw inconsistentInstanceTree(root, "a layer had a different type in the search than in its parent's children");
-        // A retired original's descendants are listed under its dead path too.
-        copied = edge.retired || (isSublayerId(child.id) && guidOf(child.id) !== guidOf(node.id));
+        // A retired original's descendants are listed under its dead path too, but a plain id is a
+        // layer's whole address: slot content owned outright keeps it under any listed ancestor.
+        copied = isSublayerId(child.id) && (edge.retired || guidOf(child.id) !== guidOf(node.id));
         if (copied) retired.set(child.id, node.id);
         alias = copied ? node.id : child.id;
         parent = edge.record;
@@ -248,18 +263,17 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       );
     }
     if (landed !== moved) {
-      const after = landed.record;
       adoptLanded(moved, landed);
       // A copy has its original's shape, so descendants pair by position, whatever their ids.
-      const pair = (old: RecordNode, copy: RecordNode): void => {
-        copy.children.forEach((child, i) => {
-          const prior = old.children[i];
-          if (!prior) return;
-          if (prior.state !== child.state) adoptLanded(prior.state, child.state);
-          pair(prior, child);
+      const pair = (old: RecordNode, held: State): void => {
+        const now = "children" in held.native ? childViews(held).map(view => views.get(view)!) : [];
+        old.children.forEach((prior, i) => {
+          if (!now[i]) return;
+          if (prior.state !== now[i]) adoptLanded(prior.state, now[i]);
+          pair(prior, prior.state);
         });
       };
-      if (before && after) pair(before, after);
+      if (before) pair(before, moved);
       return;
     }
     if (insideInstance(dest)) return;
@@ -269,12 +283,21 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
   }
   // Point a held state at the node that replaced it, so its view and cached methods follow.
   function adoptLanded(held: State, landed: State): void {
-    if (landed.id !== held.id) copies.set(held.id, landed.id);
+    if (landed.id !== held.id) pending[held.id] = landed.id;
     if (states.get(held.id) === held) states.delete(held.id);
     Object.assign(held, { native: landed.native, id: landed.id, anchor: landed.anchor, scope: landed.scope, record: landed.record, ownScope: undefined });
     if (landed.record) landed.record.state = held;
     states.set(landed.id, held);
     states.set(landed.native.id, held);
+  }
+  // The instance, described, that a move takes inherited slot content out of, or undefined when the
+  // move keeps it in one of that instance's slots (or it isn't inherited slot content).
+  function instanceLeft(dest: State, moving: State): string | undefined {
+    const node = moving.view as SceneNode;
+    if (!isInheritedSlotContent(node)) return undefined;
+    const owner = slotOwnerOf(node, false)!;
+    if (dest.native.type !== "PAGE" && slotOwnerOf(dest.view as SceneNode, true)?.id === owner.id) return undefined;
+    return describeNodeIdentity(owner);
   }
   function viewState(value: unknown): State | undefined {
     return value && typeof value === "object" ? views.get(value) : undefined;
@@ -317,10 +340,28 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
           const current = live(state);
           const method = (current as unknown as Record<PropertyKey, unknown>)[key] as (...args: unknown[]) => unknown;
           const landing = landingOf(state, key, args);
+          const native = args.map(unwrap);
+          const left = landing && instanceLeft(state, landing.moved);
+          const original = left ? live(landing.moved) as SceneNode : undefined;
+          // Cloned and placed before anything reads inside the copy: a subtree read before it moves
+          // into a slot comes back unreadable (slot-validity ARCHAEOLOGY item 2).
+          const fresh = original?.clone();
+          if (fresh) native[native.length - 1] = fresh;
           let result: unknown;
-          try { result = Reflect.apply(method, current, args.map(unwrap)); }
+          try { result = Reflect.apply(method, current, native); }
+          catch (cause) {
+            // The placement's failure is the one the agent needs; a loose copy the verb's undo also takes.
+            try { fresh?.remove(); } catch { /* reported through cause */ }
+            throw cause;
+          }
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
+          if (original) { original.remove(); invalidate(); }
           if (landing) placed(state, landing.moved, landing.index);
+          if (left) {
+            warnings.add({ id: landing!.moved.id, message: "This layer sat in a slot of " + left +
+              ", and Figma doesn't let a plugin move it out of that instance, so flcm placed a copy here and removed the original. " +
+              "Its id is now this one; the old id still reaches it in this session." });
+          }
           return result instanceof Promise ? result.then(wrap) : wrap(result);
         };
         state.methods.set(key, invoke);
@@ -335,11 +376,21 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       },
     });
   }
-  async function byId(id: string): Promise<BaseNode | null> {
+  async function byId(id: string, followed = new Set<string>()): Promise<BaseNode | null> {
+    const follow = (copy: string): Promise<BaseNode | null> | null => {
+      if (followed.has(id)) return null;
+      followed.add(id);
+      return byId(copy, followed);
+    };
     // Compound IDs name descendants of an independently addressable instance.
     // Resolve that bounded root before asking its index for either public ID form.
     const outermost = outermostInstanceId(id);
     if (outermost) {
+      // Followed before Figma is asked: a committed move removed the original, so only a human undo,
+      // which takes the copy too, brings the old id back. And asking Figma about an instance since
+      // deleted stalls 10s and throws (live, 2026-10-26).
+      const movedTo = copyOf(id);
+      if (movedTo) return follow(movedTo);
       const root = await nativeApi().getNodeByIdAsync(outermost);
       if (!root || root.removed) return null;
       const anchor = stateOf(root);
@@ -350,11 +401,8 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       // component-relative suffix and resolve it under that current native root.
       const currentId = liveSublayerId(root.id, componentPath(id, outermost));
       const record = scope.byId.get(currentId);
-      const copy = record ? undefined : scope.retired.get(currentId) ?? copies.get(id);
-      if (copy) {
-        throw new FlcmError("authoring", "Figma retired id " + JSON.stringify(id) + " when it copied that inherited slot content into another slot. " +
-          "Use the id the move returned: the copy is " + JSON.stringify(copy) + ".");
-      }
+      const copy = record ? undefined : scope.retired.get(currentId);
+      if (copy) return follow(copy);
       if (!record || record.state.native.removed) return null;
       record.state.scope = scope;
       record.state.record = record;
@@ -384,9 +432,14 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     },
     set(_target, key, value) { return Reflect.set(nativeApi(), key, unwrap(value), nativeApi()); },
   });
-  return { api, invalidate };
+  function settleMovedIds(committed: boolean): void {
+    if (committed) Object.assign(moved, pending);
+    pending = {};
+  }
+  return { api, invalidate, settleMovedIds };
 }
 
-const access = createSceneAccess(() => figma);
+const access = createSceneAccess(() => figma, movedIdsOf(runSession));
 export const sceneFigma = access.api;
 export const invalidateSceneAccess = access.invalidate;
+export const settleSceneMovedIds = access.settleMovedIds;

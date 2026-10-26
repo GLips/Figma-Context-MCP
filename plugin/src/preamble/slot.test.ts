@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import * as flcm from "./runtime.js";
 import { specNode } from "../../harness/spec-node.js";
+import { createSceneAccess } from "./scene-access.js";
 
 async function fixture() {
   const figma = createFigmaMock();
@@ -154,7 +155,7 @@ test("slot input errors identify their path and leave the document unchanged", a
   assert.deepEqual(figma.undoLog, before);
 });
 
-test("inherited slot content moves only between its own instance's slots", async () => {
+test("inherited slot content moves out of its instance as a copy, and its old id follows the copy", async () => {
   const figma = createFigmaMock();
   const tile = await flcm.component({ type: "FRAME", name: "Tile", width: 40, height: 40 });
   const slot = (name: string) => ({ type: "FRAME", name, width: 100, height: 100, componentPropertyReferences: { slot: name } });
@@ -168,14 +169,72 @@ test("inherited slot content moves only between its own instance's slots", async
   const frame = await flcm.render({ type: "FRAME", width: 100, height: 100, left: 1000 });
   const [source, destination] = ((await figma.getNodeByIdAsync(outer.id)) as any).children[0].children;
   const subject = source.children[0].id;
-  const before = [...figma.undoLog];
-
-  await assert.rejects(flcm.append(frame, { id: subject }), /is inherited slot content.*flcm\.clone\(/);
-  await assert.rejects(flcm.render({ id: subject }), /is inherited slot content/);
-  assert.deepEqual(figma.undoLog, before);
-  assert.equal(source.children.length, 1);
 
   const moved = await flcm.append(destination.id, { id: subject });
   assert.equal(destination.children[0].id, moved.id);
   assert.equal(source.children.length, 0);
+
+  const out = await flcm.append(frame, { id: moved.id }) as any;
+  assert.notEqual(out.id, moved.id);
+  assert.match(out.warnings[0].message, /placed a copy here and removed the original/);
+  assert.equal(destination.children.length, 0);
+  const copy = await figma.getNodeByIdAsync(out.id) as any;
+  assert.equal(copy.name, "Tile");
+  assert.equal(copy.parent.id, frame.id);
+  // A later call naming the old id reaches the copy.
+  assert.equal((await flcm.edit(moved.id, { name: "Moved" })).id, copy.id);
+  assert.equal(copy.name, "Moved");
+});
+
+test("a copied instance's slot content moves out at every depth", async () => {
+  const figma = createFigmaMock() as any;
+  const tile = figma.createComponent(); figma.currentPage.appendChild(tile); tile.name = "Tile";
+  const badge = figma.createFrame(); badge.name = "Badge"; tile.appendChild(badge);
+  badge.componentPropertyReferences = { slotContentId: tile.addComponentProperty("Badge", "SLOT", "") };
+  const section = figma.createComponent(); figma.currentPage.appendChild(section);
+  const body = figma.createFrame(); body.name = "Body"; section.appendChild(body);
+  body.componentPropertyReferences = { slotContentId: section.addComponentProperty("Body", "SLOT", "") };
+  const instance = section.createInstance(); figma.currentPage.appendChild(instance);
+  const userTile = tile.createInstance(); instance.children[0].appendChild(userTile);
+  userTile.children[0].appendChild(figma.createStar());
+  // A native clone gives all of the copy's slot content path ids, as a reload does to the original.
+  const copy = await figma.getNodeByIdAsync((await flcm.clone(instance.id)).id);
+  const movedTo = new Map<string, string>();
+  for (const type of ["STAR", "INSTANCE"]) {
+    const layer = copy.findOne((n: any) => n.type === type);
+    assert.match(layer.id, /^I/);
+    const out = await flcm.append(figma.currentPage.id, { id: layer.id });
+    const moved = await figma.getNodeByIdAsync(out.id);
+    assert.equal(moved.parent, figma.currentPage);
+    assert.equal(moved.type, type);
+    movedTo.set(layer.id, out.id);
+  }
+  assert.equal(copy.findAll(() => true).filter((n: any) => n.parent.type === "SLOT").length, 0);
+  // The old ids keep reaching the copies after the instance they came from is gone.
+  copy.remove();
+  for (const [old, now] of movedTo) assert.equal((await flcm.get(old) as any).node.id, now);
+});
+
+test("an old id reaches its copy only once the verb that moved it commits", async () => {
+  const figma = createFigmaMock() as any;
+  const tile = figma.createComponent(); figma.currentPage.appendChild(tile);
+  const body = figma.createFrame(); tile.appendChild(body);
+  body.componentPropertyReferences = { slotContentId: tile.addComponentProperty("Body", "SLOT", "") };
+  const instance = tile.createInstance(); figma.currentPage.appendChild(instance);
+  instance.children[0].appendChild(figma.createStar());
+  instance.children[0].appendChild(figma.createEllipse());
+  const copy = instance.clone();
+  const access = createSceneAccess(() => figma);
+  const move = async (type: string, committed: boolean) => {
+    const old = copy.findOne((n: any) => n.type === type).id;
+    const view = await access.api.getNodeByIdAsync(old) as SceneNode;
+    access.api.currentPage.appendChild(view);
+    access.settleMovedIds(committed);
+    return { old, now: view.id };
+  };
+  const kept = await move("STAR", true);
+  assert.equal((await access.api.getNodeByIdAsync(kept.old))?.id, kept.now);
+  // A rolled-back verb's undo restores the original, so its old id must not lead to the copy.
+  const undone = await move("ELLIPSE", false);
+  assert.notEqual((await access.api.getNodeByIdAsync(undone.old))?.id, undone.now);
 });

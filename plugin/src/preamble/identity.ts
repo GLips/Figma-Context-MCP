@@ -173,9 +173,10 @@ export function slotOwnerOf<T extends ParentedNode>(node: T, countSelf: boolean)
   return null;
 }
 
-// Slot content an enclosing component's definition supplied, rather than an override on the
-// instance. Figma gives an override node a plain id of its own; definition content reads through
-// the instance path, so it alone carries a compound id while sitting in an open slot.
+// Slot content that reads through its instance's path (a compound id), which Figma ties to that
+// instance. Named for content a definition supplied, but not only that: once a file reloads, or in a
+// native clone of a filled instance, the user's own slot content reads this way too (live,
+// 2026-10-26). Content placed into a slot this session has a plain id until then.
 export function isInheritedSlotContent(node: ParentedNode & { id: string }): boolean {
   return isSublayerId(node.id) && !!slotOwnerOf(node, false);
 }

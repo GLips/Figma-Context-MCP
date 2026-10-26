@@ -47,7 +47,6 @@ import { clearKeysDeep, instanceContextOf, instanceContextUnder, instanceAncesto
 import { mintAuthorizedLiveLayout, preflightInstanceWrites, type AuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
-import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
 import { compileEditPlan, emptyEditPlan, preflightEditPlan, authorizeEditPlan } from "./edit-plan.js";
@@ -275,9 +274,7 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
     const resources = gateTreeResources(tree, loaded, subject, { destination: dest.parent });
     for (const entry of loaded.live.entries.values()) assertNoCycle(entry.ref.sourcePath, entry.node, dest.parent);
     if (tree.liveId !== undefined) {
-      // Also checked as each live node is placed; here it refuses the common case before the seal.
       const liveRoot = resources.live.get(tree)!;
-      assertInheritedSlotContentStays(tree.sourcePath, liveRoot.node, dest.parent);
       assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, liveRoot.layout);
     }
     const bindings = prepareInsertBindings(subject, dest.parent, tree, resources);
@@ -409,7 +406,6 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       try {
         try {
           copy = node.clone();
-          clearKeysDeep(copy);
         } catch (cause) {
           throw fail(cause);
         }
@@ -417,7 +413,9 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
         // From here the copy is the subject, and placing it is exactly a move.
         const layout = mintAuthorizedLiveLayout("flcm.clone", copy, resolved, instanceContextUnder(dest.parent, copy));
         applyPlacement("clone", { kind: "placement", dest, layout }, span);
-        try { restoreCloneBindings(copy, bindings, created); } catch (cause) { throw fail(cause); }
+        // Keys are cleared only once the copy is placed: a subtree read before it moves into a slot
+        // comes back unreadable (slot-validity ARCHAEOLOGY item 2).
+        try { restoreCloneBindings(copy, bindings, created); clearKeysDeep(copy); } catch (cause) { throw fail(cause); }
         if (edit) {
           // After the placement: the copy's own words resolve against the parent it now sits in.
           const plan = authorizeEditPlan({ ...edit, node: copy }, resources, "flcm.clone");

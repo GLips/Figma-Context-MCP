@@ -25,7 +25,7 @@ import { planInstanceEdit, overrideRealizeOnlyChecks, instanceGeometryWrites, wi
 import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component-properties.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { instanceContextOf, instanceContextUnder, writeKey, isInheritedSlotContent, slotOwnerOf } from "./identity.js";
+import { instanceContextOf, instanceContextUnder, writeKey } from "./identity.js";
 import { assertInstanceRootLayoutMode, mintAuthorizedLiveLayout } from "./instance-write-authorization.js";
 import { layoutModeOf } from "./layout-mode.js";
 import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
@@ -34,22 +34,6 @@ import type { RenderCtx, RenderResources } from "./bridge.js";
 import { holdPivot, settlePivot } from "./apply-span.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
-
-// Inherited slot content moves only into another slot of its own instance, where Figma copies it
-// and placement returns the copy's id. Anywhere else Figma leaves a node that renders but throws on
-// every read and can't be removed, so that move is refused before it is written.
-export function assertInheritedSlotContentStays(at: string, node: SceneNode, parent: BaseNode & ChildrenMixin): void {
-  if (!isInheritedSlotContent(node)) return;
-  const owner = slotOwnerOf(node, false)!;
-  if (parent.type !== "PAGE" && slotOwnerOf(parent as SceneNode, true)?.id === owner.id) return;
-  throw new FlcmError(
-    "figma",
-    "this layer is inherited slot content: an enclosing component's definition put it in a slot of " + describeNodeIdentity(owner) +
-      ", not an override on the instance. Figma can move it only into another slot of that instance; anywhere else it leaves a layer that renders but can't be read or removed. " +
-      "To put it elsewhere, copy it with flcm.clone(" + JSON.stringify(node.id) + ", destination); the slot keeps the original.",
-    { path: at, node: { type: node.type, name: node.name, id: node.id } },
-  );
-}
 
 // The live nodes a tree places under a parent other than the one they sit in: under a node it
 // builds, or a live parent or destination that isn't theirs. Slot content's parent is a sublayer
@@ -172,9 +156,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
       turned: !!plan && !plan.instanceWords && !!((node as { rotation?: number }).rotation || plan.patch.rotation),
     });
     nodes.set(ref, { node, component: instance?.becomes ?? current, layout: plan?.patch.layout, refs, shows, place(parent, place, ctx) {
-      assertInheritedSlotContentStays(at, node, parent);
-      // Inherited slot content lands as Figma's copy, leaving the original where it was: not a move.
-      const from = intoNewNode && !isInheritedSlotContent(node) ? node.parent : null;
+      const from = intoNewNode ? node.parent : null;
       const fail = beginMutatingApply(node, { path: at });
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new FlcmError("authoring", "a node cannot move inside itself or its descendant.", { path: at });
@@ -220,7 +202,7 @@ export function gateLiveTrees(trees: readonly LoadedLiveTree[], resources: Rende
             if (!plan) settlePivot(ctx.span, node, words.child.layout);
           },
         }, ctx);
-        // Inherited slot content lands as Figma's copy, which the node now reads as (scene-access.ts).
+        // Inherited slot content lands as a copy, which the node now reads as (scene-access.ts).
         ctx.placedIds.set(ref.source, node.id);
         return node;
       } catch (cause) { throw fail(cause); }

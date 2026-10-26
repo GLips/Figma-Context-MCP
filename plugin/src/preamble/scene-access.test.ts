@@ -165,7 +165,7 @@ for (const method of ["appendChild", "insertChild"] as const) test(method + " re
   assert.equal(root.id,"4:1");assert.equal(root.parent,dest);assert.equal(root.children[0],child);
 });
 
-test("inherited slot content moved to a sibling slot reads as Figma's copy, with earlier handles following it and its old id retired", async () => {
+test("inherited slot content moved to a sibling slot reads as Figma's copy, with earlier handles and its old id following it", async () => {
   const base = (id: string, type: string) => ({ id, type, removed: false, parent: null as any, getPluginData() { return ""; } });
   const page: any = { ...base("1:1", "PAGE"), children: [] };
   const outer: any = { ...base("10:1", "INSTANCE"), parent: page };
@@ -202,7 +202,32 @@ test("inherited slot content moved to a sibling slot reads as Figma's copy, with
   assert.equal(copy.layoutGrow, 1);
   assert.equal(moved.parent, slot);
   assert.equal((await api.getNodeByIdAsync(copy.id))?.id, copy.id);
-  await assert.rejects(api.getNodeByIdAsync(tile.id), /retired.*I10:1;11:1;12:2;14:1/);
-  // A later run holds no memory of the move; the dead child-list entry alone identifies it.
-  await assert.rejects(createSceneAccess(() => native).api.getNodeByIdAsync(tile.id), /retired.*I10:1;11:1;12:2;14:1/);
+  assert.equal((await api.getNodeByIdAsync(tile.id))?.id, copy.id);
+  // An access with no memory of the move finds the copy from the dead child-list entry alone.
+  assert.equal((await createSceneAccess(() => native).api.getNodeByIdAsync(tile.id))?.id, copy.id);
+});
+
+test("slot content owned outright keeps its own id under an ancestor Figma lists by another path", async () => {
+  const base = (id: string, type: string) => ({ id, type, removed: false, parent: null as any, getPluginData() { return ""; } });
+  const page: any = { ...base("1:1", "PAGE"), children: [] };
+  const outer: any = { ...base("10:1", "INSTANCE"), parent: page };
+  const slot: any = { ...base("I10:1;11:1", "SLOT"), parent: outer };
+  // Live shape (2026-10-26): the search reaches a default tile through its slot, the child list through
+  // its definition, and the user's content in the tile's own slot is listed by its plain id.
+  const tile: any = { ...base("I10:1;11:1;12:1", "INSTANCE"), parent: slot };
+  const badge: any = { ...base("I10:1;11:1;12:1;13:1", "SLOT"), parent: tile };
+  const dot: any = { ...base("I10:1;11:1;12:1;13:1;14:2", "STAR"), parent: badge };
+  const own: any = { ...base("14:1", "STAR") };
+  badge.children = [own]; tile.children = [{ ...base("I10:1;12:9;13:1", "SLOT"), children: [own] }];
+  slot.children = [{ ...base("I10:1;12:9", "INSTANCE"), children: tile.children }];
+  outer.children = [slot];
+  outer.findAllWithCriteria = () => [slot, tile, badge, dot];
+  page.children = [outer];
+  const native: any = { currentPage: page, skipInvisibleInstanceChildren: false,
+    async getNodeByIdAsync(id: string) { return id === outer.id ? outer : null; } };
+  const { api } = createSceneAccess(() => native);
+  const root = await api.getNodeByIdAsync(outer.id) as InstanceNode;
+  const listed = (root.children[0] as SlotNode).children[0] as InstanceNode;
+  assert.equal(listed.id, tile.id);
+  assert.equal(((listed.children[0] as SlotNode).children[0]).id, own.id);
 });

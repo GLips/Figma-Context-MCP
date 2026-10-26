@@ -5,6 +5,8 @@
 import { FlcmError } from "./flcm-error.js";
 import { isPlainData } from "./plain-data.js";
 
+const MOVED_IDS = Symbol.for("framelink.flcm.movedIds");
+
 /**
  * Session values own their data. Copying on ingress closes the alias loophole: an agent cannot
  * retain an input object, attach a request-bound function later, and smuggle it into the store.
@@ -34,6 +36,8 @@ export function createSession(): Record<string, unknown> {
     ancestors.add(value);
     try {
       for (const key of Reflect.ownKeys(value)) {
+        // Returning the session snapshots it as `last`; flcm's memory isn't the agent's data to copy.
+        if (key === MOVED_IDS && value === session) continue;
         if (typeof key !== "string") return fail(path);
         const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
         if (!("value" in descriptor)) return fail(`${path}.${key}`);
@@ -76,6 +80,19 @@ export function createSession(): Record<string, unknown> {
     return proxy;
   }
 
-  const session = protect({}, "session") as Record<string, unknown>;
+  const root = {};
+  // flcm's own memory rides on the session's lifetime but outside the agent's data: under a symbol
+  // key, which no data trap admits and egress and size never walk. Hidden, not sealed: scene-access
+  // bounds what it follows, so an agent tampering with it only misleads its own session.
+  Object.defineProperty(root, MOVED_IDS, { value: {} });
+  const session = protect(root, "session") as Record<string, unknown>;
   return session;
+}
+
+/**
+ * The ids flcm retired by moving slot content as a copy, each mapped to the copy's id, kept for the
+ * session so a later call naming the old id still reaches the layer (scene-access.ts).
+ */
+export function movedIdsOf(session: Record<string, unknown>): Record<string, string> {
+  return (session as Record<symbol, Record<string, string>>)[MOVED_IDS];
 }

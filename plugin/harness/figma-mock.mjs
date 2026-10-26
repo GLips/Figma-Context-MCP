@@ -373,6 +373,7 @@ class Node {
   _appendChild(child) {
     assertChildListOpen(this, true, "appendChild");
     if (child.parent) assertChildListOpen(child, false, "appendChild");
+    const tied = tiedLeaving(child, this);
     this._settleConstraintReflow();
     child.parent?._settleConstraintReflow?.();
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
@@ -381,10 +382,12 @@ class Node {
     if (entering) this._autoPlaceGrid(child);
     this.children.push(child);
     this._recordConstraintBasis();
+    if (tied) for (const n of [child, ...child.findAll?.() ?? []]) destroyNode(n);
   }
   _insertChild(index, child) {
     assertChildListOpen(this, true, "insertChild");
     if (child.parent) assertChildListOpen(child, false, "insertChild");
+    const tied = tiedLeaving(child, this);
     this._settleConstraintReflow();
     child.parent?._settleConstraintReflow?.();
     // Live Figma interprets same-parent indices against the pre-removal child array.
@@ -397,6 +400,7 @@ class Node {
     const idx = had !== -1 && had < index ? index - 1 : index;
     this.children.splice(idx, 0, child);
     this._recordConstraintBasis();
+    if (tied) for (const n of [child, ...child.findAll?.() ?? []]) destroyNode(n);
   }
   // Duplicate this node and its subtree, parented under the current page — [verified,
   // plugin-typings 1.133: "Duplicates the node. By default, the duplicate will be parented under
@@ -409,6 +413,15 @@ class Node {
   clone() {
     const copy = cloneSubtree(this);
     for (const n of [copy, ...copy.findAll()]) if (n.type === "FRAME" && (n.componentPropertyReferences || {}).slotContentId) n.type = "SLOT";
+    // Every layer in a copied instance's slot comes back with a path id through the copy, even
+    // content the source's instance owned outright (live, 2026-10-26).
+    for (const slot of [copy, ...copy.findAll()]) {
+      if (slot.type !== "SLOT" || !instanceAbove(slot)) continue;
+      for (const n of slot.findAll()) {
+        if (n.id.startsWith("I")) continue;
+        registry.delete(n.id); n.id = "I" + slot.id.replace(/^I/, "") + ";" + n.id; registry.set(n.id, n);
+      }
+    }
     figma.currentPage.appendChild(copy);
     return copy;
   }
@@ -1225,6 +1238,26 @@ function instancesOf(component) {
     if (node.type === "INSTANCE" && !node.removed && mains.indexOf(node.mainComponent) !== -1) out.push(node);
   }
   return out;
+}
+
+function instanceAbove(node) {
+  for (let p = node.parent; p; p = p.parent) if (p.type === "INSTANCE") return p;
+  return null;
+}
+
+// The INSTANCE whose open slot holds `node` (the node itself counts when `countSelf`), or null.
+function slotOwner(node, countSelf) {
+  let p = countSelf ? node : node.parent;
+  while (p && p.type !== "PAGE" && p.type !== "SLOT" && p.type !== "INSTANCE") p = p.parent;
+  return p && p.type === "SLOT" ? instanceAbove(p) : null;
+}
+
+// Live, slot content with a path id moved anywhere but another slot of its own instance lands as a
+// node that renders while every read throws "does not exist" (2026-10-26).
+function tiedLeaving(child, dest) {
+  if (!child.parent || !child.id.startsWith("I")) return false;
+  const owner = slotOwner(child, false);
+  return !!owner && (dest.type === "PAGE" || slotOwner(dest, true) !== owner);
 }
 
 // The definition owner a layer's binding resolves against, or null for a layer outside any
