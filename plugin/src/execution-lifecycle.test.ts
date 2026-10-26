@@ -926,6 +926,25 @@ test("a verb that lands after the code returns still changes the document", asyn
   assert.equal(written.documentChanged, true);
 });
 
+test("a page switch Figma never finishes still replies, naming the page it created", { timeout: 10_000 }, async (t) => {
+  // Live (fig-139): setCurrentPageAsync to a page made this session never settled, timers still ran.
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const { PAGE_SWITCH_PATIENCE_MS } = await import("./preamble/page.js");
+  const figma = createFigmaMock();
+  figma.setCurrentPageAsync = () => new Promise(() => {});
+  const h = host(figma);
+  await h.connect(1);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const id = "page-new";
+  h.sendFrame(1, { type: "EXECUTE_CODE", id, preamble: await realPreamble, code: `await flcm.page.new("templates");` });
+  await h.frame((f) => f.type === "RUN_TRACE" && f.stage === "native-start" && f.operation === "page-switch", "the page switch starting");
+  t.mock.timers.tick(PAGE_SWITCH_PATIENCE_MS);
+  const created = figma.root.children.find((p: { name: string }) => p.name === "templates");
+  const { errors } = await h.result(id);
+  assert.match(errors, /didn't finish switching to page "templates"/);
+  assert.ok(errors.includes(`flcm.page.use(${JSON.stringify(created.id)})`), errors);
+});
+
 test("queued calls observe completed session writes and cancelled queued calls cannot change last", async () => {
   const h = host();
   await h.connect(1);

@@ -45,6 +45,34 @@ function nameList(): string {
     .join(", ");
 }
 
+/**
+ * How long a page switch may take before the verb gives up on it. Live switches settle in well under
+ * a second, even to an unloaded page of a large file; a stalled one never settles at all, and the
+ * plugin's timers keep running meanwhile (seen live, fig-139). Under the server's inactivity deadline,
+ * so the run replies with this verb's own account rather than the server's timeout.
+ */
+export const PAGE_SWITCH_PATIENCE_MS = 5_000;
+
+// Figma has held a switch to a page created in the same session for minutes, with switches to other
+// pages still settling; it cleared on its own, cause unknown. The held request isn't cancelled.
+function switchTo(target: PageNode, created: boolean): Promise<void> {
+  // Read now: the page can be deleted while the switch waits, and its getters throw then.
+  const name = JSON.stringify(target.name);
+  const id = JSON.stringify(target.id);
+  return awaitNative("page-switch", () => figma.setCurrentPageAsync(target), {
+    afterMs: PAGE_SWITCH_PATIENCE_MS,
+    stalled: () =>
+      new FlcmError(
+        "figma",
+        "Figma didn't finish switching to page " + name + " (id " + id + ") within " + PAGE_SWITCH_PATIENCE_MS / 1000 +
+          "s, so the run stops here. " + (created ? "The page was created; " : "") + "the current page is still " +
+          JSON.stringify(figma.currentPage.name) + ". The switch wasn't cancelled and may still finish later, so pass " +
+          "parents by id rather than relying on the current page: flcm.append(" + id + ", spec) writes onto that page" +
+          (created ? ", and flcm.page.use(" + id + ") retries the switch (page.new would refuse the taken name)." : "."),
+      ),
+  });
+}
+
 function assertPageName(name: unknown): string {
   if (typeof name !== "string" || !name.trim()) {
     throw new FlcmError("authoring", "the page name must be a non-empty string — got " + JSON.stringify(name) + ".");
@@ -94,7 +122,7 @@ export async function pageUse(target: string): Promise<PageInfo> {
         " — pass one of their ids instead: " + hits.map((p) => JSON.stringify(p.id)).join(", ") + ".",
     );
   }
-  await awaitNative("page-switch", () => figma.setCurrentPageAsync(hits[0]));
+  await switchTo(hits[0], false);
   return pageCurrent();
 }
 
@@ -122,7 +150,7 @@ export async function pageNew(name: string): Promise<PageInfo> {
   const created = figma.createPage();
   traceNative("native-end", "page-create");
   created.name = wanted;
-  await awaitNative("page-switch", () => figma.setCurrentPageAsync(created));
+  await switchTo(created, true);
   return pageCurrent();
 }
 

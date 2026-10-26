@@ -223,8 +223,16 @@ export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
  * pending forever — loadFontAsync in a file whose window is in the background, seen live — with the
  * plugin's timers stalled too, so no timeout could end it; without this the run never replies and
  * every run behind it waits.
+ *
+ * `patience` bounds a call whose stall is known to leave the plugin's timers running (a page switch,
+ * seen live): past `afterMs` the await rejects with its error, so the run replies with what happened
+ * instead of going silent until the server's deadline.
  */
-export async function awaitNative<T>(operation: NativeOperation, run: () => Promise<T>): Promise<T> {
+export async function awaitNative<T>(
+  operation: NativeOperation,
+  run: () => Promise<T>,
+  patience?: { afterMs: number; stalled: () => FlcmError },
+): Promise<T> {
   traceNative("native-start", operation);
   const started = Date.now();
   const host = currentHost();
@@ -243,13 +251,24 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
     : new Promise<never>(() => {});
   // The race handles it when it settles first; this keeps a later cancellation from going unhandled.
   abandoned.catch(() => {});
+  let patienceTimer: ReturnType<typeof setTimeout> | undefined;
+  const outwaited = patience
+    ? new Promise<never>((_, reject) => {
+        // A throw while composing the error must still settle the race, or the run hangs after all.
+        patienceTimer = setTimeout(() => {
+          try { reject(patience.stalled()); } catch (failure) { reject(failure); }
+        }, patience.afterMs);
+      })
+    : null;
   try {
-    const value = await Promise.race([run(), abandoned]);
+    const value = await Promise.race(outwaited ? [run(), abandoned, outwaited] : [run(), abandoned]);
     traceNative("native-end", operation);
     return value;
   } catch (error) {
     traceNative("native-error", operation);
     throw error;
+  } finally {
+    if (patienceTimer !== undefined) clearTimeout(patienceTimer);
   }
 }
 
