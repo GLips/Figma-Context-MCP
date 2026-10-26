@@ -404,8 +404,11 @@ class Node {
   // pluginData IS copied here: whether live clone() carries it is [directional] (the typings
   // don't say), and modelling the carrying case is what makes the flcm/key strip testable — if
   // live turns out not to copy, the strip is simply a no-op and the same test holds.
+  // A copied definition shows each slot frame whose binding survives as `type: "SLOT"` (live,
+  // 2026-10-26); a variant member's clone drops its bindings, so its slot frames stay FRAMEs.
   clone() {
     const copy = cloneSubtree(this);
+    for (const n of [copy, ...copy.findAll()]) if (n.type === "FRAME" && (n.componentPropertyReferences || {}).slotContentId) n.type = "SLOT";
     figma.currentPage.appendChild(copy);
     return copy;
   }

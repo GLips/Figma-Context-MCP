@@ -13,7 +13,12 @@ type Definition = { type: string; defaultValue: string | boolean; preferredValue
 interface Layer { path: Path; type: string; refs: Record<string, string> }
 interface Owner { path: Path; source: any; definitions: Record<string, Definition>; layers: Layer[] }
 interface CloneBindings { owners: Owner[] }
-const supported = new Set(["TEXT", "BOOLEAN", "INSTANCE_SWAP"]);
+const supported = new Set(["TEXT", "BOOLEAN", "INSTANCE_SWAP", "SLOT"]);
+// A native clone of a definition shows a slot's bound FRAME as `type: "SLOT"` wherever the binding
+// survives (live-checked 2026-10-26), so the two spellings are one layer here.
+function layerType(node: any): string {
+  return node.type === "SLOT" ? "FRAME" : node.type;
+}
 function at(root: any, path: Path): any {
   return path.reduce((node, index) => node?.children?.[index], root);
 }
@@ -44,7 +49,7 @@ export function captureCloneBindings(root: any): CloneBindings {
             { node: { type: layer.type, name: layer.name, id: layer.id } },
           );
         }
-        owner.layers.push({ path: relative, type: layer.type, refs });
+        owner.layers.push({ path: relative, type: layerType(layer), refs });
         if (layer.type !== "INSTANCE") (layer.children || []).forEach((child: any, index: number) => layers(child, relative.concat(index)));
       }
       layers(node, []); owners.push(owner); return;
@@ -66,7 +71,7 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
     const defs = sameOwner ? entry.definitions : destination.componentPropertyDefinitions || {};
     for (const layer of entry.layers) {
       const node = at(root, layer.path);
-      if (!node || node.type !== layer.type) throw new FlcmError("internal", "a layer of the copy doesn't match the original's layer at the same position, so its bindings couldn't be restored.");
+      if (!node || layerType(node) !== layer.type) throw new FlcmError("internal", "a layer of the copy doesn't match the original's layer at the same position, so its bindings couldn't be restored.");
       for (const [field, sourceId] of Object.entries(layer.refs)) {
         const copiedId = node.componentPropertyReferences?.[field];
         // Native clones may already preserve independent definitions. Structural correspondence
@@ -87,8 +92,9 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
       if (sameOwner || defs[sourceId] && JSON.stringify(defs[sourceId]) === JSON.stringify(def)) mapping.set(sourceId, sourceId);
       if (!mapping.has(sourceId)) {
         // Keep full-ID identity distinct even when multiple source definitions share a name.
-        const id = destination.addComponentProperty(bareName(sourceId), def.type, def.defaultValue,
-          def.preferredValues ? { preferredValues: def.preferredValues } : undefined);
+        // Figma stores no default for a slot (its content is the bound frame) and takes "" for one.
+        const id = destination.addComponentProperty(bareName(sourceId), def.type, def.type === "SLOT" ? "" : def.defaultValue,
+          def.preferredValues?.length ? { preferredValues: def.preferredValues } : undefined);
         created.push({ owner: destination, id });
         mapping.set(sourceId, id);
       }

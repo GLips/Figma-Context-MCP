@@ -12,12 +12,16 @@ function fixture() {
   const source = figma.createComponent();
   const text = figma.createText(); text.characters = "Default"; text.name = "duplicate";
   const visible = figma.createRectangle(); visible.name = "duplicate";
-  source.appendChild(text); source.appendChild(visible);
+  const content = figma.createFrame(); content.name = "Content";
+  const placeholder = figma.createRectangle(); placeholder.name = "Placeholder"; content.appendChild(placeholder);
+  source.appendChild(text); source.appendChild(visible); source.appendChild(content);
   const set = figma.combineAsVariants([source], figma.currentPage);
   const t = set.addComponentProperty("Same", "TEXT", "Default");
   const b = set.addComponentProperty("Same", "BOOLEAN", true);
+  const slot = set.addComponentProperty("Content", "SLOT", "");
   text.componentPropertyReferences = { characters: t };
   visible.componentPropertyReferences = { visible: b };
+  content.componentPropertyReferences = { slotContentId: slot };
   // Reproduce the native boundary observed live: member clone first lands on PAGE without refs.
   const nativeClone = source.clone.bind(source);
   source.clone = () => {
@@ -45,21 +49,29 @@ for (const context of ["same-set", "standalone", "different-set"]) {
     const instance = copy.createInstance();
     instance.setProperties({ [refs[0].characters]: "Changed", [refs[1].visible]: false });
     assert.equal(instance.children[0].characters, "Changed"); assert.equal(instance.children[1].visible, false);
+    assert.equal(owner.componentPropertyDefinitions[refs[2].slotContentId].type, "SLOT");
+    assert.equal(instance.children[2].type, "SLOT"); assert.equal(instance.children[2].children[0].name, "Placeholder");
     assert.equal(owner.componentPropertyDefinitions[refs[0].characters].defaultValue, "Default");
     assert.equal(JSON.stringify(source.children.map(n => n.componentPropertyReferences)), before);
     if (context === "different-set") assert.equal(Object.values(owner.componentPropertyDefinitions).filter((d: any) => d.type === "TEXT").length, 2);
   });
 }
-test("unsupported property definitions reject before native clone", async () => {
-  const source = figma.createComponent(); figma.currentPage.appendChild(source); source.addComponentProperty("Content", "SLOT", "");
-  let called = false; source.clone = () => { called = true; throw new Error("unexpected clone"); };
-  await assert.rejects(clone(source.id), (err: any) => {
-    assert.equal(err.kind, "authoring");
-    assert.equal(err.node.id, source.id);
-    assert.match(err.reason, /declares a SLOT property, which clone can't copy.*Clone an instance of it instead/);
-    return true;
-  });
-  assert.equal(called, false);
+test("a standalone slotted component whose slot holds another slotted instance clones with both slots", async () => {
+  const slotted = () => {
+    const component = figma.createComponent(); figma.currentPage.appendChild(component);
+    const frame = figma.createFrame(); frame.name = "Content"; component.appendChild(frame);
+    frame.componentPropertyReferences = { slotContentId: component.addComponentProperty("Content", "SLOT", "") };
+    return { component, frame };
+  };
+  const inner = slotted(); inner.frame.appendChild(figma.createRectangle());
+  const outer = slotted(); outer.frame.appendChild(inner.component.createInstance());
+  const copied = await clone(outer.component.id); const copy = await figma.getNodeByIdAsync(copied.id);
+  // Live shows the copy's slot frame as SLOT: the restore must take it as the same layer.
+  assert.equal(copy.children[0].type, "SLOT");
+  assert.equal(copy.componentPropertyDefinitions[copy.children[0].componentPropertyReferences.slotContentId].type, "SLOT");
+  const nested = copy.createInstance().children[0].children[0];
+  assert.equal(nested.type, "INSTANCE"); assert.equal(nested.children[0].type, "SLOT");
+  assert.equal(nested.children[0].children[0].type, "RECTANGLE");
 });
 test("restoration refusal compensates its copy before sealing the failed span", async () => {
   const { source } = fixture();
