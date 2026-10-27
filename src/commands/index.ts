@@ -7,6 +7,7 @@ import { uploadCommand } from "~/commercial/commands/upload.js";
 import { watchCommand } from "~/commercial/commands/watch.js";
 import { commentsCommand } from "./comments.js";
 import { fetchCommand } from "./fetch.js";
+import { reportIssueCommand } from "./report-issue.js";
 
 export const CLI_COMMANDS: Command[] = [
   fetchCommand,
@@ -17,6 +18,7 @@ export const CLI_COMMANDS: Command[] = [
   referenceCommand,
   uploadCommand,
   pairCommand,
+  reportIssueCommand,
 ];
 
 /**
@@ -105,6 +107,20 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
   get_flcm_reference: { command: "reference", inputs: { sections: "[sections...]" } },
   // The code is minted by the process that shows it, so a flag could only carry a code from some
   // other process's attempt. `pair` prints its own and asks whether the panel matches.
+  report_framelink_issue: {
+    command: "report-issue",
+    inputs: {
+      kind: "--kind",
+      summary: "--summary",
+      attempted: "--attempted",
+      tool: "--tool",
+      expected: "--expected",
+      actual: "--actual",
+      workaround: "--workaround",
+      gist: "--gist",
+      userWords: "--user-words",
+    },
+  },
   pair_figma_plugin: {
     command: "pair",
     inputs: {},

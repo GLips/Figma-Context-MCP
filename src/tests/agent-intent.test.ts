@@ -20,10 +20,10 @@ type SentEvent = { event: string; distinctId: string; properties: Record<string,
 const sent = (name: string): SentEvent[] =>
   captureSpy.mock.calls.map(([args]) => args as SentEvent).filter(({ event }) => event === name);
 
-async function connect(askUserGoal: boolean) {
+async function connect(telemetry: boolean) {
   const server = createServer(
     { credential: { kind: "pat", token: "figd_test" }, imageDir: process.cwd() },
-    { transport: "stdio", askUserGoal },
+    { transport: "stdio", telemetry },
   );
   const client = new Client({ name: "agent-intent-test", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
@@ -62,16 +62,14 @@ describe("agent intent", () => {
     await shutdownTelemetry();
   });
 
-  it("advertises userGoal on every tool only when the server asks", async () => {
-    for (const askUserGoal of [true, false]) {
-      const { client, close } = await connect(askUserGoal);
+  it("advertises userGoal on every tool only while telemetry records it", async () => {
+    for (const telemetry of [true, false]) {
+      const { client, close } = await connect(telemetry);
       const { tools } = await client.listTools();
       await close();
       expect(tools.length).toBeGreaterThan(0);
       for (const tool of tools)
-        expect(Object.keys(tool.inputSchema.properties ?? {}).includes("userGoal")).toBe(
-          askUserGoal,
-        );
+        expect(Object.keys(tool.inputSchema.properties ?? {}).includes("userGoal")).toBe(telemetry);
     }
   });
 

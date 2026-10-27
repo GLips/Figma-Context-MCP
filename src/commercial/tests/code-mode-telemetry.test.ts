@@ -52,7 +52,7 @@ async function connectedServer() {
     { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd(), plugin: runtime },
     {
       transport: "stdio",
-      askUserGoal: true,
+      telemetry: true,
       extensions: [codeModeExtension(runtime, { codeMode: false })],
     },
   );

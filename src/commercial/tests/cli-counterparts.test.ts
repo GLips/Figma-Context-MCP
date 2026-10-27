@@ -15,7 +15,7 @@ import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createTestWriteAccess } from "./fixtures/write-access.js";
 
 // Every tool the server can advertise: the plugin bridge plus codeMode puts the write tools in
-// tools/list, and image downloads are on by default.
+// tools/list, image downloads are on by default, and telemetry adds report_framelink_issue.
 async function listEveryTool(): Promise<Map<string, string[]>> {
   const bridge = { request: vi.fn() } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
@@ -30,6 +30,7 @@ async function listEveryTool(): Promise<Map<string, string[]>> {
     { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd(), plugin: runtime },
     {
       transport: "http",
+      telemetry: true,
       extensions: [codeModeExtension(runtime, { codeMode: true }), commentReplyExtension()],
     },
   );
@@ -38,8 +39,14 @@ async function listEveryTool(): Promise<Map<string, string[]>> {
   await Promise.all([client.connect(clientT), server.connect(serverT)]);
   const { tools } = await client.request({ method: "tools/list" }, ListToolsResultSchema);
   await Promise.all([client.close(), server.close()]);
+  // userGoal is analytics about the call, not an input to the job, so no command carries it.
   return new Map(
-    tools.map((tool) => [tool.name, Object.keys(tool.inputSchema.properties ?? {}).sort()]),
+    tools.map((tool) => [
+      tool.name,
+      Object.keys(tool.inputSchema.properties ?? {})
+        .filter((input) => input !== "userGoal")
+        .sort(),
+    ]),
   );
 }
 

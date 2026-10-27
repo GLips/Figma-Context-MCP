@@ -13,6 +13,7 @@ import {
 import type { OutputFormat } from "~/utils/serialize.js";
 import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
 import { registerFeedbackWatchTool } from "./feedback-watch-tool.js";
+import { registerReportIssueTool } from "./report-issue-tool.js";
 import type { AnnotationChangeSource } from "~/services/watch-figma-feedback.js";
 import {
   askAgentsForUserGoal,
@@ -59,8 +60,11 @@ export type CreateServerOptions<Caller extends CallerContext = CallerContext> = 
   outputFormat?: OutputFormat;
   /** Don't offer download_figma_images at all, to any caller. */
   skipImageDownloads?: boolean;
-  /** Offer every tool an optional `userGoal` param; only worth its tokens while telemetry records it. */
-  askUserGoal?: boolean;
+  /**
+   * Telemetry records this server's calls. Only then does every tool take an optional `userGoal`
+   * (worth its tokens only when recorded) and report_framelink_issue exist (a report is telemetry).
+   */
+  telemetry?: boolean;
   extensions?: readonly ServerExtension<Caller>[];
 };
 
@@ -70,13 +74,13 @@ function createServer<Caller extends CallerContext>(
     transport,
     outputFormat = "tree",
     skipImageDownloads = false,
-    askUserGoal = false,
+    telemetry = false,
     extensions = [],
   }: CreateServerOptions<Caller>,
 ) {
   const server = new McpServer(serverInfo);
   // Before any tool registers: it decides each tool's schema.
-  if (askUserGoal) askAgentsForUserGoal(server);
+  if (telemetry) askAgentsForUserGoal(server);
   const figmaService = new FigmaService(staticCredentialSource(caller.credential));
   const context: ToolCallContext = {
     transport,
@@ -123,6 +127,14 @@ function createServer<Caller extends CallerContext>(
       context,
     ),
   );
+
+  if (telemetry)
+    registerReportIssueTool(server, context, (observation) =>
+      captureToolCall(
+        toolCallEvent(observation, observation.kind === "rejected" ? undefined : observation.facts),
+        context,
+      ),
+    );
 
   for (const extension of extensions)
     extension.register(server, {

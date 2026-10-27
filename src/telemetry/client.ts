@@ -120,8 +120,56 @@ export function captureEvent(
   maxLengths: Readonly<Record<string, number>> = {},
 ): void {
   if (state.kind === "off") return;
-  const { client, sessionId, commonProps, redactionSecrets } = state;
+  const { client, sessionId } = state;
+  try {
+    client.capture({
+      distinctId: sessionId,
+      event,
+      properties: eventProperties(state, properties, maxLengths),
+    });
+  } catch {
+    // intentionally empty
+  }
+}
 
+export type ConfirmedSend = { kind: "sent" } | { kind: "off" } | { kind: "failed"; reason: string };
+
+const CONFIRMED_SEND_TIMEOUT_MS = 10_000;
+
+/**
+ * Send one event now and say whether PostHog took it — for an event the caller reports back on,
+ * unlike every other event, which must stay invisible. Posts to the capture endpoint directly:
+ * the SDK's immediate capture logs a failed send and resolves anyway.
+ */
+export async function sendEventConfirmed(
+  event: string,
+  properties: Record<string, unknown>,
+  maxLengths: Readonly<Record<string, number>> = {},
+): Promise<ConfirmedSend> {
+  if (state.kind === "off") return { kind: "off" };
+  try {
+    const response = await fetch(`${POSTHOG_HOST}/i/v0/e/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: POSTHOG_API_KEY,
+        event,
+        distinct_id: state.sessionId,
+        properties: eventProperties(state, properties, maxLengths),
+      }),
+      signal: AbortSignal.timeout(CONFIRMED_SEND_TIMEOUT_MS),
+    });
+    return response.ok ? { kind: "sent" } : { kind: "failed", reason: `HTTP ${response.status}` };
+  } catch (error) {
+    return { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function eventProperties(
+  { sessionId, commonProps, redactionSecrets }: Extract<TelemetryState, { kind: "on" }>,
+  properties: Record<string, unknown>,
+  maxLengths: Readonly<Record<string, number>>,
+): Record<string, unknown> {
   // Every string-valued property is scrubbed, whatever its name: the signature is
   // `Record<string, unknown>`, so the next field to carry free text would otherwise ship raw.
   // `commonProps` is machine-generated, so it's merged in below without passing through here.
@@ -131,17 +179,8 @@ export function captureEvent(
       typeof value === "string"
         ? redactTelemetryString(value, redactionSecrets).slice(0, maxLengths[key])
         : value;
-
-  try {
-    client.capture({
-      distinctId: sessionId,
-      event,
-      // `$session_id` is how PostHog's MCP analytics groups calls into one agent's session.
-      properties: { ...commonProps, $session_id: sessionId, ...processed },
-    });
-  } catch {
-    // intentionally empty
-  }
+  // `$session_id` is how PostHog's MCP analytics groups calls into one agent's session.
+  return { ...commonProps, $session_id: sessionId, ...processed };
 }
 
 /**

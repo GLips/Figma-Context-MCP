@@ -74,7 +74,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     transport: config.isStdioMode ? "stdio" : "http",
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
-    askUserGoal: telemetryEnabled,
+    telemetry: telemetryEnabled,
     extensions: [
       codeModeExtension(pluginBridge, { codeMode: config.codeMode }),
       commentReplyExtension(),
