@@ -75,16 +75,13 @@ const API_TOPOLOGY_METHODS: ReadonlySet<string> = new Set([
 /**
  * `moved` maps each id a committed verb's placements retired to the copy that replaced it (session.ts
  * movedIdsOf). A verb's own entries wait in `pending` until it commits: its rollback restores them.
- * A null entry drops an id a move made live again: Figma re-paths a layer moved back to its slot
- * under its old id.
  */
 export function createSceneAccess(source: () => PluginAPI, moved: Record<string, string> = {}): {
   api: PluginAPI; invalidate(): void; settleMovedIds(committed: boolean): void;
 } {
   let generation = 0;
-  let pending: Record<string, string | null> = {};
-  const copyOf = (id: string): string | undefined => (id in pending ? pending[id] : moved[id]) ?? undefined;
-  const recordMove = (from: string, to: string): void => { pending[from] = to; pending[to] = null; };
+  let pending: Record<string, string> = {};
+  const copyOf = (id: string): string | undefined => pending[id] ?? moved[id];
   const states = new Map<string, State>();
   let views = new WeakMap<object, State>();
   let currentApi: PluginAPI | undefined;
@@ -289,7 +286,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
   function takeSearchIds(record: RecordNode): void {
     const { state } = record;
     if (state.id !== state.native.id) {
-      recordMove(state.id, state.native.id);
+      pending[state.id] = state.native.id;
       if (states.get(state.id) === state) states.delete(state.id);
       state.id = state.native.id;
     }
@@ -297,7 +294,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
   }
   // Point a held state at the node that replaced it, so its view and cached methods follow.
   function adoptLanded(held: State, landed: State): void {
-    if (landed.id !== held.id) recordMove(held.id, landed.id);
+    if (landed.id !== held.id) pending[held.id] = landed.id;
     if (states.get(held.id) === held) states.delete(held.id);
     Object.assign(held, { native: landed.native, id: landed.id, anchor: landed.anchor, scope: landed.scope, record: landed.record, ownScope: undefined });
     if (landed.record) landed.record.state = held;
@@ -450,12 +447,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
     set(_target, key, value) { return Reflect.set(nativeApi(), key, unwrap(value), nativeApi()); },
   });
   function settleMovedIds(committed: boolean): void {
-    if (committed) {
-      for (const [from, to] of Object.entries(pending)) {
-        if (to === null) delete moved[from];
-        else moved[from] = to;
-      }
-    }
+    if (committed) Object.assign(moved, pending);
     pending = {};
   }
   return { api, invalidate, settleMovedIds };
