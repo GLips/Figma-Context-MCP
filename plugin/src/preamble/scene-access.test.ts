@@ -203,8 +203,6 @@ test("inherited slot content moved to a sibling slot reads as Figma's copy, with
   assert.equal(moved.parent, slot);
   assert.equal((await api.getNodeByIdAsync(copy.id))?.id, copy.id);
   assert.equal((await api.getNodeByIdAsync(tile.id))?.id, copy.id);
-  // An access with no memory of the move finds the copy from the dead child-list entry alone.
-  assert.equal((await createSceneAccess(() => native).api.getNodeByIdAsync(tile.id))?.id, copy.id);
 });
 
 test("a layer with its own id inside content copied to a sibling slot reads under the copy's path id, and its old id follows it", async () => {
@@ -261,4 +259,35 @@ test("inherited slot content Figma re-paths into a sibling slot reads under its 
   (await api.getNodeByIdAsync(destination.id) as SlotNode).appendChild(moved);
   assert.equal(moved.id, repathed.id);
   assert.equal((await api.getNodeByIdAsync(tile.id))?.id, repathed.id);
+});
+
+test("a layer Figma re-paths back to its first slot reads under its first id again", async () => {
+  const base = (id: string, type: string) => ({ id, type, removed: false, parent: null as any, name: type, getPluginData() { return ""; } });
+  const page: any = { ...base("1:1", "PAGE"), children: [] };
+  const outer: any = { ...base("10:1", "INSTANCE"), parent: page };
+  const left: any = { ...base("I10:1;12:1", "SLOT"), parent: outer, children: [] };
+  const right: any = { ...base("I10:1;12:2", "SLOT"), parent: outer, children: [] };
+  // Live (2026-10-26): each move re-paths the same guid, and the child list keeps the id it had.
+  const at = (slot: any) => ({ ...base(slot.id + ";13:1", "RECTANGLE"), parent: slot });
+  let where = left;
+  const listed = { ...base("I10:1;12:1;13:1", "RECTANGLE") };
+  outer.children = [left, right]; left.children = [listed];
+  outer.findAllWithCriteria = () => [left, ...(where === left ? [at(left)] : []), right, ...(where === right ? [at(right)] : [])];
+  for (const slot of [left, right]) {
+    slot.findAllWithCriteria = () => where === slot ? [at(slot)] : [];
+    slot.appendChild = () => { (where === left ? left : right).children = []; where = slot; slot.children = [listed]; };
+  }
+  page.children = [outer];
+  const native: any = { currentPage: page, skipInvisibleInstanceChildren: false,
+    async getNodeByIdAsync(id: string) { if (id === outer.id) return outer; throw Error("asked Figma about " + id); } };
+  const access = createSceneAccess(() => native);
+  const node = await access.api.getNodeByIdAsync(listed.id) as RectangleNode;
+  (await access.api.getNodeByIdAsync(right.id) as SlotNode).appendChild(node);
+  access.settleMovedIds(true);
+  assert.equal(node.id, "I10:1;12:2;13:1");
+  (await access.api.getNodeByIdAsync(left.id) as SlotNode).appendChild(node);
+  access.settleMovedIds(true);
+  assert.equal(node.id, "I10:1;12:1;13:1");
+  assert.equal((await access.api.getNodeByIdAsync("I10:1;12:1;13:1"))?.id, "I10:1;12:1;13:1");
+  assert.equal((await access.api.getNodeByIdAsync("I10:1;12:2;13:1"))?.id, "I10:1;12:1;13:1");
 });

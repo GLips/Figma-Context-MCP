@@ -14,16 +14,15 @@
  * containers list native children, so a node Figma lists but cannot read fails
  * alone instead of failing the index for everything around it.
  *
- * One edge is not an alias: moving inherited slot content into a sibling slot makes
- * Figma copy it or re-path it, and the slot's child list keeps naming the original. A
- * compound edge whose last segment (the node's own guid) differs from the indexed node's,
- * or naming a layer flcm moved, is that retired original, so the copy reads under its own id.
+ * Moving path-id content within its instance makes Figma copy it or re-path it, and the child
+ * lists keep naming the original. So a move gives the moved layers their search ids and records
+ * each old id in the moved-id table; an edge naming a recorded id is that retired original.
  *
  * Moved anywhere else, inherited slot content leaves a node that renders but can't be read or
  * removed (live, 2026-10-26), so a move out of its instance lands a copy and removes the original.
  * Either way a held view follows the copy, and its old id resolves to the copy for the session.
  */
-import { componentPath, guidOf, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
+import { componentPath, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
 import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
 import { isInheritedSlotContent, slotOwnerOf } from "./identity.js";
 import { warnings } from "./warnings.js";
@@ -76,15 +75,16 @@ const API_TOPOLOGY_METHODS: ReadonlySet<string> = new Set([
 /**
  * `moved` maps each id a committed verb's placements retired to the copy that replaced it (session.ts
  * movedIdsOf). A verb's own entries wait in `pending` until it commits: its rollback restores them.
+ * A null entry drops an id a move made live again: Figma re-paths a layer moved back to its slot
+ * under its old id.
  */
 export function createSceneAccess(source: () => PluginAPI, moved: Record<string, string> = {}): {
   api: PluginAPI; invalidate(): void; settleMovedIds(committed: boolean): void;
 } {
   let generation = 0;
-  let pending: Record<string, string> = {};
-  // The ids a placement in progress moves: a child list naming one elsewhere names the original.
-  const departing = new Set<string>();
-  const copyOf = (id: string): string | undefined => pending[id] ?? moved[id];
+  let pending: Record<string, string | null> = {};
+  const copyOf = (id: string): string | undefined => (id in pending ? pending[id] : moved[id]) ?? undefined;
+  const recordMove = (from: string, to: string): void => { pending[from] = to; pending[to] = null; };
   const states = new Map<string, State>();
   let views = new WeakMap<object, State>();
   let currentApi: PluginAPI | undefined;
@@ -170,12 +170,9 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
         if (!edge) throw inconsistentInstanceTree(root, "it searched more layers than the children lists hold");
         const child = edge.ids[edge.next++];
         if (child.type !== node.type) throw inconsistentInstanceTree(root, "a layer had a different type in the search than in its parent's children");
-        // A retired original's descendants are listed under its dead path too, even a layer listed by
-        // a plain id: Figma's copy reads it under a path id, and the plain one no longer resolves (live).
-        // Figma retires the original under a new guid, or under the same guid on a new path. The
-        // second looks like a stale alias, so it counts only for an id a move took from its slot.
-        copied = edge.retired || (isSublayerId(child.id) &&
-          (guidOf(child.id) !== guidOf(node.id) || (child.id !== node.id && (departing.has(child.id) || copyOf(child.id) !== undefined))));
+        // An edge naming an id a move retired names the original, and so do its descendants' edges,
+        // even a plain one: Figma's copy reads it under a path id, and the plain one no longer resolves.
+        copied = edge.retired || (child.id !== node.id && copyOf(child.id) !== undefined);
         if (copied) retired.set(child.id, node.id);
         alias = copied ? node.id : child.id;
         parent = edge.record;
@@ -256,6 +253,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
   // rebound to it before callers settle layout or reuse them.
   function placed(dest: State, moved: State, index: number | "end"): void {
     const before = moved.record;
+    const tied = isSublayerId(moved.id);
     const wasIndexed = !!moved.scope || !!moved.ownScope;
     const children = placedChildren(dest);
     const landed = children[index === "end" ? children.length - 1 : index];
@@ -279,16 +277,27 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
         });
       };
       if (before) pair(before, moved);
-      return;
     }
-    if (insideInstance(dest)) return;
+    // Figma copies or re-paths moved path-id content, and the child lists go on naming the original:
+    // the search ids are the layers now. A plain-id root keeps its ids; they still resolve.
+    if (tied && moved.record) takeSearchIds(moved.record);
+    if (landed !== moved || insideInstance(dest)) return;
     moved.scope = undefined;
     moved.record = undefined;
     if (wasIndexed && "findAllWithCriteria" in moved.native) tree(moved, true);
   }
+  function takeSearchIds(record: RecordNode): void {
+    const { state } = record;
+    if (state.id !== state.native.id) {
+      recordMove(state.id, state.native.id);
+      if (states.get(state.id) === state) states.delete(state.id);
+      state.id = state.native.id;
+    }
+    record.children.forEach(takeSearchIds);
+  }
   // Point a held state at the node that replaced it, so its view and cached methods follow.
   function adoptLanded(held: State, landed: State): void {
-    if (landed.id !== held.id) pending[held.id] = landed.id;
+    if (landed.id !== held.id) recordMove(held.id, landed.id);
     if (states.get(held.id) === held) states.delete(held.id);
     Object.assign(held, { native: landed.native, id: landed.id, anchor: landed.anchor, scope: landed.scope, record: landed.record, ownScope: undefined });
     if (landed.record) landed.record.state = held;
@@ -361,10 +370,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
           }
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
           if (original) { original.remove(); invalidate(); }
-          if (landing) {
-            departing.add(landing.moved.id);
-            try { placed(state, landing.moved, landing.index); } finally { departing.clear(); }
-          }
+          if (landing) placed(state, landing.moved, landing.index);
           if (left) {
             warnings.add({ id: landing!.moved.id, message: "This layer sat in a slot of " + left +
               ", and Figma doesn't let a plugin move it out of that instance, so flcm placed a copy here and removed the original. " +
@@ -442,7 +448,12 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
     set(_target, key, value) { return Reflect.set(nativeApi(), key, unwrap(value), nativeApi()); },
   });
   function settleMovedIds(committed: boolean): void {
-    if (committed) Object.assign(moved, pending);
+    if (committed) {
+      for (const [from, to] of Object.entries(pending)) {
+        if (to === null) delete moved[from];
+        else moved[from] = to;
+      }
+    }
     pending = {};
   }
   return { api, invalidate, settleMovedIds };
