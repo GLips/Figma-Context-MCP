@@ -15,9 +15,9 @@
  * alone instead of failing the index for everything around it.
  *
  * One edge is not an alias: moving inherited slot content into a sibling slot makes
- * Figma copy it, and the slot's child list keeps naming the original. A compound
- * edge whose last segment (the node's own guid) differs from the indexed node's is
- * that retired original, so the copy reads under its own id.
+ * Figma copy it or re-path it, and the slot's child list keeps naming the original. A
+ * compound edge whose last segment (the node's own guid) differs from the indexed node's,
+ * or naming a layer flcm moved, is that retired original, so the copy reads under its own id.
  *
  * Moved anywhere else, inherited slot content leaves a node that renders but can't be read or
  * removed (live, 2026-10-26), so a move out of its instance lands a copy and removes the original.
@@ -82,6 +82,8 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
 } {
   let generation = 0;
   let pending: Record<string, string> = {};
+  // The ids a placement in progress moves: a child list naming one elsewhere names the original.
+  const departing = new Set<string>();
   const copyOf = (id: string): string | undefined => pending[id] ?? moved[id];
   const states = new Map<string, State>();
   let views = new WeakMap<object, State>();
@@ -168,9 +170,12 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
         if (!edge) throw inconsistentInstanceTree(root, "it searched more layers than the children lists hold");
         const child = edge.ids[edge.next++];
         if (child.type !== node.type) throw inconsistentInstanceTree(root, "a layer had a different type in the search than in its parent's children");
-        // A retired original's descendants are listed under its dead path too, but a plain id is a
-        // layer's whole address: slot content owned outright keeps it under any listed ancestor.
-        copied = isSublayerId(child.id) && (edge.retired || guidOf(child.id) !== guidOf(node.id));
+        // A retired original's descendants are listed under its dead path too, even a layer listed by
+        // a plain id: Figma's copy reads it under a path id, and the plain one no longer resolves (live).
+        // Figma retires the original under a new guid, or under the same guid on a new path. The
+        // second looks like a stale alias, so it counts only for an id a move took from its slot.
+        copied = edge.retired || (isSublayerId(child.id) &&
+          (guidOf(child.id) !== guidOf(node.id) || (child.id !== node.id && (departing.has(child.id) || copyOf(child.id) !== undefined))));
         if (copied) retired.set(child.id, node.id);
         alias = copied ? node.id : child.id;
         parent = edge.record;
@@ -356,7 +361,10 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
           }
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
           if (original) { original.remove(); invalidate(); }
-          if (landing) placed(state, landing.moved, landing.index);
+          if (landing) {
+            departing.add(landing.moved.id);
+            try { placed(state, landing.moved, landing.index); } finally { departing.clear(); }
+          }
           if (left) {
             warnings.add({ id: landing!.moved.id, message: "This layer sat in a slot of " + left +
               ", and Figma doesn't let a plugin move it out of that instance, so flcm placed a copy here and removed the original. " +
@@ -382,15 +390,16 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
       followed.add(id);
       return byId(copy, followed);
     };
+    // Followed before Figma is asked: a committed move removed the original, so only a human undo,
+    // which takes the copy too, brings the old id back. And asking Figma about an id it no longer
+    // holds stalls 10s and throws (live, 2026-10-26). Short ids too: a layer of the user's own
+    // inside content Figma copies to a sibling slot comes back under a path id.
+    const movedTo = copyOf(id);
+    if (movedTo) return follow(movedTo);
     // Compound IDs name descendants of an independently addressable instance.
     // Resolve that bounded root before asking its index for either public ID form.
     const outermost = outermostInstanceId(id);
     if (outermost) {
-      // Followed before Figma is asked: a committed move removed the original, so only a human undo,
-      // which takes the copy too, brings the old id back. And asking Figma about an instance since
-      // deleted stalls 10s and throws (live, 2026-10-26).
-      const movedTo = copyOf(id);
-      if (movedTo) return follow(movedTo);
       const root = await nativeApi().getNodeByIdAsync(outermost);
       if (!root || root.removed) return null;
       const anchor = stateOf(root);
