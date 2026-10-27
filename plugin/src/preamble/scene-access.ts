@@ -14,13 +14,13 @@
  * containers list native children, so a node Figma lists but cannot read fails
  * alone instead of failing the index for everything around it.
  *
- * Moving path-id content within its instance makes Figma copy it or re-path it, and the child
- * lists keep naming the original. So a move gives the moved layers their search ids and records
- * each old id in the moved-id table; an edge naming a recorded id is that retired original.
+ * Figma breaks native moves of slot content: path-id content moved out of its instance leaves a node
+ * that renders but can't be read or removed, and content moved into another slot can corrupt the
+ * instance (live, 2026-10-26). So any move but a reorder in place lands a copy and removes the original.
  *
- * Moved anywhere else, inherited slot content leaves a node that renders but can't be read or
- * removed (live, 2026-10-26), so a move out of its instance lands a copy and removes the original.
- * Either way a held view follows the copy, and its old id resolves to the copy for the session.
+ * A reorder can re-path the layer, and the child lists keep naming the original. So a move gives the
+ * moved layers their search ids and records each old id in the moved-id table; an edge naming a
+ * recorded id is that retired original. A held view follows, and its old id resolves for the session.
  */
 import { componentPath, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
 import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
@@ -247,8 +247,8 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
     const prior = viewState(moved.view.parent) === dest ? childViews(dest).indexOf(moved.view) : -1;
     return { moved, index: prior >= 0 && prior < index ? index - 1 : index };
   }
-  // Figma decides what lands. A moved indexed root retires its compound handle, and inherited slot
-  // content moved to a sibling slot becomes a copy with a new id. So the node at the landing index
+  // Figma decides what lands. A moved indexed root retires its compound handle, and tied slot content
+  // lands as flcm's copy, or re-pathed on a reorder. So the node at the landing index
   // is the result, and the moved view, with every descendant view acquired before the move, is
   // rebound to it before callers settle layout or reuse them.
   function placed(dest: State, moved: State, index: number | "end"): void {
@@ -304,14 +304,16 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
     states.set(landed.id, held);
     states.set(landed.native.id, held);
   }
-  // The instance, described, that a move takes inherited slot content out of, or undefined when the
-  // move keeps it in one of that instance's slots (or it isn't inherited slot content).
-  function instanceLeft(dest: State, moving: State): string | undefined {
+  // The instance, described, whose slot content a move must copy, or undefined for a native move.
+  // Moved natively, path-id content leaves an unreadable node outside its instance, and any slot
+  // content placed or moved in an earlier call can corrupt the instance's search when it moves to
+  // another of its slots, whatever its id (live, 2026-10-26). A reorder in place is safe.
+  function copiedSlotOwner(dest: State, moving: State): string | undefined {
     const node = moving.view as SceneNode;
-    if (!isInheritedSlotContent(node)) return undefined;
-    const owner = slotOwnerOf(node, false)!;
-    if (dest.native.type !== "PAGE" && slotOwnerOf(dest.view as SceneNode, true)?.id === owner.id) return undefined;
-    return describeNodeIdentity(owner);
+    const owner = slotOwnerOf(node, false);
+    if (!owner || viewState(node.parent) === dest) return undefined;
+    const within = dest.native.type !== "PAGE" && slotOwnerOf(dest.view as SceneNode, true)?.id === owner.id;
+    return within || isInheritedSlotContent(node) ? describeNodeIdentity(owner) : undefined;
   }
   function viewState(value: unknown): State | undefined {
     return value && typeof value === "object" ? views.get(value) : undefined;
@@ -355,8 +357,8 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
           const method = (current as unknown as Record<PropertyKey, unknown>)[key] as (...args: unknown[]) => unknown;
           const landing = landingOf(state, key, args);
           const native = args.map(unwrap);
-          const left = landing && instanceLeft(state, landing.moved);
-          const original = left ? live(landing.moved) as SceneNode : undefined;
+          const owner = landing && copiedSlotOwner(state, landing.moved);
+          const original = owner ? live(landing.moved) as SceneNode : undefined;
           // Cloned and placed before anything reads inside the copy: a subtree read before it moves
           // into a slot comes back unreadable (slot-validity ARCHAEOLOGY item 2).
           const fresh = original?.clone();
@@ -371,9 +373,9 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
           if (original) { original.remove(); invalidate(); }
           if (landing) placed(state, landing.moved, landing.index);
-          if (left) {
-            warnings.add({ id: landing!.moved.id, message: "This layer sat in a slot of " + left +
-              ", and Figma doesn't let a plugin move it out of that instance, so flcm placed a copy here and removed the original. " +
+          if (owner) {
+            warnings.add({ id: landing!.moved.id, message: "This layer sat in a slot of " + owner +
+              ", and Figma breaks a plugin's move of it, so flcm placed a copy here and removed the original. " +
               "Its id is now this one; the old id still reaches it in this session." });
           }
           return result instanceof Promise ? result.then(wrap) : wrap(result);

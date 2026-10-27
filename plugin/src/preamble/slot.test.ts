@@ -155,7 +155,7 @@ test("slot input errors identify their path and leave the document unchanged", a
   assert.deepEqual(figma.undoLog, before);
 });
 
-test("inherited slot content moves out of its instance as a copy, and its old id follows the copy", async () => {
+test("inherited slot content moved to another slot of its instance lands as a copy, and its old id follows the copy", async () => {
   const figma = createFigmaMock();
   const tile = await flcm.component({ type: "FRAME", name: "Tile", width: 40, height: 40 });
   const slot = (name: string) => ({ type: "FRAME", name, width: 100, height: 100, componentPropertyReferences: { slot: name } });
@@ -166,24 +166,17 @@ test("inherited slot content moves out of its instance as a copy, and its old id
   const filled = { type: "INSTANCE", componentId: host.id, overrides: { [host.children![0].id!]: { children: [{ type: "INSTANCE", componentId: tile.id }] } } };
   const enclosing = await flcm.component({ type: "FRAME", name: "Enclosing", width: 400, height: 400, children: [filled] } as never);
   const outer = await flcm.render({ type: "INSTANCE", componentId: enclosing.id, left: 500 });
-  const frame = await flcm.render({ type: "FRAME", width: 100, height: 100, left: 1000 });
   const [source, destination] = ((await figma.getNodeByIdAsync(outer.id)) as any).children[0].children;
   const subject = source.children[0].id;
 
-  const moved = await flcm.append(destination.id, { id: subject });
-  assert.equal(destination.children[0].id, moved.id);
-  assert.equal(source.children.length, 0);
-
-  const out = await flcm.append(frame, { id: moved.id }) as any;
-  assert.notEqual(out.id, moved.id);
+  const out = await flcm.append(destination.id, { id: subject }) as any;
+  assert.notEqual(out.id, subject);
   assert.match(out.warnings[0].message, /placed a copy here and removed the original/);
-  assert.equal(destination.children.length, 0);
-  const copy = await figma.getNodeByIdAsync(out.id) as any;
-  assert.equal(copy.name, "Tile");
-  assert.equal(copy.parent.id, frame.id);
+  assert.equal(source.children.length, 0);
+  assert.equal(destination.children[0].id, out.id);
   // A later call naming the old id reaches the copy.
-  assert.equal((await flcm.edit(moved.id, { name: "Moved" })).id, copy.id);
-  assert.equal(copy.name, "Moved");
+  assert.equal((await flcm.edit(subject, { name: "Moved" })).id, out.id);
+  assert.equal(destination.children[0].name, "Moved");
 });
 
 test("a copied instance's slot content moves out at every depth", async () => {
