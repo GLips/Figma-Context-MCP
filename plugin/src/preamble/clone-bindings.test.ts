@@ -8,6 +8,13 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { clone } from "./structure.js";
 let figma: any;
 beforeEach(() => { figma = createFigmaMock(); });
+// A set whose one variant can't clash with the fixture's.
+function otherSet() {
+  const member = figma.createComponent(); member.name = "State=Other";
+  return figma.combineAsVariants([member], figma.currentPage);
+}
+// Into its own set a copy needs values of its own (structure.ts assertCloneIsANewVariant).
+const NEW_VARIANT = { name: "State=Copy" };
 function fixture() {
   const source = figma.createComponent();
   const text = figma.createText(); text.characters = "Default"; text.name = "duplicate";
@@ -15,6 +22,7 @@ function fixture() {
   const content = figma.createFrame(); content.name = "Content";
   const placeholder = figma.createRectangle(); placeholder.name = "Placeholder"; content.appendChild(placeholder);
   source.appendChild(text); source.appendChild(visible); source.appendChild(content);
+  source.name = "State=Default";
   const set = figma.combineAsVariants([source], figma.currentPage);
   const t = set.addComponentProperty("Same", "TEXT", "Default");
   const b = set.addComponentProperty("Same", "BOOLEAN", true);
@@ -38,10 +46,10 @@ for (const context of ["same-set", "standalone", "different-set"]) {
     let destination = set;
     if (context === "standalone") destination = figma.currentPage;
     if (context === "different-set") {
-      destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
+      destination = otherSet();
       destination.addComponentProperty("Same", "TEXT", "Unrelated");
     }
-    const result = await clone(source.id, destination.id);
+    const result = context === "same-set" ? await clone(source.id, NEW_VARIANT, destination.id) : await clone(source.id, destination.id);
     const copy = await figma.getNodeByIdAsync(result.id);
     const owner = context === "standalone" ? copy : destination;
     const refs = copy.children.map(n => n.componentPropertyReferences);
@@ -56,6 +64,23 @@ for (const context of ["same-set", "standalone", "different-set"]) {
     if (context === "different-set") assert.equal(Object.values(owner.componentPropertyDefinitions).filter((d: any) => d.type === "TEXT").length, 2);
   });
 }
+test("a variant cloned into another set brings only the properties its layers are bound to", async () => {
+  const { source, set } = fixture();
+  set.addComponentProperty("Unused", "BOOLEAN", false);
+  const destination = otherSet();
+  await clone(source.id, destination.id);
+  const names = Object.keys(destination.componentPropertyDefinitions).map(key => key.split("#")[0]);
+  assert.ok(names.includes("Same") && names.includes("Content"));
+  assert.ok(!names.includes("Unused"));
+});
+test("a clone that would duplicate a variant in its set is refused before anything is written", async () => {
+  const { source, set } = fixture();
+  const before = set.children.length;
+  // Same pairs in another order and spacing are the same variant to Figma.
+  await assert.rejects(clone(source.id), { kind: "authoring", message: /second "State=Default".*\{ name: "State=<new value>" \}/ });
+  await assert.rejects(clone(source.id, { name: " State = Default " }, set.id), { kind: "authoring" });
+  assert.equal(set.children.length, before);
+});
 test("a standalone slotted component whose slot holds another slotted instance clones with both slots", async () => {
   const slotted = () => {
     const component = figma.createComponent(); figma.currentPage.appendChild(component);
@@ -75,7 +100,7 @@ test("a standalone slotted component whose slot holds another slotted instance c
 });
 test("restoration refusal compensates its copy before sealing the failed span", async () => {
   const { source } = fixture();
-  const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
+  const destination = otherSet();
   destination.addComponentProperty = () => { throw new Error("injected restoration refusal"); };
   figma.undoLog.length = 0;
   await assert.rejects(clone(source.id, destination.id), /restoration refusal/);
@@ -109,14 +134,14 @@ test("same-set restoration does not reread definitions while the duplicate varia
     if (set.children.length > 1) throw Error("Component set has existing errors");
     return definitions;
   } });
-  const result = await clone(source.id, set.id);
+  const result = await clone(source.id, NEW_VARIANT, set.id);
   const copy = await figma.getNodeByIdAsync(result.id);
   assert.deepEqual(copy.children.map(n => n.componentPropertyReferences), source.children.map(n => n.componentPropertyReferences));
 });
 
 for (const preservesIdentity of [true, false]) test("native collision-adjusted binding names " + (preservesIdentity ? "retain identity" : "reject changed identity"), async () => {
   const { source } = fixture();
-  const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
+  const destination = otherSet();
   const nativeClone = source.clone;
   source.clone = () => {
     const copy = nativeClone();
@@ -151,10 +176,10 @@ test("unknown native clone effects and incomplete compensation retain ordinary r
   const { source } = fixture();
   source.clone = () => { throw Error("native clone refused before returning"); };
   figma.undoLog.length = 0;
-  await assert.rejects(clone(source.id), /native clone refused/);
+  await assert.rejects(clone(source.id, NEW_VARIANT), /native clone refused/);
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
   const next = fixture();
-  const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
+  const destination = otherSet();
   const add = destination.addComponentProperty.bind(destination);
   let count = 0;
   destination.addComponentProperty = (...args: any[]) => { if (++count > 1) throw Error("second definition refused"); return add(...args); };

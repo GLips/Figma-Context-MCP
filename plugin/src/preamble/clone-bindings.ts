@@ -87,8 +87,11 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
         }
       }
     }
+    // A variant shares its set's properties with its siblings; into another owner it brings only
+    // the ones its own layers are bound to.
+    const bound = new Set(entry.layers.flatMap(layer => Object.values(layer.refs)));
     for (const [sourceId, def] of Object.entries(entry.definitions)) {
-      if (def.type === "VARIANT") continue;
+      if (def.type === "VARIANT" || !sameOwner && !bound.has(sourceId)) continue;
       if (sameOwner || defs[sourceId] && JSON.stringify(defs[sourceId]) === JSON.stringify(def)) mapping.set(sourceId, sourceId);
       if (!mapping.has(sourceId)) {
         // Keep full-ID identity distinct even when multiple source definitions share a name.

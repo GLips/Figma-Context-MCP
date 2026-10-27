@@ -378,6 +378,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       }
       assertPageLoaded(dest.parent, pages, "flcm.clone");
       assertInstanceChildListUntouched(dest.parent, "destination");
+      assertCloneIsANewVariant(node, dest.parent, props);
       // The ORIGINAL's parent-relative intent: the copy is born carrying the same flow marks, and
       // they mean the old parent's axes exactly as a move's do. No cycle check — the copy did not
       // exist a moment ago, so it can't contain its own destination.
@@ -433,6 +434,28 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
         throw compensatedMutationFailure(cause);
       }
     },
+  );
+}
+
+// Figma reads a variant's axes from its name ("Size=Large, State=Default"), trimming around "=" and
+// ",", so two names with the same pairs in any order are the same variant.
+function variantKeyOf(name: string): string {
+  return name.split(",").map(pair => pair.split("=").map(word => word.trim()).join("=")).sort().join(", ");
+}
+
+// A copy landing in a set beside a variant with its exact axis values leaves the set broken: Figma
+// then refuses every later read of its properties with "Component set has existing errors".
+function assertCloneIsANewVariant(node: any, parent: any, props: EditDelta | undefined): void {
+  if (node.type !== "COMPONENT" || parent.type !== "COMPONENT_SET") return;
+  const name: string = typeof props?.name === "string" ? props.name : node.name;
+  const twin = parent.children.find((member: any) => variantKeyOf(member.name) === variantKeyOf(name));
+  if (!twin) return;
+  const pairs = name.split(",").map(pair => pair.split("=").map(word => word.trim()));
+  const example = pairs.map(([axis, value], i) => axis + "=" + (i === 0 ? "<new value>" : value)).join(", ");
+  throw new FlcmError("authoring",
+    "the copy would be a second " + JSON.stringify(name) + " in this component set, and each variant in a set needs its own combination of values. " +
+      "Give the copy its own values in its name: flcm.clone(" + JSON.stringify(node.id) + ", { name: " + JSON.stringify(example) + " }" + (parent === node.parent ? "" : ", " + JSON.stringify(parent.id)) + ").",
+    { node: layerOf(twin) },
   );
 }
 
