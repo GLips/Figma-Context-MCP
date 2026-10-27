@@ -378,7 +378,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
       }
       assertPageLoaded(dest.parent, pages, "flcm.clone");
       assertInstanceChildListUntouched(dest.parent, "destination");
-      assertCloneIsANewVariant(node, dest.parent, props);
+      const variantName = assertCloneIsANewVariant(node, dest.parent, props);
       // The ORIGINAL's parent-relative intent: the copy is born carrying the same flow marks, and
       // they mean the old parent's axes exactly as a move's do. No cycle check — the copy did not
       // exist a moment ago, so it can't contain its own destination.
@@ -398,15 +398,18 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
         dependencies,
         checks: edit ? realizeOnlyChecksOf(edit, new Map([...placed.realizeOnly, ...(local?.realizeOnly ?? [])]), loaded, site, "flcm.clone", context) : [],
       }, "flcm.clone");
-      return { node, dest, resolved, edit, owed, resources: gateEditResources(loaded, [], "flcm.clone"), bindings: captureCloneBindings(node) };
+      return { node, dest, resolved, edit, owed, variantName, resources: gateEditResources(loaded, [], "flcm.clone"), bindings: captureCloneBindings(node) };
     },
-    ({ node, dest, resolved, edit, owed, resources, bindings }, span) => {
+    ({ node, dest, resolved, edit, owed, variantName, resources, bindings }, span) => {
       const fail = beginMutatingApply(node);
       let copy: any;
       const created: CreatedCloneProperties = [];
       try {
         try {
           copy = node.clone();
+          // Named before it lands or its bindings are read: a set holding a duplicate or a variant
+          // on other axes refuses every read of its properties, even for a moment.
+          if (variantName) copy.name = variantName;
         } catch (cause) {
           throw fail(cause);
         }
@@ -443,13 +446,27 @@ function variantKeyOf(name: string): string {
   return name.split(",").map(pair => pair.split("=").map(word => word.trim()).join("=")).sort().join(", ");
 }
 
-// A copy landing in a set beside a variant with its exact axis values leaves the set broken: Figma
-// then refuses every later read of its properties with "Component set has existing errors".
-function assertCloneIsANewVariant(node: any, parent: any, props: EditDelta | undefined): void {
-  if (node.type !== "COMPONENT" || parent.type !== "COMPONENT_SET") return;
+function variantAxesOf(name: string): string {
+  return name.split(",").map(pair => pair.split("=")[0].trim()).sort().join(", ");
+}
+
+// A copy landing in a set beside a variant with its exact axis values, or with other axes, leaves the
+// set broken: Figma then refuses every later read of its properties with "Component set has existing
+// errors". Returns the name the copy must carry from the moment it exists.
+function assertCloneIsANewVariant(node: any, parent: any, props: EditDelta | undefined): string | undefined {
+  if (node.type !== "COMPONENT" || parent.type !== "COMPONENT_SET") return undefined;
   const name: string = typeof props?.name === "string" ? props.name : node.name;
+  const sibling = parent.children.find((member: any) => member !== node);
+  if (sibling && variantAxesOf(sibling.name) !== variantAxesOf(name)) {
+    const example = sibling.name.split(",").map((pair: string) => pair.split("=")[0].trim() + "=<value>").join(", ");
+    throw new FlcmError("authoring",
+      "the copy's name " + JSON.stringify(name) + " doesn't use this component set's properties (" + variantAxesOf(sibling.name) + "), and every variant in a set needs the same ones. " +
+        "Name the copy with them: flcm.clone(" + JSON.stringify(node.id) + ", { name: " + JSON.stringify(example) + " }, " + JSON.stringify(parent.id) + ").",
+      { node: layerOf(parent) },
+    );
+  }
   const twin = parent.children.find((member: any) => variantKeyOf(member.name) === variantKeyOf(name));
-  if (!twin) return;
+  if (!twin) return name;
   const pairs = name.split(",").map(pair => pair.split("=").map(word => word.trim()));
   const example = pairs.map(([axis, value], i) => axis + "=" + (i === 0 ? "<new value>" : value)).join(", ");
   throw new FlcmError("authoring",

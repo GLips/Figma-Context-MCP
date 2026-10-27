@@ -81,6 +81,22 @@ test("a clone that would duplicate a variant in its set is refused before anythi
   await assert.rejects(clone(source.id, { name: " State = Default " }, set.id), { kind: "authoring" });
   assert.equal(set.children.length, before);
 });
+test("a variant cloned into a set with other properties needs a name in that set's terms, and carries it from the start", async () => {
+  const { source } = fixture();
+  const member = figma.createComponent(); member.name = "Size=Small";
+  const destination = figma.combineAsVariants([member], figma.currentPage);
+  const definitions = destination.componentPropertyDefinitions;
+  // Live: a set holding a variant on other axes refuses every read of its properties.
+  Object.defineProperty(destination, "componentPropertyDefinitions", { configurable: true, get() {
+    if (destination.children.some((n: any) => !n.name.startsWith("Size="))) throw Error("Component set has existing errors");
+    return definitions;
+  } });
+  await assert.rejects(clone(source.id, destination.id), { kind: "authoring", message: /\(Size\).*\{ name: "Size=<value>" \}/ });
+  assert.equal(destination.children.length, 1);
+  const copy = await figma.getNodeByIdAsync((await clone(source.id, { name: "Size=Huge" }, destination.id)).id);
+  assert.equal(copy.name, "Size=Huge");
+  assert.ok(copy.children.some((n: any) => Object.keys(n.componentPropertyReferences ?? {}).length));
+});
 test("a standalone slotted component whose slot holds another slotted instance clones with both slots", async () => {
   const slotted = () => {
     const component = figma.createComponent(); figma.currentPage.appendChild(component);

@@ -65,8 +65,7 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings, created: Cr
     if (!root) throw new FlcmError("internal", "the copy lost a component the original holds while it was being placed, so its bindings couldn't be restored.");
     const destination = definitionOwnerOf(root);
     const mapping = new Map<string, string>();
-    // A duplicate variant temporarily makes the set definition getter reject. The source
-    // owner was validated before cloning, and same-owner restoration needs no new definitions.
+    // The source owner was validated before cloning, and same-owner restoration needs no new definitions.
     const sameOwner = destination === entry.source;
     const defs = sameOwner ? entry.definitions : destination.componentPropertyDefinitions || {};
     for (const layer of entry.layers) {
