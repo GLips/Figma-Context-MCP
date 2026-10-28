@@ -12,7 +12,7 @@ import { TOKEN_ENTRY_MARK } from "./token-mark.js";
 
 function setup() {
   const figma = createFigmaMock();
-  (globalThis as any).__flcmHost = { runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false };
+  (globalThis as any).__flcmHost = { callStarted: () => 0, callSettled: () => {}, runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false };
   return { figma, wire: async (value: unknown) =>
     (await serializeForWire(projectForEgress(value, "result"), async (node) => (await figma.getNodeByIdAsync(node.id)) === node, "result")) as any };
 }

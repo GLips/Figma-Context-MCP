@@ -9,7 +9,7 @@ import * as flcm from "./runtime.js";
 
 function setup() {
   const figma = createFigmaMock();
-  (globalThis as any).__flcmHost = { runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false };
+  (globalThis as any).__flcmHost = { callStarted: () => 0, callSettled: () => {}, runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false };
   return figma;
 }
 

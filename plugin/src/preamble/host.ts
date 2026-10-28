@@ -2,8 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { FLCM_ERROR_KINDS, RUN_INACTIVITY_DEADLINE_MS, type FlcmErrorKind, type HostTraceStage, type NativeOperation, type TraceOperation } from "../protocol.js";
-import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
+import { FLCM_ERROR_KINDS, RUN_INACTIVITY_DEADLINE_MS, type CallOperation, type FlcmErrorKind } from "../protocol.js";
 import { FlcmError, describeFailure } from "./flcm-error.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
@@ -23,16 +22,18 @@ import { FlcmError, describeFailure } from "./flcm-error.js";
 // sides. Only the binding name `__flcmHost` crosses the eval boundary no compiler can see — and its
 // other end is the factory wrapper index.mjs writes around this bundle, which refuses to emit one
 // that doesn't reference the name. Rename it here alone and the generator throws.
-// Execution services are required. Diagnostic reporting is optional; diagnostics never affect
-// execution or deadlines.
-type NativeTraceStage = Extract<HostTraceStage, `native-${string}`>;
-type VerbTraceStage = Extract<HostTraceStage, `verb-${string}`>;
+// Execution services are required. Call reporting only feeds the run's status: it never changes a
+// call's result and never counts as a sign of life, which only the host's heartbeat timer is.
 
 /**
- * Why a run was cancelled, which the refusal words for the agent: the server gave up on it (its
- * deadline passed), its server disconnected, or the human revoked its project's grant on the file.
+ * Why a run may not continue, which the refusal words for the agent: the server gave up on it, its
+ * server disconnected, the human revoked its project's grant on the file, or its thread ran no timer
+ * for RUN_INACTIVITY_DEADLINE_MS (so it could not have heard a CANCEL either).
  */
-export type RunCancelCause = "server" | "disconnected" | "revoked";
+export type RunCancelCause = "server" | "disconnected" | "revoked" | "unresponsive";
+
+/** The host's handle on one reported call: opaque, and meaningful only to the run that issued it. */
+export type CallToken = number;
 
 export interface FlcmHost {
   /**
@@ -40,30 +41,37 @@ export interface FlcmHost {
    * plugin run; never retain the initializer.
    */
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
-  /** Reports a step of the run to the server as it happens, so a run that never replies still says
-   * where it stopped. */
-  trace?(stage: NativeTraceStage | VerbTraceStage, operation: TraceOperation): void;
+  /**
+   * A call the run's status should name while it is pending: an flcm verb or a top-level figma.*
+   * method. The name is agent-controlled, so the host checks it (isCallOperation) and counts a bad
+   * one without naming it; reporting never refuses the call.
+   */
+  callStarted(operation: CallOperation): CallToken;
+  /** The call settled, returned or thrown. A token from another run, or settled twice, is ignored. */
+  callSettled(token: CallToken): void;
   /**
    * Private transport for server-shipped verbs. Never expose this on flcm or session. Every call
-   * goes through serverCall below: withServerCall (server-deadline.ts) keeps the run's clock from
-   * counting server work as silence, and a finished runtime is refused before it asks.
+   * goes through serverCall below, so a finished runtime is refused before it asks.
    */
   callServer(capability: string, payload: unknown): Promise<unknown>;
-  /** Why this run was cancelled, or null while it wasn't. Only the host sees a CANCEL, a disconnect
-   * or a revoke arrive. */
+  /**
+   * May this run continue? Why not, or null. A CHECK, not a getter: past the inactivity deadline
+   * since the host's heartbeat last fired, it latches "unresponsive" for good, so a late tick after a
+   * long block never revives the run. Asked before every verb and every figma.* access.
+   */
   runCancellation(): RunCancelCause | null;
-  /** Settles when this run is cancelled. A Figma call can stall with the plugin's timers stalled too,
-   * so this — driven by the CANCEL message — is the only thing that can end the wait (awaitNative). */
-  whenCancelled(): Promise<RunCancelCause>;
+  /**
+   * Call `listener` once when this run is cancelled (at once if it already is); the returned function
+   * unsubscribes. A Figma call can stall with the plugin's timers stalled too, so this, driven by the
+   * CANCEL message, is the only thing that can end the wait (untilCancelled).
+   */
+  onCancelled(listener: (cause: RunCancelCause) => void): () => void;
   /**
    * Has the run this runtime was built FOR already replied? A runtime is per request, but agent code
    * can outlive it — stash `flcm` on globalThis in one call and it is still callable in the next,
    * bound to a host whose run is gone. Only the host knows its own run settled.
    */
   isRunFinished(): boolean;
-  /** When this run's RUN_STATE "running" was stamped, by the host's clock: the server's inactivity
-   * deadline counts from this same instant (server-deadline.ts). */
-  readonly runStartedAt: number;
 }
 
 // run-executor.ts passes the host as the PARAMETER of the eval'd async wrapper the preamble runs inside, so
@@ -142,16 +150,6 @@ export function hostRunCancellation(): RunCancelCause | null {
 }
 
 /**
- * Whether this run has gone silent past the server's inactivity deadline by its own clock — the
- * CANCEL may still be queued behind a run holding the thread (server-deadline.ts). Fails OPEN like
- * cancellation: with no host there is no server and no deadline.
- */
-export function hostDeadlinePassed(): boolean {
-  const host = currentHost();
-  return host ? serverDeadlinePassed(host.runStartedAt) : false;
-}
-
-/**
  * Refuse when this runtime's own run has already replied: the agent kept `flcm` across calls (on
  * globalThis — session refuses functions). Nothing carries its reads out, nothing can cancel or wait
  * for its writes, and its server calls answer a request nobody holds. Fails OPEN like cancellation:
@@ -168,13 +166,13 @@ export function refuseIfRunFinished(): void {
 }
 
 /**
- * Every server call: refused from a finished runtime, bracketed for the deadline clock, and failing
- * only with an FlcmError, so no verb mistakes the server's failure for Figma's.
+ * Every server call: refused from a finished runtime, and failing only with an FlcmError, so no verb
+ * mistakes the server's failure for Figma's.
  */
 async function serverCall(host: FlcmHost, capability: string, payload: unknown): Promise<unknown> {
   refuseIfRunFinished();
   try {
-    return await withServerCall(() => host.callServer(capability, payload));
+    return await host.callServer(capability, payload);
   } catch (failure) {
     throw new FlcmError(capabilityFailureKind(failure), describeFailure(failure));
   }
@@ -192,65 +190,76 @@ function capabilityFailureKind(failure: unknown): FlcmErrorKind {
   return FLCM_ERROR_KINDS.find((known) => known === kind) ?? "internal";
 }
 
-/** Diagnostics must not change the result or rejection of a native operation. */
-export function traceNative(stage: NativeTraceStage, operation: NativeOperation): void {
-  try { currentHost()?.trace?.(stage, operation); } catch { /* Reporting is best effort. */ }
+/**
+ * Run `call` reported to the host as pending until it returns, throws, or its promise settles. The
+ * report never changes the call's result. With no host, the call just runs.
+ */
+export function reportCall<T>(operation: CallOperation, call: () => T): T {
+  const host = currentHost();
+  if (!host) return call();
+  const token = host.callStarted(operation);
+  let out: T;
+  try {
+    out = call();
+  } catch (thrown) {
+    host.callSettled(token);
+    throw thrown;
+  }
+  // Watched on a branch of its own, so the caller still sees a rejection exactly as it was raised.
+  if (isThenable(out)) out.then(() => host.callSettled(token), () => host.callSettled(token));
+  else host.callSettled(token);
+  return out;
 }
 
-export function traceVerb(stage: VerbTraceStage, verb: string): void {
-  try { currentHost()?.trace?.(stage, `flcm.${verb}`); } catch { /* Reporting is best effort. */ }
+/** Not `instanceof Promise`: Figma's promises needn't come from the sandbox's realm. */
+export function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return value !== null && typeof value === "object" && typeof (value as { then?: unknown }).then === "function";
 }
 
-/** What each traced operation is, in the agent's words. */
-const NATIVE_CALLS: Record<NativeOperation, string> = {
-  "page-create": "figma.createPage",
-  "page-switch": "figma.setCurrentPageAsync",
-  "font-load": "figma.loadFontAsync",
-  "font-list": "figma.listAvailableFontsAsync",
-};
+/**
+ * `call`, unless the run is cancelled while it is pending: then a run-ended error naming
+ * `operation`. The cancel listener goes once either settles, so settled calls leave none behind.
+ */
+export function untilCancelled<T>(operation: `figma.${string}`, call: PromiseLike<T>): Promise<T> {
+  const host = currentHost();
+  if (!host) return Promise.resolve(call);
+  return new Promise<T>((resolve, reject) => {
+    const unsubscribe = host.onCancelled((cause) =>
+      reject(new FlcmError("run-ended", `${operation} was still pending when ${CANCELLED_BECAUSE[cause]}, so the run stops here.`)),
+    );
+    call.then(
+      (value) => { unsubscribe(); resolve(value); },
+      (error: unknown) => { unsubscribe(); reject(error); },
+    );
+  });
+}
 
-// The server cancels for three reasons it doesn't send: its inactivity deadline, its total run
-// limit, or its caller giving up. The first is the one an agent's script causes and can fix.
+// The server doesn't say why it cancelled: its caller's time budget ran out, the caller gave up, or
+// it heard no status from the plugin for the inactivity deadline.
 export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
-  server: "the server cancelled this run, most often because the script held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
-    "s without reaching it (split long synchronous work across calls)",
+  server: "the server cancelled this run",
   disconnected: "this run's server disconnected, so the run was cancelled",
   revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
+  unresponsive:
+    "the plugin ran no timer for " + RUN_INACTIVITY_DEADLINE_MS / 1000 + "s during this run (a long synchronous stretch, " +
+    "or an export), so it couldn't hear a cancel and stopped the run (split long synchronous work across calls)",
 };
 
 /**
- * Await a Figma call, traced, and abandoned if the run is cancelled first. Figma can leave a call
+ * Await a Figma call, reported as pending, and abandoned if the run is cancelled first. Figma can leave a call
  * pending forever — loadFontAsync in a file whose window is in the background, seen live — with the
  * plugin's timers stalled too, so no timeout could end it; without this the run never replies and
  * every run behind it waits.
  *
  * `patience` bounds a call whose stall is known to leave the plugin's timers running (a page switch,
  * seen live): past `afterMs` the await rejects with its error, so the run replies with what happened
- * instead of going silent until the server's deadline.
+ * instead of waiting out its caller's budget.
  */
 export async function awaitNative<T>(
-  operation: NativeOperation,
+  operation: `figma.${string}`,
   run: () => Promise<T>,
   patience?: { afterMs: number; stalled: () => FlcmError },
 ): Promise<T> {
-  traceNative("native-start", operation);
-  const started = Date.now();
-  const host = currentHost();
-  const abandoned = host
-    ? host.whenCancelled().then((cause): never => {
-        const stalled = NATIVE_CALLS[operation] + " still hadn't returned after " + Math.round((Date.now() - started) / 1000) + "s when ";
-        // Only the server's own cancel is the stall's doing; a disconnect or a revoke says why it ended.
-        throw new FlcmError(
-          "run-ended",
-          cause === "server"
-            ? stalled + "the server cancelled the run, so the run stops here. Figma stalls its calls like this in a file " +
-                "whose window or tab is in the background: bring the file to the front in Figma before retrying."
-            : stalled + CANCELLED_BECAUSE[cause] + ", so the run stops here.",
-        );
-      })
-    : new Promise<never>(() => {});
-  // The race handles it when it settles first; this keeps a later cancellation from going unhandled.
-  abandoned.catch(() => {});
   let patienceTimer: ReturnType<typeof setTimeout> | undefined;
   const outwaited = patience
     ? new Promise<never>((_, reject) => {
@@ -261,12 +270,9 @@ export async function awaitNative<T>(
       })
     : null;
   try {
-    const value = await Promise.race(outwaited ? [run(), abandoned, outwaited] : [run(), abandoned]);
-    traceNative("native-end", operation);
-    return value;
-  } catch (error) {
-    traceNative("native-error", operation);
-    throw error;
+    // Reported until Figma's own promise settles, not the race: a call abandoned here is still pending in Figma.
+    const native = reportCall(operation, run);
+    return await untilCancelled(operation, outwaited ? Promise.race([native, outwaited]) : native);
   } finally {
     if (patienceTimer !== undefined) clearTimeout(patienceTimer);
   }

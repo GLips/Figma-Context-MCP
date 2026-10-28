@@ -14,13 +14,9 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-async function connectedBridge(timeout = 100, ceiling = 1000) {
+async function connectedBridge(timeout = 100) {
   const trace = new RequestTrace(() => {});
-  const bridge = new PluginBridge({
-    requestTimeoutMs: timeout,
-    runCeilingMs: ceiling,
-    trace,
-  });
+  const bridge = new PluginBridge({ requestTimeoutMs: timeout, trace });
   // Another authenticated link: wired to the bridge, but not the one the runs go out on.
   const stranger = await connectFakePlugin(bridge);
   const socket = await connectFakePlugin(bridge);
@@ -29,7 +25,14 @@ async function connectedBridge(timeout = 100, ceiling = 1000) {
     owner.receive(message);
   return { bridge, trace, sent, socket, stranger, receive, link: socket.link };
 }
-test("host checkpoints do not reset inactivity or resubmit; late result remains diagnostic only", async () => {
+const running = (id: string, operation: string, extra: Record<string, unknown> = {}) => ({
+  type: "RUN_STATUS",
+  executionId: id,
+  at: Date.now(),
+  phase: "running",
+  activity: { callsSettled: 2, pending: [{ operation, sinceMs: 0, ...extra }], pendingCount: 1 },
+});
+test("statuses are logged as counts only, and a late result is diagnostic only", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, link, trace, sent, socket, receive } = await connectedBridge();
@@ -49,35 +52,34 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
     )
     .catch((error) => error);
   const id = sent[0].id!;
-  receive({ type: "RUN_STATE", executionId: id, phase: "running", at: Date.now() });
-  for (let i = 0; i < 4; i++) {
-    await vi.advanceTimersByTimeAsync(20);
-    receive({
-      type: "RUN_TRACE",
-      executionId: id,
-      stage: "native-start",
-      elapsedMs: i * 20,
-      code: "secret",
-    });
-  }
-  await vi.advanceTimersByTimeAsync(20);
-  // The deadline's CANCEL is answered from the plugin's own phase, and that answer is what the
-  // caller's rejection is worded from (protocol 6).
+  receive({ ...running(id, "figma.loadFontAsync", { code: "secret" }), code: "secret" });
+  await vi.advanceTimersByTimeAsync(100);
   receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toContain("was executing when it was cancelled");
+  expect((error as Error).message).toContain("No plugin status for 100ms");
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
   await connectFakePlugin(bridge);
   receive({ id, result: { private: "response content" } }, socket);
-  expect(trace.snapshot(id).map((event) => event.stage)).toContain("late-reply");
+  expect(trace.snapshot(id).map((event) => event.stage)).toEqual([
+    "submitted",
+    "status",
+    "timeout-inactivity",
+    "late-reply",
+  ]);
+  expect(trace.snapshot(id)[1]).toMatchObject({
+    phase: "running",
+    operation: "figma.loadFontAsync",
+    callsSettled: 2,
+    pendingCount: 1,
+  });
   expect(JSON.stringify(trace.snapshot(id))).not.toMatch(/secret|private|response content/);
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
 });
-test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply checkpoints", async () => {
+test("another link's status for a run neither re-arms its deadline nor enters its trace", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, link, trace, sent, stranger, receive } = await connectedBridge(100, 150);
+  const { bridge, link, trace, sent, stranger, receive } = await connectedBridge();
   const result = bridge
     .submitRun(
       link,
@@ -95,17 +97,13 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
-  receive({ type: "RUN_STATE", executionId: id, phase: "running", at: Date.now() });
-  receive({ type: "RUN_TRACE", executionId: id, stage: "native-start", elapsedMs: 0 }, stranger);
-  receive({ type: "RUN_TRACE", executionId: id, stage: "eval-start", elapsedMs: 0 });
-  await vi.advanceTimersByTimeAsync(70);
+  receive(running(id, "figma.loadFontAsync"), stranger);
+  await vi.advanceTimersByTimeAsync(20);
   receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
-  const error = await result;
-  expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toContain("absolute 150ms");
+  expect(await result).toBeInstanceOf(Error);
   const events = trace.snapshot(id);
-  expect(events.some((event) => event.hostStage === "native-start")).toBe(false);
-  expect(events.at(-1)?.stage).toBe("timeout-ceiling");
+  expect(events.some((event) => event.stage === "status")).toBe(false);
+  expect(events.at(-1)?.stage).toBe("timeout-inactivity");
 });
 test("trace is bounded, stage-only, expires terminal entries, and keeps timeout context after noise", () => {
   let now = 0;
@@ -117,13 +115,19 @@ test("trace is bounded, stage-only, expires terminal entries, and keeps timeout 
   );
   trace.start("run", owner);
   for (let i = 0; i < 1000; i++)
-    trace.recordHost("run", owner, { stage: "native-start", elapsedMs: i });
+    trace.recordStatus("run", owner, {
+      type: "RUN_STATUS",
+      executionId: "run",
+      at: i,
+      phase: "queued",
+      wait: { ahead: 1 },
+    });
   trace.record("run", owner, "timeout-inactivity");
   trace.record("run", owner, "late-reply");
   trace.record("run", owner, "late-reply");
   expect(emitted).toHaveLength(34);
   expect(trace.snapshot("run")).toHaveLength(32);
-  expect(emitted.at(-2)?.lastHostStage).toBe("native-start");
+  expect(emitted.at(-2)).toMatchObject({ stage: "timeout-inactivity", phase: "queued", ahead: 1 });
   now = 60_000;
   expect(trace.snapshot("run")).toEqual([]);
   for (let i = 0; i < 129; i++) trace.start(String(i), owner);
@@ -155,14 +159,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
       )
       .catch((error) => error);
     const id = sent[0].id!;
-    receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: Date.now() });
-    receive({
-      type: "RUN_TRACE",
-      executionId: id,
-      stage: "native-start",
-      elapsedMs: 0,
-      operation: "page-switch",
-    });
+    receive(running(id, "figma.setCurrentPageAsync"));
     if (stage === "result")
       receive({
         id,
@@ -180,8 +177,8 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
     const events = trace.snapshot(id);
     expect(events.at(-1)).toMatchObject({
       stage,
-      lastHostStage: "native-start",
-      operation: "page-switch",
+      phase: "running",
+      operation: "figma.setCurrentPageAsync",
     });
     expect(events.some((event) => event.stage.startsWith("timeout"))).toBe(false);
     expect(JSON.stringify(events)).not.toMatch(/secret|private/);

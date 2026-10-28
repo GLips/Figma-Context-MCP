@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 import vm from "node:vm";
 import { createHmac } from "node:crypto";
-import { DOCUMENT_ID_KEY, linkProofMessage } from "./protocol.js";
+import { DOCUMENT_ID_KEY, RUN_STATUS_INTERVAL_MS, linkProofMessage } from "./protocol.js";
 import type { ConnKey, HostInbound, HostOutbound, PanelControl, PanelRender } from "./panel.js";
 
 const bundle = (entry: string) =>
@@ -235,7 +235,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       type: "EXECUTE_CODE",
       id,
       preamble:
-        "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })",
+        "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })",
       code: "",
       session: { handle: sharedSessionOf(project), create: true },
     });
@@ -247,8 +247,11 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       `a result for ${id}`,
     ) as Promise<any>;
   const running = (id: string, key: ConnKey) =>
-    frame((f, connKey) => f.type === "RUN_STATE" && f.executionId === id && connKey === key && f.phase === "running", `${id} running`);
-  return { sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
+    frame((f, connKey) => f.type === "RUN_STATUS" && f.executionId === id && connKey === key && f.phase === "running", `${id} running`);
+  /** Every status sent for one run in one phase, oldest first, as the JSON the relay would carry. */
+  const statuses = (id: string, phase: "queued" | "running") =>
+    sent.filter(({ frame: f }) => f.type === "RUN_STATUS" && f.executionId === id && f.phase === phase).map(({ frame: f }) => JSON.parse(JSON.stringify(f)));
+  return { statuses, sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
 }
 
 test("while Figma has paused the plugin, a new run is refused at once and a stuck run's cancel says why", async () => {
@@ -258,7 +261,7 @@ test("while Figma has paused the plugin, a new run is refused at once and a stuc
   h.context.hold = new Promise<void>((r) => {
     release = r;
   });
-  const preamble = "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
+  const preamble = "(host)=>({ flcm: {}, session: {}, warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })";
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "stuck", preamble, code: "await hold;" });
   await h.running("stuck", 1);
   h.pauseFigma();
@@ -285,7 +288,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.sendFrame(key, { type: "EXECUTE_CODE", id, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })", code: body });
+    h.sendFrame(key, { type: "EXECUTE_CODE", id, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
   await h.running("same-id", 1);
   h.sendControl({ type: "WS_CLOSED", connKey: 1 });
@@ -301,7 +304,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   assert(
     h.sent.some(
       ({ connKey, frame: f }) =>
-        f.type === "RUN_STATE" &&
+        f.type === "RUN_STATUS" &&
         f.executionId === "same-id" &&
         connKey === 2 &&
         f.phase === "running",
@@ -317,7 +320,7 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   await h.connect(1);
   let release!: () => void;
   h.context.hold = new Promise<void>((resolve) => { release = resolve; });
-  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })";
   const run = (id: string, body: string) =>
     h.sendFrame(1, { type: "EXECUTE_CODE", id, preamble, code: body });
   run("executing", "await hold; return 1;");
@@ -340,7 +343,7 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   await h.result("waiting");
 });
 
-const echoPreamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })";
+const echoPreamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })";
 
 test("a run is refused before it executes without a grant, or for a document this file isn't stamped with", async () => {
   const h = host();
@@ -418,6 +421,31 @@ test("a granted server's write waits out another server's Allow being saved inst
   landed();
   assert.equal((await h.result("run", 1)).result, "ran");
   assert(!h.sent.some(({ frame: f, connKey }) => connKey === 1 && f.type === "NOT_GRANTED"));
+});
+
+test("a run held at dequeue by an Allow being saved, and the runs behind it, hear a status every interval", async (t) => {
+  const h = host();
+  await h.connect(1);
+  await h.introduce(2, "/other");
+  const setAsync = h.context.figma.clientStorage.setAsync;
+  let landed!: () => void;
+  const saving = new Promise<void>((resolve) => { landed = resolve; });
+  h.context.figma.clientStorage.setAsync = async (key: string, value: unknown) => {
+    await saving;
+    return setAsync(key, value);
+  };
+  assert.equal(await h.grantStatus(2, "other-call", "allow"), "pending");
+  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2, executionId: "other-call", documentId: DOCUMENT_ID });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "front", preamble: echoPreamble, code: "return 'front';" });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 'behind';" });
+  await h.frame((f) => f.executionId === "behind" && (f.wait as any)?.blocker?.executionId === "front", "front blocking behind");
+  // A minute of the human taking their time over the other server's Allow.
+  const beats = 60_000 / RUN_STATUS_INTERVAL_MS;
+  for (let beat = 0; beat < beats; beat++) t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+  for (const id of ["front", "behind"]) assert.ok(h.statuses(id, "queued").length > beats, `${id}: ${h.statuses(id, "queued").length}`);
+  landed();
+  assert.equal((await h.result("behind", 1)).result, "behind");
 });
 
 test("a file is stamped once and keeps its stamp and grant across plugin runs; a copy shares both until given its own", async () => {
@@ -653,6 +681,7 @@ test("the result and each console line leave the run through the preamble's egre
       flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(),
       mutationQueueIdle: async () => 0, committedVerbCount: () => 0,
       projectForEgress: (value, channel) => channel === "console" ? value.map((arg) => "egress:" + arg) : { egress: value },
+      agentFigma: () => figma,
     })`,
     code: `console.log("a", "b"); return "returned";`,
   });
@@ -767,6 +796,7 @@ test("last retains the value the code returned, not its egress copy", async () =
     flcm: { read: { id: "v", type: "VECTOR", d: "M0 0 L1 1" } }, session: host.getSession(() => ({})),
     warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0,
     projectForEgress: (value, channel) => channel === "console" ? value : { projected: true },
+    agentFigma: () => figma,
   })`;
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "first", preamble, code: `return { nested: [flcm.read] };` });
   assert.deepEqual({ ...(await h.result("first")).result }, { projected: true });
@@ -943,7 +973,9 @@ test("a page switch Figma never finishes still replies, naming the page", { time
   const { createFigmaMock } = await import("../harness/figma-mock.mjs");
   const { PAGE_SWITCH_PATIENCE_MS } = await import("./preamble/page.js");
   const figma = createFigmaMock();
-  figma.setCurrentPageAsync = () => new Promise(() => {});
+  let switching!: () => void;
+  const switchStarted = new Promise<void>((resolve) => { switching = resolve; });
+  figma.setCurrentPageAsync = () => (switching(), new Promise(() => {}));
   const h = host(figma);
   await h.connect(1);
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -951,11 +983,172 @@ test("a page switch Figma never finishes still replies, naming the page", { time
   templates.name = "templates";
   const id = "page-use";
   h.sendFrame(1, { type: "EXECUTE_CODE", id, preamble: await realPreamble, code: `await flcm.page.use("templates");` });
-  await h.frame((f) => f.type === "RUN_TRACE" && f.stage === "native-start" && f.operation === "page-switch", "the page switch starting");
+  await switchStarted;
   t.mock.timers.tick(PAGE_SWITCH_PATIENCE_MS);
   const { errors } = await h.result(id);
   assert.match(errors, /didn't finish switching to page "templates"/);
   assert.ok(errors.includes(`flcm.append(${JSON.stringify(templates.id)}, spec)`), errors);
+});
+
+test("a raw run the server gave up on stops at its next figma.* access, and a run queued behind it hears why", async () => {
+  // fig-140: one raw loop with no flcm verb outlived its CANCEL by 77 minutes while every run behind
+  // it bounced with "retry as-is".
+  const h = host();
+  await h.connect(1);
+  let release!: () => void;
+  h.context.hold = new Promise<void>((resolve) => { release = resolve; });
+  const preamble = await realPreamble;
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "raw", preamble, code: `for (;;) { figma.createRectangle(); await hold; }` });
+  await h.running("raw", 1);
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble, code: "return 1;" });
+  h.sendFrame(1, { type: "CANCEL", executionId: "raw" });
+  h.sendFrame(1, { type: "CANCEL", executionId: "behind" });
+  const answers = h.sent.filter(({ frame: f }) => f.type === "CANCEL_RESULT").map(({ frame: f }) => JSON.parse(JSON.stringify(f)));
+  assert.deepEqual([answers[0].disposition, answers[0].blocker], ["was-running", undefined]);
+  const { blocker } = answers[1];
+  assert.equal(answers[1].disposition, "never-executed");
+  assert.deepEqual(
+    [blocker.executionId, blocker.kind, blocker.sameLink, blocker.session, blocker.intent, typeof blocker.cancelledForMs, blocker.activity],
+    ["raw", "code", true, "shared-session-project-one", "Run raw", "number", { callsSettled: 1, pending: [], pendingCount: 0 }],
+  );
+  release();
+  assert.match((await h.result("raw")).errors, /server cancelled this run, so figma\.createRectangle and every figma\.\* access after it is refused/);
+});
+
+test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the late heartbeat doesn't revive it", async (t) => {
+  const h = host();
+  await h.connect(1);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  Object.assign(h.context, {
+    hold: new Promise<void>((resolve) => { release = resolve; }),
+    blocked: () => reached(),
+    // Each call takes a second of a thread that never yields, so no heartbeat can fire.
+    spendSecond: () => h.advanceClock(1_000),
+  });
+  h.sendFrame(1, {
+    type: "EXECUTE_CODE",
+    id: "loop",
+    preamble: await realPreamble,
+    code: `let calls = 0, first;
+      try { for (;;) { figma.createRectangle(); calls++; spendSecond(); } } catch (e) { first = e.message; }
+      blocked(); await hold;
+      try { figma.createRectangle(); return "revived"; } catch (e) { return { calls, first, second: e.message }; }`,
+  });
+  await blocked;
+  // The thread yielded, so the overdue heartbeat fires at last, before the code goes on.
+  t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+  assert.equal(h.statuses("loop", "running").length, 2);
+  release();
+  const { result, errors } = await h.result("loop");
+  assert.equal(errors, null);
+  assert.equal(result.calls, 15);
+  assert.match(result.first, /plugin ran no timer for 15s during this run .* so figma\.createRectangle and every figma\.\* access after it is refused/);
+  assert.match(result.second, /plugin ran no timer for 15s/);
+});
+
+test("a run awaiting a Figma call that never settles keeps its heartbeat, naming the call and how long it has waited", async (t) => {
+  // Settled only after the run ended: a late settle must touch nothing.
+  let loaded!: () => void;
+  const h = host({ loadFontAsync: () => new Promise<void>((resolve) => { loaded = resolve; }) });
+  await h.connect(1);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  h.sendFrame(1, {
+    type: "EXECUTE_CODE",
+    id: "font",
+    preamble: await realPreamble,
+    code: `await figma.loadFontAsync({ family: "Inter", style: "Regular" }); return "loaded";`,
+  });
+  await h.running("font", 1);
+  // Queued now: arriving after the clock jumps would read as Figma having paused the plugin.
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 'ran';" });
+  // Past the inactivity deadline, in heartbeat steps: a thread that keeps yielding is never refused.
+  for (let beat = 0; beat < 10; beat++) {
+    h.advanceClock(RUN_STATUS_INTERVAL_MS);
+    t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+  }
+  const beats = h.statuses("font", "running").slice(1).map((status) => status.activity);
+  assert.equal(beats.length, 10);
+  for (const [beat, { callsSettled, pending, pendingCount }] of beats.entries()) {
+    assert.deepEqual([callsSettled, pending.map((call: { operation: string }) => call.operation), pendingCount], [0, ["figma.loadFontAsync"], 1]);
+    // At least the time the test moved the clock: the real clock runs on beneath it.
+    assert.ok(pending[0].sinceMs >= (beat + 1) * RUN_STATUS_INTERVAL_MS, `beat ${beat}: ${pending[0].sinceMs}`);
+    if (beat > 0) assert.ok(pending[0].sinceMs > beats[beat - 1].pending[0].sinceMs);
+  }
+  // Cancelled, the never-settling await ends the run, and the run queued behind it executes.
+  h.sendFrame(1, { type: "CANCEL", executionId: "font" });
+  assert.match((await h.result("font")).errors, /figma\.loadFontAsync was still pending when the server cancelled this run, so the run stops here/);
+  assert.deepEqual([(await h.result("behind")).result, (await h.result("behind")).errors], ["ran", null]);
+  loaded();
+});
+
+test("a run whose code returned keeps its status and its place until its reply goes out", async (t) => {
+  // A logged node is checked with Figma after the code returns, and Figma can take its time.
+  let answer!: () => void;
+  const h = host({ getNodeByIdAsync: () => new Promise((resolve) => { answer = () => resolve(null); }) });
+  await h.connect(1);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "logs", preamble: echoPreamble, code: `class Node { id = "1:2"; removed = false; } console.log(new Node()); return 1;` });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 2;" });
+  await h.running("logs", 1);
+  for (let beat = 0; beat < 3; beat++) t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+  assert.equal(h.statuses("logs", "running").length, 4);
+  assert.equal(h.statuses("behind", "queued").at(-1).wait.blocker.executionId, "logs");
+  h.sendFrame(1, { type: "CANCEL", executionId: "logs" });
+  assert.equal(h.sent.find(({ frame: f }) => f.type === "CANCEL_RESULT")?.frame.disposition, "was-running");
+  answer();
+  await h.result("logs");
+  assert.equal((await h.result("behind")).result, 2);
+});
+
+test("a queued run is told what it waits behind as the queue moves, and another link's blocker carries no session", async () => {
+  const h = host();
+  await h.connect(1);
+  await h.connect(2, "/other");
+  let releaseFirst!: () => void;
+  let releaseSecond!: () => void;
+  Object.assign(h.context, {
+    holdFirst: new Promise<void>((resolve) => { releaseFirst = resolve; }),
+    holdSecond: new Promise<void>((resolve) => { releaseSecond = resolve; }),
+  });
+  const preamble = await realPreamble;
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "first", preamble, code: "await holdFirst; return 1;" });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "second", preamble, code: "await holdSecond; return 2;" });
+  h.sendFrame(2, { type: "EXECUTE_CODE", id: "third", preamble, code: "return 3;" });
+  await h.running("first", 1);
+  const latest = (id: string) => {
+    const { ahead, blocker } = h.statuses(id, "queued").at(-1).wait;
+    return { ahead, executionId: blocker?.executionId, sameLink: blocker?.sameLink, session: blocker?.session, hasSession: blocker !== undefined && "session" in blocker };
+  };
+  assert.deepEqual(latest("second"), { ahead: 1, executionId: "first", sameLink: true, session: "shared-session-project-one", hasSession: true });
+  assert.deepEqual(latest("third"), { ahead: 2, executionId: "first", sameLink: false, session: undefined, hasSession: false });
+  releaseFirst();
+  await h.running("second", 1);
+  assert.deepEqual(latest("third"), { ahead: 1, executionId: "second", sameLink: false, session: undefined, hasSession: false });
+  releaseSecond();
+  assert.equal((await h.result("third", 2)).result, 3);
+});
+
+test("a withdrawn queued run never executes and reads as withdrawn; a running one is left to finish", async () => {
+  const h = host();
+  await h.connect(1);
+  let release!: () => void;
+  Object.assign(h.context, { hold: new Promise<void>((resolve) => { release = resolve; }), writes: [] });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "first", preamble: echoPreamble, code: "await hold; writes.push('first'); return 1;" });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "second", preamble: echoPreamble, code: "writes.push('second'); return 2;" });
+  await h.running("first", 1);
+  for (const executionId of ["second", "first", "never-heard-of"]) h.sendFrame(1, { type: "WITHDRAW", executionId });
+  assert.deepEqual(
+    h.sent.filter(({ frame: f }) => f.type === "WITHDRAW_RESULT").map(({ frame: f }) => [f.executionId, f.outcome, (f.blocker as any)?.executionId]),
+    [["second", "withdrawn", "first"], ["first", "running", undefined], ["never-heard-of", "unknown", undefined]],
+  );
+  release();
+  assert.deepEqual([(await h.result("first")).result, (await h.result("first")).errors], [1, null]);
+  assert.match((await h.result("second")).errors, /withdrawn by its server while it was still queued, so none of your code ran/);
+  assert.deepEqual(Array.from(h.context.writes), ["first"]);
+  assert.equal(h.renders.at(-1)!.activity.find((entry) => entry.executionId === "second")?.outcome, "withdrawn");
 });
 
 test("queued calls observe completed session writes and cancelled queued calls cannot change last", async () => {
@@ -1275,6 +1468,6 @@ test("a failed run's error keeps only the frames from the agent's own code", () 
 test("an error on the script's first line points at the agent's own column, not the wrapper's", () => {
   // Live QuickJS, for a script whose first line is `const c = ;`.
   const err = new SyntaxError("unexpected token in expression: ';'");
-  err.stack = "    at <input>:1:43";
+  err.stack = "    at <input>:1:50";
   assert.equal(formatFailureForAgent(err), "SyntaxError: unexpected token in expression: ';'\n    at <input>:1:11");
 });

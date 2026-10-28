@@ -188,7 +188,7 @@ function isLinkSetupRequest(type: ServerRequestType): boolean {
 /**
  * A frame one server sent over its socket (`key` names the socket generation). Server REQUESTS all
  * carry ids and each gets exactly one reply — including one this plugin can't admit, which is
- * answered ERROR. CANCEL and CHANNEL_RESPONSE are one-way.
+ * answered ERROR. CANCEL, WITHDRAW and CHANNEL_RESPONSE are one-way.
  */
 function handleServerFrame(raw: unknown, key: ConnKey): void {
   figmaPause.arm();
@@ -209,6 +209,10 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
   }
   if (msg.type === "CANCEL") {
     executor.cancel(key, msg.executionId);
+    return;
+  }
+  if (msg.type === "WITHDRAW") {
+    executor.withdraw(key, msg.executionId);
     return;
   }
   // Reverse-direction replies: answers to PLUGIN-issued requests, in the plugin's id namespace.
@@ -273,7 +277,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
         reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
         return;
       }
-      executor.runCode(to, msg.documentId, admission.session, msg.code, msg.preamble, msg.lateChangeWindowMs);
+      executor.runCode(to, msg.documentId, admission.session, msg.intent, msg.code, msg.preamble, msg.lateChangeWindowMs);
       return;
     }
     case "SCREENSHOT":
@@ -281,7 +285,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       if (refuseWhileFigmaPaused(to)) return;
       if (gate.admit(to, msg.documentId)) {
         const { nodeId, key: nodeKey, scale, context, margin } = msg;
-        executor.runScreenshot(to, msg.documentId, { nodeId, key: nodeKey }, { scale, context, margin });
+        executor.runScreenshot(to, msg.documentId, msg.intent, { nodeId, key: nodeKey }, { scale, context, margin });
       }
       return;
     case "ANNOTATION_CHANGES":

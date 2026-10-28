@@ -245,11 +245,11 @@ test("the destination is read at the seal: an anchor moved during the image fetc
   const anchor = await figma.getNodeByIdAsync(specNode(out, "anchor").id);
   // The image fetch is the run's suspension point; the user drags the anchor across it.
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) => {
+  g.__flcmHost = { callStarted: () => 0, callSettled: () => {}, callServer: async (_capability: string, urls: string[]) => {
       right.appendChild(anchor);
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
+    runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false,
   };
   try {
     await insertAfter("anchor", {
@@ -309,11 +309,11 @@ test("a destination dragged to a page this call never loaded refuses before the 
   const anchor = await figma.getNodeByIdAsync(specNode(out, "anchor").id);
   const before = [...figma.undoLog];
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = {     callServer: async (_capability: string, urls: string[]) => {
+  g.__flcmHost = { callStarted: () => 0, callSettled: () => {}, callServer: async (_capability: string, urls: string[]) => {
       figma.createPage().appendChild(anchor); // under dynamic-page that page's child list is unreadable until loaded
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
+    runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false,
   };
   try {
     await assert.rejects(

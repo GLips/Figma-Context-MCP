@@ -268,6 +268,7 @@ const OUTCOME_TEXT: Record<ActivityOutcome, string> = {
   done: "Done",
   failed: "Failed",
   cancelled: "Cancelled",
+  withdrawn: "Withdrawn — nothing ran",
 };
 
 // What each agent call did in this file lately, newest first: its intent, its outcome, and the

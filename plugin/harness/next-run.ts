@@ -13,10 +13,12 @@ export async function inNextRun<T>(body: () => Promise<T>, host: Partial<FlcmHos
   const g = globalThis as { __flcmHost?: FlcmHost };
   const outer = g.__flcmHost;
   g.__flcmHost = {
+    getSession: (initialize) => initialize(),
+    callStarted: () => 0, callSettled: () => {},
     callServer: async () => ({}), runCancellation: () => null, isRunFinished: () => false,
-    whenCancelled: () => new Promise(() => {}),
+    onCancelled: () => () => {},
     ...host,
-  } as FlcmHost;
+  };
   try {
     return await body();
   } finally {

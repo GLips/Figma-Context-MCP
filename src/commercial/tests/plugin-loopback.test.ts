@@ -757,7 +757,7 @@ it("a reconnect during a run leaves its outcome unknown, names its session, and 
   plugin.drop();
   const lost = await interrupted;
   if (!(lost instanceof ExecutionReplyLostError)) throw lost;
-  expect(lost).toMatchObject({ outcome: "unconfirmed", phase: "running" });
+  expect(lost).toMatchObject({ outcome: "unconfirmed" });
   expect(lost.message).toContain(lost.session);
 
   await settlesTo(bridge, "linked");

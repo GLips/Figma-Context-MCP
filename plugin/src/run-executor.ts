@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Runs what a granted server submits — agent code and screenshots — one at a time, against the
-// live document, and owns everything a run carries: its phase and cancellation, its mid-run server
+// live document, and owns everything a run carries: its status and cancellation, its mid-run server
 // calls, the late-change watch, and the agents' session stores. Each run's course goes to the
 // activity feed.
 import type { ActivityFeed } from "./activity-feed.js";
@@ -11,38 +11,44 @@ import type { AgentSession, AgentSessions } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 import { resolveWireSnapshot, serializeForWire, snapshotForWire, type IsFigmaNode, type WireSnapshot } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
-import { createRunCancellationRegistry } from "./run-cancellation.js";
+import { createRunRegistry, type ConnectionCancelCause, type ExternalCancelCause, type RunLabel, type RunRef } from "./run-registry.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
 import { createServerCallTable } from "./server-calls.js";
 import type { FigmaPauseWatch } from "./figma-pause.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import {
-  RUN_INACTIVITY_DEADLINE_MS,
-  type HostTraceStage,
-  type NotGrantedReason,
-  type RunPhase,
-  type ServerFrame,
-  type TraceOperation,
-} from "./protocol.js";
+import { RUN_STATUS_INTERVAL_MS, type NotGrantedReason, type ServerFrame } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
-import type { FlcmHost, RunCancelCause } from "./preamble/host.js";
+import type { FlcmHost } from "./preamble/host.js";
 // Likewise type-only: the factory result types both agent bindings without bundling their implementation.
 import type * as SandboxRuntime from "./preamble/sandbox.js";
 // The one value import from preamble/: flcm-error imports only types, so it bundles alone.
 import { FlcmError, formatFailureForAgent, wrapAgentCode } from "./preamble/flcm-error.js";
 
 // What a run cancelled before it started tells its (late) reply, by cause.
-const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
+const CANCELLED_WHILE_QUEUED: Record<ExternalCancelCause, string> = {
   server: "this run was cancelled by the server while it was still queued",
   disconnected: "this run's server disconnected while the run was still queued",
   revoked: "the human revoked this project's grant on the file while the run was still queued",
 };
+const WITHDRAWN_WHILE_QUEUED = "this run was withdrawn by its server while it was still queued";
+
+// The reply owed to a request whose run never started, by kind.
+const codeNotRun = (to: ReplyTo, reason: string): void =>
+  reply(to, { type: "EXECUTE_CODE_RESULT", result: null, console: [], errors: `${reason}, so none of your code ran.`, documentChanged: false });
+const screenshotNotTaken = (to: ReplyTo, reason: string): void =>
+  reply(to, { type: "SCREENSHOT_RESULT", errors: `${reason}, so no screenshot was taken.` });
+
+/** A queued run's work. Withdrawn, it lets go of its payload and leaves only its late reply. */
+interface QueuedJob {
+  start: () => Promise<void>;
+  withdraw: () => () => void;
+}
 
 // Why a connection's suspended server calls were abandoned, by cause.
-const CALLS_ABANDONED: Record<Exclude<RunCancelCause, "server">, string> = {
+const CALLS_ABANDONED: Record<ConnectionCancelCause, string> = {
   disconnected: "the server disconnected mid-run, so the request to it was abandoned and the script stops here.",
   revoked:
     "the human revoked this project's grant in Figma, so the request to the server was abandoned and the script stops here.",
@@ -65,8 +71,15 @@ export function createRunExecutor({
   activity: ActivityFeed;
 }) {
   const serverCalls = createServerCallTable(isConnected);
-  // The policy, the run phase it reads, and the key semantics live on run-cancellation.ts.
-  const cancelledRuns = createRunCancellationRegistry();
+  // Every run's row, and what its status and cancellation are read from (run-registry.ts).
+  const runs = createRunRegistry({
+    onQueueChange: () => {
+      publishQueue(false);
+      if (runs.isIdle()) stopStatusBeat();
+    },
+  });
+  // The status heartbeat, armed while any run is tracked (scheduleStatusBeat).
+  let statusBeat: ReturnType<typeof setTimeout> | undefined;
   // The last execution whose reply said "no change", still watching for a change that lands after it
   // (document-changes.ts watchLate). Bounded by the next run's start and by the window its
   // EXECUTE_CODE carried — the server's number, since the server is what holds the run open for it.
@@ -82,65 +95,102 @@ export function createRunExecutor({
    * error paths, so swallowing here loses nothing a caller could act on.
    */
   let writeChain: Promise<void> = Promise.resolve();
-  function enqueueWrite(run: () => Promise<void>): void {
-    writeChain = writeChain.then(run).catch(() => {});
+  // Each queued run's job until the chain reaches it; a withdrawn one is just its late reply.
+  const queuedJobs = new Map<string, QueuedJob | (() => void)>();
+  const jobKey = (to: RunRef) => `${to.connKey}:${to.id}`;
+  function enqueueWrite(to: ReplyTo, job: QueuedJob): void {
+    const key = jobKey(to);
+    queuedJobs.set(key, job);
+    writeChain = writeChain
+      .then(() => {
+        const next = queuedJobs.get(key)!;
+        queuedJobs.delete(key);
+        return typeof next === "function" ? next() : next.start();
+      })
+      .catch(() => {});
   }
 
-  /** Announce a run's phase on its connection. Returns the stamp it carries. */
-  function runState(to: ReplyTo, phase: RunPhase): number {
-    // `at` because the frame only leaves once this thread goes idle: a run that opens with seconds of
-    // synchronous work delivers "running" seconds late, and the server would start its deadline then.
+  // Every status is stamped `at` when posted: a frame only leaves once this thread goes idle, so it
+  // can arrive seconds late, and the server must not take a late one as fresh.
+  function sendRunning(to: RunRef): void {
     const at = Date.now();
-    toServer(to.connKey, { type: "RUN_STATE", executionId: to.id, phase, at });
-    return at;
+    toServer(to.connKey, { type: "RUN_STATUS", executionId: to.id, at, phase: "running", activity: runs.activity(to, at) });
+  }
+
+  /** Tell each queued run where it stands: `all` on a heartbeat, else only those whose wait changed. */
+  function publishQueue(all: boolean): void {
+    const at = Date.now();
+    for (const { ref, wait } of runs.dueQueueStatuses(at, all))
+      toServer(ref.connKey, { type: "RUN_STATUS", executionId: ref.id, at, phase: "queued", wait });
   }
 
   /**
-   * Accept a run: track it from this moment — a run can be cancelled while it still sits in the
-   * queue — and tell its server. Phase transitions are announced and recorded together, here and in
-   * beginRun only: the server's copy drives its deadlines, ours answers its CANCELs, and a run whose
-   * two copies disagree is exactly how a caller gets told the wrong thing.
+   * The heartbeat: every tracked run's status, each interval while any is tracked, since the server
+   * stops waiting on any run it hears nothing about, queued ones included. It only fires when the
+   * thread yields, so silence means the thread is held. Each beat is also the running run's watchdog.
    */
-  function acceptRun(to: ReplyTo, session: string | null): void {
-    cancelledRuns.enqueue(to);
-    runState(to, "queued");
-    activity.advance(to.id, "queued", session);
+  function scheduleStatusBeat(): void {
+    statusBeat ??= setTimeout(() => {
+      statusBeat = undefined;
+      const running = runs.heartbeat();
+      if (running) sendRunning(running);
+      publishQueue(true);
+      if (!runs.isIdle()) scheduleStatusBeat();
+    }, RUN_STATUS_INTERVAL_MS);
+  }
+
+  function stopStatusBeat(): void {
+    if (statusBeat !== undefined) clearTimeout(statusBeat);
+    statusBeat = undefined;
+  }
+
+  /** Accept a run: tracked from this moment, since a run can be cancelled or withdrawn while queued. */
+  function acceptRun(to: ReplyTo, label: RunLabel): void {
+    runs.enqueue(to, label);
+    scheduleStatusBeat();
+    activity.advance(to.id, "queued", label.session);
   }
 
   /**
    * The run reached the front of the write chain and is about to touch the document. The previous
    * execution's late-change watch ends first, so nothing this run does is charged to that one.
    */
-  function beginRun(to: ReplyTo): number {
+  function beginRun(to: ReplyTo): void {
     lateChangeWatch?.stop();
     lateChangeWatch = null;
-    cancelledRuns.markRunning(to);
+    runs.markRunning(to);
     activity.advance(to.id, "running");
-    return runState(to, "running");
+    sendRunning(to);
   }
 
   /**
    * The dequeue refusals, in order: the grant first, so a CANCEL landing while storage settles is
-   * still honoured; then the queued-zombie case (run-cancellation.ts) — a run cancelled while it sat
-   * queued must not execute now, mutating a canvas the agent was told is unchanged. Nothing waits on
-   * that reply (the CANCEL was answered when it landed), but the frozen envelope promises one per
-   * request, and the server files it as a late reply. True when the run may start.
+   * still honoured; then the queued-zombie case — a run withdrawn while its grant was read, or
+   * cancelled while it sat queued, must not execute now, mutating a canvas the agent was told is
+   * unchanged. Nothing waits on that reply (the WITHDRAW or CANCEL was answered when it landed), but
+   * the frozen envelope promises one per request, and the server files it as a late reply. True when
+   * the run may start.
    */
   async function admitAtDequeue(
     to: ReplyTo,
     documentId: string,
     refuseQueued: (reason: string) => void,
   ): Promise<boolean> {
+    runs.markAtFront(to);
     const refusal = await refusalAtDequeue(to.connKey, documentId);
-    const cancelled = cancelledRuns.cancellation(to);
+    if (!runs.isTracked(to)) {
+      refuseQueued(WITHDRAWN_WHILE_QUEUED);
+      return false;
+    }
+    const cancelled = runs.queuedCancellation(to);
     if (cancelled) {
-      cancelledRuns.settle(to);
+      runs.settle(to);
       activity.advance(to.id, "cancelled");
       refuseQueued(CANCELLED_WHILE_QUEUED[cancelled]);
       return false;
     }
     if (refusal) {
-      cancelledRuns.settle(to);
+      runs.settle(to);
       activity.advance(to.id, "refused");
       reply(to, { type: "NOT_GRANTED", reason: refusal });
       return false;
@@ -164,27 +214,12 @@ export function createRunExecutor({
     preamble: string,
     lateChangeWindowMs: number,
   ): Promise<void> {
-    const admitted = await admitAtDequeue(to, documentId, (reason) =>
-      reply(to, {
-        type: "EXECUTE_CODE_RESULT",
-        result: null,
-        console: [],
-        errors: `${reason}, so none of your code ran.`,
-        documentChanged: false,
-      }),
-    );
+    const admitted = await admitAtDequeue(to, documentId, (reason) => codeNotRun(to, reason));
     if (!admitted) {
       sessions.release(agentSession);
       return;
     }
-    const runStartedAt = beginRun(to);
-    const traceStarted = Date.now();
-    const trace = (stage: HostTraceStage, operation?: TraceOperation) => {
-      try {
-        toServer(to.connKey, { type: "RUN_TRACE", executionId: to.id, stage, operation, elapsedMs: Date.now() - traceStarted });
-      } catch { /* A diagnostic must never change execution or cleanup. */ }
-    };
-    trace("eval-start");
+    beginRun(to);
     const logged: { level: string; args: WireSnapshot }[] = [];
     const originalConsole = {
       log: console.log,
@@ -216,7 +251,6 @@ export function createRunExecutor({
     let landedAfterReturn = 0;
     let documentChanged = false;
     let documentChanges: DocumentChangeObserver | undefined;
-    let cancelledMidRun = false;
     try {
       // Watching starts before anything of the agent's can run, and ends after the drain below.
       documentChanges = observeDocumentChanges();
@@ -225,20 +259,20 @@ export function createRunExecutor({
       // agent's code receives as named parameters. The agent's own wrapper keeps its line numbers.
       //
       // The host answers for THIS run (`to`), so each service refuses once the run has settled rather
-      // than serve a runtime the agent kept past its reply. Tracing goes quiet instead: a diagnostic
-      // that refused would change execution.
+      // than serve a runtime the agent kept past its reply. Call reports go quiet instead: the row is
+      // gone, and a report that refused would change execution.
       const host: FlcmHost = {
         getSession: (initialize) => {
           agentSession.store ??= initialize();
           return agentSession.store;
         },
-        trace: (stage, operation) => { if (!settled) trace(stage, operation); },
+        callStarted: (operation) => runs.callStarted(to, operation),
+        callSettled: (token) => runs.callSettled(to, token),
         // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
         callServer: (capability: string, payload: unknown) => serverCalls.call(to, capability, payload),
-        runCancellation: () => cancelledRuns.cancellation(to),
-        whenCancelled: () => cancelledRuns.whenCancelled(to),
+        runCancellation: () => runs.cancellation(to),
+        onCancelled: (listener) => runs.onCancelled(to, listener),
         isRunFinished: () => settled,
-        runStartedAt,
       };
       const built = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
       // Checked HERE, not in the finally that drains: a std-lib that cannot be drained must fail as a
@@ -247,7 +281,8 @@ export function createRunExecutor({
       if (
         typeof built.mutationQueueIdle !== "function" ||
         typeof built.committedVerbCount !== "function" ||
-        typeof built.projectForEgress !== "function"
+        typeof built.projectForEgress !== "function" ||
+        typeof built.agentFigma !== "function"
       ) {
         throw new FlcmError(
           "run-ended",
@@ -258,14 +293,14 @@ export function createRunExecutor({
       runtime = built;
       const { flcm, session } = built;
       // Indirect eval gives agent code global scope, never this function's host/transport locals.
-      const raw = await (0, eval)(wrapAgentCode(code))(flcm, session);
-      trace("code-returned");
+      // Its `figma` is the preamble's (agent-figma.ts), shadowing the global: the one the run's
+      // cancellation can stop.
+      const raw = await (0, eval)(wrapAgentCode(code))(flcm, session, built.agentFigma());
       // A live node anywhere in the result is refused here, with its path (serialize.ts).
       result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode, "result");
       // Session capture is optional; its narrower data contract must not reject a valid wire result.
       try { session.last = raw; } catch { session.last = undefined; }
     } catch (err) {
-      trace("code-returned");
       errorMessage = formatFailureForAgent(err);
     } finally {
       // Drain before anything else in here, and the order of the three is load-bearing:
@@ -294,15 +329,11 @@ export function createRunExecutor({
         );
         lateChangeWatch = documentChanges;
       }
-      trace("eval-end");
       console.log = originalConsole.log;
       console.info = originalConsole.info;
       console.warn = originalConsole.warn;
       console.error = originalConsole.error;
       settled = true;
-      // Read before settle(), which forgets the run's cancellation.
-      cancelledMidRun = cancelledRuns.cancellation(to) !== null;
-      cancelledRuns.settle(to);
     }
     if (landedAfterReturn > 0) {
       runtime!.warnings.add({ id: null, message:
@@ -327,8 +358,11 @@ export function createRunExecutor({
     const sessionNotice = sessions.release(agentSession);
     if (sessionNotice) consoleLog.push(`[warn] ${sessionNotice}`);
 
-    activity.advance(to.id, cancelledMidRun ? "cancelled" : errorMessage === null ? "done" : "failed");
+    activity.advance(to.id, runs.cancellation(to) !== null ? "cancelled" : errorMessage === null ? "done" : "failed");
     reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
+    // Only now: until the reply the run still holds the write chain, so it keeps its status, its
+    // cancel answer, and its place as the blocker, though its code finished long before.
+    runs.settle(to);
   }
 
   /**
@@ -345,44 +379,52 @@ export function createRunExecutor({
     target: ScreenshotTarget,
     options: CaptureOptions,
   ): Promise<void> {
-    const admitted = await admitAtDequeue(to, documentId, (reason) =>
-      reply(to, { type: "SCREENSHOT_RESULT", errors: `${reason}, so no screenshot was taken.` }),
-    );
+    const admitted = await admitAtDequeue(to, documentId, (reason) => screenshotNotTaken(to, reason));
     if (!admitted) return;
     beginRun(to);
     try {
       const node = await resolveScreenshotTarget(target);
-      const bytes = await captureScreenshot(node, options, () => cancelledRuns.cancellation(to) !== null);
+      const bytes = await captureScreenshot(node, options, () => runs.cancellation(to) !== null);
       activity.advance(to.id, "done");
       reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
     } catch (err) {
-      activity.advance(to.id, cancelledRuns.cancellation(to) !== null ? "cancelled" : "failed");
+      activity.advance(to.id, runs.cancellation(to) !== null ? "cancelled" : "failed");
       reply(to, { type: "SCREENSHOT_RESULT", errors: formatFailureForAgent(err) });
     } finally {
-      cancelledRuns.settle(to);
+      runs.settle(to);
     }
   }
 
   return {
     /**
      * Queue an admitted EXECUTE_CODE for `documentId`, the document it was admitted for, in its pinned
-     * session. Queued, not awaited, so another server's write can't interleave.
+     * session, under the call's intent. Queued, not awaited, so another server's write can't interleave.
      */
     runCode(
       to: ReplyTo,
       documentId: string,
       session: AgentSession,
+      intent: string,
       code: string,
       preamble: string,
       lateChangeWindowMs: number,
     ): void {
-      acceptRun(to, session.handle);
-      enqueueWrite(() => executeCode(to, documentId, session, code, preamble, lateChangeWindowMs));
+      acceptRun(to, { kind: "code", intent, session: session.handle });
+      enqueueWrite(to, {
+        start: () => executeCode(to, documentId, session, code, preamble, lateChangeWindowMs),
+        withdraw: () => {
+          sessions.release(session);
+          return () => codeNotRun(to, WITHDRAWN_WHILE_QUEUED);
+        },
+      });
     },
 
-    runScreenshot(to: ReplyTo, documentId: string, target: ScreenshotTarget, options: CaptureOptions): void {
-      acceptRun(to, null);
-      enqueueWrite(() => screenshot(to, documentId, target, options));
+    runScreenshot(to: ReplyTo, documentId: string, intent: string, target: ScreenshotTarget, options: CaptureOptions): void {
+      acceptRun(to, { kind: "screenshot", intent, session: null });
+      enqueueWrite(to, {
+        start: () => screenshot(to, documentId, target, options),
+        withdraw: () => () => screenshotNotTaken(to, WITHDRAWN_WHILE_QUEUED),
+      });
     },
 
     /** Resolves once every run queued so far has settled, ran or refused. */
@@ -398,14 +440,29 @@ export function createRunExecutor({
       toServer(connKey, {
         type: "CANCEL_RESULT",
         executionId,
-        disposition: cancelledRuns.recordCancellation(connKey, executionId),
+        ...runs.recordCancellation(connKey, executionId),
         figmaPausedMs,
       });
       serverCalls.reject(
         (call) => call.executionId === executionId && call.connKey === connKey,
-        "the server cancelled this run, most often because the script held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
-          "s without reaching it, so the script stops here. Split long synchronous work across calls.",
+        "the server cancelled this run, so its request to the server was abandoned and the script stops here.",
       );
+    },
+
+    /**
+     * The caller no longer wants a run that hasn't started. A queued one is dropped at once, with its
+     * payload and session, and answered later as never run, when the chain reaches it; a running one
+     * is left alone.
+     */
+    withdraw(connKey: ConnKey, executionId: string): void {
+      const answer = runs.withdraw(connKey, executionId);
+      toServer(connKey, { type: "WITHDRAW_RESULT", executionId, ...answer });
+      if (answer.outcome !== "withdrawn") return;
+      activity.advance(executionId, "withdrawn");
+      // Absent when the run is already at the front, awaiting its dequeue checks: those let it go.
+      const key = jobKey({ connKey, id: executionId });
+      const job = queuedJobs.get(key);
+      if (typeof job === "object") queuedJobs.set(key, job.withdraw());
     },
 
     /**
@@ -413,9 +470,9 @@ export function createRunExecutor({
      * more, and a server call it is suspended on is abandoned. Cooperative — a raw figma.* write
      * already in flight can't be stopped, only every verb and await after it.
      */
-    cancelConnection(connKey: ConnKey, cause: Exclude<RunCancelCause, "server">): void {
+    cancelConnection(connKey: ConnKey, cause: ConnectionCancelCause): void {
       serverCalls.reject((call) => call.connKey === connKey, CALLS_ABANDONED[cause]);
-      cancelledRuns.cancelConnection(connKey, cause);
+      runs.cancelConnection(connKey, cause);
     },
 
     settleServerCall(msg: Extract<ServerFrame, { type: "CHANNEL_RESPONSE" }>, connKey: ConnKey): void {

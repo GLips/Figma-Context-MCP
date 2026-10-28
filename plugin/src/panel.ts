@@ -59,6 +59,7 @@ export interface PanelPrompt {
  *   • allowed / picked — the human answered its prompt here, and the call is on its way.
  *   • denied — the human denied it here; refused — the plugin refused it before anything ran.
  *   • queued, running — then done or failed by what its run reported, or cancelled.
+ *   • withdrawn — its caller stopped waiting while it was queued, so it never ran.
  */
 export type ActivityOutcome =
   | "waiting"
@@ -71,7 +72,8 @@ export type ActivityOutcome =
   | "running"
   | "done"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "withdrawn";
 
 /** One call in this file's activity feed, keyed by its execution id. */
 export interface PanelActivity {

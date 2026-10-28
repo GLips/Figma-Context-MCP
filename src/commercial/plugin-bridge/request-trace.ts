@@ -2,45 +2,68 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { HostTraceStage, PluginEvent, TraceOperation } from "@framelink/plugin/protocol";
+import type { CallOperation, RunPhase, RunStatus } from "@framelink/plugin/protocol";
 
 /** Bounded diagnostic metadata, deliberately independent of request promises, clocks and sockets. */
 type Stage =
   | "submitted"
-  | "queued"
-  | "running"
+  | "status"
   | "timeout-inactivity"
-  | "timeout-ceiling"
+  | "timeout-budget"
   | "caller-cancelled"
+  | "withdrawn"
   | "disconnected"
   | "result"
   | "error"
-  | "late-reply"
-  | "host";
-export interface TraceEvent {
+  | "late-reply";
+const TERMINAL: ReadonlySet<Stage> = new Set([
+  "timeout-inactivity",
+  "timeout-budget",
+  "caller-cancelled",
+  "withdrawn",
+  "disconnected",
+  "result",
+  "error",
+]);
+
+/** A status reduced to counts and the oldest pending call's name: never agent data. */
+interface StatusSummary {
+  phase: RunPhase;
+  /** Queued: runs in front of it. */
+  ahead?: number;
+  /** Running: the oldest pending call, and the counts. */
+  operation?: CallOperation;
+  pendingCount?: number;
+  callsSettled?: number;
+}
+export interface TraceEvent extends Partial<StatusSummary> {
   requestId: string;
   stage: Stage;
   elapsedMs: number;
-  hostStage?: HostTraceStage;
-  lastHostStage?: HostTraceStage;
-  hostElapsedMs?: number;
-  operation?: TraceOperation;
 }
-/** A RUN_TRACE as the protocol admitted it — only a known stage and a bounded elapsed time. */
-export type HostTrace = Omit<Extract<PluginEvent, { type: "RUN_TRACE" }>, "type" | "executionId">;
 interface RecordEntry {
   owner: object;
   started: number;
   ended?: number;
   events: TraceEvent[];
   emitted: number;
-  lastHostStage?: HostTraceStage;
-  lastOperation?: TraceOperation;
+  /** The latest status, repeated on the terminal event so it survives a spent emit budget. */
+  lastStatus?: StatusSummary;
   late: boolean;
 }
 const REQUEST_LIMIT = 128;
 const EVENT_LIMIT = 32;
 const RETAIN_MS = 60_000;
+
+function summarize(status: RunStatus): StatusSummary {
+  if (status.phase === "queued") return { phase: "queued", ahead: status.wait.ahead };
+  const { pending, pendingCount, callsSettled } = status.activity;
+  const summary: StatusSummary = { phase: "running", pendingCount, callsSettled };
+  if (pending[0]) summary.operation = pending[0].operation;
+  return summary;
+}
+
+/** A diagnostic log of each run's lifecycle and the statuses the plugin sent for it. */
 export class RequestTrace {
   private entries = new Map<string, RecordEntry>();
   constructor(
@@ -54,38 +77,28 @@ export class RequestTrace {
     this.entries.set(id, { owner, started: this.now(), events: [], emitted: 0, late: false });
     this.record(id, owner, "submitted");
   }
-  record(id: string, owner: object, stage: Exclude<Stage, "host">): void {
+  record(id: string, owner: object, stage: Exclude<Stage, "status">): void {
     this.append(id, owner, stage);
   }
-  recordHost(id: string, owner: object, host: HostTrace): void {
-    this.append(id, owner, "host", host);
+  recordStatus(id: string, owner: object, status: RunStatus): void {
+    this.append(id, owner, "status", summarize(status));
   }
-  private append(id: string, owner: object, stage: Stage, host?: HostTrace): void {
+  private append(id: string, owner: object, stage: Stage, status?: StatusSummary): void {
     this.prune();
     const entry = this.entries.get(id);
     if (!entry || entry.owner !== owner) return;
     if (stage === "late-reply") {
       if (entry.ended === undefined || entry.late) return;
       entry.late = true;
-    } else if (entry.ended !== undefined && !host) return;
-    if (host) entry.lastHostStage = host.stage;
-    const terminal = [
-      "timeout-inactivity",
-      "timeout-ceiling",
-      "caller-cancelled",
-      "disconnected",
-      "result",
-      "error",
-    ].includes(stage);
-    const event: TraceEvent = { requestId: id, stage, elapsedMs: this.now() - entry.started };
-    if (host) {
-      event.hostStage = host.stage;
-      event.hostElapsedMs = host.elapsedMs;
-      if (host.operation) event.operation = host.operation;
-      entry.lastOperation = host.operation;
-    }
-    if (terminal && entry.lastHostStage) event.lastHostStage = entry.lastHostStage;
-    if (terminal && entry.lastOperation) event.operation = entry.lastOperation;
+    } else if (entry.ended !== undefined) return;
+    const terminal = TERMINAL.has(stage);
+    if (status) entry.lastStatus = status;
+    const event: TraceEvent = {
+      requestId: id,
+      stage,
+      elapsedMs: this.now() - entry.started,
+      ...(status ?? (terminal ? entry.lastStatus : undefined)),
+    };
     entry.events.push(event);
     if (entry.events.length > EVENT_LIMIT) entry.events.shift();
     if (terminal) entry.ended = this.now();
@@ -94,16 +107,6 @@ export class RequestTrace {
       entry.emitted++;
       this.emit(event);
     }
-  }
-  /** The run's last step the plugin reported, worded for an error; null when it reported none. */
-  lastHostStep(id: string): string | null {
-    const last = this.entries
-      .get(id)
-      ?.events.filter((event) => event.stage === "host")
-      .at(-1);
-    if (!last) return null;
-    const what = last.operation ? `${last.hostStage} of ${last.operation}` : last.hostStage;
-    return `${what}, ${last.hostElapsedMs}ms into the run`;
   }
   snapshot(id: string): readonly TraceEvent[] {
     this.prune();

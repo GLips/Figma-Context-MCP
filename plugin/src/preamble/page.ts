@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { awaitNative, traceNative } from "./host.js";
+import { awaitNative, reportCall } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import { FlcmError } from "./flcm-error.js";
 // page — the document-level verbs: which page am I on, switch to another, make a new one.
@@ -52,8 +52,8 @@ function nameList(): string {
 /**
  * How long a page switch may take before the verb gives up on it. Live switches settle in well under
  * a second, even to an unloaded page of a large file; a stalled one never settles at all, and the
- * plugin's timers keep running meanwhile (seen live, fig-139). Under the server's inactivity deadline,
- * so the run replies with this verb's own account rather than the server's timeout.
+ * plugin's timers keep running meanwhile (seen live, fig-139). Well inside an agent call's time
+ * budget, so the run replies with this verb's own account rather than the server's cancel.
  */
 export const PAGE_SWITCH_PATIENCE_MS = 5_000;
 
@@ -63,7 +63,7 @@ function switchTo(target: PageNode): Promise<void> {
   // Read now: the page can be deleted while the switch waits, and its getters throw then.
   const name = JSON.stringify(target.name);
   const id = JSON.stringify(target.id);
-  return awaitNative("page-switch", () => figma.setCurrentPageAsync(target), {
+  return awaitNative("figma.setCurrentPageAsync", () => figma.setCurrentPageAsync(target), {
     afterMs: PAGE_SWITCH_PATIENCE_MS,
     stalled: () =>
       new FlcmError(
@@ -151,9 +151,7 @@ export async function pageNew(name: string): Promise<PageCreated> {
         "Nothing was created.",
     );
   }
-  traceNative("native-start", "page-create");
-  const created = figma.createPage();
-  traceNative("native-end", "page-create");
+  const created = reportCall("figma.createPage", () => figma.createPage());
   created.name = wanted;
   const current = figma.currentPage;
   const id = JSON.stringify(created.id);

@@ -69,7 +69,7 @@ function loadFont(font: { family: string; style: string }): Promise<void> {
   const label = fontLabel(font);
   let load = fontLoads.get(label);
   if (!load) {
-    load = awaitNative("font-load", () => figma.loadFontAsync(font)).then(() => {
+    load = awaitNative("figma.loadFontAsync", () => figma.loadFontAsync(font)).then(() => {
       loadedFonts.add(label);
     });
     fontLoads.set(label, load);
@@ -84,7 +84,7 @@ let availableFonts: Promise<Font[]> | null = null;
 function listAvailableFonts(): Promise<Font[]> {
   useRunCaches();
   if (!availableFonts) {
-    const listing = awaitNative("font-list", () => figma.listAvailableFontsAsync());
+    const listing = awaitNative("figma.listAvailableFontsAsync", () => figma.listAvailableFontsAsync());
     availableFonts = listing;
     listing.catch(() => {
       if (availableFonts === listing) availableFonts = null;

@@ -8,7 +8,7 @@
 // calls it at all — ADR-0010 moved the runtime onto the server so DSL changes skip the re-import.
 //
 // What it emits is a FACTORY EXPRESSION, not a paste-in blob: `eval(preamble)(host)` takes the
-// FlcmHost and returns { flcm, session }, the bindings agent code receives. That shape
+// FlcmHost and returns { flcm, session, agentFigma }, the bindings agent code receives. That shape
 // is what keeps `__flcmHost` — the one identifier no compiler can follow across eval — entirely
 // inside this directory. This file writes the wrapper that BINDS it and asserts the bundle READS it
 // (see below); the consumers only ever call the factory positionally, so none of them can drift.

@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -74,6 +74,13 @@ export const PROTOCOL_VERSION = 19;
  *     after a cursor, held until one does or the hold ends, and is answered with their annotations now.
  * v19: ANNOTATION_CHANGES answers at once (no `holdMs`); the plugin says when its log moved with the
  *     ANNOTATIONS_CHANGED event, so a watcher asks when told rather than holding an ask open.
+ * v20: run status. RUN_STATUS replaces RUN_STATE and RUN_TRACE: the plugin's latest word about a
+ *     run, sent on every change and on a heartbeat timer while it runs, so any fresh one is the sign
+ *     of life. A queued run's status names what it waits behind; a running one's, what it has settled
+ *     and is pending on. The preamble's factory returns the agent's `figma` (agentFigma), checked like
+ *     every verb. FlcmHost reports calls (callStarted/callSettled) and its runCancellation latches an
+ *     unresponsive run; runStartedAt and trace are gone. WITHDRAW drops a run only if it hasn't
+ *     started. CANCEL_RESULT names a queued run's blocker.
  */
 
 // ---- Transport ----
@@ -93,9 +100,23 @@ export const WS_PORT_BLOCK: readonly number[] = Array.from(
 
 // ---- Timing both processes reason against ----
 
-/** The server's inactivity deadline for a run. The preamble mirrors it on the run's own clock
- * (preamble/server-deadline.ts) to refuse verbs while a CANCEL is still queued behind the thread. */
+/**
+ * How long a run may go without a fresh RUN_STATUS before the server stops waiting for it. The plugin
+ * holds the same deadline over its own heartbeat timer: a thread that ran no timer for this long
+ * could not have dispatched a CANCEL either, so the run latches unresponsive and refuses its next
+ * verb or figma.* access.
+ */
 export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
+
+/**
+ * How often a running run's RUN_STATUS heartbeat fires. Figma clamps plugin timers to about one tick
+ * a second (measured live, 2026-10-27) and stalls them during an export, so this is well inside the
+ * deadline without promising a cadence Figma won't keep.
+ */
+export const RUN_STATUS_INTERVAL_MS = 2_000;
+
+/** The most pending calls one RUN_STATUS names, oldest first; `pendingCount` carries the rest. */
+export const RUN_STATUS_PENDING_LIMIT = 3;
 
 /**
  * The longest the plugin waits between dials to a port that keeps refusing. A server that just
@@ -138,35 +159,107 @@ export type CancelDisposition = (typeof CANCEL_DISPOSITIONS)[number];
 export const RUN_PHASES = ["queued", "running"] as const;
 export type RunPhase = (typeof RUN_PHASES)[number];
 
-/** The host stages RUN_TRACE may report. Diagnostic only; the server drops any other word. */
-export const HOST_TRACE_STAGES = [
-  "eval-start",
-  // The agent's code returned or threw; what follows is the verb-queue drain and the change check.
-  "code-returned",
-  "eval-end",
-  "native-start",
-  "native-end",
-  "native-error",
-  // One flcm verb's course (preamble mutation-lock.ts): its turn began, its resources were loaded,
-  // its writes were applied, and it committed or failed.
-  "verb-start",
-  "verb-prepared",
-  "verb-applied",
-  "verb-end",
-  "verb-error",
-] as const;
-export type HostTraceStage = (typeof HOST_TRACE_STAGES)[number];
+/**
+ * A call a run's status names, as the agent writes it: an flcm verb (`flcm.edit`) or a top-level
+ * Figma method (`figma.loadFontAsync`). The name comes from agent-controlled property keys, so the
+ * host checks it on the way in and the server again off the wire.
+ */
+export type CallOperation = `flcm.${string}` | `figma.${string}`;
+const CALL_OPERATION = /^(flcm|figma)\.[A-Za-z]{1,40}$/;
 
-/** The native Figma operations whose waits the preamble traces. */
-export const NATIVE_OPERATIONS = ["page-create", "page-switch", "font-load", "font-list"] as const;
-export type NativeOperation = (typeof NATIVE_OPERATIONS)[number];
+export function isCallOperation(value: unknown): value is CallOperation {
+  return typeof value === "string" && CALL_OPERATION.test(value);
+}
 
-/** What a traced stage concerns: a native Figma wait, or an flcm verb by its `flcm.` name. */
-export type TraceOperation = NativeOperation | `flcm.${string}`;
-const TRACED_VERB = /^flcm\.[A-Za-z]{1,32}$/;
+/** A call the run is waiting on, and how long it had been waiting when the status was stamped. */
+export interface PendingCall {
+  operation: CallOperation;
+  sinceMs: number;
+}
 
-function isTraceOperation(value: unknown): value is TraceOperation {
-  return isOneOf(NATIVE_OPERATIONS, value) || (typeof value === "string" && TRACED_VERB.test(value));
+/**
+ * What a running run has visibly done: diagnostic only. Nothing decides liveness or completion from
+ * it; a slow Figma call and a hung one look the same here until the caller's budget runs out.
+ */
+export interface RunActivity {
+  /** Calls the run has made that have returned or thrown, flcm verbs and figma.* alike. */
+  callsSettled: number;
+  /** The oldest pending calls, at most RUN_STATUS_PENDING_LIMIT of them. */
+  pending: PendingCall[];
+  pendingCount: number;
+}
+
+/**
+ * The run at the front of the plugin's queue, which every run behind it waits on: the one running,
+ * or the one being admitted.
+ */
+export interface QueueBlocker {
+  executionId: string;
+  /** A screenshot has no agent code: it stops at its export's own cancellation check. */
+  kind: "code" | "screenshot";
+  /** Whether the blocker came over the link this status goes to. */
+  sameLink: boolean;
+  /** Only for a blocker from the same link: a handle resumes its session anywhere under the same grant scope. */
+  session?: string;
+  intent: string;
+  runningForMs: number;
+  /** How long ago the blocker was cancelled (by its server, a disconnect, a revoke or its own deadline). */
+  cancelledForMs?: number;
+  /** Absent before the blocker's code starts, and for a screenshot. */
+  activity?: RunActivity;
+}
+
+/**
+ * Where a queued run stands. `ahead` counts every run in front of it, the blocker included, so a run
+ * whose only obstacle is the running one has ahead 1. No blocker: it is next and about to be admitted.
+ */
+export interface QueueWait {
+  ahead: number;
+  blocker?: QueueBlocker;
+}
+
+// Clamped, never refused: the durations a status reports grow with exactly the runs it exists to
+// describe, and dropping the report for a run that has gone on for days would leave its callers blind.
+const DAY_MS = 86_400_000;
+const clampMs = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(value, DAY_MS) : null;
+const count = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+function parseRunActivity(value: unknown): RunActivity | null {
+  if (!isRecord(value) || !Array.isArray(value.pending)) return null;
+  const callsSettled = count(value.callsSettled);
+  const pendingCount = count(value.pendingCount);
+  if (callsSettled === null || pendingCount === null) return null;
+  const pending: PendingCall[] = [];
+  for (const call of value.pending.slice(0, RUN_STATUS_PENDING_LIMIT)) {
+    const sinceMs = isRecord(call) ? clampMs(call.sinceMs) : null;
+    if (isRecord(call) && isCallOperation(call.operation) && sinceMs !== null) pending.push({ operation: call.operation, sinceMs });
+  }
+  return { callsSettled, pending, pendingCount: Math.max(pendingCount, pending.length) };
+}
+
+function parseQueueBlocker(value: unknown): QueueBlocker | null {
+  if (!isRecord(value) || !isExecutionId(value.executionId)) return null;
+  const runningForMs = clampMs(value.runningForMs);
+  if (runningForMs === null || (value.kind !== "code" && value.kind !== "screenshot") || typeof value.sameLink !== "boolean") return null;
+  const intent = parseIntent(value.intent);
+  if (intent.kind !== "intent") return null;
+  const blocker: QueueBlocker = { executionId: value.executionId, kind: value.kind, sameLink: value.sameLink, intent: intent.intent, runningForMs };
+  // A handle is bearer-like within its grant scope: another link's never crosses, whatever was sent.
+  if (value.sameLink && isSessionHandle(value.session)) blocker.session = value.session;
+  const cancelledForMs = clampMs(value.cancelledForMs);
+  if (cancelledForMs !== null) blocker.cancelledForMs = cancelledForMs;
+  const activity = parseRunActivity(value.activity);
+  if (activity) blocker.activity = activity;
+  return blocker;
+}
+
+function parseQueueWait(value: unknown): QueueWait | null {
+  const ahead = isRecord(value) ? count(value.ahead) : null;
+  if (!isRecord(value) || ahead === null) return null;
+  const blocker = parseQueueBlocker(value.blocker);
+  return blocker ? { ahead, blocker } : { ahead };
 }
 
 /**
@@ -489,13 +582,17 @@ export const LINK_SETUP_REQUEST_TYPES = [
   "PAIR_CONFIRMED",
 ] as const satisfies readonly ServerRequestType[];
 
-/** The requests the plugin tracks as runs: queued, then running, and answerable by CANCEL_RESULT. */
+/** The requests the plugin tracks as runs: queued, then running, and answerable by CANCEL_RESULT and WITHDRAW_RESULT. */
 export const RUN_REQUEST_TYPES = ["EXECUTE_CODE", "SCREENSHOT"] as const satisfies readonly ServerRequestType[];
 
 /** The server's one-way frames: neither is a request, and neither is answered by a reply. */
 export type ServerOneWay =
   // The server gave up on a run: run-scoped and id-less. Answered by the CANCEL_RESULT event.
   | { type: "CANCEL"; executionId: string }
+  // The caller no longer wants a run that hasn't started: drop it if still queued, else leave it
+  // running. Separate from CANCEL so a run that started a moment ago is never cut off by a stale
+  // view of the queue. Answered by the WITHDRAW_RESULT event.
+  | { type: "WITHDRAW"; executionId: string }
   // The answer to a plugin-issued CHANNEL_REQUEST, in the PLUGIN's id namespace. Payload and error
   // cross opaquely: a capability can change its shapes with no plugin release.
   | { type: "CHANNEL_RESPONSE"; id: string; ok: true; payload: unknown }
@@ -526,7 +623,7 @@ export type ServerFrame = (ServerRequest & { id: string }) | ServerOneWay;
 export function parseServerFrame(value: unknown): ServerFrame | null {
   if (!isRecord(value)) return null;
   const f = value;
-  if (f.type === "CANCEL") return typeof f.executionId === "string" ? { type: "CANCEL", executionId: f.executionId } : null;
+  if (f.type === "CANCEL" || f.type === "WITHDRAW") return typeof f.executionId === "string" ? { type: f.type, executionId: f.executionId } : null;
   if (typeof f.id !== "string") return null;
   const id = f.id;
   switch (f.type) {
@@ -854,12 +951,22 @@ export type PluginEvent =
   | { type: "WRITE_ACCESS_SIGN_IN" }
   // A mid-run call to a server capability, tagged with the run it serves.
   | { type: "CHANNEL_REQUEST"; id: string; executionId: string; capability: string; payload: unknown }
-  // A run entered a phase; `at` is the plugin's stamp for when (the frame leaves only once the
-  // plugin thread goes idle, so arrival can be seconds late).
-  | { type: "RUN_STATE"; executionId: string; phase: RunPhase; at: number }
-  | { type: "RUN_TRACE"; executionId: string; stage: HostTraceStage; operation?: TraceOperation; elapsedMs: number }
-  // The answer to a CANCEL.
-  | { type: "CANCEL_RESULT"; executionId: string; disposition: CancelDisposition; figmaPausedMs?: number }
+  // The plugin's latest word about a run: sent when it queues, whenever what it waits behind changes,
+  // on entering running, and on the RUN_STATUS_INTERVAL_MS heartbeat while it runs. `at` is the
+  // plugin's stamp: a frame leaves only once the thread goes idle, so arrival can be seconds late,
+  // and a late status must not buy a fresh deadline.
+  | RunStatus
+  // The answer to a CANCEL. A never-executed one names the run it was queued behind, when there was one.
+  | {
+      type: "CANCEL_RESULT";
+      executionId: string;
+      disposition: CancelDisposition;
+      figmaPausedMs?: number;
+      blocker?: QueueBlocker;
+    }
+  // The answer to a WITHDRAW: dropped before it ran, already running (and left alone), or not
+  // tracked (settled first, or never a run). A withdrawn one names its blocker, when there was one.
+  | { type: "WITHDRAW_RESULT"; executionId: string; outcome: WithdrawOutcome; blocker?: QueueBlocker }
   // The document changed after the run's reply said it hadn't. At most one per run.
   | { type: "RUN_CHANGED"; executionId: string }
   // The run's late-change watch closed with no change: nothing more will be reported for it. Never
@@ -870,6 +977,13 @@ export type PluginEvent =
   | { type: "ANNOTATIONS_CHANGED"; cursor: AnnotationCursor };
 
 export type PluginEventType = PluginEvent["type"];
+
+export type RunStatus =
+  | { type: "RUN_STATUS"; executionId: string; at: number; phase: "queued"; wait: QueueWait }
+  | { type: "RUN_STATUS"; executionId: string; at: number; phase: "running"; activity: RunActivity };
+
+export const WITHDRAW_OUTCOMES = ["withdrawn", "running", "unknown"] as const;
+export type WithdrawOutcome = (typeof WITHDRAW_OUTCOMES)[number];
 
 /** Admit an unsolicited plugin frame, or null. */
 export function parsePluginEvent(value: unknown): PluginEvent | null {
@@ -890,16 +1004,14 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
       return typeof f.id === "string" && typeof f.executionId === "string" && typeof f.capability === "string"
         ? { type: "CHANNEL_REQUEST", id: f.id, executionId: f.executionId, capability: f.capability, payload: f.payload }
         : null;
-    case "RUN_STATE":
-      return typeof f.executionId === "string" && isOneOf(RUN_PHASES, f.phase) && typeof f.at === "number" && Number.isFinite(f.at)
-        ? { type: "RUN_STATE", executionId: f.executionId, phase: f.phase, at: f.at }
-        : null;
-    case "RUN_TRACE": {
-      if (typeof f.executionId !== "string" || !isOneOf(HOST_TRACE_STAGES, f.stage)) return null;
-      if (typeof f.elapsedMs !== "number" || !(f.elapsedMs >= 0 && f.elapsedMs <= 3_600_000)) return null;
-      const event: PluginEvent = { type: "RUN_TRACE", executionId: f.executionId, stage: f.stage, elapsedMs: f.elapsedMs };
-      if (isTraceOperation(f.operation)) event.operation = f.operation;
-      return event;
+    case "RUN_STATUS": {
+      if (typeof f.executionId !== "string" || typeof f.at !== "number" || !Number.isFinite(f.at)) return null;
+      if (f.phase === "queued") {
+        const wait = parseQueueWait(f.wait);
+        return wait ? { type: "RUN_STATUS", executionId: f.executionId, at: f.at, phase: "queued", wait } : null;
+      }
+      const activity = f.phase === "running" ? parseRunActivity(f.activity) : null;
+      return activity ? { type: "RUN_STATUS", executionId: f.executionId, at: f.at, phase: "running", activity } : null;
     }
     case "CANCEL_RESULT": {
       if (typeof f.executionId !== "string") return null;
@@ -910,6 +1022,19 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
         disposition: isOneOf(CANCEL_DISPOSITIONS, f.disposition) ? f.disposition : "unknown",
       };
       if (isPausedMs(f.figmaPausedMs)) event.figmaPausedMs = f.figmaPausedMs;
+      const blocker = parseQueueBlocker(f.blocker);
+      if (blocker) event.blocker = blocker;
+      return event;
+    }
+    case "WITHDRAW_RESULT": {
+      if (typeof f.executionId !== "string") return null;
+      const event: PluginEvent = {
+        type: "WITHDRAW_RESULT",
+        executionId: f.executionId,
+        outcome: isOneOf(WITHDRAW_OUTCOMES, f.outcome) ? f.outcome : "unknown",
+      };
+      const blocker = parseQueueBlocker(f.blocker);
+      if (blocker) event.blocker = blocker;
       return event;
     }
     case "RUN_CHANGED":

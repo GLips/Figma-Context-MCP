@@ -12,7 +12,7 @@ import * as flcm from "./runtime.js";
 
 function setup() {
   const figma = createFigmaMock();
-  (globalThis as any).__flcmHost = { runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false };
+  (globalThis as any).__flcmHost = { callStarted: () => 0, callSettled: () => {}, runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false };
   seedStyle({ type: "PAINT", name: "Brand/Primary", paints: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1 }] });
   return figma;
 }

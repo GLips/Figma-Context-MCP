@@ -25,10 +25,9 @@ export function createServerCallTable(isConnected: (key: ConnKey) => boolean) {
   return {
     /**
      * Call a capability on the run's server and await its opaque response. Tagged with the run's
-     * execution id so the server can (a) suspend the run's inactivity deadline while IT is the side
-     * doing the work, and (b) refuse a request for a run it no longer tracks — that refusal rejects
-     * this promise, which is what makes a zombie run die at its suspension point instead of resuming
-     * into canvas writes.
+     * execution id so the server can refuse a request for a run it no longer tracks — that refusal
+     * rejects this promise, which is what makes a zombie run die at its suspension point instead of
+     * resuming into canvas writes.
      *
      * ORDERING RULE a capability must hold to: the sandbox gathers its evidence, the server computes,
      * and any follow-up `figma.*` work happens AFTER the reply. A server handler must not await a

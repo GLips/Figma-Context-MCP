@@ -155,8 +155,8 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
 
 // Run `fn` over `items` with at most `limit` in flight at once. After any item FAILS no new item
 // starts, and the rejection surfaces only once every already-started item has settled. That late
-// surfacing is load-bearing, not politeness — the bridge re-arms the run's inactivity deadline when
-// the handler settles (serveChannelRequest), so "settled" must mean no fetch is still running on
+// surfacing is load-bearing, not politeness — the channel counts a service against the run's
+// concurrency cap until its handler settles, so "settled" must mean no fetch is still running on
 // the run's behalf.
 async function mapWithConcurrency<T>(
   items: T[],

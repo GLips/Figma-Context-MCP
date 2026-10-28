@@ -21,13 +21,12 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 //     enqueueWrite). The queue can outlive the agent's code, so it also says when it is empty —
 //     mutationQueueIdle, which the host drains before it replies.
 //
-//   • Enforce cancellation during execution: once the host records this run's CANCEL — or the
-//     run's own clock says the server's deadline passed (server-deadline.ts) — no further verb
-//     STARTS. Checked as each verb's turn arrives AND again after its preparation (the font/image
-//     awaits are the run's long suspension points; a cancel that lands during them refuses before
-//     the entry seal), so a zombie run can never mutate a canvas the agent was
-//     already told is unchanged. The full policy and its other refusal points live on the host's
-//     registry (plugin/src/run-cancellation.ts).
+//   • Enforce cancellation during execution: once the host says this run may not continue
+//     (cancelled, or latched unresponsive by its watchdog) no further verb STARTS. Checked as each
+//     verb's turn arrives AND again after its preparation (the font/image awaits are the run's long
+//     suspension points; a cancel that lands during them refuses before the entry seal), so a
+//     zombie run can never mutate a canvas the agent was already told is unchanged. The full
+//     policy and its other refusal points live on the host's registry (plugin/src/run-registry.ts).
 //
 // Verbs are non-reentrant BY DESIGN: a verb that awaits another public verb inside its body would
 // deadlock on its own chain. No runtime guard is possible — QuickJS has no async context, so a
@@ -36,8 +35,7 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { CANCELLED_BECAUSE, hostDeadlinePassed, hostRunCancellation, refuseIfRunFinished, traceVerb } from "./host.js";
-import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
+import { CANCELLED_BECAUSE, hostRunCancellation, refuseIfRunFinished, reportCall } from "./host.js";
 import { openApplySpan, retargetSpanNode, type ApplySpan } from "./apply-span.js";
 import { settleApplySpan } from "./bridge.js";
 import { committedVerbCount, recordCommittedVerb } from "./verb-error.js";
@@ -105,18 +103,6 @@ function refuseIfCancelled(): void {
     throw new FlcmError(
       "run-ended",
       CANCELLED_BECAUSE[cause] + ", so no further call that changes the file starts.",
-    );
-  }
-  // Worded apart from the CANCEL: with the thread held, the run can't know whether the server has
-  // given up yet (a run that waited in the queue may have reported "running" late, starting the
-  // server's clock late). Refusing anyway keeps one rule: a run that holds the plugin past the
-  // deadline writes nothing more.
-  if (hostDeadlinePassed()) {
-    throw new FlcmError(
-      "run-ended",
-      "this run held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
-        "s without reaching the server, past the server's inactivity deadline, so no further call that changes the file starts. " +
-        "Split long synchronous work across calls.",
     );
   }
 }
@@ -267,7 +253,8 @@ export function enterMutatingVerb<P, G, T>(
   gate: (prepared: P) => SyncOnly<G>,
   apply: (gated: G, span: ApplySpan) => SyncOnly<VerbResultBuilder<T>>,
 ): Promise<T> {
-  const turn = verbChain.then(async () => {
+  // Pending from the agent's call, through its wait for the lock, to its settling.
+  const turn = reportCall(`flcm.${verb}`, () => verbChain.then(async () => {
     // The verb's annotation-category slate, opened here rather than by prepare because its other
     // half is the failure path below: what a prepare created must be removable from a catch that
     // never sees the prepared value (annotation-categories.ts).
@@ -276,9 +263,7 @@ export function enterMutatingVerb<P, G, T>(
       // Inside the try, so a refusal at the turn says what was kept like every other failure.
       refuseIfRunFinished();
       refuseIfCancelled();
-      traceVerb("verb-start", verb);
       const prepared = await prepare();
-      traceVerb("verb-prepared", verb);
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
       // during them is the same kind of fact, read at the same place.
@@ -303,7 +288,6 @@ export function enterMutatingVerb<P, G, T>(
         const build = apply(gated, span);
         // The backstop: whatever geometry the verb didn't settle itself, before any style links.
         settleApplySpan(span);
-        traceVerb("verb-applied", verb);
         // Before the await on purpose: a failure here rolls back over writes nothing else has touched.
         concedeSizeBoundClamps();
         const verified = finalizeMutatingCall(verb, span.styleLinks);
@@ -315,7 +299,6 @@ export function enterMutatingVerb<P, G, T>(
         finishSizingDiagnostics(verb);
         finishMovedOutDiagnostics(verb);
         registerResult(result);
-        traceVerb("verb-end", verb);
         return result;
       } catch (err) {
         warnings.discardFrom(warningCheckpoint);
@@ -337,11 +320,10 @@ export function enterMutatingVerb<P, G, T>(
     } catch (err) {
       // Wraps every phase: a category is created during the resource loads, so a gate that refuses
       // after them (or a write that fails inside the seal) both leave one to remove.
-      traceVerb("verb-error", verb);
       // Kept-sentence first: a leftover category is the exception to it, said after it.
       throw removeFailedAnnotationCategories(sayWhatWasKept(err));
     }
-  });
+  }));
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);
   // later verbs proceed against the rolled-back (or, on a prepare/gate reject, untouched) canvas.
   // (Same swallow as the host's writeChain, run-executor.ts enqueueWrite.)

@@ -199,9 +199,12 @@ export function formatFailureForAgent(cause: unknown): string {
 // The agent's code is the body of this function, starting on the same line as its prefix so every
 // line number QuickJS reports is the agent's own. Only a column on line 1 counts the prefix too,
 // which formatFailureForAgent takes back off.
-const AGENT_CODE_PREFIX = "(async function(flcm, session){ ";
+const AGENT_CODE_PREFIX = "(async function(flcm, session, figma){ ";
 
-/** The source run-executor evals for an agent's script: an async function of `flcm` and `session`. */
+/**
+ * The source run-executor evals for an agent's script: an async function of `flcm`, `session` and
+ * the `figma` it hands the agent, which shadows the global for the script's whole scope.
+ */
 export function wrapAgentCode(code: string): string {
   return AGENT_CODE_PREFIX + code + "\n })";
 }

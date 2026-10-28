@@ -21,7 +21,13 @@ import {
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
 import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
-import { MAX_INTENT_LENGTH, MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
+import {
+  MAX_INTENT_LENGTH,
+  MAX_SCREENSHOT_SCALE,
+  type QueueWait,
+} from "@framelink/plugin/protocol";
+import type { RunWatch } from "~/commercial/plugin-bridge/run-ledger.js";
+import { queueWaitMoved, queueWaitText } from "~/commercial/plugin-bridge/run-outcome-text.js";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
   GRANT_WAITING_TEXT,
@@ -292,6 +298,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     const outcome = await executePluginCode(runtime, bound, code, {
       figma,
       signal: controller.signal,
+      onWaiting: printingQueueMoves(),
     });
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "not-granted")
@@ -315,7 +322,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
           runtime.bridge,
           { ...bound, executionId: mintExecutionId() },
           target,
-          controller.signal,
+          { signal: controller.signal, onWaiting: printingQueueMoves() },
         );
         if (captured.kind === "not-granted")
           throw new Error(
@@ -353,4 +360,17 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     if (runtime.stop) runtime.stop();
     else runtime.bridge.stop();
   }
+}
+
+/**
+ * The CLI waits on a queued run with no budget, so the person watching is told where it stands: a
+ * line when its place, its blocker, or the blocker's cancellation changes, never per heartbeat.
+ */
+function printingQueueMoves(): RunWatch["onWaiting"] {
+  let shown: QueueWait | null = null;
+  return ({ wait }) => {
+    if (!queueWaitMoved(shown, wait)) return;
+    shown = wait;
+    console.error(queueWaitText(wait));
+  };
 }

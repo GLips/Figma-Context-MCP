@@ -33,11 +33,11 @@ import { MAX_CHANNEL_BYTES, RelayListener } from "./relay-listener.js";
 import { RequestTrace } from "./request-trace.js";
 import {
   BridgeRequestError,
-  DEFAULT_RUN_CEILING_MS,
   DEFAULT_TIMEOUT_MS,
   type LedgerSubmitOptions,
   RunLedger,
   type ChannelRunContext,
+  type RunWatch,
 } from "./run-ledger.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
@@ -55,7 +55,12 @@ import {
   type ServerRequest,
 } from "@framelink/plugin/protocol";
 
-export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
+export {
+  BridgeRequestError,
+  type ChannelRunContext,
+  type RunWaiting,
+  type RunWatch,
+} from "./run-ledger.js";
 export type { CapabilityHandler } from "./channel-server.js";
 export type { LinkStage } from "./relay-connection.js";
 export type {
@@ -152,7 +157,6 @@ export class PluginBridge {
   };
 
   private readonly routes: EventRoutes = {
-    RUN_TRACE: (link, event) => this.ledger.trace.recordHost(event.executionId, link, event),
     // Every other plugin instance of the same owner re-reads its storage: one file open in two
     // instances must honor a grant or revoke made in either.
     GRANT_CHANGED: (link, event) => {
@@ -169,15 +173,12 @@ export class PluginBridge {
     DOCUMENT_REPORTED: (link, event) => this.documents.reported(link, event.document),
     WRITE_ACCESS_SIGN_IN: (link) => this.events.onWriteAccessSignIn?.(link),
     CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
-    RUN_STATE: (link, event) => this.ledger.runState(link, event),
-    // Run-scoped, so it settles here rather than through the correlated-reply path.
-    CANCEL_RESULT: (link, event) =>
-      this.ledger.settleCancelAnswer(
-        event.executionId,
-        event.disposition,
-        link,
-        event.figmaPausedMs,
-      ),
+    RUN_STATUS: (link, event) => this.ledger.runStatus(link, event),
+    // Run-scoped, so these settle here rather than through the correlated-reply path.
+    CANCEL_RESULT: (link, { type: _, executionId, ...answer }) =>
+      this.ledger.settleCancelAnswer(executionId, answer, link),
+    WITHDRAW_RESULT: (link, { type: _, executionId, ...answer }) =>
+      this.ledger.settleWithdrawAnswer(executionId, answer, link),
     // Metering outlives the caller, so these go to the meter, never to the run's caller.
     RUN_CHANGED: (link, event) =>
       this.events.onRunEvent?.({ type: "changed", executionId: event.executionId, link }),
@@ -199,7 +200,6 @@ export class PluginBridge {
     project = canonicalProjectPath(),
     framelinkOrigin = new URL(DEFAULT_FRAMELINK_API_URL).origin,
     requestTimeoutMs = DEFAULT_TIMEOUT_MS,
-    runCeilingMs = DEFAULT_RUN_CEILING_MS,
     unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
     linkSettleMs = PLUGIN_LINK_SETTLE_MS,
     capabilities = new Map(),
@@ -210,7 +210,6 @@ export class PluginBridge {
     project?: string;
     framelinkOrigin?: string;
     requestTimeoutMs?: number;
-    runCeilingMs?: number;
     unauthenticatedLinkMs?: number;
     linkSettleMs?: number;
     capabilities?: ReadonlyMap<string, CapabilityHandler>;
@@ -221,7 +220,6 @@ export class PluginBridge {
     this.linkSettleMs = linkSettleMs;
     this.ledger = new RunLedger({
       requestTimeoutMs,
-      runCeilingMs,
       trace,
       disconnectedDurationMs: () => this.disconnectedDurationMs(),
     });
@@ -492,9 +490,14 @@ export class PluginBridge {
     link: PluginLink,
     payload: T,
     executionId: ExecutionId,
-    { signal, runContext }: { signal?: AbortSignal; runContext?: ChannelRunContext } = {},
+    {
+      signal,
+      runContext,
+      budgetMs,
+      onWaiting,
+    }: { signal?: AbortSignal; runContext?: ChannelRunContext } & RunWatch = {},
   ): Promise<ReplyFor<T["type"]>> {
-    return this.submit(link, payload, { id: executionId, signal, runContext });
+    return this.submit(link, payload, { id: executionId, signal, runContext, budgetMs, onWaiting });
   }
 
   private submit<T extends LinkRequest>(

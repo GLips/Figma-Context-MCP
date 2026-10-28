@@ -28,14 +28,15 @@ const SANDBOX_PREAMBLE = await buildSandboxPreamble();
 createFigmaMock();
 // The host capability object (FlcmHost, preamble/host.ts): the live sandbox awaits the server over
 // the WS bridge for images and reads the run's real CANCEL state; the harness answers instantly with
-// stand-in bytes and never cancels, so scenarios run headless. The run's own deadline clock
-// (server-deadline.ts) still applies: a scenario must finish within it.
+// stand-in bytes and never cancels, so scenarios run headless. No run status goes anywhere, so call
+// reports are dropped.
 let agentSession;
 const host = {
   getSession: initialize => agentSession ??= initialize(),
+  callStarted: () => 0, callSettled: () => {},
   callServer: async (_capability, urls) =>
     Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
-  runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false,
+  runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false,
 };
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");
 const log = [];
@@ -43,12 +44,12 @@ const real = { ...console };
 for (const lvl of ["log", "info", "warn", "error"]) console[lvl] = (...a) => log.push(`[${lvl}] ${a.join(" ")}`);
 
 // 3. Run in the same two-eval shape as executeCode in code.ts: call the std-lib factory with the
-//    host, then hand the resulting `flcm` to the scenario. Indirect eval so the preamble's
+//    host, then hand the resulting `flcm`, `session` and `figma` to the scenario. Indirect eval so the preamble's
 //    `figma`/`console`/`Promise` references resolve to globals.
 let result, error = null;
 try {
-  const { flcm, session } = (0, eval)(SANDBOX_PREAMBLE)(host);
-  result = await (0, eval)("(async function(flcm, session){ " + userCode + "\n })")(flcm, session);
+  const { flcm, session, agentFigma } = (0, eval)(SANDBOX_PREAMBLE)(host);
+  result = await (0, eval)("(async function(flcm, session, figma){ " + userCode + "\n })")(flcm, session, agentFigma());
   try { session.last = result; } catch { session.last = undefined; }
 } catch (e) {
   error = e && e.stack ? e.stack : String(e);

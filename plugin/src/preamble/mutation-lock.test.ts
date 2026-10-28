@@ -21,7 +21,6 @@ import { ConcurrentEditError, FlcmError } from "./flcm-error.js";
 import { committedVerbCount } from "./verb-error.js";
 import { image } from "./value-sugar.js";
 import { render } from "./structure.js";
-import { RUN_INACTIVITY_DEADLINE_MS } from "../protocol.js";
 
 let figma = createFigmaMock();
 
@@ -36,7 +35,7 @@ beforeEach(() => {
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
   if (!g.__flcmHost) {
-    g.__flcmHost = { callServer: async () => ({}), runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false, runStartedAt: Date.now() };
+    g.__flcmHost = { callStarted: () => 0, callSettled: () => {}, callServer: async () => ({}), runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false };
   }
   return g.__flcmHost as Record<string, unknown>;
 };
@@ -376,28 +375,6 @@ test("render enters the lock: a cancelled run creates no node", async () => {
   installCancelFlag(() => true);
   await assert.rejects(render({ type: "FRAME", width: 10, height: 10 }), /the server cancelled this run/);
   assert.equal(figma.currentPage.children.length, 0);
-});
-
-// A run that held the thread past the server's deadline reaches the lock with its CANCEL still
-// queued behind it — the host flag is false, and the run's own clock is what refuses (runbook §8b).
-test("a run that held the thread past the server's deadline is refused before its CANCEL dispatches", async (t) => {
-  hostSlot();
-  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  t.mock.timers.tick(RUN_INACTIVITY_DEADLINE_MS);
-  await assert.rejects(render({ type: "FRAME", width: 10, height: 10 }), /past the server's inactivity deadline/);
-  assert.equal(figma.currentPage.children.length, 0);
-});
-
-test("time the server spends on a call never counts toward the deadline", async (t) => {
-  // Started in the past so the clock ends near real time: the module's clock is shared state, and a
-  // future contact time would mask the other test's expiry if they ever ran in the other order.
-  t.mock.timers.enable({ apis: ["Date"], now: Date.now() - RUN_INACTIVITY_DEADLINE_MS * 2 });
-  installImageChannel(async () => {
-    t.mock.timers.tick(RUN_INACTIVITY_DEADLINE_MS * 2);
-    return { "https://cdn.example.com/a.jpg": "AAAA" };
-  });
-  await render({ type: "RECTANGLE", width: 10, height: 10, fill: image("https://cdn.example.com/a.jpg") });
-  assert.equal(figma.currentPage.children.length, 1);
 });
 
 // The next three pin render's hand-rolled settle-both (prepare loads images and fonts

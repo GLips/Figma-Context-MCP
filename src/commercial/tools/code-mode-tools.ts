@@ -39,7 +39,9 @@ import {
   BridgeRequestError,
   type CallDocument,
   type PluginLink,
+  type RunWatch,
 } from "~/commercial/plugin-bridge/bridge.js";
+import { mcpBudgetAdviceText } from "~/commercial/plugin-bridge/run-outcome-text.js";
 import { parseDocumentId, type DocumentId } from "~/commercial/plugin-bridge/document-id.js";
 import {
   intentProblemText,
@@ -169,6 +171,42 @@ async function answeringExpectedFailures(
     if (!failure) throw error;
     call.record({ ...facts, outcome: "failed", failure });
     return { isError: true, content: [{ type: "text", text: (error as Error).message }] };
+  }
+}
+
+// An MCP client abandons a call at its own ~60s default, so a run gets this long, leaving the rest for
+// targeting and the grant wait in the common (already-granted) case. The CLI waits with no budget.
+const MCP_RUN_BUDGET_MS = 45_000;
+
+/**
+ * How an MCP call waits on its plugin run: within the budget, and never behind a run its own server
+ * already cancelled, which stops only at its next check and so would spend the whole budget. A code
+ * run the budget cut off gets the advice for fitting the work in.
+ */
+async function waitingUnderMcpBudget<T>(
+  kind: "code" | "screenshot",
+  run: (watch: RunWatch) => Promise<T>,
+): Promise<T> {
+  try {
+    return await run({
+      budgetMs: MCP_RUN_BUDGET_MS,
+      onWaiting: ({ wait, withdraw }) => {
+        if (wait.blocker?.cancelledForMs !== undefined) void withdraw();
+      },
+    });
+  } catch (error) {
+    if (
+      kind === "code" &&
+      error instanceof BridgeRequestError &&
+      error.stoppedBy === "budget" &&
+      error.outcome === "unconfirmed"
+    )
+      throw new BridgeRequestError(
+        `${error.message} ${mcpBudgetAdviceText(MCP_RUN_BUDGET_MS, CLI_NAME)}`,
+        error.outcome,
+        error.stoppedBy,
+      );
+    throw error;
   }
 }
 
@@ -404,10 +442,13 @@ function registerCodeModeTools(
             });
             if ("reply" in target) return target.reply;
             const { link } = target;
-            const outcome = await executePluginCode(runtime, target, script, {
-              figma: figmaService,
-              signal: extra.signal,
-            });
+            const outcome = await waitingUnderMcpBudget("code", (watch) =>
+              executePluginCode(runtime, target, script, {
+                figma: figmaService,
+                signal: extra.signal,
+                ...watch,
+              }),
+            );
             if (outcome.kind === "not-granted")
               return notGrantedReply(call, source, target, outcome.reason);
             if (outcome.kind === "session-not-found") {
@@ -585,11 +626,11 @@ Returns a PNG image.`,
             });
             if ("reply" in located) return located.reply;
             const { link } = located;
-            const outcome = await capturePluginScreenshot(
-              runtime.bridge,
-              located,
-              target,
-              extra.signal,
+            const outcome = await waitingUnderMcpBudget("screenshot", (watch) =>
+              capturePluginScreenshot(runtime.bridge, located, target, {
+                signal: extra.signal,
+                ...watch,
+              }),
             );
             if (outcome.kind === "not-granted")
               return notGrantedReply(call, {}, located, outcome.reason);

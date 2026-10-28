@@ -38,7 +38,6 @@ async function running(
   const bridge = create({
     capabilities: new Map([["test.only", handler]]),
     requestTimeoutMs: 100,
-    runCeilingMs: 1000,
     ...options,
   });
   const socket = await connectFakePlugin(bridge);
@@ -82,37 +81,28 @@ it("refuses unknown names, including prototype names, without invoking any handl
   await h.result;
 });
 
-it("suspends until the last service settles, then rearms inactivity; limits concurrent services", async () => {
+it("caps concurrent services, and services in flight never hold a silent run open", async () => {
   vi.useFakeTimers();
   const releases: Array<(payload: unknown) => void> = [];
   const h = await running(() => new Promise((resolve) => releases.push(resolve)));
   for (let i = 0; i < 5; i++) h.request(String(i));
-  await vi.advanceTimersByTimeAsync(200);
+  await vi.advanceTimersByTimeAsync(0);
   expect(releases).toHaveLength(4);
   expect(h.socket.frames.at(-1)).toMatchObject({
     id: "4",
     ok: false,
     error: { message: expect.stringContaining("in flight") },
   });
-  // Run-state traffic must not accidentally rearm a suspended clock.
-  h.socket.receive({
-    type: "RUN_STATE",
-    executionId: h.executionId,
-    phase: "running",
-    at: Date.now(),
-  });
-  releases.slice(0, 3).forEach((resolve) => resolve({ arbitrary: [1, true, null] }));
-  await vi.advanceTimersByTimeAsync(200);
-  expect(h.socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
-  releases[3](42);
-  await vi.advanceTimersByTimeAsync(99);
-  expect(h.socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
-  expect(h.socket.frames.find((f) => f.id === "3")).toMatchObject({
+  releases[0]({ arbitrary: [1, true, null] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.socket.frames.find((f) => f.id === "0")).toMatchObject({
     type: "CHANNEL_RESPONSE",
     ok: true,
-    payload: 42,
+    payload: { arbitrary: [1, true, null] },
   });
-  await vi.advanceTimersByTimeAsync(1);
+  // A run awaiting the server leaves the plugin's thread free to heartbeat, so its silence is the
+  // plugin's, whatever the server is still doing for it.
+  await vi.advanceTimersByTimeAsync(100);
   expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
   h.socket.receive({
     type: "CANCEL_RESULT",
@@ -122,7 +112,7 @@ it("suspends until the last service settles, then rearms inactivity; limits conc
   expect(await h.result).toBeInstanceOf(BridgeRequestError);
 });
 
-it("never suspends the ceiling and refuses both late requests and late service results", async () => {
+it("refuses both late requests and late service results once the run is dead", async () => {
   vi.useFakeTimers();
   let release!: (payload: unknown) => void;
   const handler = vi.fn(
@@ -131,9 +121,9 @@ it("never suspends the ceiling and refuses both late requests and late service r
         release = resolve;
       }),
   );
-  const h = await running(handler, { runCeilingMs: 300 });
+  const h = await running(handler);
   h.request("first");
-  await vi.advanceTimersByTimeAsync(300);
+  await vi.advanceTimersByTimeAsync(100);
   expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
   h.socket.receive({
     type: "CANCEL_RESULT",
@@ -408,7 +398,7 @@ it.each([false, true])(
         documentId,
         lateChangeWindowMs: 60_000,
         // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
-        preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value })`,
+        preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })`,
         code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
       },
       executionId,

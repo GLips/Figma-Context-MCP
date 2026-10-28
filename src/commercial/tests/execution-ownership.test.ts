@@ -4,7 +4,6 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
-import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/protocol";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
@@ -74,79 +73,16 @@ describe("link-owned execution", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     const error = await call;
     expect(error).toBeInstanceOf(BridgeRequestError);
-    expect(error).toMatchObject({ outcome: "unconfirmed", phase: "submitted" });
-    expect(String(error)).toContain("did not confirm what became of the run");
+    expect(error).toMatchObject({ outcome: "unconfirmed" });
+    expect(String(error)).toContain(
+      "No plugin status for 100ms. Cancellation requested; the run may still be executing. The plugin sent no status for this run.",
+    );
   });
-  it("leaves a queued run to the run ceiling and rejects it as never executed", async () => {
-    vi.useFakeTimers();
-    const bridge = create({ requestTimeoutMs: 100, runCeilingMs: 600 });
-    const socket = await connectFakePlugin(bridge);
-    const call = bridge
-      .submitRun(
-        socket.link,
-        {
-          type: "EXECUTE_CODE",
-          intent: "Test run",
-          session: TEST_SESSION_REQUEST,
-          documentId: TEST_DOCUMENT.documentId,
-          code: "x",
-          preamble: "x",
-          lateChangeWindowMs: 60_000,
-        },
-        mintExecutionId(),
-      )
-      .catch((e: unknown) => e);
-    await Promise.resolve();
-    const id = socket.frames[0].id as string;
-    socket.receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: Date.now() });
-    // Five times the inactivity deadline: a run waiting behind another one is not silence.
-    await vi.advanceTimersByTimeAsync(500);
-    expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
-    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "never-executed" });
-    const error = await call;
-    expect(error).toMatchObject({ outcome: "not-submitted", phase: "queued" });
-    expect(String(error)).toContain("run ceiling");
-    expect(String(error)).toContain("never executed");
-  });
-  it("deadlines a running run on inactivity and reports that its writes may have landed", async () => {
-    vi.useFakeTimers();
-    const bridge = create({ requestTimeoutMs: 100 });
-    const socket = await connectFakePlugin(bridge);
-    const call = bridge
-      .submitRun(
-        socket.link,
-        {
-          type: "EXECUTE_CODE",
-          intent: "Test run",
-          session: TEST_SESSION_REQUEST,
-          documentId: TEST_DOCUMENT.documentId,
-          code: "x",
-          preamble: "x",
-          lateChangeWindowMs: 60_000,
-        },
-        mintExecutionId(),
-      )
-      .catch((e: unknown) => e);
-    await Promise.resolve();
-    const id = socket.frames[0].id as string;
-    socket.receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: Date.now() });
-    socket.receive({ type: "RUN_STATE", executionId: id, phase: "running", at: Date.now() });
-    await vi.advanceTimersByTimeAsync(100);
-    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
-    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
-    const error = await call;
-    expect(error).toMatchObject({ outcome: "unconfirmed", phase: "running" });
-    expect(String(error)).toContain("was executing when it was cancelled");
-  });
-  // The plugin's RUN_STATE leaves only once its thread goes idle, so a run that opens with synchronous
-  // work announces "running" late. Both clocks count from the stamp, so the server cancels exactly when
-  // the run's own copy of the deadline starts refusing writes.
-  it("counts a late-delivered running from the plugin's stamp, in step with the run's own clock", async () => {
+  it("rejects a run its budget cut off while queued as never executed, naming what it waited behind", async () => {
     vi.useFakeTimers();
     const bridge = create();
     const socket = await connectFakePlugin(bridge);
+    const blocker = mintExecutionId();
     const call = bridge
       .submitRun(
         socket.link,
@@ -160,24 +96,50 @@ describe("link-owned execution", () => {
           lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
+        { budgetMs: 600 },
       )
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    const runStartedAt = Date.now();
-    const heldThreadMs = 6_000;
-    await vi.advanceTimersByTimeAsync(heldThreadMs);
-    socket.receive({ type: "RUN_STATE", executionId: id, phase: "queued", at: runStartedAt });
-    socket.receive({ type: "RUN_STATE", executionId: id, phase: "running", at: runStartedAt });
-    const cancelled = () => socket.frames.some((f) => f.type === "CANCEL");
-    // The run's own clock, with no server call in flight: the plugin refuses writes from here.
-    const runDeadlinePassed = () => Date.now() - runStartedAt >= RUN_INACTIVITY_DEADLINE_MS;
-    await vi.advanceTimersByTimeAsync(RUN_INACTIVITY_DEADLINE_MS - heldThreadMs - 1);
-    expect([cancelled(), runDeadlinePassed()]).toEqual([false, false]);
+    socket.receive({
+      type: "RUN_STATUS",
+      executionId: id,
+      at: Date.now(),
+      phase: "queued",
+      wait: { ahead: 1 },
+    });
+    await vi.advanceTimersByTimeAsync(599);
+    expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect([cancelled(), runDeadlinePassed()]).toEqual([true, true]);
-    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
-    expect(await call).toMatchObject({ phase: "running" });
+    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
+    socket.receive({
+      type: "CANCEL_RESULT",
+      executionId: id,
+      disposition: "never-executed",
+      blocker: {
+        executionId: blocker,
+        kind: "code",
+        sameLink: true,
+        session: "soft-size-skull-fruit",
+        intent: "Shape the new Promo card variants",
+        runningForMs: 842_000,
+        cancelledForMs: 827_000,
+        activity: {
+          callsSettled: 412,
+          pending: [{ operation: "figma.loadFontAsync", sinceMs: 130_000 }],
+          pendingCount: 1,
+        },
+      },
+    });
+    const error = await call;
+    expect(error).toMatchObject({ outcome: "not-submitted", stoppedBy: "budget" });
+    expect(String(error)).toContain(
+      "The call's budget of 600ms ran out. Your code did not run; this request made no changes. " +
+        `Run ${blocker} ("Shape the new Promo card variants", session soft-size-skull-fruit) still ` +
+        "occupies the plugin and has run 14m 02s. Cancellation was requested 13m 47s ago. Its last " +
+        "status: figma.loadFontAsync pending for 2m 10s, 412 calls settled. Retrying now will queue " +
+        "behind it again.",
+    );
   });
   it("caller abort removes tracking and sends one cancellation", async () => {
     const bridge = create();

@@ -16,18 +16,19 @@ export type CapabilityHandler = (
 ) => Promise<unknown>;
 
 // How many channel services one run may have in flight. Excess requests are refused, not queued,
-// to bound work from a runaway or hostile plugin link. The run ceiling bounds the total service window.
+// to bound work from a runaway or hostile plugin link. The run's own deadline and its caller's budget
+// bound the total service window.
 const MAX_INFLIGHT_SERVICES_PER_RUN = 4;
 
 /**
  * The reverse direction: the plugin calls a server capability mid-run (CHANNEL_REQUEST), answered by
- * CHANNEL_RESPONSE in the plugin's own id namespace. Traffic-as-heartbeat: the run's inactivity
- * deadline is suspended while the server is the side working, and never the run ceiling.
+ * CHANNEL_RESPONSE in the plugin's own id namespace. Nothing here touches the run's deadline: a run
+ * awaiting the server leaves the plugin's thread free, so its RUN_STATUS heartbeat keeps it alive.
  *
  * A request naming a run the ledger no longer tracks (timed out, cancelled, already resolved) is
  * refused instead of served: the refusal rejects the run's suspended await plugin-side, so a zombie
  * run can never resume into canvas writes after the agent was told nothing happened. That refusal is
- * the server's half of the policy; the plugin's run-cancellation registry enforces the rest.
+ * the server's half of the policy; the plugin's run registry enforces the rest.
  */
 export class ChannelServer {
   // The allowlist is fixed at construction. No dynamic lookup or fallback handler.
@@ -68,7 +69,7 @@ export class ChannelServer {
     }
     // Only a code run may call the server. Every server-issued request (HELLO, INTRODUCE,
     // GRANT_STATUS, …) is in the ledger under an id the link was sent, so without this gate a
-    // link could burn server work — and hold a suspension — against a request that is no run.
+    // link could burn server work against a request that is no run.
     if (run.payloadType !== "EXECUTE_CODE") {
       refuse(
         "INVALID_INPUT",
@@ -96,7 +97,7 @@ export class ChannelServer {
       return;
     }
     // Counted until the work actually settles, cleanup included, even past the run's death.
-    const release = this.ledger.suspend(run);
+    run.services++;
     void Promise.resolve()
       .then(() => {
         run.servicesAbort.signal.throwIfAborted();
@@ -133,7 +134,7 @@ export class ChannelServer {
           );
         }
       })
-      .finally(release);
+      .finally(() => run.services--);
   }
 
   /** Reply on the link a request arrived on, and only while it is still authenticated and open. */

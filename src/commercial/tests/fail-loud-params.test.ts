@@ -89,7 +89,7 @@ describe("unknown MCP tool params fail loud", () => {
         scale: 2,
       },
       expect.any(String),
-      { signal: expect.any(AbortSignal) },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
     await close();

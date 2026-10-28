@@ -16,7 +16,7 @@ import * as flcm from "./runtime.js";
 
 async function chipOnHolder() {
   const figma = createFigmaMock();
-  (globalThis as any).__flcmHost = { runCancellation: () => null, whenCancelled: () => new Promise(() => {}), isRunFinished: () => false };
+  (globalThis as any).__flcmHost = { callStarted: () => 0, callSettled: () => {}, runCancellation: () => null, onCancelled: () => () => {}, isRunFinished: () => false };
   seedVariables({ collection: "Brand", variables: [{ name: "color/brand", type: "COLOR", values: { Default: { r: 0, g: 0, b: 1, a: 1 } } }] });
   const holder = await flcm.render({ type: "FRAME", width: 400, height: 400 });
   const comp = await flcm.component(

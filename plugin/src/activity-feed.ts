@@ -15,7 +15,7 @@ export const ACTIVITY_FEED_LIMIT = 10;
 
 // A run's outcome moves forward only: a resubmitted id (a refused session handle) may start over,
 // but nothing moves a settled run.
-const SETTLED: ReadonlySet<ActivityOutcome> = new Set(["done", "failed", "cancelled"]);
+const SETTLED: ReadonlySet<ActivityOutcome> = new Set(["done", "failed", "cancelled", "withdrawn"]);
 
 // What the cap may drop: a call with nothing left to report. Anything still in flight stays, even
 // past the cap, so a long run's final outcome isn't lost behind a burst of refused calls.
