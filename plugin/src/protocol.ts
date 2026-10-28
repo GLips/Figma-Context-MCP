@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -75,12 +75,15 @@ export const PROTOCOL_VERSION = 20;
  * v19: ANNOTATION_CHANGES answers at once (no `holdMs`); the plugin says when its log moved with the
  *     ANNOTATIONS_CHANGED event, so a watcher asks when told rather than holding an ask open.
  * v20: run status. RUN_STATUS replaces RUN_STATE and RUN_TRACE: the plugin's latest word about a
- *     run, sent on every change and in answer to the server's RUN_STATUS_REQUEST, which the server
- *     sends a link on a timer while it has runs there, so any fresh one is the sign of life. A queued run's status names what it waits behind; a running one's, what it has settled
+ *     run, sent on every change and on the plugin's own timer, so any fresh one is the sign of
+ *     life. A queued run's status names what it waits behind; a running one's, what it has settled
  *     and is pending on. The preamble's factory returns the agent's `figma` (agentFigma), checked like
  *     every verb. FlcmHost reports calls (callStarted/callSettled) and its runCancellation latches an
  *     unresponsive run; runStartedAt and trace are gone. WITHDRAW drops a run only if it hasn't
  *     started. CANCEL_RESULT names a queued run's blocker.
+ * v21: the server paces the heartbeat. It sends RUN_STATUS_REQUEST to a link on a timer while it has
+ *     runs there, and the plugin answers each with its runs' RUN_STATUS: a hidden Figma window
+ *     throttles the plugin's chained timers to about one tick a minute but still delivers messages.
  */
 
 // ---- Transport ----

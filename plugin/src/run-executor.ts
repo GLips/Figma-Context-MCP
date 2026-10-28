@@ -40,7 +40,7 @@ const RUN_CANCELLED_BY: Record<RunCancelCause, string> = {
   server: "the server cancelled this run",
   disconnected: "this run's server disconnected",
   revoked: "the human revoked this project's grant on the file",
-  unresponsive: `the plugin handled no message from the server for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run and stopped it`,
+  unresponsive: `the plugin handled no heartbeat from this run's server for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run and stopped it`,
 };
 // Microtask hops before the run's own cancel rejection lands. A turn of the timer queue would be
 // simpler, but Figma can stall timers while it still delivers the CANCEL.

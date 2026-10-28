@@ -1039,15 +1039,15 @@ test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, a
   await refused;
   // The heartbeat handled once the thread yields must not revive the latched run.
   h.beat(1);
-  assert.match((await h.result("loop")).errors, /your code was still awaiting when the plugin handled no message from the server for 15s during this run/);
+  assert.match((await h.result("loop")).errors, /your code was still awaiting when the plugin handled no heartbeat from this run.s server for 15s during this run/);
   release();
   await h.context.hold;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(reports.length, 2);
   const [[calls, first], [second]] = reports as [[number, string], [string]];
   assert.equal(calls, 15);
-  assert.match(first, /plugin handled no message from the server for 15s during this run .* so figma\.createRectangle and every figma\.\* access after it is refused/);
-  assert.match(second, /plugin handled no message from the server for 15s/);
+  assert.match(first, /plugin handled no heartbeat from this run.s server for 15s during this run, so figma\.createRectangle and every figma\.\* access after it is refused/);
+  assert.match(second, /plugin handled no heartbeat from this run.s server for 15s/);
 });
 
 test("a run awaiting a Figma call that never settles keeps its heartbeat, naming the call and how long it has waited", async () => {

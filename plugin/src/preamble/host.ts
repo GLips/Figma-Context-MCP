@@ -241,8 +241,7 @@ export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
   disconnected: "this run's server disconnected, so the run was cancelled",
   revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
   unresponsive:
-    "the plugin handled no message from the server for " + RUN_INACTIVITY_DEADLINE_MS / 1000 + "s during this run (a long " +
-    "synchronous stretch, or an export), so it couldn't hear a cancel and stopped the run (split long synchronous work across calls)",
+    "the plugin handled no heartbeat from this run's server for " + RUN_INACTIVITY_DEADLINE_MS / 1000 + "s during this run",
 };
 
 /**

@@ -178,8 +178,9 @@ describe("liveness is the plugin's heartbeat", () => {
     expect(error).toMatchObject({ outcome: "unconfirmed" });
     expect(String(error)).toContain(
       "No plugin status for 15 seconds. Cancellation requested; the plugin confirmed the run was " +
-        "executing and ended it there: what it was awaiting is abandoned and every later figma.* " +
-        "call refused. Its writes so far stay. " +
+        "executing. It ends the run as soon as it handles the cancel: what the run awaits is " +
+        "abandoned and its later figma.* calls are refused, but code already in flight can still " +
+        "write to nodes it holds. Its writes so far stay. " +
         "Last seen 15s ago: figma.loadFontAsync pending for 18s, 3 calls settled. Inspect affected " +
         "nodes before retrying.",
     );

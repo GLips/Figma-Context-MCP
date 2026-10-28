@@ -86,8 +86,9 @@ export function stoppedRunText({
     };
   const state =
     disposition === "was-running"
-      ? "the plugin confirmed the run was executing and ended it there: what it was awaiting is " +
-        "abandoned and every later figma.* call refused. Its writes so far stay."
+      ? "the plugin confirmed the run was executing. It ends the run as soon as it handles the " +
+        "cancel: what the run awaits is abandoned and its later figma.* calls are refused, but code " +
+        "already in flight can still write to nodes it holds. Its writes so far stay."
       : "the run may still be executing.";
   return {
     message: `${lead} Cancellation requested; ${state} ${lastSeenText(latest, now)} Inspect affected nodes before retrying.`,
