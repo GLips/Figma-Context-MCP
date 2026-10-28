@@ -179,9 +179,9 @@ async function answeringExpectedFailures(
 const MCP_RUN_BUDGET_MS = 45_000;
 
 /**
- * How an MCP call waits on its plugin run: within the budget, and never behind a run its own server
- * already cancelled, which stops only at its next check and so would spend the whole budget. A code
- * run the budget cut off gets the advice for fitting the work in.
+ * How an MCP call waits on its plugin run: within the budget, and never behind a cancelled run, from
+ * any link and for any cause, whose end nothing here can hurry. A code run the budget cut off gets
+ * the advice for fitting the work in.
  */
 async function waitingUnderMcpBudget<T>(
   kind: "code" | "screenshot",

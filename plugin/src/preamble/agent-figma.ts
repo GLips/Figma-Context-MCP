@@ -19,9 +19,9 @@ import { FlcmError } from "./flcm-error.js";
 /** Refuse the agent's next figma.* access once the run may not continue. */
 function refuse(key: string | symbol): void {
   const host = currentHost();
-  // A handler the code registered (figma.on) can call in long after its run replied. It is no run's
-  // to stop, so the run's check would only misreport it.
-  if (typeof key === "symbol" || !host || host.isRunFinished()) return;
+  if (typeof key === "symbol" || !host) return;
+  // Still answered once the run replied: a cancelled run's leftover code stays refused for good,
+  // while a handler a finished run registered (figma.on) calls in freely.
   const cause = host.runCancellation();
   if (cause) throw new FlcmError("run-ended", `${CANCELLED_BECAUSE[cause]}, so figma.${key} and every figma.* access after it is refused.`);
 }
@@ -42,9 +42,7 @@ export function agentFigma(): PluginAPI {
       const out = reportCall(operation, () => Reflect.apply(original, real, args));
       // As in awaitNative: a Figma call can stall forever, and a cancelled run must still end so
       // the queue behind it moves. The call stays pending in the status until Figma settles it.
-      const host = currentHost();
-      if (!isThenable(out) || !host || host.isRunFinished()) return out;
-      return untilCancelled(operation, out);
+      return isThenable(out) ? untilCancelled(operation, out) : out;
     };
     wrapped.set(key, { original, call });
     return call;

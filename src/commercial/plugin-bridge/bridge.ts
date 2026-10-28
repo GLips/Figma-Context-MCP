@@ -175,10 +175,18 @@ export class PluginBridge {
     CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
     RUN_STATUS: (link, event) => this.ledger.runStatus(link, event),
     // Run-scoped, so these settle here rather than through the correlated-reply path.
-    CANCEL_RESULT: (link, { type: _, executionId, ...answer }) =>
-      this.ledger.settleCancelAnswer(executionId, answer, link),
-    WITHDRAW_RESULT: (link, { type: _, executionId, ...answer }) =>
-      this.ledger.settleWithdrawAnswer(executionId, answer, link),
+    // The meter hears every never-ran answer too: one landing after its caller's answer window
+    // still frees the Write that caller's loss held.
+    CANCEL_RESULT: (link, { type: _, executionId, ...answer }) => {
+      this.ledger.settleCancelAnswer(executionId, answer, link);
+      if (answer.disposition === "never-executed")
+        this.events.onRunEvent?.({ type: "neverRan", executionId, link });
+    },
+    WITHDRAW_RESULT: (link, { type: _, executionId, ...answer }) => {
+      this.ledger.settleWithdrawAnswer(executionId, answer, link);
+      if (answer.outcome === "withdrawn")
+        this.events.onRunEvent?.({ type: "neverRan", executionId, link });
+    },
     // Metering outlives the caller, so these go to the meter, never to the run's caller.
     RUN_CHANGED: (link, event) =>
       this.events.onRunEvent?.({ type: "changed", executionId: event.executionId, link }),

@@ -990,13 +990,12 @@ test("a page switch Figma never finishes still replies, naming the page", { time
   assert.ok(errors.includes(`flcm.append(${JSON.stringify(templates.id)}, spec)`), errors);
 });
 
-test("a raw run the server gave up on stops at its next figma.* access, and a run queued behind it hears why", async () => {
+test("a raw run the server gave up on ends at once, and a run queued behind it hears why", async () => {
   // fig-140: one raw loop with no flcm verb outlived its CANCEL by 77 minutes while every run behind
   // it bounced with "retry as-is".
   const h = host();
   await h.connect(1);
-  let release!: () => void;
-  h.context.hold = new Promise<void>((resolve) => { release = resolve; });
+  h.context.hold = new Promise<void>(() => {});
   const preamble = await realPreamble;
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "raw", preamble, code: `for (;;) { figma.createRectangle(); await hold; }` });
   await h.running("raw", 1);
@@ -1011,20 +1010,20 @@ test("a raw run the server gave up on stops at its next figma.* access, and a ru
     [blocker.executionId, blocker.kind, blocker.sameLink, blocker.session, blocker.intent, typeof blocker.cancelledForMs, blocker.activity],
     ["raw", "code", true, "shared-session-project-one", "Run raw", "number", { callsSettled: 1, pending: [], pendingCount: 0 }],
   );
-  release();
-  assert.match((await h.result("raw")).errors, /server cancelled this run, so figma\.createRectangle and every figma\.\* access after it is refused/);
+  assert.match((await h.result("raw")).errors, /the server cancelled this run while your code was still awaiting/);
 });
 
-test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the late heartbeat doesn't revive it", async (t) => {
+test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the run stays refused after it ends", async (t) => {
   const h = host();
   await h.connect(1);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let reached!: () => void;
-  const blocked = new Promise<void>((resolve) => { reached = resolve; });
+  const refused = new Promise<void>((resolve) => { reached = resolve; });
   let release!: () => void;
+  const reports: unknown[] = [];
   Object.assign(h.context, {
     hold: new Promise<void>((resolve) => { release = resolve; }),
-    blocked: () => reached(),
+    report: (...said: unknown[]) => { reports.push(said); reached(); },
     // Each call takes a second of a thread that never yields, so no heartbeat can fire.
     spendSecond: () => h.advanceClock(1_000),
   });
@@ -1032,21 +1031,23 @@ test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, a
     type: "EXECUTE_CODE",
     id: "loop",
     preamble: await realPreamble,
-    code: `let calls = 0, first;
-      try { for (;;) { figma.createRectangle(); calls++; spendSecond(); } } catch (e) { first = e.message; }
-      blocked(); await hold;
-      try { figma.createRectangle(); return "revived"; } catch (e) { return { calls, first, second: e.message }; }`,
+    code: `let calls = 0;
+      try { for (;;) { figma.createRectangle(); calls++; spendSecond(); } } catch (e) { report(calls, e.message); }
+      await hold;
+      try { figma.createRectangle(); report("revived"); } catch (e) { report(e.message); }`,
   });
-  await blocked;
-  // The thread yielded, so the overdue heartbeat fires at last, before the code goes on.
+  await refused;
+  // The thread yielded, so the overdue heartbeat fires at last, and the latched run ends.
   t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
-  assert.equal(h.statuses("loop", "running").length, 2);
+  assert.match((await h.result("loop")).errors, /plugin ran no timer for 15s during this run, so it stopped the run/);
   release();
-  const { result, errors } = await h.result("loop");
-  assert.equal(errors, null);
-  assert.equal(result.calls, 15);
-  assert.match(result.first, /plugin ran no timer for 15s during this run .* so figma\.createRectangle and every figma\.\* access after it is refused/);
-  assert.match(result.second, /plugin ran no timer for 15s/);
+  await h.context.hold;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reports.length, 2);
+  const [[calls, first], [second]] = reports as [[number, string], [string]];
+  assert.equal(calls, 15);
+  assert.match(first, /plugin ran no timer for 15s during this run .* so figma\.createRectangle and every figma\.\* access after it is refused/);
+  assert.match(second, /plugin ran no timer for 15s/);
 });
 
 test("a run awaiting a Figma call that never settles keeps its heartbeat, naming the call and how long it has waited", async (t) => {
@@ -1082,6 +1083,32 @@ test("a run awaiting a Figma call that never settles keeps its heartbeat, naming
   assert.match((await h.result("font")).errors, /figma\.loadFontAsync was still pending when the server cancelled this run, so the run stops here/);
   assert.deepEqual([(await h.result("behind")).result, (await h.result("behind")).errors], ["ran", null]);
   loaded();
+});
+
+test("a cancelled run whose code awaits forever still ends, and its leftover code is refused figma.* for good", async () => {
+  const h = host();
+  await h.connect(1);
+  let wake!: () => void;
+  Object.assign(h.context, { later: new Promise<void>((resolve) => { wake = resolve; }), writes: [] });
+  const preamble = await realPreamble;
+  // The leftover wakes after the run replied, as a Promise.all sibling on a timer would.
+  h.sendFrame(1, {
+    type: "EXECUTE_CODE",
+    id: "forever",
+    preamble,
+    code: `later.then(() => { try { figma.createRectangle(); writes.push("wrote"); } catch (e) { writes.push(e.message); } });
+      await new Promise(() => {});`,
+  });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble, code: "return 'ran';" });
+  await h.running("forever", 1);
+  h.sendFrame(1, { type: "CANCEL", executionId: "forever" });
+  assert.match((await h.result("forever")).errors, /the server cancelled this run while your code was still awaiting, so the run stops here/);
+  assert.equal((await h.result("behind")).result, "ran");
+  wake();
+  await h.context.later;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.context.writes.length, 1);
+  assert.match(h.context.writes[0], /server cancelled this run, so figma\.createRectangle and every figma\.\* access after it is refused/);
 });
 
 test("a run whose code returned keeps its status and its place until its reply goes out", async (t) => {

@@ -17,11 +17,11 @@ import { createServerCallTable } from "./server-calls.js";
 import type { FigmaPauseWatch } from "./figma-pause.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import { RUN_STATUS_INTERVAL_MS, type NotGrantedReason, type ServerFrame } from "./protocol.js";
+import { RUN_INACTIVITY_DEADLINE_MS, RUN_STATUS_INTERVAL_MS, type NotGrantedReason, type ServerFrame } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
-import type { FlcmHost } from "./preamble/host.js";
+import type { FlcmHost, RunCancelCause } from "./preamble/host.js";
 // Likewise type-only: the factory result types both agent bindings without bundling their implementation.
 import type * as SandboxRuntime from "./preamble/sandbox.js";
 // The one value import from preamble/: flcm-error imports only types, so it bundles alone.
@@ -34,6 +34,13 @@ const CANCELLED_WHILE_QUEUED: Record<ExternalCancelCause, string> = {
   revoked: "the human revoked this project's grant on the file while the run was still queued",
 };
 const WITHDRAWN_WHILE_QUEUED = "this run was withdrawn by its server while it was still queued";
+
+// What ends a run whose code was still awaiting when it was cancelled, by cause.
+const CANCELLED_WHILE_AWAITING: Record<Exclude<RunCancelCause, "disconnected">, string> = {
+  server: "the server cancelled this run while your code was still awaiting",
+  revoked: "the human revoked this project's grant on the file while your code was still awaiting",
+  unresponsive: `the plugin ran no timer for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run, so it stopped the run`,
+};
 
 // The reply owed to a request whose run never started, by kind.
 const codeNotRun = (to: ReplyTo, reason: string): void =>
@@ -199,6 +206,27 @@ export function createRunExecutor({
   }
 
   /**
+   * The agent's code, unless the run is cancelled first: its own awaits (a figma.on promise, a node
+   * export, a promise that never settles) are no call the preamble can race, and the run must still
+   * end so the queue moves. Code left running is refused at its next figma.* access or verb.
+   */
+  function untilRunCancelled<T>(to: RunRef, code: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      // A turn later, so a refusal that names what was pending (awaitNative, a server call) reaches
+      // the agent first; this only ends code that nothing else will. A dropped link is no request to
+      // stop: that run finishes, so a reconnected agent can read its session.last.
+      const unsubscribe = runs.onCancelled(to, (cause) => {
+        if (cause === "disconnected") return;
+        setTimeout(() => reject(new FlcmError("run-ended", `${CANCELLED_WHILE_AWAITING[cause]}, so the run stops here.`)), 0);
+      });
+      code.then(
+        (value) => { unsubscribe(); resolve(value); },
+        (error: unknown) => { unsubscribe(); reject(error); },
+      );
+    });
+  }
+
+  /**
    * Runs the agent's raw code string against the live figma.* API and posts back
    * `{ id, result, console, errors }`. The agent's code is never bundled or transformed — it arrives
    * as a string and is eval'd here, in the sandbox.
@@ -220,149 +248,156 @@ export function createRunExecutor({
       return;
     }
     beginRun(to);
-    const logged: { level: string; args: WireSnapshot }[] = [];
-    const originalConsole = {
-      log: console.log,
-      info: console.info,
-      warn: console.warn,
-      error: console.error,
-    };
-
-    // Capture the agent's console output so it round-trips back as feedback. Each call takes the
-    // result's egress (one projection for the whole line) and is snapshotted as it is logged, Figma
-    // asked then about any object that could be a node; its answers arrive asynchronously, so those
-    // objects resolve to `{id,name,type}` before the reply.
-    const capture = (level: string) => (...args: unknown[]) => {
-      const line = runtime ? runtime.projectForEgress(args, "console") : args;
-      logged.push({ level, args: snapshotForWire(line, isFigmaNode) });
-    };
-    console.log = capture("log");
-    console.info = capture("info");
-    console.warn = capture("warn");
-    console.error = capture("error");
-
-    let result: unknown;
-    let errorMessage: string | null = null;
-    // Flipped once this run has nothing left to do — after the queue drain below, so a verb that was
-    // legitimately queued by this run's code is not refused as another run's leftover. Every host
-    // method reads it, which is what contains a runtime the agent stored across calls.
-    let settled = false;
-    let runtime: typeof SandboxRuntime | undefined;
-    let landedAfterReturn = 0;
-    let documentChanged = false;
-    let documentChanges: DocumentChangeObserver | undefined;
+    // How the run ended, kept for its host once the row goes (agent-figma.ts refuses on it).
+    let endedBy: RunCancelCause | null = null;
     try {
-      // Watching starts before anything of the agent's can run, and ends after the drain below.
-      documentChanges = observeDocumentChanges();
-      // Two evals, and the split is the point. The server's std-lib is a FACTORY expression
-      // (src/preamble/index.mjs): called with the host, it returns { flcm, session }, which the
-      // agent's code receives as named parameters. The agent's own wrapper keeps its line numbers.
-      //
-      // The host answers for THIS run (`to`), so each service refuses once the run has settled rather
-      // than serve a runtime the agent kept past its reply. Call reports go quiet instead: the row is
-      // gone, and a report that refused would change execution.
-      const host: FlcmHost = {
-        getSession: (initialize) => {
-          agentSession.store ??= initialize();
-          return agentSession.store;
-        },
-        callStarted: (operation) => runs.callStarted(to, operation),
-        callSettled: (token) => runs.callSettled(to, token),
-        // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
-        callServer: (capability: string, payload: unknown) => serverCalls.call(to, capability, payload),
-        runCancellation: () => runs.cancellation(to),
-        onCancelled: (listener) => runs.onCancelled(to, listener),
-        isRunFinished: () => settled,
+      const logged: { level: string; args: WireSnapshot }[] = [];
+      const originalConsole = {
+        log: console.log,
+        info: console.info,
+        warn: console.warn,
+        error: console.error,
       };
-      const built = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
-      // Checked HERE, not in the finally that drains: a std-lib that cannot be drained must fail as a
-      // run error the agent sees, never as a throw out of the finally — that would cost the run its
-      // reply, and the frozen envelope promises one for every request.
-      if (
-        typeof built.mutationQueueIdle !== "function" ||
-        typeof built.committedVerbCount !== "function" ||
-        typeof built.projectForEgress !== "function" ||
-        typeof built.agentFigma !== "function"
-      ) {
-        throw new FlcmError(
-          "run-ended",
-          "the flcm the server sent doesn't fit this version of the Figma plugin, so none of your code ran. " +
-            "Update the server (`npx figma-developer-mcp@latest`) and the plugin, then restart.",
-        );
-      }
-      runtime = built;
-      const { flcm, session } = built;
-      // Indirect eval gives agent code global scope, never this function's host/transport locals.
-      // Its `figma` is the preamble's (agent-figma.ts), shadowing the global: the one the run's
-      // cancellation can stop.
-      const raw = await (0, eval)(wrapAgentCode(code))(flcm, session, built.agentFigma());
-      // A live node anywhere in the result is refused here, with its path (serialize.ts).
-      result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode, "result");
-      // Session capture is optional; its narrower data contract must not reject a valid wire result.
-      try { session.last = raw; } catch { session.last = undefined; }
-    } catch (err) {
-      errorMessage = formatFailureForAgent(err);
-    } finally {
-      // Drain before anything else in here, and the order of the three is load-bearing:
-      //   • BEFORE the console restore, so a queued verb's warnings still reach the agent's reply;
-      //   • BEFORE settle(), which drops this run's cancellation — a CANCEL landing mid-drain must
-      //     still refuse the verbs behind it (mutation-lock refuseIfCancelled);
-      //   • BEFORE `settled`, or the run's own queued verbs would be refused as a stale runtime's.
-      // A preamble that never evaluated leaves no queue to drain.
-      if (runtime) landedAfterReturn = await runtime.mutationQueueIdle();
-      // After the drain, so writes that landed after the agent's code returned count too. A committed
-      // flcm verb is a change by construction; it is OR'd in because it is known synchronously,
-      // while change events arrive in asynchronous batches (document-changes.ts). A "no" is only
-      // provisional: the observer keeps watching past the reply and reports a late change on its own.
-      documentChanged =
-        (documentChanges?.changedSoFar() ?? false) || (runtime?.committedVerbCount() ?? 0) > 0;
-      if (documentChanged) documentChanges?.stop();
-      else if (documentChanges) {
-        // Run-scoped and id-less, like CANCEL_RESULT; at most one RUN_CHANGED per run, and the server
-        // records the Write under the run's execution, so a duplicate is harmless.
-        documentChanges.watchLate(
-          {
-            onChange: () => toServer(to.connKey, { type: "RUN_CHANGED", executionId: to.id }),
-            onSettled: () => toServer(to.connKey, { type: "RUN_SETTLED", executionId: to.id }),
-          },
-          lateChangeWindowMs,
-        );
-        lateChangeWatch = documentChanges;
-      }
-      console.log = originalConsole.log;
-      console.info = originalConsole.info;
-      console.warn = originalConsole.warn;
-      console.error = originalConsole.error;
-      settled = true;
-    }
-    if (landedAfterReturn > 0) {
-      runtime!.warnings.add({ id: null, message:
-        `${landedAfterReturn} write(s) finished after your code returned: a write is queued the moment ` +
-          `its verb is called, so an unawaited verb (or a sibling of one that rejected in Promise.all) ` +
-          `still lands. This reply waited for them; await every verb to keep your result and the canvas in step.`,
-      });
-    }
-    const consoleLog: string[] = [];
-    for (const { level, args } of logged) {
-      try {
-        const line = (await resolveWireSnapshot(args, "console")) as unknown[];
-        consoleLog.push(`[${level}] ${line.map(stringifyArg).join(" ")}`);
-      } catch (err) {
-        // A cycle through an object Figma disowned is only found now, past the console.log it would
-        // have thrown from, so it fails the run the way that throw would have.
-        errorMessage ??= formatFailureForAgent(err);
-      }
-    }
-    if (runtime) consoleLog.push(...runtime.warnings.summary());
-    // After `last` is captured and the run settled, so the budgets see everything the run kept.
-    const sessionNotice = sessions.release(agentSession);
-    if (sessionNotice) consoleLog.push(`[warn] ${sessionNotice}`);
 
-    activity.advance(to.id, runs.cancellation(to) !== null ? "cancelled" : errorMessage === null ? "done" : "failed");
-    reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
-    // Only now: until the reply the run still holds the write chain, so it keeps its status, its
-    // cancel answer, and its place as the blocker, though its code finished long before.
-    runs.settle(to);
+      // Capture the agent's console output so it round-trips back as feedback. Each call takes the
+      // result's egress (one projection for the whole line) and is snapshotted as it is logged, Figma
+      // asked then about any object that could be a node; its answers arrive asynchronously, so those
+      // objects resolve to `{id,name,type}` before the reply.
+      const capture = (level: string) => (...args: unknown[]) => {
+        const line = runtime ? runtime.projectForEgress(args, "console") : args;
+        logged.push({ level, args: snapshotForWire(line, isFigmaNode) });
+      };
+      console.log = capture("log");
+      console.info = capture("info");
+      console.warn = capture("warn");
+      console.error = capture("error");
+
+      let result: unknown;
+      let errorMessage: string | null = null;
+      // Flipped once this run has nothing left to do — after the queue drain below, so a verb that was
+      // legitimately queued by this run's code is not refused as another run's leftover. Every host
+      // method reads it, which is what contains a runtime the agent stored across calls.
+      let settled = false;
+      let runtime: typeof SandboxRuntime | undefined;
+      let landedAfterReturn = 0;
+      let documentChanged = false;
+      let documentChanges: DocumentChangeObserver | undefined;
+      try {
+        // Watching starts before anything of the agent's can run, and ends after the drain below.
+        documentChanges = observeDocumentChanges();
+        // Two evals, and the split is the point. The server's std-lib is a FACTORY expression
+        // (src/preamble/index.mjs): called with the host, it returns { flcm, session }, which the
+        // agent's code receives as named parameters. The agent's own wrapper keeps its line numbers.
+        //
+        // The host answers for THIS run (`to`), so each service refuses once the run has settled rather
+        // than serve a runtime the agent kept past its reply. Call reports go quiet instead: the row is
+        // gone, and a report that refused would change execution.
+        const host: FlcmHost = {
+          getSession: (initialize) => {
+            agentSession.store ??= initialize();
+            return agentSession.store;
+          },
+          callStarted: (operation) => runs.callStarted(to, operation),
+          callSettled: (token) => runs.callSettled(to, token),
+          // A finished runtime is refused in the preamble, before it asks (refuseIfRunFinished).
+          callServer: (capability: string, payload: unknown) => serverCalls.call(to, capability, payload),
+          // Past settlement the row is gone, and the cause the run ended with still answers.
+          runCancellation: () => endedBy ?? runs.cancellation(to),
+          onCancelled: (listener) => runs.onCancelled(to, listener),
+          isRunFinished: () => settled,
+        };
+        const built = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
+        // Checked HERE, not in the finally that drains: a std-lib that cannot be drained must fail as a
+        // run error the agent sees, never as a throw out of the finally — that would cost the run its
+        // reply, and the frozen envelope promises one for every request.
+        if (
+          typeof built.mutationQueueIdle !== "function" ||
+          typeof built.committedVerbCount !== "function" ||
+          typeof built.projectForEgress !== "function" ||
+          typeof built.agentFigma !== "function"
+        ) {
+          throw new FlcmError(
+            "run-ended",
+            "the flcm the server sent doesn't fit this version of the Figma plugin, so none of your code ran. " +
+              "Update the server (`npx figma-developer-mcp@latest`) and the plugin, then restart.",
+          );
+        }
+        runtime = built;
+        const { flcm, session } = built;
+        // Indirect eval gives agent code global scope, never this function's host/transport locals.
+        // Its `figma` is the preamble's (agent-figma.ts), shadowing the global: the one the run's
+        // cancellation can stop.
+        const raw = await untilRunCancelled(to, (0, eval)(wrapAgentCode(code))(flcm, session, built.agentFigma()));
+        // A live node anywhere in the result is refused here, with its path (serialize.ts).
+        result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode, "result");
+        // Session capture is optional; its narrower data contract must not reject a valid wire result.
+        try { session.last = raw; } catch { session.last = undefined; }
+      } catch (err) {
+        errorMessage = formatFailureForAgent(err);
+      } finally {
+        // Drain before anything else in here, and the order of the three is load-bearing:
+        //   • BEFORE the console restore, so a queued verb's warnings still reach the agent's reply;
+        //   • BEFORE settle(), which drops this run's cancellation — a CANCEL landing mid-drain must
+        //     still refuse the verbs behind it (mutation-lock refuseIfCancelled);
+        //   • BEFORE `settled`, or the run's own queued verbs would be refused as a stale runtime's.
+        // A preamble that never evaluated leaves no queue to drain.
+        if (runtime) landedAfterReturn = await runtime.mutationQueueIdle();
+        // After the drain, so writes that landed after the agent's code returned count too. A committed
+        // flcm verb is a change by construction; it is OR'd in because it is known synchronously,
+        // while change events arrive in asynchronous batches (document-changes.ts). A "no" is only
+        // provisional: the observer keeps watching past the reply and reports a late change on its own.
+        documentChanged =
+          (documentChanges?.changedSoFar() ?? false) || (runtime?.committedVerbCount() ?? 0) > 0;
+        if (documentChanged) documentChanges?.stop();
+        else if (documentChanges) {
+          // Run-scoped and id-less, like CANCEL_RESULT; at most one RUN_CHANGED per run, and the server
+          // records the Write under the run's execution, so a duplicate is harmless.
+          documentChanges.watchLate(
+            {
+              onChange: () => toServer(to.connKey, { type: "RUN_CHANGED", executionId: to.id }),
+              onSettled: () => toServer(to.connKey, { type: "RUN_SETTLED", executionId: to.id }),
+            },
+            lateChangeWindowMs,
+          );
+          lateChangeWatch = documentChanges;
+        }
+        console.log = originalConsole.log;
+        console.info = originalConsole.info;
+        console.warn = originalConsole.warn;
+        console.error = originalConsole.error;
+        settled = true;
+      }
+      if (landedAfterReturn > 0) {
+        runtime!.warnings.add({ id: null, message:
+          `${landedAfterReturn} write(s) finished after your code returned: a write is queued the moment ` +
+            `its verb is called, so an unawaited verb (or a sibling of one that rejected in Promise.all) ` +
+            `still lands. This reply waited for them; await every verb to keep your result and the canvas in step.`,
+        });
+      }
+      const consoleLog: string[] = [];
+      for (const { level, args } of logged) {
+        try {
+          const line = (await resolveWireSnapshot(args, "console")) as unknown[];
+          consoleLog.push(`[${level}] ${line.map(stringifyArg).join(" ")}`);
+        } catch (err) {
+          // A cycle through an object Figma disowned is only found now, past the console.log it would
+          // have thrown from, so it fails the run the way that throw would have.
+          errorMessage ??= formatFailureForAgent(err);
+        }
+      }
+      if (runtime) consoleLog.push(...runtime.warnings.summary());
+      // After `last` is captured and the run settled, so the budgets see everything the run kept.
+      const sessionNotice = sessions.release(agentSession);
+      if (sessionNotice) consoleLog.push(`[warn] ${sessionNotice}`);
+
+      activity.advance(to.id, runs.cancellation(to) !== null ? "cancelled" : errorMessage === null ? "done" : "failed");
+      reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
+    } finally {
+      // Only now: until the reply the run still holds the write chain, so it keeps its status, its
+      // cancel answer, and its place as the blocker, though its code finished long before.
+      endedBy = runs.cancellation(to);
+      runs.settle(to);
+    }
   }
 
   /**

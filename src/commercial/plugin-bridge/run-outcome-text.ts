@@ -76,22 +76,24 @@ export function stoppedRunText({
         `${lead} ${notRunText(payloadType)}; this request made no changes. ` +
         (blocker
           ? blockerText(blocker)
-          : "It was next in the plugin's queue, which will skip it. Retry as-is."),
+          : "It was still queued, and the plugin will skip it. Retry as-is."),
       outcome: "not-submitted",
     };
+  // A started screenshot may have placed a temporary context slice, removed only once its export
+  // settles; a running status comes before the target is even resolved.
   if (screenshot)
     return {
       message:
-        `${lead} Cancellation requested` +
-        (disposition === "was-running"
-          ? "; the plugin confirmed the screenshot was exporting, and it stops at the export's next cancellation check."
-          : "; the screenshot may still be exporting.") +
-        " This request made no changes.",
+        `${lead} Cancellation requested; the screenshot ` +
+        (disposition === "was-running" ? "had started" : "may have started") +
+        ", so its cleanup is unconfirmed.",
       outcome: "unconfirmed",
     };
   const state =
     disposition === "was-running"
-      ? "the plugin confirmed the run was executing, and it stops at its next flcm verb or figma.* access. Its writes so far stay."
+      ? "the plugin confirmed the run was executing. It stops at its next flcm verb or top-level " +
+        "figma.* call (one it is awaiting is abandoned); writes to nodes it already holds continue " +
+        "until then, and its writes so far stay."
       : "the run may still be executing.";
   return {
     message: `${lead} Cancellation requested; ${state} ${lastSeenText(latest, now)} Inspect affected nodes before retrying.`,

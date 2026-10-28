@@ -26,7 +26,7 @@ import {
 import { mintExecutionId } from "~/commercial/execution-id.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
-import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
+import { LATE_CHANGE_WINDOW_MS, WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import type { PluginReply, ReplyFor, WriteAccessNotice } from "@framelink/plugin/protocol";
 import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
 import {
@@ -335,6 +335,37 @@ describe("write authorization", () => {
     expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "authorized" });
     await writeAccess.reportWriteUsage(USER_ID);
     expect(app.reportedExecutionIds.filter((id) => id === executionId)).toHaveLength(1);
+  });
+
+  it("holds a lost run's Write until its late window closes, freeing it if the plugin says it never ran", async () => {
+    const { app, writeAccess } = await setup();
+    let now = 0;
+    const meter = new WriteMeter(writeAccess, { now: () => new Date(now) });
+    const link = TEST_PLUGIN_LINK;
+    const lose = async () => {
+      const executionId = mintExecutionId();
+      const admission = await meter.authorize(link, executionId);
+      if (admission.kind !== "authorized") throw new Error("a Write still fits the allowance");
+      admission.charge.lost({ mayHaveRun: true });
+      return executionId;
+    };
+    // Queued behind a held thread: the cancel answer came too late for the caller, not for the meter.
+    const cancelledInQueue = await lose();
+    meter.runEvent({ type: "neverRan", executionId: cancelledInQueue, link });
+    // Its late reply says it changed nothing.
+    const repliedLate = await lose();
+    meter.runEvent({
+      type: "orphanReply",
+      executionId: repliedLate,
+      link,
+      reply: { type: "EXECUTE_CODE_RESULT", console: [], errors: null, documentChanged: false },
+    });
+    // Nothing more is ever heard: the Write it may have made is charged when the window closes.
+    const silent = await lose();
+    now = LATE_CHANGE_WINDOW_MS + 30_000;
+    await meter.drain(new AbortController().signal);
+    await writeAccess.reportWriteUsage(USER_ID);
+    expect(app.reportedExecutionIds).toEqual([silent]);
   });
 
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {

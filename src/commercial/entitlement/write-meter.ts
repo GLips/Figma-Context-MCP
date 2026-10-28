@@ -38,11 +38,14 @@ export interface MeteredLink {
 /**
  * What a plugin link says about a run after its caller may have stopped listening. The bridge
  * forwards these as they come, with the link that said them; whether they settle or charge anything
- * is decided here. `orphanReply` is a run's result that arrived after its caller gave up on it.
+ * is decided here. `orphanReply` is a run's result that arrived after its caller gave up on it;
+ * `neverRan` is the plugin's word that a run left its queue without starting (a never-executed
+ * cancel answer, or a withdrawal).
  */
 export type RunEvent =
   | { type: "changed"; executionId: string; link: MeteredLink }
   | { type: "settled"; executionId: string; link: MeteredLink }
+  | { type: "neverRan"; executionId: string; link: MeteredLink }
   | { type: "orphanReply"; executionId: string; link: MeteredLink; reply: ExecuteCodeResult };
 
 /**
@@ -53,7 +56,10 @@ export type RunEvent =
 export interface ExecutionCharge {
   /** The plugin answered. `documentChanged: false` stays provisional until the run settles. */
   replied(documentChanged: boolean): void;
-  /** No answer. `mayHaveRun`: the run may have touched the document, so it is charged. */
+  /**
+   * No answer. `mayHaveRun`: the run may have touched the document, so it is charged when its late
+   * window closes, unless the plugin says first that it never ran or changed nothing.
+   */
   lost(outcome: { mayHaveRun: boolean }): void;
 }
 
@@ -76,6 +82,8 @@ interface UnsettledExecution {
    * can't all pass the gate on the same last Write. Then the end of its late window.
    */
   lateWindowEndsAt: number;
+  /** Charged when the late window closes: a lost run the plugin hasn't yet cleared. */
+  chargedOnClose: boolean;
 }
 
 export class WriteMeter {
@@ -130,13 +138,14 @@ export class WriteMeter {
       figmaUserId: decision.figmaUserId,
       link,
       lateWindowEndsAt: Infinity,
+      chargedOnClose: false,
     });
     return {
       kind: "authorized",
       authorization: decision,
       charge: {
         replied: (documentChanged) => this.callerFinished(executionId, documentChanged),
-        lost: ({ mayHaveRun }) => this.callerFinished(executionId, mayHaveRun),
+        lost: ({ mayHaveRun }) => this.callerFinished(executionId, false, mayHaveRun),
       },
     };
   }
@@ -149,7 +158,12 @@ export class WriteMeter {
   runEvent(event: RunEvent): void {
     const execution = this.unsettled.get(event.executionId);
     if (!execution || execution.link !== event.link) return;
-    if (event.type === "orphanReply" && !event.reply.documentChanged) return;
+    if (event.type === "neverRan") return this.settle(event.executionId, false);
+    // The run's own word that it changed nothing so far: only a later change charges it now.
+    if (event.type === "orphanReply" && !event.reply.documentChanged) {
+      execution.chargedOnClose = false;
+      return;
+    }
     // A change seen during the run, after its reply, or after its caller gave up: all one Write.
     this.settle(
       event.executionId,
@@ -166,6 +180,7 @@ export class WriteMeter {
     let announced = false;
     for (;;) {
       signal.throwIfAborted();
+      this.closeExpiredWindows();
       const remaining = this.longestOpenWindowMs();
       if (!remaining) return;
       if (!announced) onWaiting?.(remaining);
@@ -175,6 +190,8 @@ export class WriteMeter {
   }
 
   private decide(owner: PluginOwner | null): WriteAuthorization {
+    // A lost run's charge lands when its window closes, which nothing else marks: count it first.
+    this.closeExpiredWindows();
     const figmaUserId = owner?.figmaUserId;
     let reserved = 0;
     for (const execution of this.unsettled.values())
@@ -185,12 +202,14 @@ export class WriteMeter {
 
   /**
    * The caller is done with the execution. A Write is recorded now; otherwise its reservation ends
-   * and the late window opens, for a change the plugin reports after the reply.
+   * and the late window opens, for a change the plugin reports after the reply, or for a lost run
+   * (`chargedOnClose`) the plugin's word that it never ran.
    */
-  private callerFinished(executionId: ExecutionId, wrote: boolean): void {
+  private callerFinished(executionId: ExecutionId, wrote: boolean, chargedOnClose = false): void {
     const execution = this.unsettled.get(executionId);
     if (!execution || execution.lateWindowEndsAt !== Infinity) return;
     if (wrote) return this.settle(executionId, true);
+    execution.chargedOnClose = chargedOnClose;
     execution.lateWindowEndsAt = this.now().getTime() + LATE_DOCUMENT_CHANGE_MS;
     this.closeExpiredWindows();
   }
@@ -210,6 +229,7 @@ export class WriteMeter {
     for (const [executionId, execution] of this.unsettled)
       if (execution.lateWindowEndsAt <= now) {
         this.unsettled.delete(executionId);
+        if (execution.chargedOnClose) this.access.recordWrite(execution.figmaUserId, executionId);
         closed = true;
       }
     if (closed) this.wakeSettleWaiters();
