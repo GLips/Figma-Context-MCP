@@ -4,7 +4,7 @@
  */
 // The plugin's one row per outstanding run, from acceptance to settlement, and everything a run's
 // status and its cancellation are read from: its phase and place in the write chain, why it may not
-// continue, the calls its code has pending, and when its heartbeat last fired. "No row" is what
+// continue, the calls its code has pending, and when its server's heartbeat last reached it. "No row" is what
 // makes a cancel or a withdrawal answer `unknown`.
 import { isCallOperation, queueWaitKey, type CallOperation, type CancelAnswer, type QueueWait, type RunActivity, type WithdrawAnswer } from "./protocol.js";
 import type { CallToken, RunCancelCause } from "./preamble/host.js";
@@ -102,14 +102,14 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
     },
     isIdle: (): boolean => runs.size === 0,
     /**
-     * The heartbeat fired: tick the running run's watchdog and name it, or null with none running.
-     * The gap is checked before the clock moves, so the first tick after a long block latches the
-     * run rather than reviving it.
+     * `connKey`'s server asked for status: tick the watchdog of the running run on that link and name
+     * it, or null with none. The gap is checked before the clock moves, so the first request handled
+     * after a long block latches the run rather than reviving it.
      */
-    heartbeat(): RunRef | null {
+    heartbeat(connKey: number): RunRef | null {
       // The write chain runs one at a time, so at most one row is running.
       for (const run of runs.values()) {
-        if (run.lastTickAt === null) continue;
+        if (run.lastTickAt === null || run.connKey !== connKey) continue;
         const now = Date.now();
         if (inactivityExpired(now, run.lastTickAt)) cancel(run, "unresponsive");
         run.lastTickAt = now;
@@ -196,14 +196,14 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
     cancelConnection(connKey: number, cause: ConnectionCancelCause): void {
       for (const run of runs.values()) if (run.connKey === connKey) cancel(run, cause);
     },
-    /** The queued statuses due now: every queued run's with `all`, else those whose wait changed. */
-    dueQueueStatuses(now: number, all: boolean): { ref: RunRef; wait: QueueWait }[] {
+    /** The queued runs whose wait changed since they were last told, and every one on `askedBy`. */
+    dueQueueStatuses(now: number, askedBy: number | null): { ref: RunRef; wait: QueueWait }[] {
       const due = [];
       for (const run of runs.values()) {
         if (run.phase !== "queued") continue;
         const wait = waitOf(run, now);
         const key = queueWaitKey(wait);
-        if (!all && run.sentWaitKey === key) continue;
+        if (run.connKey !== askedBy && run.sentWaitKey === key) continue;
         run.sentWaitKey = key;
         due.push({ ref: { id: run.id, connKey: run.connKey }, wait });
       }

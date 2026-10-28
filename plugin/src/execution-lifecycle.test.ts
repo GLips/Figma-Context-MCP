@@ -251,7 +251,9 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   /** Every status sent for one run in one phase, oldest first, as the JSON the relay would carry. */
   const statuses = (id: string, phase: "queued" | "running") =>
     sent.filter(({ frame: f }) => f.type === "RUN_STATUS" && f.executionId === id && f.phase === phase).map(({ frame: f }) => JSON.parse(JSON.stringify(f)));
-  return { statuses, sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
+  /** The server's heartbeat on one link: each handled one is a status for every run there. */
+  const beat = (key: ConnKey) => sendFrame(key, { type: "RUN_STATUS_REQUEST" });
+  return { beat, statuses, sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
 }
 
 test("while Figma has paused the plugin, a new run is refused at once and a stuck run's cancel says why", async () => {
@@ -423,7 +425,7 @@ test("a granted server's write waits out another server's Allow being saved inst
   assert(!h.sent.some(({ frame: f, connKey }) => connKey === 1 && f.type === "NOT_GRANTED"));
 });
 
-test("a run held at dequeue by an Allow being saved, and the runs behind it, hear a status every interval", async (t) => {
+test("a run held at dequeue by an Allow being saved, and the runs behind it, hear a status at every heartbeat", async () => {
   const h = host();
   await h.connect(1);
   await h.introduce(2, "/other");
@@ -436,13 +438,12 @@ test("a run held at dequeue by an Allow being saved, and the runs behind it, hea
   };
   assert.equal(await h.grantStatus(2, "other-call", "allow"), "pending");
   h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2, executionId: "other-call", documentId: DOCUMENT_ID });
-  t.mock.timers.enable({ apis: ["setTimeout"] });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "front", preamble: echoPreamble, code: "return 'front';" });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 'behind';" });
   await h.frame((f) => f.executionId === "behind" && (f.wait as any)?.blocker?.executionId === "front", "front blocking behind");
   // A minute of the human taking their time over the other server's Allow.
   const beats = 60_000 / RUN_STATUS_INTERVAL_MS;
-  for (let beat = 0; beat < beats; beat++) t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+  for (let beat = 0; beat < beats; beat++) h.beat(1);
   for (const id of ["front", "behind"]) assert.ok(h.statuses(id, "queued").length > beats, `${id}: ${h.statuses(id, "queued").length}`);
   landed();
   assert.equal((await h.result("behind", 1)).result, "behind");
@@ -1013,10 +1014,9 @@ test("a raw run the server gave up on ends at once, and a run queued behind it h
   assert.match((await h.result("raw")).errors, /your code was still awaiting when the server cancelled this run/);
 });
 
-test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the run stays refused after it ends", async (t) => {
+test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the run stays refused after it ends", async () => {
   const h = host();
   await h.connect(1);
-  t.mock.timers.enable({ apis: ["setTimeout"] });
   let reached!: () => void;
   const refused = new Promise<void>((resolve) => { reached = resolve; });
   let release!: () => void;
@@ -1024,7 +1024,7 @@ test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, a
   Object.assign(h.context, {
     hold: new Promise<void>((resolve) => { release = resolve; }),
     report: (...said: unknown[]) => { reports.push(said); reached(); },
-    // Each call takes a second of a thread that never yields, so no heartbeat can fire.
+    // Each call takes a second of a thread that never yields, so no heartbeat can be handled.
     spendSecond: () => h.advanceClock(1_000),
   });
   h.sendFrame(1, {
@@ -1037,25 +1037,24 @@ test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, a
       try { figma.createRectangle(); report("revived"); } catch (e) { report(e.message); }`,
   });
   await refused;
-  // The thread yielded, so the overdue heartbeat fires at last, and the latched run ends.
-  t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
-  assert.match((await h.result("loop")).errors, /your code was still awaiting when the plugin ran no timer for 15s during this run/);
+  // The heartbeat handled once the thread yields must not revive the latched run.
+  h.beat(1);
+  assert.match((await h.result("loop")).errors, /your code was still awaiting when the plugin handled no message from the server for 15s during this run/);
   release();
   await h.context.hold;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(reports.length, 2);
   const [[calls, first], [second]] = reports as [[number, string], [string]];
   assert.equal(calls, 15);
-  assert.match(first, /plugin ran no timer for 15s during this run .* so figma\.createRectangle and every figma\.\* access after it is refused/);
-  assert.match(second, /plugin ran no timer for 15s/);
+  assert.match(first, /plugin handled no message from the server for 15s during this run .* so figma\.createRectangle and every figma\.\* access after it is refused/);
+  assert.match(second, /plugin handled no message from the server for 15s/);
 });
 
-test("a run awaiting a Figma call that never settles keeps its heartbeat, naming the call and how long it has waited", async (t) => {
+test("a run awaiting a Figma call that never settles keeps its heartbeat, naming the call and how long it has waited", async () => {
   // Settled only after the run ended: a late settle must touch nothing.
   let loaded!: () => void;
   const h = host({ loadFontAsync: () => new Promise<void>((resolve) => { loaded = resolve; }) });
   await h.connect(1);
-  t.mock.timers.enable({ apis: ["setTimeout"] });
   h.sendFrame(1, {
     type: "EXECUTE_CODE",
     id: "font",
@@ -1068,7 +1067,7 @@ test("a run awaiting a Figma call that never settles keeps its heartbeat, naming
   // Past the inactivity deadline, in heartbeat steps: a thread that keeps yielding is never refused.
   for (let beat = 0; beat < 10; beat++) {
     h.advanceClock(RUN_STATUS_INTERVAL_MS);
-    t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+    h.beat(1);
   }
   const beats = h.statuses("font", "running").slice(1).map((status) => status.activity);
   assert.equal(beats.length, 10);
@@ -1142,15 +1141,14 @@ test("a cancelled run ends while Figma runs no timers, so the run behind it stil
   assert.equal((await h.result("behind")).result, "ran");
 });
 
-test("a run whose code returned keeps its status and its place until its reply goes out, and a cancel ends a node lookup Figma never answers", async (t) => {
+test("a run whose code returned keeps its status and its place until its reply goes out, and a cancel ends a node lookup Figma never answers", async () => {
   // A logged node is checked with Figma after the code returns, and Figma can leave it pending forever.
   const h = host({ getNodeByIdAsync: () => new Promise(() => {}) });
   await h.connect(1);
-  t.mock.timers.enable({ apis: ["setTimeout"] });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "logs", preamble: echoPreamble, code: `class Node { id = "1:2"; removed = false; } console.log(new Node()); return 1;` });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 2;" });
   await h.running("logs", 1);
-  for (let beat = 0; beat < 3; beat++) t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
+  for (let beat = 0; beat < 3; beat++) h.beat(1);
   assert.equal(h.statuses("logs", "running").length, 4);
   assert.equal(h.statuses("behind", "queued").at(-1).wait.blocker.executionId, "logs");
   h.sendFrame(1, { type: "CANCEL", executionId: "logs" });

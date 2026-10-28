@@ -48,7 +48,7 @@ The server's explicit allowlist is the `capabilities` map in `src/commercial/plu
 `images.fetch` (a source array in, a source-to-base64 record out) and `comments.pins`. Image parsing and policy live in the server and preamble adapters.
 The channel owns correlation, connection ownership, dead-run refusal, the four-service concurrency
 cap, and the 100 MiB frame limit. A server call doesn't pause the run's liveness: the call yields,
-so the plugin's RUN_STATUS heartbeat keeps going, and the only time limit is the caller's own per-call
+so the plugin keeps answering the server's RUN_STATUS_REQUEST heartbeat, and the only time limit is the caller's own per-call
 budget (45 s over MCP, none from the CLI). The current caller requires an
 `EXECUTE_CODE` run. The frame does not constrain future callers to that request type.
 

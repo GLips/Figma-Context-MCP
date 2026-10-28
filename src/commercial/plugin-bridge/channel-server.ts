@@ -23,7 +23,7 @@ const MAX_INFLIGHT_SERVICES_PER_RUN = 4;
 /**
  * The reverse direction: the plugin calls a server capability mid-run (CHANNEL_REQUEST), answered by
  * CHANNEL_RESPONSE in the plugin's own id namespace. Nothing here touches the run's deadline: a run
- * awaiting the server leaves the plugin's thread free, so its RUN_STATUS heartbeat keeps it alive.
+ * awaiting the server leaves the plugin's thread free, so it keeps answering the heartbeat with RUN_STATUS.
  *
  * A request naming a run the ledger no longer tracks (timed out, cancelled, already resolved) is
  * refused instead of served: the refusal rejects the run's suspended await plugin-side, so a zombie

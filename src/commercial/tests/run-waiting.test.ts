@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// How a caller waits on a plugin run: liveness from the plugin's RUN_STATUS heartbeat alone, and the
+// How a caller waits on a plugin run: liveness from the plugin's RUN_STATUS answers to the server's
+// heartbeat alone, and the
 // caller's own policy on top — the MCP tools' 45-second budget and withdraw-behind-a-cancelled-run,
 // the CLI's patience. The MCP cases go through a real tool call over a real bridge.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,7 @@ import type { RunWaiting } from "~/commercial/plugin-bridge/run-ledger.js";
 import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
-import type { QueueBlocker } from "@framelink/plugin/protocol";
+import { RUN_STATUS_INTERVAL_MS, type QueueBlocker } from "@framelink/plugin/protocol";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 import {
   TEST_DOCUMENT,
@@ -130,6 +131,28 @@ const textOf = (result: { content: unknown[] }) =>
   (result.content as { type: string; text?: string }[]).map((c) => c.text ?? "").join("\n");
 
 describe("liveness is the plugin's heartbeat", () => {
+  it("asks a link for its runs' statuses every interval while it has one outstanding, and stops once it has none", async () => {
+    vi.useFakeTimers();
+    const { bridge, socket } = await pluginBridge();
+    const asked = () => socket.frames.filter((f) => f.type === "RUN_STATUS_REQUEST").length;
+    const first = submitCode(bridge, socket);
+    const second = submitCode(bridge, socket);
+    await Promise.resolve();
+    const [firstId, secondId] = socket.frames.map((f) => f.id as string);
+    for (const id of [firstId, secondId]) socket.receive(queuedStatus(id, 0));
+    await vi.advanceTimersByTimeAsync(RUN_STATUS_INTERVAL_MS);
+    expect(asked()).toBe(1);
+    socket.receive(executed(firstId));
+    await first;
+    socket.receive(runningStatus(secondId));
+    await vi.advanceTimersByTimeAsync(RUN_STATUS_INTERVAL_MS);
+    expect(asked()).toBe(2);
+    socket.receive(executed(secondId));
+    expect(await second).toMatchObject({ type: "EXECUTE_CODE_RESULT" });
+    await vi.advanceTimersByTimeAsync(10 * RUN_STATUS_INTERVAL_MS);
+    expect(asked()).toBe(2);
+  });
+
   it("keeps a heartbeating run alive past the deadline, cancels on 15s of silence naming its pending call, and a stale stamp buys nothing", async () => {
     vi.useFakeTimers();
     const { bridge, socket } = await pluginBridge();

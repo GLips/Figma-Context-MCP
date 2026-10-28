@@ -23,12 +23,12 @@ import { FlcmError, describeFailure } from "./flcm-error.js";
 // other end is the factory wrapper index.mjs writes around this bundle, which refuses to emit one
 // that doesn't reference the name. Rename it here alone and the generator throws.
 // Execution services are required. Call reporting only feeds the run's status: it never changes a
-// call's result and never counts as a sign of life, which only the host's heartbeat timer is.
+// call's result and never counts as a sign of life, which only the server's handled heartbeat request is.
 
 /**
  * Why a run may not continue, which the refusal words for the agent: the server gave up on it, its
- * server disconnected, the human revoked its project's grant on the file, or its thread ran no timer
- * for RUN_INACTIVITY_DEADLINE_MS (so it could not have heard a CANCEL either).
+ * server disconnected, the human revoked its project's grant on the file, or its thread handled no
+ * server heartbeat for RUN_INACTIVITY_DEADLINE_MS (so it could not have heard a CANCEL either).
  */
 export type RunCancelCause = "server" | "disconnected" | "revoked" | "unresponsive";
 
@@ -56,14 +56,14 @@ export interface FlcmHost {
   callServer(capability: string, payload: unknown): Promise<unknown>;
   /**
    * May this run continue? Why not, or null. A CHECK, not a getter: past the inactivity deadline
-   * since the host's heartbeat last fired, it latches "unresponsive" for good, so a late tick after a
+   * since the host last handled its server's heartbeat, it latches "unresponsive" for good, so a late tick after a
    * long block never revives the run. Asked before every verb and every figma.* access.
    */
   runCancellation(): RunCancelCause | null;
   /**
    * Call `listener` once when this run is cancelled (at once if it already is); the returned function
    * unsubscribes. A Figma call can stall with the plugin's timers stalled too, so this, driven by the
-   * CANCEL message, is the only thing that can end the wait (untilCancelled).
+   * CANCEL message (or the heartbeat request that latches the watchdog), is the only thing that can end the wait (untilCancelled).
    */
   onCancelled(listener: (cause: RunCancelCause) => void): () => void;
   /**
@@ -241,8 +241,8 @@ export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
   disconnected: "this run's server disconnected, so the run was cancelled",
   revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
   unresponsive:
-    "the plugin ran no timer for " + RUN_INACTIVITY_DEADLINE_MS / 1000 + "s during this run (a long synchronous stretch, " +
-    "or an export), so it couldn't hear a cancel and stopped the run (split long synchronous work across calls)",
+    "the plugin handled no message from the server for " + RUN_INACTIVITY_DEADLINE_MS / 1000 + "s during this run (a long " +
+    "synchronous stretch, or an export), so it couldn't hear a cancel and stopped the run (split long synchronous work across calls)",
 };
 
 /**

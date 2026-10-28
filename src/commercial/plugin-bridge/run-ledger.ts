@@ -10,12 +10,14 @@ import type { RequestTrace } from "./request-trace.js";
 import {
   RUN_INACTIVITY_DEADLINE_MS,
   RUN_REQUEST_TYPES,
+  RUN_STATUS_INTERVAL_MS,
   parseReply,
   type CancelAnswer,
   type PluginReply,
   type QueueWait,
   type RunPhase,
   type RunStatus,
+  type ServerFrame,
   type ServerRequest,
   type ServerRequestType,
   type WithdrawAnswer,
@@ -102,9 +104,10 @@ export class BridgeRequestError extends Error {
 }
 
 // The per-request INACTIVITY deadline, not a hard cap: every fresh RUN_STATUS re-arms it, and the
-// plugin sends one at least every RUN_STATUS_INTERVAL_MS while its thread is free, so a run dies here
-// only when the plugin's thread has been held for this long. The plugin latches the same deadline
-// over its own timer, refusing the run's next verb or figma.* access.
+// plugin answers each RUN_STATUS_REQUEST (sent every RUN_STATUS_INTERVAL_MS) with one at once while
+// its thread is free, so a run dies here only when the plugin's thread has been held for this long.
+// The plugin latches the same deadline between the requests it handles, refusing the run's next
+// verb or figma.* access.
 export const DEFAULT_TIMEOUT_MS = RUN_INACTIVITY_DEADLINE_MS;
 
 // How long the caller's rejection waits for the plugin's CANCEL_RESULT, and a withdrawal for its
@@ -187,6 +190,11 @@ export class RunLedger {
     AwaitedAnswer<WithdrawAnswer> & { answered: Promise<WithdrawOutcome> }
   >();
 
+  // One heartbeat per link with runs on it. The server paces it because the plugin can't: a hidden
+  // Figma window throttles the plugin's chained timers to about one tick a minute, but still hands
+  // it each message within milliseconds.
+  private readonly statusRequests = new Map<RelayConnection, ReturnType<typeof setInterval>>();
+
   constructor(private readonly options: RunLedgerOptions) {}
 
   get trace(): RequestTrace {
@@ -245,7 +253,10 @@ export class RunLedger {
       };
       this.entries.set(id, entry);
       this.armInactivityDeadline(entry, entry.startedAt + this.options.requestTimeoutMs);
-      if (RUN_REQUESTS.has(payload.type)) this.trace.start(id, connection);
+      if (RUN_REQUESTS.has(payload.type)) {
+        this.trace.start(id, connection);
+        this.requestStatusWhileRunsOn(connection);
+      }
       // `id` last: the caller's id is authoritative and a payload field must never
       // overwrite it, or the reply could never be matched to this entry.
       connection.send({ ...payload, id });
@@ -416,7 +427,29 @@ export class RunLedger {
     clearTimeout(entry.budgetTimer ?? undefined);
     this.entries.delete(id);
     entry.servicesAbort.abort();
+    if (!this.hasRunsOn(entry.connection)) {
+      clearInterval(this.statusRequests.get(entry.connection));
+      this.statusRequests.delete(entry.connection);
+    }
     return entry;
+  }
+
+  private hasRunsOn(connection: RelayConnection): boolean {
+    for (const entry of this.entries.values())
+      if (entry.connection === connection && RUN_REQUESTS.has(entry.payloadType)) return true;
+    return false;
+  }
+
+  /** Ask `connection` for its runs' statuses each interval, until it has none (take() stops it). */
+  private requestStatusWhileRunsOn(connection: RelayConnection): void {
+    if (this.statusRequests.has(connection)) return;
+    this.statusRequests.set(
+      connection,
+      setInterval(() => {
+        if (connection.isOpen)
+          connection.send({ type: "RUN_STATUS_REQUEST" } satisfies ServerFrame);
+      }, RUN_STATUS_INTERVAL_MS),
+    );
   }
 
   /**

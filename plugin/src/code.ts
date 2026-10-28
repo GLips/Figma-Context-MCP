@@ -188,7 +188,7 @@ function isLinkSetupRequest(type: ServerRequestType): boolean {
 /**
  * A frame one server sent over its socket (`key` names the socket generation). Server REQUESTS all
  * carry ids and each gets exactly one reply — including one this plugin can't admit, which is
- * answered ERROR. CANCEL, WITHDRAW and CHANNEL_RESPONSE are one-way.
+ * answered ERROR. CANCEL, WITHDRAW, RUN_STATUS_REQUEST and CHANNEL_RESPONSE are one-way.
  */
 function handleServerFrame(raw: unknown, key: ConnKey): void {
   figmaPause.arm();
@@ -209,6 +209,11 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
   }
   if (msg.type === "CANCEL") {
     executor.cancel(key, msg.executionId);
+    return;
+  }
+  // Before the auth check on purpose: an unauthenticated link tracks no runs, so it hears nothing.
+  if (msg.type === "RUN_STATUS_REQUEST") {
+    executor.statusRequested(key);
     return;
   }
   if (msg.type === "WITHDRAW") {

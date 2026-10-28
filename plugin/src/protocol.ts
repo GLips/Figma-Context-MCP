@@ -75,8 +75,8 @@ export const PROTOCOL_VERSION = 20;
  * v19: ANNOTATION_CHANGES answers at once (no `holdMs`); the plugin says when its log moved with the
  *     ANNOTATIONS_CHANGED event, so a watcher asks when told rather than holding an ask open.
  * v20: run status. RUN_STATUS replaces RUN_STATE and RUN_TRACE: the plugin's latest word about a
- *     run, sent on every change and on a heartbeat timer while it runs, so any fresh one is the sign
- *     of life. A queued run's status names what it waits behind; a running one's, what it has settled
+ *     run, sent on every change and in answer to the server's RUN_STATUS_REQUEST, which the server
+ *     sends a link on a timer while it has runs there, so any fresh one is the sign of life. A queued run's status names what it waits behind; a running one's, what it has settled
  *     and is pending on. The preamble's factory returns the agent's `figma` (agentFigma), checked like
  *     every verb. FlcmHost reports calls (callStarted/callSettled) and its runCancellation latches an
  *     unresponsive run; runStartedAt and trace are gone. WITHDRAW drops a run only if it hasn't
@@ -102,16 +102,16 @@ export const WS_PORT_BLOCK: readonly number[] = Array.from(
 
 /**
  * How long a run may go without a fresh RUN_STATUS before the server stops waiting for it. The plugin
- * holds the same deadline over its own heartbeat timer: a thread that ran no timer for this long
- * could not have dispatched a CANCEL either, so the run latches unresponsive and refuses its next
- * verb or figma.* access.
+ * holds the same deadline between the RUN_STATUS_REQUESTs it handles: a thread that handled none for
+ * this long could not have dispatched a CANCEL either, so the run latches unresponsive and refuses
+ * its next verb or figma.* access.
  */
 export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
 
 /**
- * How often a running run's RUN_STATUS heartbeat fires. Figma clamps plugin timers to about one tick
- * a second (measured live, 2026-10-27) and stalls them during an export, so this is well inside the
- * deadline without promising a cadence Figma won't keep.
+ * How often the server sends a link RUN_STATUS_REQUEST while it has runs there. The server paces the
+ * heartbeat because Figma can't: a hidden window throttles a plugin's chained timer to about one tick
+ * a minute (measured live, 2026-10-27) while it still handles each message within milliseconds.
  */
 export const RUN_STATUS_INTERVAL_MS = 2_000;
 
@@ -577,7 +577,7 @@ export const LINK_SETUP_REQUEST_TYPES = [
 /** The requests the plugin tracks as runs: queued, then running, and answerable by CANCEL_RESULT and WITHDRAW_RESULT. */
 export const RUN_REQUEST_TYPES = ["EXECUTE_CODE", "SCREENSHOT"] as const satisfies readonly ServerRequestType[];
 
-/** The server's one-way frames: neither is a request, and neither is answered by a reply. */
+/** The server's one-way frames: none is a request, and none is answered by a reply. */
 export type ServerOneWay =
   // The server gave up on a run: run-scoped and id-less. Answered by the CANCEL_RESULT event.
   | { type: "CANCEL"; executionId: string }
@@ -585,6 +585,9 @@ export type ServerOneWay =
   // running. Separate from CANCEL so a run that started a moment ago is never cut off by a stale
   // view of the queue. Answered by the WITHDRAW_RESULT event.
   | { type: "WITHDRAW"; executionId: string }
+  // The server's heartbeat: answered at once by a RUN_STATUS for every run the plugin tracks on this
+  // link, running or queued.
+  | { type: "RUN_STATUS_REQUEST" }
   // The answer to a plugin-issued CHANNEL_REQUEST, in the PLUGIN's id namespace. Payload and error
   // cross opaquely: a capability can change its shapes with no plugin release.
   | { type: "CHANNEL_RESPONSE"; id: string; ok: true; payload: unknown }
@@ -616,6 +619,7 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
   if (!isRecord(value)) return null;
   const f = value;
   if (f.type === "CANCEL" || f.type === "WITHDRAW") return typeof f.executionId === "string" ? { type: f.type, executionId: f.executionId } : null;
+  if (f.type === "RUN_STATUS_REQUEST") return { type: f.type };
   if (typeof f.id !== "string") return null;
   const id = f.id;
   switch (f.type) {
@@ -944,7 +948,7 @@ export type PluginEvent =
   // A mid-run call to a server capability, tagged with the run it serves.
   | { type: "CHANNEL_REQUEST"; id: string; executionId: string; capability: string; payload: unknown }
   // The plugin's latest word about a run: sent when it queues, whenever what it waits behind changes,
-  // on entering running, and on the RUN_STATUS_INTERVAL_MS heartbeat while it runs. `at` is the
+  // on entering running, and in answer to each RUN_STATUS_REQUEST. `at` is the
   // plugin's stamp: a frame leaves only once the thread goes idle, so arrival can be seconds late,
   // and a late status must not buy a fresh deadline.
   | RunStatus

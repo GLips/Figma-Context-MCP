@@ -17,7 +17,7 @@ import { createServerCallTable } from "./server-calls.js";
 import type { FigmaPauseWatch } from "./figma-pause.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import { RUN_INACTIVITY_DEADLINE_MS, RUN_STATUS_INTERVAL_MS, type NotGrantedReason, type ServerFrame } from "./protocol.js";
+import { RUN_INACTIVITY_DEADLINE_MS, type NotGrantedReason, type ServerFrame } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
@@ -40,7 +40,7 @@ const RUN_CANCELLED_BY: Record<RunCancelCause, string> = {
   server: "the server cancelled this run",
   disconnected: "this run's server disconnected",
   revoked: "the human revoked this project's grant on the file",
-  unresponsive: `the plugin ran no timer for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run and stopped it`,
+  unresponsive: `the plugin handled no message from the server for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run and stopped it`,
 };
 // Microtask hops before the run's own cancel rejection lands. A turn of the timer queue would be
 // simpler, but Figma can stall timers while it still delivers the CANCEL.
@@ -83,17 +83,7 @@ export function createRunExecutor({
 }) {
   const serverCalls = createServerCallTable(isConnected);
   // Every run's row, and what its status and cancellation are read from (run-registry.ts).
-  const runs = createRunRegistry({
-    onQueueChange: () => {
-      publishQueue(false);
-      if (runs.isIdle() && statusBeat !== undefined) {
-        clearTimeout(statusBeat);
-        statusBeat = undefined;
-      }
-    },
-  });
-  // The status heartbeat, armed while any run is tracked (scheduleStatusBeat).
-  let statusBeat: ReturnType<typeof setTimeout> | undefined;
+  const runs = createRunRegistry({ onQueueChange: () => publishQueue(null) });
   // The last execution whose reply said "no change", still watching for a change that lands after it
   // (document-changes.ts watchLate). Bounded by the next run's start and by the window its
   // EXECUTE_CODE carried — the server's number, since the server is what holds the run open for it.
@@ -131,32 +121,16 @@ export function createRunExecutor({
     toServer(to.connKey, { type: "RUN_STATUS", executionId: to.id, at, phase: "running", activity: runs.activity(to, at) });
   }
 
-  /** Tell each queued run where it stands: `all` on a heartbeat, else only those whose wait changed. */
-  function publishQueue(all: boolean): void {
+  /** Tell each queued run whose wait changed where it stands, and every one on `askedBy`'s link. */
+  function publishQueue(askedBy: ConnKey | null): void {
     const at = Date.now();
-    for (const { ref, wait } of runs.dueQueueStatuses(at, all))
+    for (const { ref, wait } of runs.dueQueueStatuses(at, askedBy))
       toServer(ref.connKey, { type: "RUN_STATUS", executionId: ref.id, at, phase: "queued", wait });
-  }
-
-  /**
-   * The heartbeat: every tracked run's status, each interval while any is tracked, since the server
-   * stops waiting on any run it hears nothing about, queued ones included. It only fires when the
-   * thread yields, so silence means the thread is held. Each beat is also the running run's watchdog.
-   */
-  function scheduleStatusBeat(): void {
-    statusBeat ??= setTimeout(() => {
-      statusBeat = undefined;
-      const running = runs.heartbeat();
-      if (running) sendRunning(running);
-      publishQueue(true);
-      if (!runs.isIdle()) scheduleStatusBeat();
-    }, RUN_STATUS_INTERVAL_MS);
   }
 
   /** Accept a run: tracked from this moment, since a run can be cancelled or withdrawn while queued. */
   function acceptRun(to: ReplyTo, label: RunLabel): void {
     runs.enqueue(to, label);
-    scheduleStatusBeat();
     activity.advance(to.id, "queued", label.session);
   }
 
@@ -475,6 +449,17 @@ export function createRunExecutor({
 
     /** Resolves once every run queued so far has settled, ran or refused. */
     idle: (): Promise<void> => writeChain,
+
+    /**
+     * The server's heartbeat: every run tracked on its link says where it stands, since the server
+     * stops waiting on any run it hears nothing about. Answered synchronously, so only a held thread
+     * delays it; each request is also the watchdog's tick for the link's running run.
+     */
+    statusRequested(connKey: ConnKey): void {
+      const running = runs.heartbeat(connKey);
+      if (running) sendRunning(running);
+      publishQueue(connKey);
+    },
 
     /**
      * The server gave up on a run. Answer FIRST, from what is already known: the server is holding
