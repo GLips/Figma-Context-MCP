@@ -31,9 +31,8 @@ interface StatusSummary {
   phase: RunPhase;
   /** Queued: runs in front of it. */
   ahead?: number;
-  /** Running: the oldest pending call, and the counts. */
+  /** Running: the oldest pending call, and the calls settled. */
   operation?: CallOperation;
-  pendingCount?: number;
   callsSettled?: number;
 }
 export interface TraceEvent extends Partial<StatusSummary> {
@@ -57,9 +56,9 @@ const RETAIN_MS = 60_000;
 
 function summarize(status: RunStatus): StatusSummary {
   if (status.phase === "queued") return { phase: "queued", ahead: status.wait.ahead };
-  const { pending, pendingCount, callsSettled } = status.activity;
-  const summary: StatusSummary = { phase: "running", pendingCount, callsSettled };
-  if (pending[0]) summary.operation = pending[0].operation;
+  const { oldestPending, callsSettled } = status.activity;
+  const summary: StatusSummary = { phase: "running", callsSettled };
+  if (oldestPending) summary.operation = oldestPending.operation;
   return summary;
 }
 

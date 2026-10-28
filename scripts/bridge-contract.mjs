@@ -45,6 +45,15 @@ import {
 const PORT = 19876;
 const URL = `ws://127.0.0.1:${PORT}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// A running run's heartbeat, as the plugin sends it while its thread is free.
+const runningStatus = (executionId) =>
+  JSON.stringify({
+    type: "RUN_STATUS",
+    executionId,
+    at: Date.now(),
+    phase: "running",
+    activity: { callsSettled: 0 },
+  });
 const until = async (condition, what, ms = 5_000) => {
   const deadline = Date.now() + ms;
   while (!(await condition())) {
@@ -695,19 +704,7 @@ const pluginImg = rawPeer(`ws://127.0.0.1:${PORT_I}`, {
     if (msg.type === "EXECUTE_CODE") {
       const executionId = msg.id;
       clearInterval(pluginImg.heartbeat);
-      pluginImg.heartbeat = setInterval(
-        () =>
-          pluginImg.send(
-            JSON.stringify({
-              type: "RUN_STATUS",
-              executionId,
-              at: Date.now(),
-              phase: "running",
-              activity: { callsSettled: 0, pending: [], pendingCount: 0 },
-            }),
-          ),
-        200,
-      );
+      pluginImg.heartbeat = setInterval(() => pluginImg.send(runningStatus(executionId)), 200);
       // The urls repeat one entry on purpose: dedupe is the handler's job (the plugin is untrusted).
       const urls = msg.code === "boom run" ? ["boom"] : ["u1", "u1", "u2"];
       const preqId = msg.code === "boom run" ? "preq-2" : "preq-1";
@@ -844,19 +841,7 @@ console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse cha
 const runP = execute(bridgeC, linkC, { code: "two fetches" }).catch((e) => e);
 await wait(50);
 const executionIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
-const heartbeat = setInterval(
-  () =>
-    pluginC.send(
-      JSON.stringify({
-        type: "RUN_STATUS",
-        executionId: executionIdC,
-        at: Date.now(),
-        phase: "running",
-        activity: { callsSettled: 0, pending: [{ operation: "flcm.image", sinceMs: 0 }], pendingCount: 1 },
-      }),
-    ),
-  200,
-);
+const heartbeat = setInterval(() => pluginC.send(runningStatus(executionIdC)), 200);
 imageRequest("preq-f", executionIdC, ["fast"]);
 await wait(20);
 imageRequest("preq-s", executionIdC, ["slow"]);

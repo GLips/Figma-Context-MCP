@@ -42,14 +42,16 @@ test("a pending call is settled only by its own run's token, once, and never by 
   runs.enqueue(first, label); runs.markRunning(first);
   const font = runs.callStarted(first, "figma.loadFontAsync");
   const bad = runs.callStarted(first, "figma.no such call" as "figma.x");
-  assert.equal(runs.activity(first, Date.now()).pendingCount, 2);
-  assert.deepEqual(runs.activity(first, Date.now()).pending.map((call) => call.operation), ["figma.loadFontAsync"]);
+  assert.equal(runs.activity(first, Date.now()).oldestPending?.operation, "figma.loadFontAsync");
+  runs.callSettled(first, font);
+  // The bad name is still pending, counted but never named.
+  assert.equal(runs.activity(first, Date.now()).oldestPending, undefined);
   runs.callSettled(first, bad); runs.callSettled(first, bad);
-  assert.equal(runs.activity(first, Date.now()).callsSettled, 1);
+  assert.equal(runs.activity(first, Date.now()).callsSettled, 2);
   runs.settle(first);
   runs.enqueue(second, label); runs.markRunning(second);
   const edit = runs.callStarted(second, "flcm.edit");
   runs.callSettled(first, edit); runs.callSettled(second, font);
-  const { callsSettled, pending, pendingCount } = runs.activity(second, Date.now());
-  assert.deepEqual([callsSettled, pending.map((call) => call.operation), pendingCount], [0, ["flcm.edit"], 1]);
+  const { callsSettled, oldestPending } = runs.activity(second, Date.now());
+  assert.deepEqual([callsSettled, oldestPending?.operation], [0, "flcm.edit"]);
 });

@@ -36,8 +36,6 @@ import {
   DEFAULT_TIMEOUT_MS,
   type LedgerSubmitOptions,
   RunLedger,
-  type ChannelRunContext,
-  type RunWatch,
 } from "./run-ledger.js";
 import type { RunEvent } from "../entitlement/write-meter.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
@@ -498,14 +496,9 @@ export class PluginBridge {
     link: PluginLink,
     payload: T,
     executionId: ExecutionId,
-    {
-      signal,
-      runContext,
-      budgetMs,
-      onWaiting,
-    }: { signal?: AbortSignal; runContext?: ChannelRunContext } & RunWatch = {},
+    options: Omit<LedgerSubmitOptions, "id"> = {},
   ): Promise<ReplyFor<T["type"]>> {
-    return this.submit(link, payload, { id: executionId, signal, runContext, budgetMs, onWaiting });
+    return this.submit(link, payload, { ...options, id: executionId });
   }
 
   private submit<T extends LinkRequest>(

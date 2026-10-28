@@ -82,7 +82,10 @@ export function createRunExecutor({
   const runs = createRunRegistry({
     onQueueChange: () => {
       publishQueue(false);
-      if (runs.isIdle()) stopStatusBeat();
+      if (runs.isIdle() && statusBeat !== undefined) {
+        clearTimeout(statusBeat);
+        statusBeat = undefined;
+      }
     },
   });
   // The status heartbeat, armed while any run is tracked (scheduleStatusBeat).
@@ -144,11 +147,6 @@ export function createRunExecutor({
       publishQueue(true);
       if (!runs.isIdle()) scheduleStatusBeat();
     }, RUN_STATUS_INTERVAL_MS);
-  }
-
-  function stopStatusBeat(): void {
-    if (statusBeat !== undefined) clearTimeout(statusBeat);
-    statusBeat = undefined;
   }
 
   /** Accept a run: tracked from this moment, since a run can be cancelled or withdrawn while queued. */

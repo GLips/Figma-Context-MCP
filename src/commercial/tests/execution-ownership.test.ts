@@ -126,8 +126,7 @@ describe("link-owned execution", () => {
         cancelledForMs: 827_000,
         activity: {
           callsSettled: 412,
-          pending: [{ operation: "figma.loadFontAsync", sinceMs: 130_000 }],
-          pendingCount: 1,
+          oldestPending: { operation: "figma.loadFontAsync", sinceMs: 130_000 },
         },
       },
     });

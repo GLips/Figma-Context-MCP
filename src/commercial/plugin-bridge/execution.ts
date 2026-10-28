@@ -90,12 +90,9 @@ export async function executePluginCode(
   { executionId, intent, link, document, session: namedSession }: PluginCallTarget,
   code: string,
   // The caller's waiting policy (budget, and what to do behind a blocker) rides through untouched.
-  {
-    figma,
-    signal,
-    budgetMs,
-    onWaiting,
-  }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } & RunWatch = { figma: null },
+  { figma, ...watch }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } & RunWatch = {
+    figma: null,
+  },
 ): Promise<ExecutionOutcome> {
   // The upload grant comes from the code as submitted here, by the trusted caller — never from the
   // plugin, which executes the code and so could otherwise name any handle it has seen.
@@ -133,12 +130,16 @@ export async function executePluginCode(
           lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
         },
         executionId,
-        { signal, runContext, budgetMs, onWaiting },
+        { ...watch, runContext },
       )
       .catch((error: unknown) => {
-        charge.lost({ mayHaveRun: mayHaveRun(error) });
-        if (error instanceof BridgeRequestError && error.outcome === "unconfirmed")
+        // Only the bridge's proof that the run never started clears it. The last phase heard is no
+        // proof: a run can start executing while its "running" status is held behind a blocked thread.
+        if (error instanceof BridgeRequestError && error.outcome === "unconfirmed") {
+          charge.lost({ mayHaveRun: true });
           throw new ExecutionReplyLostError(error, session.handle);
+        }
+        charge.lost({ mayHaveRun: false });
         throw error;
       });
     if (reply.type === "EXECUTE_CODE_RESULT") {
@@ -164,20 +165,11 @@ export async function executePluginCode(
   }
 }
 
-/**
- * A failed submission may have touched the document unless the bridge proved it never started. The
- * last phase heard is no proof: a run can start executing while its "running" status is held behind a
- * blocked thread.
- */
-function mayHaveRun(error: unknown): boolean {
-  return error instanceof BridgeRequestError && error.outcome === "unconfirmed";
-}
-
 export async function capturePluginScreenshot(
   bridge: PluginBridgeRuntime["bridge"],
   { executionId, intent, link, document }: PluginCallTarget,
   target: { nodeId?: string; key?: string; scale?: number; context?: boolean; margin?: number },
-  { signal, budgetMs, onWaiting }: { signal?: AbortSignal } & RunWatch = {},
+  options: { signal?: AbortSignal } & RunWatch = {},
 ): Promise<
   { kind: "captured"; reply: ScreenshotResult } | { kind: "not-granted"; reason: NotGrantedReason }
 > {
@@ -185,7 +177,7 @@ export async function capturePluginScreenshot(
     link,
     { type: "SCREENSHOT", intent, documentId: document.documentId, ...target },
     executionId,
-    { signal, budgetMs, onWaiting },
+    options,
   );
   if (reply.type === "FIGMA_PAUSED") throw new FigmaPausedError(reply.pausedMs, document.fileName);
   return reply.type === "NOT_GRANTED"

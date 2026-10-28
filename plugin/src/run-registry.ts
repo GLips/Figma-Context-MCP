@@ -6,9 +6,9 @@
 // status and its cancellation are read from: its phase and place in the write chain, why it may not
 // continue, the calls its code has pending, and when its heartbeat last fired. "No row" is what
 // makes a cancel or a withdrawal answer `unknown`.
-import { isCallOperation, type CallOperation, type CancelDisposition, type QueueBlocker, type QueueWait, type RunActivity, type WithdrawOutcome } from "./protocol.js";
+import { isCallOperation, queueWaitKey, type CallOperation, type CancelAnswer, type QueueWait, type RunActivity, type WithdrawAnswer } from "./protocol.js";
 import type { CallToken, RunCancelCause } from "./preamble/host.js";
-import { inactivityExpired, queueWait, queueWaitKey, runActivity, type QueueRow } from "./run-status.js";
+import { inactivityExpired, queueWait, runActivity, type QueueRow } from "./run-status.js";
 
 // connKey identifies one socket generation, assigned by the relay iframe (ui.ts) and never reused,
 // so an old generation's settlement can only release its own run.
@@ -28,33 +28,14 @@ export interface RunLabel {
   session: string | null;
 }
 
-/** The answer to one CANCEL, as CANCEL_RESULT carries it. */
-interface PluginCancelAnswer {
-  disposition: CancelDisposition;
-  blocker?: QueueBlocker;
-}
-
-/** The answer to one WITHDRAW, as WITHDRAW_RESULT carries it. */
-interface PluginWithdrawAnswer {
-  outcome: WithdrawOutcome;
-  blocker?: QueueBlocker;
-}
-
 /** The causes that come from outside the run, so the only ones that can stop it while it is queued. */
 export type ExternalCancelCause = Exclude<RunCancelCause, "unresponsive">;
 export type ConnectionCancelCause = Exclude<ExternalCancelCause, "server">;
 
-/** A queued run's status that is due to go out. */
-interface DueQueueStatus {
-  ref: RunRef;
-  wait: QueueWait;
-}
-
-// At most one of `cancelled` and `unresponsive` is ever set: the first cause sticks.
 type Run = QueueRow & {
-  cancelled: ExternalCancelCause | null;
-  // Latched by the watchdog, which arms only once the run executes.
-  unresponsive: boolean;
+  // Why the run may not continue; the first cause sticks. "unresponsive" is latched by the watchdog,
+  // which arms only once the run executes.
+  cause: RunCancelCause | null;
   cancelListeners: Set<(cause: RunCancelCause) => void>;
   // The watchdog's clock: null until the run executes.
   lastTickAt: number | null;
@@ -73,12 +54,10 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
   let nextToken: CallToken = 0;
 
   const runOf = (ref: RunRef) => runs.get(runKey(ref.connKey, ref.id));
-  const causeOf = (run: Run): RunCancelCause | null => (run.unresponsive ? "unresponsive" : run.cancelled);
   // The first cause sticks: it is what happened first.
   const cancel = (run: Run, cause: RunCancelCause): void => {
-    if (causeOf(run)) return;
-    if (cause === "unresponsive") run.unresponsive = true;
-    else run.cancelled = cause;
+    if (run.cause) return;
+    run.cause = cause;
     run.cancelledAt = Date.now();
     const listeners = [...run.cancelListeners];
     run.cancelListeners.clear();
@@ -95,8 +74,7 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
         ...label,
         phase: "queued",
         frontAt: null,
-        cancelled: null,
-        unresponsive: false,
+        cause: null,
         cancelledAt: null,
         calls: null,
         cancelListeners: new Set(),
@@ -164,7 +142,7 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
      * Transport delivery is ordered, so a cancel either follows this run's enqueue or names one that
      * already settled. The latter is retained by nobody, so the table never leaks a row.
      */
-    recordCancellation(connKey: number, executionId: string): PluginCancelAnswer {
+    recordCancellation(connKey: number, executionId: string): CancelAnswer {
       const run = runs.get(runKey(connKey, executionId));
       if (!run) return { disposition: "unknown" };
       const { blocker } = waitOf(run, Date.now());
@@ -176,7 +154,7 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
      * Drop a run that hasn't started, in one step, so its dequeue finds no row and skips it. A run
      * at the front whose dequeue checks are still awaiting counts as not started.
      */
-    withdraw(connKey: number, executionId: string): PluginWithdrawAnswer {
+    withdraw(connKey: number, executionId: string): WithdrawAnswer {
       const key = runKey(connKey, executionId);
       const run = runs.get(key);
       if (!run) return { outcome: "unknown" };
@@ -194,11 +172,12 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
       const run = runOf(ref);
       if (!run) return null;
       if (run.lastTickAt !== null && inactivityExpired(Date.now(), run.lastTickAt)) cancel(run, "unresponsive");
-      return causeOf(run);
+      return run.cause;
     },
     /** Why a run still queued was cancelled, or null: only a cause from outside reaches one. */
     queuedCancellation(ref: RunRef): ExternalCancelCause | null {
-      return runOf(ref)?.cancelled ?? null;
+      const cause = runOf(ref)?.cause ?? null;
+      return cause === "unresponsive" ? null : cause;
     },
     /**
      * Hear the run's cancellation, as the CANCEL message is handled or the watchdog latches — the one
@@ -206,9 +185,8 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
      */
     onCancelled(ref: RunRef, listener: (cause: RunCancelCause) => void): () => void {
       const run = runOf(ref);
-      const cause = run && causeOf(run);
-      if (!run || cause) {
-        if (cause) listener(cause);
+      if (!run || run.cause) {
+        if (run?.cause) listener(run.cause);
         return () => {};
       }
       run.cancelListeners.add(listener);
@@ -219,8 +197,8 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
       for (const run of runs.values()) if (run.connKey === connKey) cancel(run, cause);
     },
     /** The queued statuses due now: every queued run's with `all`, else those whose wait changed. */
-    dueQueueStatuses(now: number, all: boolean): DueQueueStatus[] {
-      const due: DueQueueStatus[] = [];
+    dueQueueStatuses(now: number, all: boolean): { ref: RunRef; wait: QueueWait }[] {
+      const due = [];
       for (const run of runs.values()) {
         if (run.phase !== "queued") continue;
         const wait = waitOf(run, now);

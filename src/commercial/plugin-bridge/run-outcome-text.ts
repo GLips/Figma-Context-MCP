@@ -7,7 +7,7 @@
 // said. Pure, so the ledger keeps only timers and correlation.
 import {
   RUN_REQUEST_TYPES,
-  type PluginEvent,
+  type CancelAnswer,
   type QueueBlocker,
   type QueueWait,
   type RunActivity,
@@ -19,11 +19,6 @@ import { figmaPausedReason } from "./figma-paused.js";
 /** Why the server gave up on a request: the plugin's silence, the caller's budget, or the caller itself. */
 export type RunStopCause = "inactivity" | "budget" | "caller";
 
-/** What the plugin said about a run the instant a CANCEL for it landed (protocol CANCEL_RESULT). */
-export type CancelAnswer = Omit<
-  Extract<PluginEvent, { type: "CANCEL_RESULT" }>,
-  "type" | "executionId"
->;
 export const NO_CANCEL_ANSWER: CancelAnswer = { disposition: "unknown" };
 
 export interface StoppedRunFacts {
@@ -125,13 +120,6 @@ export function queueWaitText({ ahead, blocker }: QueueWait): string {
   );
 }
 
-/** Whether a person watching a queue would see anything new: its place, its blocker, or the blocker's cancellation. */
-export function queueWaitMoved(previous: QueueWait | null, next: QueueWait): boolean {
-  const key = ({ ahead, blocker }: QueueWait) =>
-    `${ahead}|${blocker?.executionId ?? ""}|${blocker?.cancelledForMs !== undefined}`;
-  return previous === null || key(previous) !== key(next);
-}
-
 /** What an MCP agent does about a code run its call's budget cut off. */
 export function mcpBudgetAdviceText(budgetMs: number, cliName: string): string {
   return (
@@ -176,11 +164,9 @@ function lastSeenText(latest: RunStatus | null, now: number): string {
     : `${ago} ${activitySummary(latest.activity)}.`;
 }
 
-function activitySummary({ callsSettled, pending, pendingCount }: RunActivity): string {
-  const oldest = pending[0];
-  const waiting = oldest
-    ? `${oldest.operation} pending for ${formatDuration(oldest.sinceMs)}` +
-      (pendingCount > 1 ? ` (${pendingCount} calls pending)` : "")
+function activitySummary({ callsSettled, oldestPending }: RunActivity): string {
+  const waiting = oldestPending
+    ? `${oldestPending.operation} pending for ${formatDuration(oldestPending.sinceMs)}`
     : "no call pending";
   return `${waiting}, ${callsSettled} ${callsSettled === 1 ? "call" : "calls"} settled`;
 }

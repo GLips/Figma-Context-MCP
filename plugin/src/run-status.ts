@@ -7,7 +7,6 @@
 // stands. The registry (run-registry.ts) holds the rows; nothing here keeps state.
 import {
   RUN_INACTIVITY_DEADLINE_MS,
-  RUN_STATUS_PENDING_LIMIT,
   type CallOperation,
   type QueueBlocker,
   type QueueWait,
@@ -37,13 +36,10 @@ interface RunCalls {
 }
 
 export function runActivity(calls: RunCalls | null, now: number): RunActivity {
-  if (!calls) return { callsSettled: 0, pending: [], pendingCount: 0 };
-  const pending = [];
-  for (const call of calls.pending.values()) {
-    if (pending.length === RUN_STATUS_PENDING_LIMIT) break;
-    if (call.operation) pending.push({ operation: call.operation, sinceMs: now - call.since });
-  }
-  return { callsSettled: calls.settled, pending, pendingCount: calls.pending.size };
+  if (!calls) return { callsSettled: 0 };
+  for (const { operation, since } of calls.pending.values())
+    if (operation) return { callsSettled: calls.settled, oldestPending: { operation, sinceMs: now - since } };
+  return { callsSettled: calls.settled };
 }
 
 /** One run as the queue sees it. */
@@ -86,12 +82,4 @@ export function queueWait(rows: readonly QueueRow[], row: QueueRow, now: number)
   const ahead = rows.indexOf(row);
   const front = rows[0];
   return ahead > 0 && front.frontAt !== null ? { ahead, blocker: queueBlocker(front, row.connKey, now) } : { ahead };
-}
-
-/** What a queued run is told again when it changes: heartbeat-only changes in activity aren't news. */
-export function queueWaitKey(wait: QueueWait): string {
-  const { blocker } = wait;
-  return blocker
-    ? `${wait.ahead}:${blocker.sameLink ? "same" : "other"}:${blocker.executionId}:${blocker.cancelledForMs !== undefined}`
-    : `${wait.ahead}`;
 }

@@ -115,9 +115,6 @@ export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
  */
 export const RUN_STATUS_INTERVAL_MS = 2_000;
 
-/** The most pending calls one RUN_STATUS names, oldest first; `pendingCount` carries the rest. */
-export const RUN_STATUS_PENDING_LIMIT = 3;
-
 /**
  * The longest the plugin waits between dials to a port that keeps refusing. A server that just
  * started, or just lost a link, hears from every open plugin within it.
@@ -171,12 +168,6 @@ export function isCallOperation(value: unknown): value is CallOperation {
   return typeof value === "string" && CALL_OPERATION.test(value);
 }
 
-/** A call the run is waiting on, and how long it had been waiting when the status was stamped. */
-export interface PendingCall {
-  operation: CallOperation;
-  sinceMs: number;
-}
-
 /**
  * What a running run has visibly done: diagnostic only. Nothing decides liveness or completion from
  * it; a slow Figma call and a hung one look the same here until the caller's budget runs out.
@@ -184,9 +175,8 @@ export interface PendingCall {
 export interface RunActivity {
   /** Calls the run has made that have returned or thrown, flcm verbs and figma.* alike. */
   callsSettled: number;
-  /** The oldest pending calls, at most RUN_STATUS_PENDING_LIMIT of them. */
-  pending: PendingCall[];
-  pendingCount: number;
+  /** The oldest named call still pending, and how long it had waited when the status was stamped. */
+  oldestPending?: { operation: CallOperation; sinceMs: number };
 }
 
 /**
@@ -218,6 +208,11 @@ export interface QueueWait {
   blocker?: QueueBlocker;
 }
 
+/** What a person watching a queued run would see change: its place, its blocker, or the blocker's cancellation. */
+export function queueWaitKey({ ahead, blocker }: QueueWait): string {
+  return `${ahead}|${blocker?.executionId ?? ""}|${blocker?.cancelledForMs !== undefined}`;
+}
+
 // Clamped, never refused: the durations a status reports grow with exactly the runs it exists to
 // describe, and dropping the report for a run that has gone on for days would leave its callers blind.
 const DAY_MS = 86_400_000;
@@ -227,24 +222,21 @@ const count = (value: unknown): number | null =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
 function parseRunActivity(value: unknown): RunActivity | null {
-  if (!isRecord(value) || !Array.isArray(value.pending)) return null;
-  const callsSettled = count(value.callsSettled);
-  const pendingCount = count(value.pendingCount);
-  if (callsSettled === null || pendingCount === null) return null;
-  const pending: PendingCall[] = [];
-  for (const call of value.pending.slice(0, RUN_STATUS_PENDING_LIMIT)) {
-    const sinceMs = isRecord(call) ? clampMs(call.sinceMs) : null;
-    if (isRecord(call) && isCallOperation(call.operation) && sinceMs !== null) pending.push({ operation: call.operation, sinceMs });
-  }
-  return { callsSettled, pending, pendingCount: Math.max(pendingCount, pending.length) };
+  const callsSettled = isRecord(value) ? count(value.callsSettled) : null;
+  if (!isRecord(value) || callsSettled === null) return null;
+  const activity: RunActivity = { callsSettled };
+  const call = value.oldestPending;
+  const sinceMs = isRecord(call) ? clampMs(call.sinceMs) : null;
+  if (isRecord(call) && isCallOperation(call.operation) && sinceMs !== null) activity.oldestPending = { operation: call.operation, sinceMs };
+  return activity;
 }
 
-function parseQueueBlocker(value: unknown): QueueBlocker | null {
-  if (!isRecord(value) || !isExecutionId(value.executionId)) return null;
+function parseQueueBlocker(value: unknown): QueueBlocker | undefined {
+  if (!isRecord(value) || !isExecutionId(value.executionId)) return undefined;
   const runningForMs = clampMs(value.runningForMs);
-  if (runningForMs === null || (value.kind !== "code" && value.kind !== "screenshot") || typeof value.sameLink !== "boolean") return null;
+  if (runningForMs === null || (value.kind !== "code" && value.kind !== "screenshot") || typeof value.sameLink !== "boolean") return undefined;
   const intent = parseIntent(value.intent);
-  if (intent.kind !== "intent") return null;
+  if (intent.kind !== "intent") return undefined;
   const blocker: QueueBlocker = { executionId: value.executionId, kind: value.kind, sameLink: value.sameLink, intent: intent.intent, runningForMs };
   // A handle is bearer-like within its grant scope: another link's never crosses, whatever was sent.
   if (value.sameLink && isSessionHandle(value.session)) blocker.session = value.session;
@@ -956,17 +948,8 @@ export type PluginEvent =
   // plugin's stamp: a frame leaves only once the thread goes idle, so arrival can be seconds late,
   // and a late status must not buy a fresh deadline.
   | RunStatus
-  // The answer to a CANCEL. A never-executed one names the run it was queued behind, when there was one.
-  | {
-      type: "CANCEL_RESULT";
-      executionId: string;
-      disposition: CancelDisposition;
-      figmaPausedMs?: number;
-      blocker?: QueueBlocker;
-    }
-  // The answer to a WITHDRAW: dropped before it ran, already running (and left alone), or not
-  // tracked (settled first, or never a run). A withdrawn one names its blocker, when there was one.
-  | { type: "WITHDRAW_RESULT"; executionId: string; outcome: WithdrawOutcome; blocker?: QueueBlocker }
+  | ({ type: "CANCEL_RESULT"; executionId: string } & CancelAnswer)
+  | ({ type: "WITHDRAW_RESULT"; executionId: string } & WithdrawAnswer)
   // The document changed after the run's reply said it hadn't. At most one per run.
   | { type: "RUN_CHANGED"; executionId: string }
   // The run's late-change watch closed with no change: nothing more will be reported for it. Never
@@ -982,6 +965,21 @@ export type RunStatus =
   | { type: "RUN_STATUS"; executionId: string; at: number; phase: "queued"; wait: QueueWait }
   | { type: "RUN_STATUS"; executionId: string; at: number; phase: "running"; activity: RunActivity };
 
+/** The answer to a CANCEL. A never-executed one names the run it was queued behind, when there was one. */
+export interface CancelAnswer {
+  disposition: CancelDisposition;
+  figmaPausedMs?: number;
+  blocker?: QueueBlocker;
+}
+
+/**
+ * The answer to a WITHDRAW: dropped before it ran, already running (and left alone), or not tracked
+ * (settled first, or never a run). A withdrawn one names its blocker, when there was one.
+ */
+export interface WithdrawAnswer {
+  outcome: WithdrawOutcome;
+  blocker?: QueueBlocker;
+}
 export const WITHDRAW_OUTCOMES = ["withdrawn", "running", "unknown"] as const;
 export type WithdrawOutcome = (typeof WITHDRAW_OUTCOMES)[number];
 

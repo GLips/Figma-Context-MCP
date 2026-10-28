@@ -11,20 +11,20 @@ import {
   RUN_INACTIVITY_DEADLINE_MS,
   RUN_REQUEST_TYPES,
   parseReply,
+  type CancelAnswer,
   type PluginReply,
-  type QueueBlocker,
   type QueueWait,
   type RunPhase,
   type RunStatus,
   type ServerRequest,
   type ServerRequestType,
+  type WithdrawAnswer,
   type WithdrawOutcome,
 } from "@framelink/plugin/protocol";
 import {
   NO_CANCEL_ANSWER,
   stoppedRunText,
   withdrawnRunText,
-  type CancelAnswer,
   type RunStopCause,
 } from "./run-outcome-text.js";
 import type { FigmaService } from "~/services/figma.js";
@@ -159,12 +159,6 @@ export interface RunLedgerOptions {
   trace: RequestTrace;
   /** How long the plugin has been gone, for the wording of a non-run request its drop cut short. */
   disconnectedDurationMs(): number | null;
-}
-
-/** What the plugin said about a withdrawn run (protocol WITHDRAW_RESULT). */
-export interface WithdrawAnswer {
-  outcome: WithdrawOutcome;
-  blocker?: QueueBlocker;
 }
 
 /** A frame the ledger is holding something for, until the link it went out on answers it. */

@@ -21,13 +21,9 @@ import {
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
 import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
-import {
-  MAX_INTENT_LENGTH,
-  MAX_SCREENSHOT_SCALE,
-  type QueueWait,
-} from "@framelink/plugin/protocol";
+import { MAX_INTENT_LENGTH, MAX_SCREENSHOT_SCALE, queueWaitKey } from "@framelink/plugin/protocol";
 import type { RunWatch } from "~/commercial/plugin-bridge/run-ledger.js";
-import { queueWaitMoved, queueWaitText } from "~/commercial/plugin-bridge/run-outcome-text.js";
+import { queueWaitText } from "~/commercial/plugin-bridge/run-outcome-text.js";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
   GRANT_WAITING_TEXT,
@@ -367,10 +363,10 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
  * line when its place, its blocker, or the blocker's cancellation changes, never per heartbeat.
  */
 function printingQueueMoves(): RunWatch["onWaiting"] {
-  let shown: QueueWait | null = null;
+  let shown: string | null = null;
   return ({ wait }) => {
-    if (!queueWaitMoved(shown, wait)) return;
-    shown = wait;
+    if (queueWaitKey(wait) === shown) return;
+    shown = queueWaitKey(wait);
     console.error(queueWaitText(wait));
   };
 }

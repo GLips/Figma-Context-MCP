@@ -38,12 +38,15 @@ async function pluginBridge() {
   return { bridge, socket };
 }
 
-const runningStatus = (executionId: string, pending: { operation: string; sinceMs: number }[]) => ({
+const runningStatus = (
+  executionId: string,
+  oldestPending?: { operation: string; sinceMs: number },
+) => ({
   type: "RUN_STATUS",
   executionId,
   at: Date.now(),
   phase: "running",
-  activity: { callsSettled: 3, pending, pendingCount: pending.length },
+  activity: { callsSettled: 3, oldestPending },
 });
 const queuedStatus = (executionId: string, ahead: number, blocker?: QueueBlocker) => ({
   type: "RUN_STATUS",
@@ -136,13 +139,13 @@ describe("liveness is the plugin's heartbeat", () => {
     for (let elapsed = 2_000; elapsed <= 20_000; elapsed += 2_000) {
       await vi.advanceTimersByTimeAsync(2_000);
       socket.receive(
-        runningStatus(id, [{ operation: "figma.loadFontAsync", sinceMs: elapsed - 2_000 }]),
+        runningStatus(id, { operation: "figma.loadFontAsync", sinceMs: elapsed - 2_000 }),
       );
     }
     expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
     // Arrives now, but stamped long ago: the plugin's thread was held, so it re-arms nothing.
     await vi.advanceTimersByTimeAsync(5_000);
-    socket.receive({ ...runningStatus(id, []), at: Date.now() - 30_000 });
+    socket.receive({ ...runningStatus(id), at: Date.now() - 30_000 });
     await vi.advanceTimersByTimeAsync(9_999);
     expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -175,7 +178,7 @@ describe("liveness is the plugin's heartbeat", () => {
         .then(() =>
           socket.receive(queuedStatus(id, elapsed < 20_000 ? 3 : elapsed < 40_000 ? 2 : 1)),
         );
-    socket.receive(runningStatus(id, []));
+    socket.receive(runningStatus(id));
     socket.receive(executed(id));
     expect(await call).toMatchObject({ type: "EXECUTE_CODE_RESULT", result: "done" });
     expect([...new Set(waits.map((w) => w.ahead))]).toEqual([3, 2, 1]);
@@ -229,7 +232,7 @@ describe("the MCP tools' waiting policy", () => {
       const id = await mcp.submitted();
       mcp.socket.receive(queuedStatus(id, 1, cancelledBlocker()));
       mcp.socket.receive({ type: "WITHDRAW_RESULT", executionId: id, outcome: "running" });
-      mcp.socket.receive(runningStatus(id, []));
+      mcp.socket.receive(runningStatus(id));
       mcp.socket.receive(executed(id));
       const reply = await result;
       expect(reply.isError).toBeFalsy();
@@ -247,7 +250,7 @@ describe("the MCP tools' waiting policy", () => {
       const id = await mcp.submitted();
       const cancelled = () => mcp.socket.frames.some((f) => f.type === "CANCEL");
       for (let i = 0; i < 22 && !cancelled(); i++) {
-        mcp.socket.receive(runningStatus(id, [{ operation: "flcm.render", sinceMs: i * 2_000 }]));
+        mcp.socket.receive(runningStatus(id, { operation: "flcm.render", sinceMs: i * 2_000 }));
         await vi.advanceTimersByTimeAsync(2_000);
       }
       await vi.advanceTimersByTimeAsync(1_000);

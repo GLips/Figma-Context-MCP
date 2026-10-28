@@ -30,7 +30,7 @@ const running = (id: string, operation: string, extra: Record<string, unknown> =
   executionId: id,
   at: Date.now(),
   phase: "running",
-  activity: { callsSettled: 2, pending: [{ operation, sinceMs: 0, ...extra }], pendingCount: 1 },
+  activity: { callsSettled: 2, oldestPending: { operation, sinceMs: 0, ...extra } },
 });
 test("statuses are logged as counts only, and a late result is diagnostic only", async () => {
   vi.useFakeTimers();
@@ -71,7 +71,6 @@ test("statuses are logged as counts only, and a late result is diagnostic only",
     phase: "running",
     operation: "figma.loadFontAsync",
     callsSettled: 2,
-    pendingCount: 1,
   });
   expect(JSON.stringify(trace.snapshot(id))).not.toMatch(/secret|private|response content/);
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);

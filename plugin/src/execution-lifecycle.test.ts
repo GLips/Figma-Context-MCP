@@ -1008,7 +1008,7 @@ test("a raw run the server gave up on ends at once, and a run queued behind it h
   assert.equal(answers[1].disposition, "never-executed");
   assert.deepEqual(
     [blocker.executionId, blocker.kind, blocker.sameLink, blocker.session, blocker.intent, typeof blocker.cancelledForMs, blocker.activity],
-    ["raw", "code", true, "shared-session-project-one", "Run raw", "number", { callsSettled: 1, pending: [], pendingCount: 0 }],
+    ["raw", "code", true, "shared-session-project-one", "Run raw", "number", { callsSettled: 1 }],
   );
   assert.match((await h.result("raw")).errors, /the server cancelled this run while your code was still awaiting/);
 });
@@ -1072,11 +1072,11 @@ test("a run awaiting a Figma call that never settles keeps its heartbeat, naming
   }
   const beats = h.statuses("font", "running").slice(1).map((status) => status.activity);
   assert.equal(beats.length, 10);
-  for (const [beat, { callsSettled, pending, pendingCount }] of beats.entries()) {
-    assert.deepEqual([callsSettled, pending.map((call: { operation: string }) => call.operation), pendingCount], [0, ["figma.loadFontAsync"], 1]);
+  for (const [beat, { callsSettled, oldestPending }] of beats.entries()) {
+    assert.deepEqual([callsSettled, oldestPending.operation], [0, "figma.loadFontAsync"]);
     // At least the time the test moved the clock: the real clock runs on beneath it.
-    assert.ok(pending[0].sinceMs >= (beat + 1) * RUN_STATUS_INTERVAL_MS, `beat ${beat}: ${pending[0].sinceMs}`);
-    if (beat > 0) assert.ok(pending[0].sinceMs > beats[beat - 1].pending[0].sinceMs);
+    assert.ok(oldestPending.sinceMs >= (beat + 1) * RUN_STATUS_INTERVAL_MS, `beat ${beat}: ${oldestPending.sinceMs}`);
+    if (beat > 0) assert.ok(oldestPending.sinceMs > beats[beat - 1].oldestPending.sinceMs);
   }
   // Cancelled, the never-settling await ends the run, and the run queued behind it executes.
   h.sendFrame(1, { type: "CANCEL", executionId: "font" });
