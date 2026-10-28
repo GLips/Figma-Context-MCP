@@ -82,8 +82,18 @@ interface UnsettledExecution {
    * can't all pass the gate on the same last Write. Then the end of its late window.
    */
   lateWindowEndsAt: number;
-  /** Charged when the late window closes: a lost run the plugin hasn't yet cleared. */
-  chargedOnClose: boolean;
+  /** The caller lost the run's answer while it may have run. */
+  lostUnconfirmed: boolean;
+  /** The plugin said the run changed nothing, whenever that arrived relative to the caller's loss. */
+  reportedUnchanged: boolean;
+}
+
+/**
+ * A lost run the plugin hasn't cleared: a Write recorded when its window closes, and reserved until
+ * then so a retry can't spend the same last Write.
+ */
+function chargedOnClose(execution: UnsettledExecution): boolean {
+  return execution.lostUnconfirmed && !execution.reportedUnchanged;
 }
 
 export class WriteMeter {
@@ -138,7 +148,8 @@ export class WriteMeter {
       figmaUserId: decision.figmaUserId,
       link,
       lateWindowEndsAt: Infinity,
-      chargedOnClose: false,
+      lostUnconfirmed: false,
+      reportedUnchanged: false,
     });
     return {
       kind: "authorized",
@@ -161,7 +172,7 @@ export class WriteMeter {
     if (event.type === "neverRan") return this.settle(event.executionId, false);
     // The run's own word that it changed nothing so far: only a later change charges it now.
     if (event.type === "orphanReply" && !event.reply.documentChanged) {
-      execution.chargedOnClose = false;
+      execution.reportedUnchanged = true;
       return;
     }
     // A change seen during the run, after its reply, or after its caller gave up: all one Write.
@@ -195,7 +206,10 @@ export class WriteMeter {
     const figmaUserId = owner?.figmaUserId;
     let reserved = 0;
     for (const execution of this.unsettled.values())
-      if (execution.figmaUserId === figmaUserId && execution.lateWindowEndsAt === Infinity)
+      if (
+        execution.figmaUserId === figmaUserId &&
+        (execution.lateWindowEndsAt === Infinity || chargedOnClose(execution))
+      )
         reserved++;
     return this.access.decide(owner, reserved);
   }
@@ -203,13 +217,13 @@ export class WriteMeter {
   /**
    * The caller is done with the execution. A Write is recorded now; otherwise its reservation ends
    * and the late window opens, for a change the plugin reports after the reply, or for a lost run
-   * (`chargedOnClose`) the plugin's word that it never ran.
+   * (`lostUnconfirmed`) the plugin's word that it never ran or changed nothing.
    */
-  private callerFinished(executionId: ExecutionId, wrote: boolean, chargedOnClose = false): void {
+  private callerFinished(executionId: ExecutionId, wrote: boolean, lostUnconfirmed = false): void {
     const execution = this.unsettled.get(executionId);
     if (!execution || execution.lateWindowEndsAt !== Infinity) return;
     if (wrote) return this.settle(executionId, true);
-    execution.chargedOnClose = chargedOnClose;
+    execution.lostUnconfirmed = lostUnconfirmed;
     execution.lateWindowEndsAt = this.now().getTime() + LATE_DOCUMENT_CHANGE_MS;
     this.closeExpiredWindows();
   }
@@ -229,7 +243,7 @@ export class WriteMeter {
     for (const [executionId, execution] of this.unsettled)
       if (execution.lateWindowEndsAt <= now) {
         this.unsettled.delete(executionId);
-        if (execution.chargedOnClose) this.access.recordWrite(execution.figmaUserId, executionId);
+        if (chargedOnClose(execution)) this.access.recordWrite(execution.figmaUserId, executionId);
         closed = true;
       }
     if (closed) this.wakeSettleWaiters();

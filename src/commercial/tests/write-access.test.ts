@@ -368,6 +368,40 @@ describe("write authorization", () => {
     expect(app.reportedExecutionIds).toEqual([silent]);
   });
 
+  it("lets the plugin's word that a run changed nothing win over a loss its caller reports after it", async () => {
+    const { app, writeAccess } = await setup();
+    let now = 0;
+    const meter = new WriteMeter(writeAccess, { now: () => new Date(now) });
+    const link = TEST_PLUGIN_LINK;
+    const executionId = mintExecutionId();
+    const admission = await meter.authorize(link, executionId);
+    if (admission.kind !== "authorized") throw new Error("a Write still fits the allowance");
+    // The result crossed the budget's CANCEL; the caller, told only "unknown", reports a loss after it.
+    meter.runEvent({
+      type: "orphanReply",
+      executionId,
+      link,
+      reply: { type: "EXECUTE_CODE_RESULT", console: [], errors: null, documentChanged: false },
+    });
+    admission.charge.lost({ mayHaveRun: true });
+    now = LATE_CHANGE_WINDOW_MS + 30_000;
+    await meter.drain(new AbortController().signal);
+    await writeAccess.reportWriteUsage(USER_ID);
+    expect(app.reportedExecutionIds).toEqual([]);
+  });
+
+  it("reserves a lost run's pending Write, so a retry can't spend the same last one", async () => {
+    const { writeAccess, writeMeter } = await setup();
+    spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
+    const lost = mintExecutionId();
+    const admission = await writeMeter.authorize(TEST_PLUGIN_LINK, lost);
+    if (admission.kind !== "authorized") throw new Error("one Write still fits the allowance");
+    admission.charge.lost({ mayHaveRun: true });
+    expect(await gateAnswer(writeMeter)).toMatchObject({ reason: "allowance-exhausted" });
+    writeMeter.runEvent({ type: "neverRan", executionId: lost, link: TEST_PLUGIN_LINK });
+    expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "authorized" });
+  });
+
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {
     const { store, writeMeter, signIn } = await setup();
     await signIn.start(TEST_PLUGIN_OWNER);
