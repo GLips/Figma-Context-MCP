@@ -59,6 +59,9 @@ class PendingNodeCandidate {
   constructor(readonly candidate: NodeCandidate, readonly figma: FigmaAsked) {
     this.identity = readNodeIdentity(candidate);
     this.isNode = figma.isFigmaNode(candidate);
+    // Awaited only when the snapshot resolves; a lookup the run's cancel abandons before then must
+    // not surface as an unhandled rejection.
+    this.isNode.catch(() => {});
   }
 }
 

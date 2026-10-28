@@ -738,7 +738,7 @@ it("after a server restart, an unnamed call waits for the granted file's plugin 
   });
 });
 
-it("a reconnect during a run leaves its outcome unknown, names its session, and never runs it a second time", async () => {
+it("a reconnect during a run stops it, leaves its outcome unknown, names its session, and never runs it a second time", async () => {
   const bridge = startBridge(dir, ports[0]);
   const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   await pairByPanel(bridge, plugin);
@@ -761,12 +761,10 @@ it("a reconnect during a run leaves its outcome unknown, names its session, and 
   expect(lost.message).toContain(lost.session);
 
   await settlesTo(bridge, "linked");
-  // Queued behind the interrupted run, so this reads what it did once it has finished.
+  // Queued behind the interrupted run, so this reads what it did once it has ended. The dropped link
+  // stopped it before it returned, so it ran once and recorded no last.
   const read = "return [globalThis.runs, session.last];";
-  expect((await runIn(bridge, { session: lost.session }, read)).reply.result).toEqual([
-    1,
-    "interrupted run's result",
-  ]);
+  expect((await runIn(bridge, { session: lost.session }, read)).reply.result).toEqual([1, null]);
 });
 
 it("a handle passed with another document refuses without running, and without asking either panel", async () => {

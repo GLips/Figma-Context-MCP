@@ -1010,7 +1010,7 @@ test("a raw run the server gave up on ends at once, and a run queued behind it h
     [blocker.executionId, blocker.kind, blocker.sameLink, blocker.session, blocker.intent, typeof blocker.cancelledForMs, blocker.activity],
     ["raw", "code", true, "shared-session-project-one", "Run raw", "number", { callsSettled: 1 }],
   );
-  assert.match((await h.result("raw")).errors, /the server cancelled this run while your code was still awaiting/);
+  assert.match((await h.result("raw")).errors, /your code was still awaiting when the server cancelled this run/);
 });
 
 test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the run stays refused after it ends", async (t) => {
@@ -1039,7 +1039,7 @@ test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, a
   await refused;
   // The thread yielded, so the overdue heartbeat fires at last, and the latched run ends.
   t.mock.timers.tick(RUN_STATUS_INTERVAL_MS);
-  assert.match((await h.result("loop")).errors, /plugin ran no timer for 15s during this run, so it stopped the run/);
+  assert.match((await h.result("loop")).errors, /your code was still awaiting when the plugin ran no timer for 15s during this run/);
   release();
   await h.context.hold;
   await new Promise((resolve) => setImmediate(resolve));
@@ -1120,7 +1120,7 @@ test("a cancelled run whose code awaits forever still ends, and its leftover cod
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble, code: "return 'ran';" });
   await h.running("forever", 1);
   h.sendFrame(1, { type: "CANCEL", executionId: "forever" });
-  assert.match((await h.result("forever")).errors, /the server cancelled this run while your code was still awaiting, so the run stops here/);
+  assert.match((await h.result("forever")).errors, /your code was still awaiting when the server cancelled this run, so the run stops here/);
   assert.equal((await h.result("behind")).result, "ran");
   wake();
   await h.context.later;
@@ -1129,10 +1129,22 @@ test("a cancelled run whose code awaits forever still ends, and its leftover cod
   assert.match(h.context.writes[0], /server cancelled this run, so figma\.createRectangle and every figma\.\* access after it is refused/);
 });
 
-test("a run whose code returned keeps its status and its place until its reply goes out", async (t) => {
-  // A logged node is checked with Figma after the code returns, and Figma can take its time.
-  let answer!: () => void;
-  const h = host({ getNodeByIdAsync: () => new Promise((resolve) => { answer = () => resolve(null); }) });
+test("a cancelled run ends while Figma runs no timers, so the run behind it still starts", async () => {
+  const h = host();
+  await h.connect(1);
+  const preamble = await realPreamble;
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "forever", preamble, code: "await new Promise(() => {});" });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble, code: "return 'ran';" });
+  await h.running("forever", 1);
+  h.pauseFigma();
+  h.sendFrame(1, { type: "CANCEL", executionId: "forever" });
+  assert.match((await h.result("forever")).errors, /your code was still awaiting when the server cancelled this run/);
+  assert.equal((await h.result("behind")).result, "ran");
+});
+
+test("a run whose code returned keeps its status and its place until its reply goes out, and a cancel ends a node lookup Figma never answers", async (t) => {
+  // A logged node is checked with Figma after the code returns, and Figma can leave it pending forever.
+  const h = host({ getNodeByIdAsync: () => new Promise(() => {}) });
   await h.connect(1);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "logs", preamble: echoPreamble, code: `class Node { id = "1:2"; removed = false; } console.log(new Node()); return 1;` });
@@ -1143,8 +1155,9 @@ test("a run whose code returned keeps its status and its place until its reply g
   assert.equal(h.statuses("behind", "queued").at(-1).wait.blocker.executionId, "logs");
   h.sendFrame(1, { type: "CANCEL", executionId: "logs" });
   assert.equal(h.sent.find(({ frame: f }) => f.type === "CANCEL_RESULT")?.frame.disposition, "was-running");
-  answer();
-  await h.result("logs");
+  const ended = await h.result("logs");
+  assert.deepEqual(JSON.parse(JSON.stringify([ended.result, ended.console])), [1, []]);
+  assert.match(ended.errors, /Figma was still looking up a node your code logged or returned when the server cancelled this run/);
   assert.equal((await h.result("behind")).result, 2);
 });
 

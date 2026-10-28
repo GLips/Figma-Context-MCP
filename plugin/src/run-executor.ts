@@ -35,12 +35,16 @@ const CANCELLED_WHILE_QUEUED: Record<ExternalCancelCause, string> = {
 };
 const WITHDRAWN_WHILE_QUEUED = "this run was withdrawn by its server while it was still queued";
 
-// What ends a run whose code was still awaiting when it was cancelled, by cause.
-const CANCELLED_WHILE_AWAITING: Record<Exclude<RunCancelCause, "disconnected">, string> = {
-  server: "the server cancelled this run while your code was still awaiting",
-  revoked: "the human revoked this project's grant on the file while your code was still awaiting",
-  unresponsive: `the plugin ran no timer for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run, so it stopped the run`,
+// What ended a run whose code or node lookup was still pending, by cause.
+const RUN_CANCELLED_BY: Record<RunCancelCause, string> = {
+  server: "the server cancelled this run",
+  disconnected: "this run's server disconnected",
+  revoked: "the human revoked this project's grant on the file",
+  unresponsive: `the plugin ran no timer for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run and stopped it`,
 };
+// Microtask hops before the run's own cancel rejection lands. A turn of the timer queue would be
+// simpler, but Figma can stall timers while it still delivers the CANCEL.
+const CANCEL_REJECTION_HOPS = 16;
 
 // The reply owed to a request whose run never started, by kind.
 const codeNotRun = (to: ReplyTo, reason: string): void =>
@@ -204,20 +208,21 @@ export function createRunExecutor({
   }
 
   /**
-   * The agent's code, unless the run is cancelled first: its own awaits (a figma.on promise, a node
-   * export, a promise that never settles) are no call the preamble can race, and the run must still
-   * end so the queue moves. Code left running is refused at its next figma.* access or verb.
+   * `work`, unless the run is cancelled first, whatever the cause: the agent's own awaits (a figma.on
+   * promise, a node export, a promise that never settles) and the host's node lookups are no call the
+   * preamble can race, and the run must still end so the queue moves. Code left running is refused at
+   * its next figma.* access or verb. `pending` says what was still going on.
    */
-  function untilRunCancelled<T>(to: RunRef, code: Promise<T>): Promise<T> {
+  function untilRunCancelled<T>(to: RunRef, work: PromiseLike<T>, pending: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      // A turn later, so a refusal that names what was pending (awaitNative, a server call) reaches
-      // the agent first; this only ends code that nothing else will. A dropped link is no request to
-      // stop: that run finishes, so a reconnected agent can read its session.last.
+      // Deferred, so a refusal that names what was pending (awaitNative, a server call) reaches the
+      // agent first; this only ends work that nothing else will.
       const unsubscribe = runs.onCancelled(to, (cause) => {
-        if (cause === "disconnected") return;
-        setTimeout(() => reject(new FlcmError("run-ended", `${CANCELLED_WHILE_AWAITING[cause]}, so the run stops here.`)), 0);
+        let hops = Promise.resolve();
+        for (let hop = 0; hop < CANCEL_REJECTION_HOPS; hop++) hops = hops.then();
+        void hops.then(() => reject(new FlcmError("run-ended", `${pending} when ${RUN_CANCELLED_BY[cause]}, so the run stops here.`)));
       });
-      code.then(
+      work.then(
         (value) => { unsubscribe(); resolve(value); },
         (error: unknown) => { unsubscribe(); reject(error); },
       );
@@ -246,6 +251,9 @@ export function createRunExecutor({
       return;
     }
     beginRun(to);
+    const isFigmaNode = isFigmaNodeAsking((id) =>
+      untilRunCancelled(to, figma.getNodeByIdAsync(id), "Figma was still looking up a node your code logged or returned"),
+    );
     // How the run ended, kept for its host once the row goes (agent-figma.ts refuses on it).
     let endedBy: RunCancelCause | null = null;
     try {
@@ -325,7 +333,11 @@ export function createRunExecutor({
         // Indirect eval gives agent code global scope, never this function's host/transport locals.
         // Its `figma` is the preamble's (agent-figma.ts), shadowing the global: the one the run's
         // cancellation can stop.
-        const raw = await untilRunCancelled(to, (0, eval)(wrapAgentCode(code))(flcm, session, built.agentFigma()));
+        const raw = await untilRunCancelled(
+          to,
+          (0, eval)(wrapAgentCode(code))(flcm, session, built.agentFigma()),
+          "your code was still awaiting",
+        );
         // A live node anywhere in the result is refused here, with its path (serialize.ts).
         result = await serializeForWire(runtime.projectForEgress(raw, "result"), isFigmaNode, "result");
         // Session capture is optional; its narrower data contract must not reject a valid wire result.
@@ -379,7 +391,8 @@ export function createRunExecutor({
           consoleLog.push(`[${level}] ${line.map(stringifyArg).join(" ")}`);
         } catch (err) {
           // A cycle through an object Figma disowned is only found now, past the console.log it would
-          // have thrown from, so it fails the run the way that throw would have.
+          // have thrown from, so it fails the run the way that throw would have. A lookup the run's
+          // cancel abandoned drops just its line; the lines already resolved still go out.
           errorMessage ??= formatFailureForAgent(err);
         }
       }
@@ -520,10 +533,10 @@ export function createRunExecutor({
 // object's own `removed` decides whether to ask: true is a node Figma removed, false a node Figma
 // should hold, and an object with neither is no node. Read again after the answer: the script runs on
 // while Figma is asked, and a node it removes meanwhile is answered null.
-const isFigmaNode: IsFigmaNode = async (value) => {
+const isFigmaNodeAsking = (lookup: (id: string) => Promise<BaseNode | null>): IsFigmaNode => async (value) => {
   const removed = (): unknown => value.removed;
   if (removed() !== false) return removed() === true;
-  return (await figma.getNodeByIdAsync(value.id)) === value || removed() === true;
+  return (await lookup(value.id)) === value || removed() === true;
 };
 
 function stringifyArg(value: unknown): string {
