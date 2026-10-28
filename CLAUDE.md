@@ -15,6 +15,8 @@ It runs as a long-lived local process on user machines holding a user's Figma to
 
 `pnpm run` for full list of commands.
 
+In dev (`pnpm dev`), everything reloads on its own: the server rebuilds and restarts on a source change, and the plugin hot-loads its new build in Figma. Never ask for a server restart or a plugin re-import before testing live, even after a protocol bump.
+
 ## Architecture
 
 A pnpm workspace with three private members, never published on their own. The first two are bundled into `dist` by the root build:
