@@ -249,33 +249,12 @@ export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
  * Await a Figma call, reported as pending, and abandoned if the run is cancelled first. Figma can leave a call
  * pending forever — loadFontAsync in a file whose window is in the background, seen live — with the
  * plugin's timers stalled too, so no timeout could end it; without this the run never replies and
- * every run behind it waits.
- *
- * `patience` bounds a call whose stall is known to leave the plugin's timers running (a page switch,
- * seen live): past `afterMs` the await rejects with its error, so the run replies with what happened
- * instead of waiting out its caller's budget.
+ * every run behind it waits. The preamble's own scene access (scene-access.ts) routes every Figma
+ * promise through here.
  */
-export async function awaitNative<T>(
-  operation: `figma.${string}`,
-  run: () => Promise<T>,
-  patience?: { afterMs: number; stalled: () => FlcmError },
-): Promise<T> {
-  let patienceTimer: ReturnType<typeof setTimeout> | undefined;
-  const outwaited = patience
-    ? new Promise<never>((_, reject) => {
-        // A throw while composing the error must still settle the race, or the run hangs after all.
-        patienceTimer = setTimeout(() => {
-          try { reject(patience.stalled()); } catch (failure) { reject(failure); }
-        }, patience.afterMs);
-      })
-    : null;
-  try {
-    // Reported until Figma's own promise settles, not the race: a call abandoned here is still pending in Figma.
-    const native = reportCall(operation, run);
-    return await untilCancelled(operation, outwaited ? Promise.race([native, outwaited]) : native);
-  } finally {
-    if (patienceTimer !== undefined) clearTimeout(patienceTimer);
-  }
+export async function awaitNative<T>(operation: `figma.${string}`, run: () => PromiseLike<T>): Promise<T> {
+  // Reported until Figma's own promise settles, not the race: a call abandoned here is still pending in Figma.
+  return untilCancelled(operation, reportCall(operation, run));
 }
 
 /** Host ownership supplies lifetime; the server-shipped initializer supplies data policy. */

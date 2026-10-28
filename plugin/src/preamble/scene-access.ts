@@ -24,6 +24,7 @@
  */
 import { componentPath, isSublayerId, liveSublayerId, outermostInstanceId } from "@framelink/core";
 import { FlcmError, describeNodeIdentity } from "./flcm-error.js";
+import { awaitNative, isThenable } from "./host.js";
 import { isInheritedSlotContent, slotOwnerOf } from "./identity.js";
 import { warnings } from "./warnings.js";
 import { runSession } from "./run-session.js";
@@ -113,6 +114,30 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
     }
     if (isNode(value)) return stateOf(value).view;
     return value;
+  }
+  // Every Figma promise the preamble awaits passes here, so a cancelled run abandons it (awaitNative).
+  // The host drains a run's queued verbs before it replies, and one call Figma never settles would
+  // otherwise hold that run, and every run queued behind it, for good.
+  function nativeResult(operation: `figma.${string}`, result: unknown): unknown {
+    return isThenable(result) ? awaitNative(operation, () => result).then(wrap) : wrap(result);
+  }
+  // The namespaces holding Figma's async API besides the root. Not nodes, so wrap() passes them through.
+  const NATIVE_NAMESPACES: ReadonlySet<PropertyKey> = new Set(["variables", "annotations", "teamLibrary"]);
+  // Per native object, so a namespace keeps its identity (tokens.ts keys a cache by teamLibrary).
+  const namespaces = new WeakMap<object, object>();
+  function namespaceView(name: string, native: object): object {
+    let view = namespaces.get(native);
+    if (!view) {
+      view = new Proxy({}, {
+        get(_target, key) {
+          const value: unknown = Reflect.get(native, key, native);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => nativeResult(`figma.${name}.${String(key)}`, Reflect.apply(value, native, args.map(unwrap)));
+        },
+      });
+      namespaces.set(native, view);
+    }
+    return view;
   }
   function stateOf(node: BaseNode, alias = node.id): State {
     const owned = views.get(node);
@@ -375,7 +400,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
               ", and Figma breaks a plugin's move of it, so flcm placed a copy here and removed the original. " +
               "Its id is now this one; the old id still reaches it in this session." });
           }
-          return result instanceof Promise ? result.then(wrap) : wrap(result);
+          return nativeResult(`figma.${String(key)}`, result);
         };
         state.methods.set(key, invoke);
         return invoke;
@@ -405,7 +430,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
     // Resolve that bounded root before asking its index for either public ID form.
     const outermost = outermostInstanceId(id);
     if (outermost) {
-      const root = await nativeApi().getNodeByIdAsync(outermost);
+      const root = await awaitNative("figma.getNodeByIdAsync", () => nativeApi().getNodeByIdAsync(outermost));
       if (!root || root.removed) return null;
       const anchor = stateOf(root);
       tree(anchor, true);
@@ -422,7 +447,7 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
       record.state.record = record;
       return record.state.view;
     }
-    const node = await nativeApi().getNodeByIdAsync(id);
+    const node = await awaitNative("figma.getNodeByIdAsync", () => nativeApi().getNodeByIdAsync(id));
     if (!node) return null;
     const state = stateOf(node);
     // A direct ordinary ID is its own native anchor. Earlier broad scans must not
@@ -436,12 +461,13 @@ export function createSceneAccess(source: () => PluginAPI, moved: Record<string,
       if (key === "getNodeByIdAsync") return byId;
       const native = nativeApi();
       const value = (native as unknown as Record<PropertyKey, unknown>)[key];
+      if (NATIVE_NAMESPACES.has(key) && value && typeof value === "object") return namespaceView(String(key), value);
       if (typeof value !== "function") return wrap(value);
       return (...args: unknown[]) => {
         let result: unknown;
         try { result = Reflect.apply(value, native, args.map(unwrap)); }
         finally { if (API_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
-        return result instanceof Promise ? result.then(wrap) : wrap(result);
+        return nativeResult(`figma.${String(key)}`, result);
       };
     },
     set(_target, key, value) { return Reflect.set(nativeApi(), key, unwrap(value), nativeApi()); },

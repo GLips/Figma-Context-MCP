@@ -1085,6 +1085,24 @@ test("a run awaiting a Figma call that never settles keeps its heartbeat, naming
   loaded();
 });
 
+test("a cancelled run whose verb awaits an import Figma never settles still replies, and the run behind it executes", async () => {
+  // fig-153: the host drains queued verbs before it replies, so one stuck call inside a verb held the queue.
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const figma = createFigmaMock();
+  let importing!: () => void;
+  const importStarted = new Promise<void>((resolve) => { importing = resolve; });
+  figma.importStyleByKeyAsync = () => (importing(), new Promise(() => {}));
+  const h = host(figma);
+  await h.connect(1);
+  const preamble = await realPreamble;
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "import", preamble, code: `await flcm.render({ type: "FRAME", fill: { style: "${"a".repeat(40)}" } });` });
+  h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble, code: "return 'ran';" });
+  await importStarted;
+  h.sendFrame(1, { type: "CANCEL", executionId: "import" });
+  assert.match((await h.result("import")).errors, /the server cancelled this run/);
+  assert.equal((await h.result("behind")).result, "ran");
+});
+
 test("a cancelled run whose code awaits forever still ends, and its leftover code is refused figma.* for good", async () => {
   const h = host();
   await h.connect(1);

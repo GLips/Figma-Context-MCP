@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { awaitNative, currentHost } from "./host.js";
+import { currentHost } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // fonts — resolve every text node's (family, weight) to a real, loaded Figma font style, and preload
 // them before render() builds any text.
@@ -69,7 +69,7 @@ function loadFont(font: { family: string; style: string }): Promise<void> {
   const label = fontLabel(font);
   let load = fontLoads.get(label);
   if (!load) {
-    load = awaitNative("figma.loadFontAsync", () => figma.loadFontAsync(font)).then(() => {
+    load = figma.loadFontAsync(font).then(() => {
       loadedFonts.add(label);
     });
     fontLoads.set(label, load);
@@ -84,7 +84,7 @@ let availableFonts: Promise<Font[]> | null = null;
 function listAvailableFonts(): Promise<Font[]> {
   useRunCaches();
   if (!availableFonts) {
-    const listing = awaitNative("figma.listAvailableFontsAsync", () => figma.listAvailableFontsAsync());
+    const listing = figma.listAvailableFontsAsync();
     availableFonts = listing;
     listing.catch(() => {
       if (availableFonts === listing) availableFonts = null;

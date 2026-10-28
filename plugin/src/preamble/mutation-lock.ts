@@ -57,6 +57,10 @@ let settledVerbs = 0;
  *
  * Re-reads the chain until it stops growing, since a draining verb can queue the next one. Never
  * rejects: a verb's failure belongs to the caller that invoked it, not to the drain.
+ *
+ * Unbounded on purpose: once the run is cancelled, each verb still queued refuses at its turn, and
+ * every Figma call a verb awaits is abandoned (scene-access.ts routes each through awaitNative), so
+ * a timeout would only cut short a verb still making progress.
  */
 export async function mutationQueueIdle(): Promise<number> {
   const before = settledVerbs;
@@ -215,6 +219,8 @@ async function linkVerifiedStyles(links: VerifiedStyleLinks): Promise<void> {
       else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
       else await node.setTextStyleIdAsync(styleId);
     } catch (err) {
+      // A cancelled run abandoned the link (awaitNative): that is the run ending, not Figma refusing.
+      if (err instanceof FlcmError && err.kind === "run-ended") throw err;
       // `removed` is the one read besides id a deleted node still answers.
       if (node.removed) throw new ConcurrentEditError({ node: subjects[i], changed: "it was deleted" });
       throw new FlcmError(
@@ -263,7 +269,9 @@ export function enterMutatingVerb<P, G, T>(
       // Inside the try, so a refusal at the turn says what was kept like every other failure.
       refuseIfRunFinished();
       refuseIfCancelled();
-      const prepared = await prepare();
+      // A failure during a cancelled run is the cancellation: a lookup that swallows its abandoned
+      // Figma call (`.catch(() => null)`) would otherwise refuse as if the token didn't exist.
+      const prepared = await prepare().catch((failure: unknown) => { refuseIfCancelled(); throw failure; });
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
       // during them is the same kind of fact, read at the same place.

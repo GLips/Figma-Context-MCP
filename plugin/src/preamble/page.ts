@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { awaitNative, reportCall } from "./host.js";
+import { reportCall } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import { FlcmError } from "./flcm-error.js";
 // page — the document-level verbs: which page am I on, switch to another, make a new one.
@@ -63,17 +63,22 @@ function switchTo(target: PageNode): Promise<void> {
   // Read now: the page can be deleted while the switch waits, and its getters throw then.
   const name = JSON.stringify(target.name);
   const id = JSON.stringify(target.id);
-  return awaitNative("figma.setCurrentPageAsync", () => figma.setCurrentPageAsync(target), {
-    afterMs: PAGE_SWITCH_PATIENCE_MS,
-    stalled: () =>
-      new FlcmError(
-        "figma",
-        "Figma didn't finish switching to page " + name + " (id " + id + ") within " + PAGE_SWITCH_PATIENCE_MS / 1000 +
-          "s, so the run stops here. The current page is still " + JSON.stringify(figma.currentPage.name) +
-          ". The switch wasn't cancelled and may still finish later, so pass parents by id rather than relying on " +
-          "the current page: flcm.append(" + id + ", spec) writes onto that page.",
-      ),
+  let timer!: ReturnType<typeof setTimeout>;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      // A throw while composing the error must still settle the race, or the run hangs after all.
+      try {
+        reject(new FlcmError(
+          "figma",
+          "Figma didn't finish switching to page " + name + " (id " + id + ") within " + PAGE_SWITCH_PATIENCE_MS / 1000 +
+            "s, so the run stops here. The current page is still " + JSON.stringify(figma.currentPage.name) +
+            ". The switch wasn't cancelled and may still finish later, so pass parents by id rather than relying on " +
+            "the current page: flcm.append(" + id + ", spec) writes onto that page.",
+        ));
+      } catch (failure) { reject(failure); }
+    }, PAGE_SWITCH_PATIENCE_MS);
   });
+  return Promise.race([figma.setCurrentPageAsync(target), stalled]).finally(() => clearTimeout(timer));
 }
 
 function assertPageName(name: unknown): string {
