@@ -75,7 +75,6 @@ const submitCode = (bridge: PluginBridge, socket: FakePluginSocket, watch = {}) 
         documentId: TEST_DOCUMENT.documentId,
         code: "x",
         preamble: "x",
-        lateChangeWindowMs: 60_000,
       },
       mintExecutionId(),
       watch,

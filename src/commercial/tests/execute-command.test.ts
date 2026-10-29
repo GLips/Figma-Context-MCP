@@ -483,7 +483,6 @@ describe("one-shot bridge lifecycle", () => {
                   documentId: TEST_DOCUMENT.documentId,
                   code: "return 1",
                   preamble: "test runtime",
-                  lateChangeWindowMs: 60_000,
                 },
                 mintExecutionId(),
               );
@@ -584,28 +583,4 @@ it("CLI records partial writes on script failure", async () => {
   expect(await finished).toBe(1);
   await closed;
   expect(writesUsedThisMonth(store.read().ledger, "cli-test-user", new Date())).toBe(1);
-});
-
-it("delivers JSON before settlement and charges a late document change before closing", async () => {
-  let done = false;
-  const finished = run().then((result) => {
-    done = true;
-    return result;
-  });
-  let executionId: unknown;
-  const { socket, closed } = await plugin((frame, socket) => {
-    if (frame.type === "EXECUTE_CODE") {
-      executionId = frame.id;
-      reply(socket, frame, { console: [], errors: null, result: "read", documentChanged: false });
-    }
-  });
-  for (let i = 0; i < 100 && !stdout; i++) await delay(5);
-  expect(JSON.parse(stdout).result).toBe("read");
-  expect(done).toBe(false);
-  socket.send(JSON.stringify({ type: "RUN_CHANGED", executionId }));
-  expect(await finished).toBe(0);
-  await closed;
-  expect(
-    writesUsedThisMonth(new WriteAccessStore().read().ledger, "cli-test-user", new Date()),
-  ).toBe(1);
 });

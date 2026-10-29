@@ -51,7 +51,6 @@ async function running(
         documentId: TEST_DOCUMENT.documentId,
         code: "x",
         preamble: "x",
-        lateChangeWindowMs: 60_000,
       },
       mintExecutionId(),
       { signal },
@@ -396,7 +395,6 @@ it.each([false, true])(
         intent: "Test run",
         session: TEST_SESSION_REQUEST,
         documentId,
-        lateChangeWindowMs: 60_000,
         // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
         preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0, projectForEgress: (value) => value, agentFigma: () => figma })`,
         code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
@@ -561,7 +559,6 @@ it("hands each channel request the credentials of the request that started its r
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
-          lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
         {

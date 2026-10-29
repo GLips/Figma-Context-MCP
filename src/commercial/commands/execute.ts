@@ -250,7 +250,6 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     framelinkApiUrl: config.framelinkApiUrl.value,
   });
   const controller = new AbortController();
-  let awaitingSettlement = false;
   let signalExit: number | undefined;
   // Closing the socket triggers the plugin's existing disconnect cancellation. Signal exits
   // retain conventional shell status; normal and error exits close in finally below.
@@ -301,54 +300,37 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       throw new Error(notGrantedText(outcome.reason, ran.fileName));
     if (outcome.kind === "session-not-found")
       throw new Error(sessionNotFoundText(outcome.session, "cli"));
-    try {
-      const reply = {
-        file: ran,
-        session: outcome.session,
-        ...withoutTokenMarks(outcome.reply),
-      };
-      const json = JSON.stringify(reply, null, 2) + "\n";
-      process.stdout.write(json);
-      if (flags.output) await writeFile(flags.output, json);
-      if (reply.errors !== null) console.error(reply.errors);
+    const reply = {
+      file: ran,
+      session: outcome.session,
+      ...withoutTokenMarks(outcome.reply),
+    };
+    const json = JSON.stringify(reply, null, 2) + "\n";
+    process.stdout.write(json);
+    if (flags.output) await writeFile(flags.output, json);
+    if (reply.errors !== null) console.error(reply.errors);
 
-      if (flags.screenshot) {
-        // Its own execution: the script's id is spent on the run it named. It shows the run's intent.
-        const captured = await capturePluginScreenshot(
-          runtime.bridge,
-          { ...bound, executionId: mintExecutionId() },
-          target,
-          { signal: controller.signal, onWaiting: printingQueueMoves() },
+    if (flags.screenshot) {
+      // Its own execution: the script's id is spent on the run it named. It shows the run's intent.
+      const captured = await capturePluginScreenshot(
+        runtime.bridge,
+        { ...bound, executionId: mintExecutionId() },
+        target,
+        { signal: controller.signal, onWaiting: printingQueueMoves() },
+      );
+      if (captured.kind === "not-granted")
+        throw new Error(
+          "The script ran (its reply is above), but the plugin refused the screenshot (the grant " +
+            "was revoked or the file got a new identity), so no PNG was saved. Re-running would " +
+            "repeat the script's writes; report this to the user or coordinating agent instead.",
         );
-        if (captured.kind === "not-granted")
-          throw new Error(
-            "The script ran (its reply is above), but the plugin refused the screenshot (the grant " +
-              "was revoked or the file got a new identity), so no PNG was saved. Re-running would " +
-              "repeat the script's writes; report this to the user or coordinating agent instead.",
-          );
-        const screenshot = captured.reply;
-        if ("errors" in screenshot) throw new Error(`Screenshot failed: ${screenshot.errors}`);
-        await writeFile(flags.screenshot, Buffer.from(screenshot.image, "base64"));
-      }
-      return reply.errors === null ? 0 : 1;
-    } finally {
-      // Before stop(): a change the plugin reports after the reply is still charged to this run.
-      awaitingSettlement = true;
-      await runtime.writeMeter.drain(controller.signal, (remaining) => {
-        console.error(
-          `Execution finished. Keeping the relay connected for up to ${Math.ceil(remaining / 1000)}s to observe delayed document changes for write accounting.`,
-        );
-      });
-      awaitingSettlement = false;
+      const screenshot = captured.reply;
+      if ("errors" in screenshot) throw new Error(`Screenshot failed: ${screenshot.errors}`);
+      await writeFile(flags.screenshot, Buffer.from(screenshot.image, "base64"));
     }
+    return reply.errors === null ? 0 : 1;
   } catch (error) {
-    if (signalExit !== undefined) {
-      if (awaitingSettlement)
-        console.error(
-          "Interrupted while observing delayed document changes. The result was delivered, but late-write accounting could not be fully observed.",
-        );
-      return signalExit;
-    }
+    if (signalExit !== undefined) return signalExit;
     throw error;
   } finally {
     process.removeListener("SIGINT", interrupt);

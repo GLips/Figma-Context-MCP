@@ -265,21 +265,16 @@ export class RunLedger {
 
   /**
    * Settle the entry a reply names, admitted by the protocol's parser for that request type — the one
-   * place a reply is parsed. Returns `settled` only for a reply that matched a live entry sent on this
-   * same connection (malformed or not: it still proves the holder speaks the envelope), `late` when
-   * no entry exists any more, and `foreign` for an entry another connection owns.
+   * place a reply is parsed. Only a reply sent on the entry's own connection settles it; one for an
+   * entry that is gone (its caller gave up) is traced and dropped.
    */
-  settleReply(
-    connection: RelayConnection,
-    id: string,
-    msg: Record<string, unknown>,
-  ): "settled" | "late" | "foreign" {
+  settleReply(connection: RelayConnection, id: string, msg: Record<string, unknown>): void {
     const entry = this.entries.get(id);
     if (!entry) {
       this.trace.record(id, connection, "late-reply");
-      return "late";
+      return;
     }
-    if (entry.connection !== connection) return "foreign";
+    if (entry.connection !== connection) return;
     this.take(id);
     const reply = parseReply(entry.payloadType, msg);
     // Frozen-envelope error path: a plugin replies ERROR to any message type it doesn't recognize —
@@ -293,7 +288,7 @@ export class RunLedger {
             `The Figma plugin answered ${entry.payloadType} with a reply this server can't read.`,
         ),
       );
-      return "settled";
+      return;
     }
     this.trace.record(
       id,
@@ -302,7 +297,6 @@ export class RunLedger {
     );
     Logger.log(`Bridge request ${id}: finished after ${Date.now() - entry.startedAt}ms`);
     entry.resolve(reply);
-    return "settled";
   }
 
   /**

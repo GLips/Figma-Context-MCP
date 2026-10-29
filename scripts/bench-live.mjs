@@ -23,7 +23,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { RequestTrace } from "../src/commercial/plugin-bridge/request-trace.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
-import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
 import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handle.ts";
@@ -251,7 +250,6 @@ async function run(target, code) {
     const reply = await executeOnProbeTarget(bridge, target, {
       code,
       preamble: PREAMBLE,
-      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
       session,
     });
     sessionCreated = true;

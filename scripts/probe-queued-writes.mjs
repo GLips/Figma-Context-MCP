@@ -27,7 +27,6 @@
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
-import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
 import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -49,7 +48,6 @@ const run = (code) =>
   executeOnProbeTarget(bridge, target, {
     code,
     preamble: PREAMBLE,
-    lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
   });
 
 // The agent's shape from the DX notes, verbatim in spirit: a batch that rejects fast while its

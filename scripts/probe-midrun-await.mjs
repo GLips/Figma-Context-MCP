@@ -31,7 +31,6 @@
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
-import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
 import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -90,7 +89,6 @@ async function runProbe() {
     const reply = await executeOnProbeTarget(bridge, target, {
       code: PROBE_CODE,
       preamble: PREAMBLE,
-      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
     });
     if (reply?.errors) {
       fail(`the probe script errored in the sandbox:\n${reply.errors}`);
@@ -120,7 +118,6 @@ async function runProbe() {
     const cleanup = await executeOnProbeTarget(bridge, target, {
       code: `const n = await figma.getNodeByIdAsync(${JSON.stringify(rootId)}); if (n) n.remove(); return "cleaned";`,
       preamble: PREAMBLE,
-      lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
     });
     if (cleanup?.result !== "cleaned") {
       log(

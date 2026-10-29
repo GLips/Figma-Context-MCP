@@ -21,7 +21,6 @@ import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { FigmaPausedError } from "./figma-paused.js";
 import { mintSessionHandle, type SessionHandle } from "./session-handle.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
-import { LATE_CHANGE_WINDOW_MS } from "../entitlement/write-meter.js";
 import { writeRefusalText, type WriteRefusal } from "../entitlement/write-authorization.js";
 
 // A script executes exactly once — images arrive mid-run (PluginBridge.serveChannelRequest) — and
@@ -127,7 +126,6 @@ export async function executePluginCode(
           documentId: document.documentId,
           session,
           preamble: flcmSandboxPreamble(),
-          lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
         },
         executionId,
         { ...watch, runContext },

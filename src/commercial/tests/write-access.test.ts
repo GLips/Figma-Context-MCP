@@ -26,7 +26,7 @@ import {
 import { mintExecutionId } from "~/commercial/execution-id.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
-import { LATE_CHANGE_WINDOW_MS, WriteMeter } from "~/commercial/entitlement/write-meter.js";
+import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import type { PluginReply, ReplyFor, WriteAccessNotice } from "@framelink/plugin/protocol";
 import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
 import {
@@ -311,95 +311,34 @@ describe("write authorization", () => {
     expect(store.read().ledger[USER_ID]?.executions.map((e) => e.executionId)).toContain(writesId);
   });
 
-  it("charges an execution once, however many times and ways it is settled", async () => {
+  it("charges an execution once, however many times its caller ends it", async () => {
     const { app, writeAccess, writeMeter } = await setup();
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 2);
     const executionId = mintExecutionId();
     const admission = await writeMeter.authorize(TEST_PLUGIN_LINK, executionId);
     if (admission.kind !== "authorized") throw new Error("a Write still fits the allowance");
-    // The reply said "no change", then the plugin saw one — and said so twice, then its result
-    // arrived again late, and the caller ended the charge a second time.
-    admission.charge.replied(false);
-    const link = TEST_PLUGIN_LINK;
-    writeMeter.runEvent({ type: "changed", executionId, link });
-    writeMeter.runEvent({ type: "changed", executionId, link });
-    writeMeter.runEvent({
-      type: "orphanReply",
-      executionId,
-      link,
-      reply: { type: "EXECUTE_CODE_RESULT", console: [], errors: null, documentChanged: true },
-    });
+    admission.charge.replied(true);
     admission.charge.lost({ mayHaveRun: true });
-    writeMeter.runEvent({ type: "changed", executionId: mintExecutionId(), link });
+    admission.charge.replied(true);
     // One Write spent, so exactly one of the last two remains.
     expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "authorized" });
     await writeAccess.reportWriteUsage(USER_ID);
     expect(app.reportedExecutionIds.filter((id) => id === executionId)).toHaveLength(1);
   });
 
-  it("holds a lost run's Write until its late window closes, freeing it if the plugin says it never ran", async () => {
-    const { app, writeAccess } = await setup();
-    let now = 0;
-    const meter = new WriteMeter(writeAccess, { now: () => new Date(now) });
-    const link = TEST_PLUGIN_LINK;
-    const lose = async () => {
+  it("charges a lost run that may have run at once, and frees one that never started", async () => {
+    const { app, writeAccess, writeMeter } = await setup();
+    const lose = async (mayHaveRun: boolean) => {
       const executionId = mintExecutionId();
-      const admission = await meter.authorize(link, executionId);
+      const admission = await writeMeter.authorize(TEST_PLUGIN_LINK, executionId);
       if (admission.kind !== "authorized") throw new Error("a Write still fits the allowance");
-      admission.charge.lost({ mayHaveRun: true });
+      admission.charge.lost({ mayHaveRun });
       return executionId;
     };
-    // Queued behind a held thread: the cancel answer came too late for the caller, not for the meter.
-    const cancelledInQueue = await lose();
-    meter.runEvent({ type: "neverRan", executionId: cancelledInQueue, link });
-    // Its late reply says it changed nothing.
-    const repliedLate = await lose();
-    meter.runEvent({
-      type: "orphanReply",
-      executionId: repliedLate,
-      link,
-      reply: { type: "EXECUTE_CODE_RESULT", console: [], errors: null, documentChanged: false },
-    });
-    // Nothing more is ever heard: the Write it may have made is charged when the window closes.
-    const silent = await lose();
-    now = LATE_CHANGE_WINDOW_MS + 30_000;
-    await meter.drain(new AbortController().signal);
+    const mayHaveRun = await lose(true);
+    await lose(false);
     await writeAccess.reportWriteUsage(USER_ID);
-    expect(app.reportedExecutionIds).toEqual([silent]);
-  });
-
-  it("lets the plugin's word that a run changed nothing win over a loss its caller reports after it", async () => {
-    const { app, writeAccess } = await setup();
-    let now = 0;
-    const meter = new WriteMeter(writeAccess, { now: () => new Date(now) });
-    const link = TEST_PLUGIN_LINK;
-    const executionId = mintExecutionId();
-    const admission = await meter.authorize(link, executionId);
-    if (admission.kind !== "authorized") throw new Error("a Write still fits the allowance");
-    // The result crossed the budget's CANCEL; the caller, told only "unknown", reports a loss after it.
-    meter.runEvent({
-      type: "orphanReply",
-      executionId,
-      link,
-      reply: { type: "EXECUTE_CODE_RESULT", console: [], errors: null, documentChanged: false },
-    });
-    admission.charge.lost({ mayHaveRun: true });
-    now = LATE_CHANGE_WINDOW_MS + 30_000;
-    await meter.drain(new AbortController().signal);
-    await writeAccess.reportWriteUsage(USER_ID);
-    expect(app.reportedExecutionIds).toEqual([]);
-  });
-
-  it("reserves a lost run's pending Write, so a retry can't spend the same last one", async () => {
-    const { writeAccess, writeMeter } = await setup();
-    spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
-    const lost = mintExecutionId();
-    const admission = await writeMeter.authorize(TEST_PLUGIN_LINK, lost);
-    if (admission.kind !== "authorized") throw new Error("one Write still fits the allowance");
-    admission.charge.lost({ mayHaveRun: true });
-    expect(await gateAnswer(writeMeter)).toMatchObject({ reason: "allowance-exhausted" });
-    writeMeter.runEvent({ type: "neverRan", executionId: lost, link: TEST_PLUGIN_LINK });
-    expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "authorized" });
+    expect(app.reportedExecutionIds).toEqual([mayHaveRun]);
   });
 
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {

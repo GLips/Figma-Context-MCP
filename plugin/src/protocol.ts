@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -84,6 +84,8 @@ export const PROTOCOL_VERSION = 21;
  * v21: the server paces the heartbeat. It sends RUN_STATUS_REQUEST to a link on a timer while it has
  *     runs there, and the plugin answers each with its runs' RUN_STATUS: a hidden Figma window
  *     throttles the plugin's chained timers to about one tick a minute but still delivers messages.
+ * v22: a run's documentChanged is final. RUN_CHANGED, RUN_SETTLED and EXECUTE_CODE's
+ *     lateChangeWindowMs are gone: the plugin no longer watches the document past its reply.
  */
 
 // ---- Transport ----
@@ -542,9 +544,6 @@ export type ServerRequest =
       documentId: string;
       // The agent session the run's `session` binding is, scoped to the grant it runs under.
       session: SessionRequest;
-      // How long past a "no change" reply the plugin keeps watching for a change it would charge to
-      // this run. The server owns the number (write-access.ts); the plugin only obeys it.
-      lateChangeWindowMs: number;
     }
   // What the panel shows about write access. Acked, never acted on.
   | { type: "WRITE_ACCESS"; notice: WriteAccessNotice }
@@ -666,10 +665,9 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
     case "SESSION_LOOKUP":
       return isSessionHandle(f.handle) ? { type: "SESSION_LOOKUP", id, handle: f.handle } : null;
     case "EXECUTE_CODE": {
-      // No std-lib, window, document, session or intent means a server that predates this plugin:
+      // No std-lib, document, session or intent means a server that predates this plugin:
       // refused, never defaulted.
       if (typeof f.preamble !== "string" || !f.preamble) return null;
-      if (typeof f.lateChangeWindowMs !== "number" || !(f.lateChangeWindowMs >= 0)) return null;
       if (!isDocumentId(f.documentId)) return null;
       const session = parseSessionRequest(f.session);
       const intent = wireIntent(f.intent);
@@ -682,7 +680,6 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
         intent,
         documentId: f.documentId,
         session,
-        lateChangeWindowMs: f.lateChangeWindowMs,
       };
     }
     case "WRITE_ACCESS": {
@@ -736,8 +733,8 @@ export type SessionRefusedReply = { type: "SESSION_NOT_FOUND" } | { type: "SESSI
 /**
  * What a run reported. `result` is absent when the code returned nothing or threw (undefined isn't
  * JSON). `documentChanged` is whether the document changed while the run executed, writes that landed
- * after the code returned included; false is provisional until RUN_SETTLED, since a change Figma
- * reports later arrives as RUN_CHANGED. It is the server's to meter, never the agent's to read.
+ * after the code returned included, and final: a change Figma reports after the reply goes unmetered.
+ * It is the server's to meter, never the agent's to read.
  */
 export type ExecuteCodeResult = {
   type: "EXECUTE_CODE_RESULT";
@@ -957,11 +954,6 @@ export type PluginEvent =
   | RunStatus
   | ({ type: "CANCEL_RESULT"; executionId: string } & CancelAnswer)
   | ({ type: "WITHDRAW_RESULT"; executionId: string } & WithdrawAnswer)
-  // The document changed after the run's reply said it hadn't. At most one per run.
-  | { type: "RUN_CHANGED"; executionId: string }
-  // The run's late-change watch closed with no change: nothing more will be reported for it. Never
-  // sent for a run whose reply said documentChanged, nor alongside a RUN_CHANGED.
-  | { type: "RUN_SETTLED"; executionId: string }
   // This plugin's annotation log moved to `cursor`, once edits went quiet. Sent to every link, granted
   // or not, and says only that: what changed is an ANNOTATION_CHANGES read, which checks the grant.
   | { type: "ANNOTATIONS_CHANGED"; cursor: AnnotationCursor };
@@ -1042,9 +1034,6 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
       if (blocker) event.blocker = blocker;
       return event;
     }
-    case "RUN_CHANGED":
-    case "RUN_SETTLED":
-      return typeof f.executionId === "string" ? { type: f.type, executionId: f.executionId } : null;
     case "ANNOTATIONS_CHANGED": {
       const cursor = parseAnnotationCursor(f.cursor);
       return cursor ? { type: "ANNOTATIONS_CHANGED", cursor } : null;

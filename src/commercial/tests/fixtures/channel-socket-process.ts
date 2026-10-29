@@ -120,7 +120,6 @@ try {
           documentId: TEST_DOCUMENT.documentId,
           code: "unused",
           preamble: "unused",
-          lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
       )

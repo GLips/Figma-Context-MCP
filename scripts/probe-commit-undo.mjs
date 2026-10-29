@@ -58,7 +58,6 @@
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
-import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
 import { executeOnProbeTarget, targetForProbe } from "./probe-link.mjs";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -195,7 +194,6 @@ async function exec(code) {
   const reply = await executeOnProbeTarget(bridge, target, {
     code,
     preamble: PREAMBLE,
-    lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
   });
   // Any execution reply proves code ran — set BEFORE the errors check, so a scenario that created
   // nodes and then threw still gets the failure-path cleanup.

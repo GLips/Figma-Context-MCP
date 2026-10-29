@@ -135,7 +135,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     } catch {
       // A view-only root refuses; the test is about exactly that.
     }
-  // Unref'd so a run's minute-long late-change watch can't hold the test process open after it ends.
+  // Unref'd so a run's pending timer can't hold the test process open after it ends.
   // Figma pausing the plugin (figma-pause.ts): its timers stop firing while its clock runs on.
   let figmaPaused = false;
   let clockOffsetMs = 0;
@@ -155,8 +155,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout, Date: HostDate });
   vm.runInContext(code, context);
   // Stand in for the relay (ui.ts), in its two envelopes. A server frame is untrusted JSON the host
-  // must admit, so it stays loosely typed; every EXECUTE_CODE carries the server's late-change window,
-  // and every run names this file's document unless the test says otherwise. Unless a test names a session,
+  // must admit, so it stays loosely typed; every run names this file's document unless the test says otherwise. Unless a test names a session,
   // every run resumes its project's one shared session, which connect() opens — as an agent passing
   // its handle back would.
   const projectOf = new Map<ConnKey, string>();
@@ -176,7 +175,6 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
       frame:
         frame.type === "EXECUTE_CODE"
           ? {
-              lateChangeWindowMs: 60_000,
               documentId: DOCUMENT_ID,
               intent: `Run ${String(frame.id)}`,
               session: { handle: sharedSessionOf(projectOf.get(connKey) ?? "/proj"), create: false },
@@ -908,29 +906,17 @@ test("a logged node reports the name it had when logged, not one it was given af
   assert.deepEqual([...run.console], [`[log] {"id":"${run.result}","name":"A","type":"FRAME"}`]);
 });
 
-test("a raw figma write counts even when its change event lands after the reply", async () => {
+test("a raw figma write counts from the change Figma reports during the run, and a remote edit doesn't", async () => {
   const h = host();
   await h.connect(1);
-  const changedLate = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_CHANGED" && f.executionId === id);
-  const read = await execute(h, `return 1;`) as any;
-  assert.equal(read.documentChanged, false);
-  // Someone else in the file edits while this run is being watched: not this run's Write.
-  const remote = await execute(h, `figma.simulateRemoteEdit(); return 1;`) as any;
-  h.deliverChanges();
+  h.context.deliver = () => h.deliverChanges();
+  // Someone else in the file edits while this run executes: not this run's Write.
+  const remote = await execute(h, `figma.simulateRemoteEdit(); deliver(); return 1;`) as any;
   assert.equal(remote.documentChanged, false);
-  assert.equal(changedLate(remote.id), false);
-  // No flcm verb at all: the agent went straight to the Figma API, and Figma reports it only after
-  // the reply went out. The listener posts RUN_CHANGED as the event is delivered.
-  const raw = await execute(h, `figma.createRectangle(); return "done";`) as any;
+  // No flcm verb at all: the agent went straight to the Figma API.
+  const raw = await execute(h, `figma.createRectangle(); deliver(); return "done";`) as any;
   assert.equal(raw.errors, null);
-  assert.equal(raw.documentChanged, false);
-  h.deliverChanges();
-  assert.equal(changedLate(raw.id), true);
-  assert.equal(changedLate(read.id), false);
-  // A watch that closed clean says so, ending the server's wait; the next run's start closes it.
-  const settled = (id: string) => h.sent.some(({ frame: f }) => f.type === "RUN_SETTLED" && f.executionId === id);
-  assert.equal(settled(read.id), true);
-  assert.equal(settled(raw.id), false);
+  assert.equal(raw.documentChanged, true);
 });
 
 test("revoking a project's grant cancels its runs: a queued one never starts, a suspended server call is abandoned", async () => {

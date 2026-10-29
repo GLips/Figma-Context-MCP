@@ -81,7 +81,6 @@ const execute = (bridge, link, fields = {}) =>
       session: { handle: mintSessionHandle(), create: true },
       code: "return 'ok';",
       preamble: PREAMBLE,
-      lateChangeWindowMs: 60_000,
       ...fields,
     },
     mintExecutionId(),
@@ -597,24 +596,11 @@ console.log(
   `✅ manifest devAllowedDomains mirrors WS_PORT_BLOCK exactly (${WS_PORT_BLOCK.length} ports)`,
 );
 
-// --- Deadlines: cancel, never abandon; the cancel is ANSWERED; a late result still reports ---
+// --- Deadlines: cancel, never abandon; the cancel is ANSWERED ---
 // A run that stalls is CANCELLED with a run-scoped, id-less CANCEL, and the caller's rejection is
 // worded from the plugin's answer — "never executed; retry" and "inspect the canvas" differ.
 const PORT_T = 19895;
-const orphanReplies = [];
-const bridgeT = bridgeOn(PORT_T, {
-  requestTimeoutMs: 400,
-  events: {
-    onRunEvent: (event) => {
-      if (event.type === "orphanReply")
-        orphanReplies.push([
-          event.executionId,
-          event.link === silentLink,
-          event.reply.documentChanged,
-        ]);
-    },
-  },
-});
+const bridgeT = bridgeOn(PORT_T, { requestTimeoutMs: 400 });
 await wait(150);
 const framesT = [];
 let disposition = "never-executed";
@@ -647,27 +633,6 @@ console.log(
   "✅ A stalled run is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's answer",
 );
 
-// The link wakes up: a result for a run its caller gave up on still reaches the meter, as it
-// came — whether it costs a Write is the meter's call.
-disposition = "was-running";
-await execute(bridgeT, silentLink, { code: "changed late" }).catch(() => {});
-const lateRun = framesT.filter((f) => f.type === "EXECUTE_CODE").at(-1).id;
-const lateResult = (id, documentChanged) =>
-  JSON.stringify({ type: "EXECUTE_CODE_RESULT", id, console: [], errors: null, documentChanged });
-silent.send(lateResult(stalled.id, false));
-silent.send(lateResult(lateRun, true));
-await until(() => orphanReplies.length === 2, "the late results");
-assert.deepEqual(
-  orphanReplies,
-  [
-    [stalled.id, true, false],
-    [lateRun, true, true],
-  ],
-  "a late result reaches the meter with what it says about the document",
-);
-console.log(
-  "✅ A late result reaches the meter under its execution id, with its link and documentChanged",
-);
 silent.close();
 bridgeT.stop();
 await wait(150);

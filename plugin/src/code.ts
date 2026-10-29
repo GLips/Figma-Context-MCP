@@ -282,7 +282,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
         reply(to, { type: admission.kind === "taken" ? "SESSION_HANDLE_TAKEN" : "SESSION_NOT_FOUND" });
         return;
       }
-      executor.runCode(to, msg.documentId, admission.session, msg.intent, msg.code, msg.preamble, msg.lateChangeWindowMs);
+      executor.runCode(to, msg.documentId, admission.session, msg.intent, msg.code, msg.preamble);
       return;
     }
     case "SCREENSHOT":

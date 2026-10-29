@@ -268,16 +268,12 @@ it("without a token: pairs, refuses an unnamed call with the open file, asks All
     outcome: { kind: "executed", reply: { result: 2, console: [], errors: null } },
   });
 
-  // The next run closes the read's late-change watch clean (RUN_SETTLED, long before the ceiling),
-  // and Figma reports the raw write's change only after its reply: RUN_CHANGED charges it then.
+  // A raw figma.* write is metered from the change Figma reports during the run.
   const write = await execute("figma.createRectangle(); return 'drawn';");
   expect(write).toMatchObject({
     prompted: false,
     outcome: { kind: "executed", reply: { result: "drawn" } },
   });
-  const drained = runtime.writeMeter.drain(new AbortController().signal);
-  plugin.deliverChanges();
-  await drained;
   const writesUsed = () =>
     writesUsedThisMonth(new WriteAccessStore().read().ledger, "loopback-user", new Date());
   expect(writesUsed()).toBe(1);

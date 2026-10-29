@@ -46,7 +46,6 @@ test("statuses are logged as counts only, and a late result is diagnostic only",
         documentId: TEST_DOCUMENT.documentId,
         code: "private code",
         preamble: "private preamble",
-        lateChangeWindowMs: 60_000,
       },
       mintExecutionId(),
     )
@@ -89,7 +88,6 @@ test("another link's status for a run neither re-arms its deadline nor enters it
         documentId: TEST_DOCUMENT.documentId,
         code: "",
         preamble: "",
-        lateChangeWindowMs: 60_000,
       },
       mintExecutionId(),
     )
@@ -151,7 +149,6 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
           documentId: TEST_DOCUMENT.documentId,
           code: "",
           preamble: "",
-          lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
         { signal: controller.signal },
@@ -198,7 +195,6 @@ test("execution error result is traced as error without changing successful enve
       documentId: TEST_DOCUMENT.documentId,
       code: "",
       preamble: "",
-      lateChangeWindowMs: 60_000,
     },
     mintExecutionId(),
   );

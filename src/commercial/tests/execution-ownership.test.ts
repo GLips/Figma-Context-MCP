@@ -59,7 +59,6 @@ describe("link-owned execution", () => {
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
-          lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
       )
@@ -93,7 +92,6 @@ describe("link-owned execution", () => {
           documentId: TEST_DOCUMENT.documentId,
           code: "x",
           preamble: "x",
-          lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
         { budgetMs: 600 },
@@ -176,7 +174,6 @@ describe("link-owned execution", () => {
           documentId: TEST_DOCUMENT.documentId,
           code: "old",
           preamble: "x",
-          lateChangeWindowMs: 60_000,
         },
         mintExecutionId(),
       )

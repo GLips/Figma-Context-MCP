@@ -50,7 +50,7 @@ export type PluginPresence = "connected" | "expected" | "absent";
  */
 export interface PluginBridgeRuntime {
   bridge: PluginBridge;
-  /** Close a short-lived CLI runtime and its background synchronization. Call drain first. */
+  /** Close a short-lived CLI runtime and its background synchronization. */
   stop?(): void;
   /** Seat and free-allowance authorization for figma_execute_code, and each run's charge. */
   writeMeter: WriteMeter;
@@ -154,7 +154,6 @@ export function startPluginBridge({
         if (link.owner) inBackground(signIn.start(link.owner));
         else notifyLinkPanel(link, SIGN_IN_NEEDS_FIGMA_USER_NOTICE);
       },
-      onRunEvent: (event) => writeMeter.runEvent(event),
     },
     capabilities: new Map([
       [

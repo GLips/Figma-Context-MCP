@@ -27,11 +27,10 @@ afterEach(() => {
 });
 
 it("an unpaired link is sent only the setup envelope, and nothing it sends is heard", async () => {
-  const onRunEvent = vi.fn();
   const onGrantChanged = vi.fn();
   const capability = vi.fn();
   const bridge = create({
-    events: { onRunEvent, onGrantChanged },
+    events: { onGrantChanged },
     capabilities: new Map([["images.fetch", capability]]),
   });
   const socket = await connectFakePlugin(bridge, { paired: false });
@@ -43,7 +42,6 @@ it("an unpaired link is sent only the setup envelope, and nothing it sends is he
     documentId: TEST_DOCUMENT.documentId,
     granted: true,
   });
-  socket.receive({ type: "RUN_CHANGED", executionId: "r" });
   socket.receive({
     type: "CHANNEL_REQUEST",
     id: "q",
@@ -55,7 +53,6 @@ it("an unpaired link is sent only the setup envelope, and nothing it sends is he
 
   expect(await bridge.resolveLink()).toEqual({ kind: "unpaired" });
   expect(bridge.authenticatedLinks()).toEqual([]);
-  expect(onRunEvent).not.toHaveBeenCalled();
   expect(onGrantChanged).not.toHaveBeenCalled();
   expect(capability).not.toHaveBeenCalled();
   // resolveLink challenged it again; nothing else was sent, not even a channel refusal.

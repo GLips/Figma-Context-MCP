@@ -37,11 +37,9 @@ import {
   type LedgerSubmitOptions,
   RunLedger,
 } from "./run-ledger.js";
-import type { RunEvent } from "../entitlement/write-meter.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import {
   PLUGIN_REDIAL_MAX_MS,
-  parseExecuteCodeResult,
   parsePluginEvent,
   type AnnotationCursor,
   type GrantState,
@@ -96,13 +94,6 @@ export interface PluginBridgeEvents {
   onGrantChanged?: (link: PluginLink, granted: boolean) => void;
   /** The human clicked the panel's sign-in button in this link's plugin. */
   onWriteAccessSignIn?: (link: PluginLink) => void;
-  /**
-   * What a link says about a run outside its caller's reply: RUN_CHANGED, RUN_SETTLED, or a result
-   * that arrived after the caller gave up. Forwarded as-is with the link that said it — whether it is
-   * the run's own link, and what it costs, is the write meter's call. May fire more than once for an
-   * execution, and for execution ids this server never issued.
-   */
-  onRunEvent?: (event: RunEvent) => void;
 }
 
 /**
@@ -173,23 +164,10 @@ export class PluginBridge {
     CHANNEL_REQUEST: (link, event) => this.channel.serve(link, event),
     RUN_STATUS: (link, event) => this.ledger.runStatus(link, event),
     // Run-scoped, so these settle here rather than through the correlated-reply path.
-    // The meter hears every never-ran answer too: one landing after its caller's answer window
-    // still frees the Write that caller's loss held.
-    CANCEL_RESULT: (link, { type: _, executionId, ...answer }) => {
-      this.ledger.settleCancelAnswer(executionId, answer, link);
-      if (answer.disposition === "never-executed")
-        this.events.onRunEvent?.({ type: "neverRan", executionId, link });
-    },
-    WITHDRAW_RESULT: (link, { type: _, executionId, ...answer }) => {
-      this.ledger.settleWithdrawAnswer(executionId, answer, link);
-      if (answer.outcome === "withdrawn")
-        this.events.onRunEvent?.({ type: "neverRan", executionId, link });
-    },
-    // Metering outlives the caller, so these go to the meter, never to the run's caller.
-    RUN_CHANGED: (link, event) =>
-      this.events.onRunEvent?.({ type: "changed", executionId: event.executionId, link }),
-    RUN_SETTLED: (link, event) =>
-      this.events.onRunEvent?.({ type: "settled", executionId: event.executionId, link }),
+    CANCEL_RESULT: (link, { type: _, executionId, ...answer }) =>
+      this.ledger.settleCancelAnswer(executionId, answer, link),
+    WITHDRAW_RESULT: (link, { type: _, executionId, ...answer }) =>
+      this.ledger.settleWithdrawAnswer(executionId, answer, link),
     ANNOTATIONS_CHANGED: (link, event) => {
       this.annotationLogs.set(link, event.cursor);
       for (const wake of this.annotationLogWaiters) wake();
@@ -566,13 +544,7 @@ export class PluginBridge {
       if (this.isLive(link)) this.channel.refuseMalformed(link, msg.id);
       return;
     }
-    const outcome = this.ledger.settleReply(link, msg.id, msg);
-    // A run whose caller gave up still reports what it did; a Write it made is owed regardless.
-    if (outcome === "late" && this.isLive(link)) {
-      const reply = parseExecuteCodeResult(msg);
-      if (reply)
-        this.events.onRunEvent?.({ type: "orphanReply", executionId: msg.id, link, reply });
-    }
+    this.ledger.settleReply(link, msg.id, msg);
   }
 
   private route<K extends PluginEventType>(

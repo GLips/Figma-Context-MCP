@@ -4,7 +4,7 @@
  */
 // Runs what a granted server submits — agent code and screenshots — one at a time, against the
 // live document, and owns everything a run carries: its status and cancellation, its mid-run server
-// calls, the late-change watch, and the agents' session stores. Each run's course goes to the
+// calls, and the agents' session stores. Each run's course goes to the
 // activity feed.
 import type { ActivityFeed } from "./activity-feed.js";
 import type { AgentSession, AgentSessions } from "./agent-sessions.js";
@@ -84,10 +84,6 @@ export function createRunExecutor({
   const serverCalls = createServerCallTable(isConnected);
   // Every run's row, and what its status and cancellation are read from (run-registry.ts).
   const runs = createRunRegistry({ onQueueChange: () => publishQueue(null) });
-  // The last execution whose reply said "no change", still watching for a change that lands after it
-  // (document-changes.ts watchLate). Bounded by the next run's start and by the window its
-  // EXECUTE_CODE carried — the server's number, since the server is what holds the run open for it.
-  let lateChangeWatch: DocumentChangeObserver | null = null;
 
   /**
    * One writer at a time (Invariant) — enforced by SERIALIZING writes rather than refusing the
@@ -134,13 +130,8 @@ export function createRunExecutor({
     activity.advance(to.id, "queued", label.session);
   }
 
-  /**
-   * The run reached the front of the write chain and is about to touch the document. The previous
-   * execution's late-change watch ends first, so nothing this run does is charged to that one.
-   */
+  /** The run reached the front of the write chain and is about to touch the document. */
   function beginRun(to: ReplyTo): void {
-    lateChangeWatch?.stop();
-    lateChangeWatch = null;
     runs.markRunning(to);
     activity.advance(to.id, "running");
     sendRunning(to);
@@ -217,7 +208,6 @@ export function createRunExecutor({
     agentSession: AgentSession,
     code: string,
     preamble: string,
-    lateChangeWindowMs: number,
   ): Promise<void> {
     const admitted = await admitAtDequeue(to, documentId, (reason) => codeNotRun(to, reason));
     if (!admitted) {
@@ -328,23 +318,11 @@ export function createRunExecutor({
         if (runtime) landedAfterReturn = await runtime.mutationQueueIdle();
         // After the drain, so writes that landed after the agent's code returned count too. A committed
         // flcm verb is a change by construction; it is OR'd in because it is known synchronously,
-        // while change events arrive in asynchronous batches (document-changes.ts). A "no" is only
-        // provisional: the observer keeps watching past the reply and reports a late change on its own.
+        // while change events arrive in asynchronous batches (document-changes.ts). The answer is
+        // final: a raw figma.* write whose event Figma delivers after this goes unmetered.
         documentChanged =
           (documentChanges?.changedSoFar() ?? false) || (runtime?.committedVerbCount() ?? 0) > 0;
-        if (documentChanged) documentChanges?.stop();
-        else if (documentChanges) {
-          // Run-scoped and id-less, like CANCEL_RESULT; at most one RUN_CHANGED per run, and the server
-          // records the Write under the run's execution, so a duplicate is harmless.
-          documentChanges.watchLate(
-            {
-              onChange: () => toServer(to.connKey, { type: "RUN_CHANGED", executionId: to.id }),
-              onSettled: () => toServer(to.connKey, { type: "RUN_SETTLED", executionId: to.id }),
-            },
-            lateChangeWindowMs,
-          );
-          lateChangeWatch = documentChanges;
-        }
+        documentChanges?.stop();
         console.log = originalConsole.log;
         console.info = originalConsole.info;
         console.warn = originalConsole.warn;
@@ -427,11 +405,10 @@ export function createRunExecutor({
       intent: string,
       code: string,
       preamble: string,
-      lateChangeWindowMs: number,
     ): void {
       acceptRun(to, { kind: "code", intent, session: session.handle });
       enqueueWrite(to, {
-        start: () => executeCode(to, documentId, session, code, preamble, lateChangeWindowMs),
+        start: () => executeCode(to, documentId, session, code, preamble),
         withdraw: () => {
           sessions.release(session);
           return () => codeNotRun(to, WITHDRAWN_WHILE_QUEUED);
