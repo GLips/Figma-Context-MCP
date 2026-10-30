@@ -31,6 +31,7 @@ import {
 } from "~/commercial/plugin-bridge/execution.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import { runPair } from "~/commercial/commands/pair.js";
+import { createCliCommandContext } from "~/commands/cli-context.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import { writesUsedThisMonth } from "~/commercial/entitlement/write-ledger.js";
 import {
@@ -293,7 +294,11 @@ it("the pair command confirms at its terminal what the panel shows, and pairs ev
   const plugin = startPlugin(ports[0]);
   const input = new PassThrough();
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const paired = runPair({ wait: 5 }, { input });
+  const paired = runPair(
+    { wait: 5 },
+    createCliCommandContext({ signal: new AbortController().signal, credential: undefined }),
+    { input },
+  );
   await plugin.pairingCode();
   input.write("y\n");
   expect(await paired).toBe(0);

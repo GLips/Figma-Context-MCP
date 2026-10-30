@@ -1,39 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock posthog-node so we can observe what the telemetry client sends without
-// hitting the network. We're testing OUR code (withRequestSecrets, ALS
-// propagation, the scrub) end-to-end — only the system boundary is mocked.
-const captureSpy = vi.fn();
-const captureExceptionSpy =
-  vi.fn<(error: Error, distinctId: string, properties: Record<string, unknown>) => void>();
-const shutdownSpy = vi.fn(async () => {});
-vi.mock("posthog-node", () => ({
-  PostHog: class {
-    capture = captureSpy;
-    captureException = captureExceptionSpy;
-    shutdown = shutdownSpy;
-  },
-}));
-
-/** Every byte handed to PostHog: events, and reported errors' messages and stacks. */
-function everythingSent(): string {
-  const events = captureSpy.mock.calls.map(([args]) => JSON.stringify(args));
-  const exceptions = captureExceptionSpy.mock.calls.map(([error, distinctId, props]) =>
-    [error.message, error.stack, distinctId, JSON.stringify(props)].join("\n"),
-  );
-  return [...events, ...exceptions].join("\n");
-}
-
-/** The errors sent to error tracking, as PostHog receives them. */
-function exceptionsSent(): Error[] {
-  return captureExceptionSpy.mock.calls.map(([error]) => error);
-}
-
-function resetPostHogSpies() {
-  captureSpy.mockClear();
-  captureExceptionSpy.mockClear();
-}
-
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -41,7 +7,46 @@ import type { Server } from "http";
 import { homedir } from "os";
 import type { AddressInfo } from "net";
 import { startHttpServer, stopHttpServer } from "~/server.js";
-import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
+import {
+  captureReadToolCall,
+  closeTelemetry,
+  initTelemetry,
+  type ToolCallContext,
+} from "~/telemetry/index.js";
+import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
+import { stubPostHogNetwork, type SentEvent } from "./fixtures/posthog-network.js";
+
+// PostHog's capture API is the system boundary: everything up to the bytes it receives is real.
+let posthog: ReturnType<typeof stubPostHogNetwork>;
+
+/** Every byte delivered to PostHog: events and reported errors alike. */
+async function everythingSent(): Promise<string> {
+  return JSON.stringify(await posthog.delivered());
+}
+
+/** The errors delivered to error tracking: each `$exception`'s first entry. */
+async function exceptionsSent(): Promise<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the wire's exception entry
+  { value: string; stacktrace?: { frames: any[] } }[]
+> {
+  return (await posthog.delivered())
+    .filter((event) => event.event === "$exception")
+    .map((event) => event.properties.$exception_list[0]);
+}
+
+async function toolEvents(): Promise<SentEvent[]> {
+  return (await posthog.delivered()).filter((event) => event.event === "tool_called");
+}
+
+const STDIO_CALLER: ToolCallContext = { transport: "stdio", authMode: "api_key" };
+
+/** A finished get_figma_data call, as the MCP tool's observation reports it. */
+function captureRead(facts: GetFigmaDataOutcome): void {
+  captureReadToolCall(
+    { tool: "get_figma_data", kind: "completed", durationMs: 1, isError: true, facts },
+    STDIO_CALLER,
+  );
+}
 import { REDACTED_FILE_KEY, REDACTED_NODE_ID } from "~/telemetry/redact-identifiers.js";
 import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
 
@@ -52,24 +57,20 @@ describe("per-request telemetry redaction", () => {
   let httpServer: Server | undefined;
 
   beforeEach(() => {
-    resetPostHogSpies();
     // Init with NO global redaction secrets so the assertion proves the
     // per-request AsyncLocalStorage path is what's doing the scrubbing.
-    initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: [] });
+    initTelemetry({ enabled: true, redactFromTelemetry: [] });
 
     // Stub fetch to fail with the per-request token embedded in the error
     // message. FigmaService wraps the original message into a new Error, so
     // the secret survives into `outcome.error.message` and reaches captureEvent.
     const realFetch = globalThis.fetch;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input).startsWith("https://api.figma.com")) {
-          throw new Error(`upstream failure (token=${PER_REQUEST_KEY})`);
-        }
-        return realFetch(input, init);
-      }),
-    );
+    posthog = stubPostHogNetwork(async (input, init) => {
+      if (String(input).startsWith("https://api.figma.com")) {
+        throw new Error(`upstream failure (token=${PER_REQUEST_KEY})`);
+      }
+      return realFetch(input, init);
+    });
   });
 
   afterEach(async () => {
@@ -78,7 +79,7 @@ describe("per-request telemetry redaction", () => {
       await stopHttpServer();
       httpServer = undefined;
     }
-    await shutdownTelemetry();
+    await closeTelemetry(5_000);
     vi.unstubAllGlobals();
   });
 
@@ -110,9 +111,9 @@ describe("per-request telemetry redaction", () => {
     expect(result.isError).toBe(true);
 
     // An untagged fetch failure is unexpected, so it went to error tracking — scrubbed.
-    const [reported] = exceptionsSent();
-    expect(reported.message).toContain("[REDACTED]");
-    expect(everythingSent()).not.toContain(PER_REQUEST_KEY);
+    const [reported] = await exceptionsSent();
+    expect(reported.value).toContain("[REDACTED]");
+    expect(await everythingSent()).not.toContain(PER_REQUEST_KEY);
   });
 });
 
@@ -129,10 +130,10 @@ describe("figma identifier redaction in telemetry", () => {
   const FILE_KEY = figmaFileKey("aB3xYz9QpLmN0kRtVwSdEf");
   const NODE_ID = figmaNodeId("1234:5678");
 
-  function onlyExceptionMessage(): string {
-    const [reported, ...rest] = exceptionsSent();
+  async function onlyExceptionMessage(): Promise<string> {
+    const [reported, ...rest] = await exceptionsSent();
     expect(rest).toEqual([]);
-    return reported.message;
+    return reported.value;
   }
 
   async function captureThrown(fn: () => Promise<unknown>): Promise<unknown> {
@@ -145,30 +146,26 @@ describe("figma identifier redaction in telemetry", () => {
   }
 
   beforeEach(() => {
-    resetPostHogSpies();
-    initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: [] });
+    initTelemetry({ enabled: true, redactFromTelemetry: [] });
+    posthog = stubPostHogNetwork();
   });
 
   afterEach(async () => {
-    await shutdownTelemetry();
+    await closeTelemetry(5_000);
     vi.unstubAllGlobals();
   });
 
   it("scrubs the file key and node ID from a 403 on a targeted read", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response('{"err":"Not allowed"}', {
-            status: 403,
-            statusText: "Forbidden",
-            headers: { "content-type": "application/json" },
-          }),
-      ),
+    posthog.routeOthers(
+      async () =>
+        new Response('{"err":"Not allowed"}', {
+          status: 403,
+          statusText: "Forbidden",
+          headers: { "content-type": "application/json" },
+        }),
     );
 
     const { FigmaService, staticCredentialSource } = await import("~/services/figma.js");
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
     const service = new FigmaService(staticCredentialSource({ kind: "pat", token: "figd_test" }));
 
     const error = await captureThrown(() => service.getRawNodeInContext(FILE_KEY, NODE_ID));
@@ -178,37 +175,40 @@ describe("figma identifier redaction in telemetry", () => {
     // boundary, not at the throw site.
     expect(String((error as Error).message)).toContain(FILE_KEY);
 
-    captureGetFigmaDataCall(
-      { input: { fileKey: FILE_KEY, nodeId: NODE_ID }, outputFormat: "tree", durationMs: 1, error },
-      { transport: "stdio", authMode: "api_key" },
-    );
+    captureRead({
+      input: { fileKey: FILE_KEY, nodeId: NODE_ID },
+      outputFormat: "tree",
+      durationMs: 1,
+      error,
+    });
 
     // An expected failure travels as codes only; nothing quotes the endpoint.
-    expect(exceptionsSent()).toEqual([]);
-    expect(everythingSent()).not.toContain(FILE_KEY);
-    expect(everythingSent()).not.toContain(NODE_ID);
-    const [event] = captureSpy.mock.calls.map(([args]) => args);
+    expect(await exceptionsSent()).toEqual([]);
+    expect(await everythingSent()).not.toContain(FILE_KEY);
+    expect(await everythingSent()).not.toContain(NODE_ID);
+    const [event] = await toolEvents();
     expect(event.properties.http_status).toBe(403);
     expect(event.properties.error_category).toBe("auth");
   });
 
   it("scrubs the node ID from the REST adapter's missing-node error", async () => {
     const { parseRestResponse } = await import("~/adapters/rest/decode/response.js");
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
 
     const error = await captureThrown(async () =>
       parseRestResponse({ name: "test", nodes: { [NODE_ID]: null } } as never),
     );
     expect(String((error as Error).message)).toContain(NODE_ID);
 
-    captureGetFigmaDataCall(
-      { input: { fileKey: FILE_KEY, nodeId: NODE_ID }, outputFormat: "tree", durationMs: 1, error },
-      { transport: "stdio", authMode: "api_key" },
-    );
+    captureRead({
+      input: { fileKey: FILE_KEY, nodeId: NODE_ID },
+      outputFormat: "tree",
+      durationMs: 1,
+      error,
+    });
 
-    expect(exceptionsSent()).toEqual([]);
-    expect(everythingSent()).not.toContain(NODE_ID);
-    const [event] = captureSpy.mock.calls.map(([args]) => args);
+    expect(await exceptionsSent()).toEqual([]);
+    expect(await everythingSent()).not.toContain(NODE_ID);
+    const [event] = await toolEvents();
     expect(event.properties.error_category).toBe("not_found");
   });
 
@@ -220,53 +220,42 @@ describe("figma identifier redaction in telemetry", () => {
       <p>Access to api.figma.com/v1/files/${FILE_KEY} is blocked by your organization.</p>
       <p>User: jane.doe@acme-corp.com</p><p>Client IP: 10.42.7.19</p>
       <p>Gateway: zs-gw-03.internal.acme-corp.com</p></body></html>`;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(blockPage, {
-            status: 403,
-            statusText: "Forbidden",
-            headers: { "content-type": "text/html" },
-          }),
-      ),
+    posthog.routeOthers(
+      async () =>
+        new Response(blockPage, {
+          status: 403,
+          statusText: "Forbidden",
+          headers: { "content-type": "text/html" },
+        }),
     );
 
     const { FigmaService, staticCredentialSource } = await import("~/services/figma.js");
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
     const service = new FigmaService(staticCredentialSource({ kind: "pat", token: "figd_test" }));
     const error = await captureThrown(() => service.getRawFile(FILE_KEY));
     expect(String((error as Error).message)).toContain("jane.doe@acme-corp.com");
 
-    captureGetFigmaDataCall(
-      { input: { fileKey: FILE_KEY }, outputFormat: "tree", durationMs: 1, error },
-      { transport: "stdio", authMode: "api_key" },
-    );
+    captureRead({ input: { fileKey: FILE_KEY }, outputFormat: "tree", durationMs: 1, error });
 
+    const sent = await everythingSent();
     for (const leak of ["jane.doe", "10.42.7.19", "zs-gw-03", "acme-corp", FILE_KEY]) {
-      expect(everythingSent()).not.toContain(leak);
+      expect(sent).not.toContain(leak);
     }
-    const [event] = captureSpy.mock.calls.map(([args]) => args);
+    const [event] = await toolEvents();
     expect(event.properties.response_fingerprint).toContain("vendor=zscaler");
     expect(event.properties.response_fingerprint).toContain('title="Website Blocked"');
   });
 
   it("scrubs a branch URL's keys and file-name slug", async () => {
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+    captureRead({
+      input: { fileKey: FILE_KEY },
+      outputFormat: "tree",
+      durationMs: 1,
+      error: new Error(
+        `bad link https://www.figma.com/design/${FILE_KEY}/branch/BrKey987654321/Acme-Secret-Rebrand?node-id=1-2`,
+      ),
+    });
 
-    captureGetFigmaDataCall(
-      {
-        input: { fileKey: FILE_KEY },
-        outputFormat: "tree",
-        durationMs: 1,
-        error: new Error(
-          `bad link https://www.figma.com/design/${FILE_KEY}/branch/BrKey987654321/Acme-Secret-Rebrand?node-id=1-2`,
-        ),
-      },
-      { transport: "stdio", authMode: "api_key" },
-    );
-
-    const message = onlyExceptionMessage();
+    const message = await onlyExceptionMessage();
     expect(message).not.toContain(FILE_KEY);
     expect(message).not.toContain("BrKey987654321");
     expect(message).not.toContain("Acme-Secret-Rebrand");
@@ -274,44 +263,36 @@ describe("figma identifier redaction in telemetry", () => {
   });
 
   it("replaces the home directory with ~", async () => {
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+    captureRead({
+      input: { fileKey: FILE_KEY },
+      outputFormat: "tree",
+      durationMs: 1,
+      error: new Error(`EACCES: permission denied, open '${homedir()}/clients/acme/hero.png'`),
+    });
 
-    captureGetFigmaDataCall(
-      {
-        input: { fileKey: FILE_KEY },
-        outputFormat: "tree",
-        durationMs: 1,
-        error: new Error(`EACCES: permission denied, open '${homedir()}/clients/acme/hero.png'`),
-      },
-      { transport: "stdio", authMode: "api_key" },
-    );
-
-    const message = onlyExceptionMessage();
+    const message = await onlyExceptionMessage();
     expect(message).toContain("'~/clients/acme/hero.png'");
     // The stack's frames are absolute paths too.
-    expect(exceptionsSent()[0].stack).toMatch(/^\s+at /m);
-    expect(everythingSent()).not.toContain(homedir());
+    const [reported] = await exceptionsSent();
+    expect(reported.stacktrace?.frames.length).toBeGreaterThan(0);
+    expect(await everythingSent()).not.toContain(homedir());
   });
 
   it("scrubs a percent-encoded Figma URL quoted from a proxy block page", async () => {
     // An untagged error can still quote a block page, and many encode the URL
     // they echo, so the separators arrive as %2F/%3F/%3D.
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
 
-    captureGetFigmaDataCall(
-      {
-        input: { fileKey: FILE_KEY },
-        outputFormat: "tree",
-        durationMs: 1,
-        error: new Error(
-          `Response body: <html>Blocked by policy. ` +
-            `url=https%3A%2F%2Fapi.figma.com%2Fv1%2Ffiles%2F${FILE_KEY}%2Fnodes%3Fids%3D1%3A2</html>`,
-        ),
-      },
-      { transport: "stdio", authMode: "api_key" },
-    );
+    captureRead({
+      input: { fileKey: FILE_KEY },
+      outputFormat: "tree",
+      durationMs: 1,
+      error: new Error(
+        `Response body: <html>Blocked by policy. ` +
+          `url=https%3A%2F%2Fapi.figma.com%2Fv1%2Ffiles%2F${FILE_KEY}%2Fnodes%3Fids%3D1%3A2</html>`,
+      ),
+    });
 
-    const message = onlyExceptionMessage();
+    const message = await onlyExceptionMessage();
     expect(message).not.toContain(FILE_KEY);
     expect(message).not.toContain("1%3A2");
     expect(message).toContain(REDACTED_FILE_KEY);
@@ -323,46 +304,37 @@ describe("figma identifier redaction in telemetry", () => {
     // Over-redaction has a real cost here: the port distinguishes "proxy
     // refused" from "direct connect refused", and network failures are exactly
     // what the proxy_mode property exists to analyze.
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
 
-    captureGetFigmaDataCall(
-      {
-        input: { fileKey: FILE_KEY },
-        outputFormat: "tree",
-        durationMs: 1,
-        error: new Error("connect ECONNREFUSED 127.0.0.1:8080 at fetch-json.ts:75:11"),
-      },
-      { transport: "stdio", authMode: "api_key" },
-    );
+    captureRead({
+      input: { fileKey: FILE_KEY },
+      outputFormat: "tree",
+      durationMs: 1,
+      error: new Error("connect ECONNREFUSED 127.0.0.1:8080 at fetch-json.ts:75:11"),
+    });
 
-    const message = onlyExceptionMessage();
+    const message = await onlyExceptionMessage();
     expect(message).toContain("127.0.0.1:8080");
     expect(message).toContain("fetch-json.ts:75:11");
     expect(message).not.toContain(REDACTED_NODE_ID);
   });
 
   it("scrubs identifiers alongside credentials in an untagged error", async () => {
-    await shutdownTelemetry();
-    initTelemetry({ enabled: true, immediateFlush: true, redactFromTelemetry: ["figd_secret"] });
-    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+    initTelemetry({ enabled: true, redactFromTelemetry: ["figd_secret"] });
 
-    captureGetFigmaDataCall(
-      {
-        input: { fileKey: FILE_KEY },
-        outputFormat: "tree",
-        durationMs: 1,
-        error: new Error(
-          `proxy rejected https://www.figma.com/design/${FILE_KEY}/Board?node-id=1234-5678 ` +
-            `(token figd_secret, node ${NODE_ID})`,
-        ),
-      },
-      { transport: "stdio", authMode: "api_key" },
-    );
+    captureRead({
+      input: { fileKey: FILE_KEY },
+      outputFormat: "tree",
+      durationMs: 1,
+      error: new Error(
+        `proxy rejected https://www.figma.com/design/${FILE_KEY}/Board?node-id=1234-5678 ` +
+          `(token figd_secret, node ${NODE_ID})`,
+      ),
+    });
 
-    const message = onlyExceptionMessage();
+    const message = await onlyExceptionMessage();
     expect(message).not.toContain(FILE_KEY);
     expect(message).not.toContain(NODE_ID);
     expect(message).not.toContain("1234-5678");
-    expect(everythingSent()).not.toContain("figd_secret");
+    expect(await everythingSent()).not.toContain("figd_secret");
   });
 });

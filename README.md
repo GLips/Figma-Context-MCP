@@ -119,7 +119,9 @@ The command exits as soon as the execution replies. Ctrl-C exits with status 130
 
 ## Telemetry
 
-The server sends usage telemetry to PostHog: one event per tool call, with its duration, outcome and sizes. Opt out with `--no-telemetry`, `FRAMELINK_TELEMETRY=off`, or `DO_NOT_TRACK=1`.
+The server and the CLI send usage telemetry to PostHog: one event per tool call or CLI command, with its duration, outcome and sizes. A CLI command records the same event as the tool it mirrors (`fetch` as `get_figma_data`), marked as coming from the CLI. Opt out with `--no-telemetry` (on the server and every CLI command), `FRAMELINK_TELEMETRY=off`, or `DO_NOT_TRACK=1`.
+
+- **Telemetry never holds you up.** Events are sent in the background. On exit, delivery gets at most 1.5 seconds, then whatever is unsent is dropped.
 
 - **Reads are anonymous.** Read events carry a per-process random ID, never your identity, file keys, node IDs, or design content.
 - **Writes name the Figma user.** Events from write-path tools (`figma_execute_code`, `get_screenshot`) carry the Figma user ID of the plugin owner, the Figma user signed in to the plugin that ran the code. Writes are metered per user, so we need it to tell usage apart. Neither authored code nor returned content is ever sent.

@@ -1,22 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// posthog-node is the system boundary for batched events; a report skips it for a confirmed send.
-vi.mock("posthog-node", () => ({
-  PostHog: class {
-    capture = vi.fn();
-    captureException = vi.fn();
-    shutdown = vi.fn(async () => {});
-  },
-}));
-
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { runReportIssue } from "~/commands/report-issue.js";
 import { createServer } from "~/mcp/index.js";
-import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
-
-type CapturePost = { event: string; distinct_id: string; properties: Record<string, unknown> };
+import { createCliCommandContext } from "~/commands/cli-context.js";
+import { prepareCliProcess } from "~/commands/cli-runner.js";
+import { closeTelemetry, initTelemetry } from "~/telemetry/index.js";
+import { stubPostHogNetwork, type SentEvent } from "./fixtures/posthog-network.js";
 
 async function connect(telemetry: boolean) {
   const server = createServer(
@@ -38,19 +30,18 @@ async function connect(telemetry: boolean) {
 }
 
 describe("report_framelink_issue", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
-  const posts = (): CapturePost[] =>
-    fetchMock.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string));
+  // PostHog's capture API is the boundary. A report is sent at once, so it is there before close.
+  let posthog: ReturnType<typeof stubPostHogNetwork>;
+  const posts = (): SentEvent[] => posthog.events;
 
   beforeEach(() => {
     initTelemetry({ enabled: true, redactFromTelemetry: ["figd_secret"] });
-    fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    posthog = stubPostHogNetwork();
   });
 
   afterEach(async () => {
+    await closeTelemetry(5_000);
     vi.unstubAllGlobals();
-    await shutdownTelemetry();
   });
 
   it("exists only while telemetry records the server's calls", async () => {
@@ -107,9 +98,7 @@ describe("report_framelink_issue", () => {
   });
 
   it("tells the agent when the report didn't arrive", async () => {
-    fetchMock.mockImplementation(async () => {
-      throw new Error("offline");
-    });
+    posthog.answerPostHog(() => new Response("{}", { status: 400 }));
     const { report, close } = await connect(true);
     const result = await report({ kind: "friction", summary: "x", attempted: "y" });
     await close();
@@ -119,14 +108,18 @@ describe("report_framelink_issue", () => {
   });
 
   it("scrubs the environment's Figma token from a CLI report", async () => {
-    await shutdownTelemetry();
     vi.stubEnv("FIGMA_API_KEY", "figd_from_env");
-    const code = await runReportIssue({
-      kind: "friction",
-      summary: "Had to retry execute",
-      attempted: "Restyle the cards",
-      actual: "rejected figd_from_env",
-    });
+    // What the CLI runner does before any command: here it adds the env's token to the scrub list.
+    const credential = prepareCliProcess({ env: "/nonexistent/.env" });
+    const code = await runReportIssue(
+      {
+        kind: "friction",
+        summary: "Had to retry execute",
+        attempted: "Restyle the cards",
+        actual: "rejected figd_from_env",
+      },
+      createCliCommandContext({ signal: new AbortController().signal, credential }),
+    );
     vi.unstubAllEnvs();
 
     expect(code).toBe(0);

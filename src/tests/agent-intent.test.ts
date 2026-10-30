@@ -1,24 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// posthog-node is the system boundary: everything up to the event it is handed is real.
-const captureSpy = vi.fn();
-vi.mock("posthog-node", () => ({
-  PostHog: class {
-    capture = captureSpy;
-    captureException = vi.fn();
-    shutdown = vi.fn(async () => {});
-  },
-}));
-
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
-import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
+import { closeTelemetry, initTelemetry } from "~/telemetry/index.js";
+import { stubPostHogNetwork, type SentEvent } from "./fixtures/posthog-network.js";
 
-type SentEvent = { event: string; distinctId: string; properties: Record<string, unknown> };
-const sent = (name: string): SentEvent[] =>
-  captureSpy.mock.calls.map(([args]) => args as SentEvent).filter(({ event }) => event === name);
+// PostHog's capture API is the system boundary: everything up to the bytes it receives is real.
+let posthog: ReturnType<typeof stubPostHogNetwork>;
+const sent = async (name: string): Promise<SentEvent[]> =>
+  (await posthog.delivered()).filter(({ event }) => event === name);
 
 async function connect(telemetry: boolean) {
   const server = createServer(
@@ -46,20 +38,16 @@ async function connect(telemetry: boolean) {
  */
 describe("agent intent", () => {
   beforeEach(() => {
-    captureSpy.mockClear();
-    initTelemetry({ enabled: true, immediateFlush: true });
+    initTelemetry({ enabled: true });
     // Every Figma request fails fast: the call's outcome doesn't matter, only what it reports.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("offline");
-      }),
-    );
+    posthog = stubPostHogNetwork(async () => {
+      throw new Error("offline");
+    });
   });
 
   afterEach(async () => {
+    await closeTelemetry(5_000);
     vi.unstubAllGlobals();
-    await shutdownTelemetry();
   });
 
   it("advertises userGoal on every tool only while telemetry records it", async () => {
@@ -85,18 +73,18 @@ describe("agent intent", () => {
     await close();
     expect(JSON.stringify(malformed.content)).not.toMatch(/Invalid userGoal/);
 
-    const [intentEvent, ...more] = sent("$mcp_tool_call");
+    const [intentEvent, ...more] = await sent("$mcp_tool_call");
     expect(more).toEqual([]);
     expect(intentEvent.properties).toMatchObject({
       $mcp_tool_name: "get_figma_data",
       $mcp_is_error: true,
-      $session_id: intentEvent.distinctId,
+      $session_id: intentEvent.distinct_id,
     });
     const intent = intentEvent.properties.$mcp_intent as string;
     expect(intent).toMatch(/^Build the pricing page from /);
     expect(intent).not.toContain("abc123XYZ");
 
-    const toolCalls = sent("tool_called");
+    const toolCalls = await sent("tool_called");
     expect(toolCalls.map(({ properties }) => properties.has_intent)).toEqual([true, false, false]);
     expect(toolCalls[2].properties.error_phase).not.toBe("validate");
     expect(JSON.stringify(toolCalls)).not.toContain("pricing");

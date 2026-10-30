@@ -17,7 +17,15 @@ import { z } from "zod";
 import { z as z3 } from "zod/v3";
 import { unknownParamsReply } from "./fail-loud-params.js";
 import type { ToolExtra } from "./progress.js";
-import { installValidationRejectCapture, type ParamRejection } from "./validation-capture.js";
+import { installValidationRejectCapture } from "./validation-capture.js";
+import {
+  observeOperation,
+  reportingTo,
+  type ObserveOperation,
+  type OperationCall,
+  type OperationObservation,
+  type ParamRejection,
+} from "~/utils/observed-operation.js";
 
 export type { ParamRejection };
 
@@ -35,29 +43,11 @@ type ParamsOf<Input extends ToolInput> = Input extends ZodRawShapeCompat
     ? SchemaOutput<Input>
     : never;
 
-/** One call's handle on its own observation. */
-export interface FramelinkToolCall<Facts> {
-  /** The tool-specific facts this call's observation carries; the last recorded wins. */
-  record(facts: Facts): void;
-  /** The arguments failed a check the schema can't express; the handler still answers the agent. */
-  reject(rejection: ParamRejection): void;
-}
+/** One tool call's handle on its own observation (utils/observed-operation.ts). */
+export type FramelinkToolCall<Facts> = OperationCall<Facts>;
 
-/**
- * How one call ended. `completed`: the handler answered (`isError` as it said). `threw`: the
- * handler threw — every expected failure is answered as a result, so a throw is a bug or an outage
- * nobody anticipated. `rejected`: the arguments failed validation and the tool's work never ran.
- */
-export type ToolCallObservation<Name extends string, Facts> = {
-  tool: Name;
-  durationMs: number;
-  /** What the agent said the call is for, verbatim — free text. Absent when it said nothing. */
-  intent?: string;
-} & (
-  | { kind: "completed"; isError: boolean; facts?: Facts }
-  | { kind: "threw"; error: unknown; facts?: Facts }
-  | { kind: "rejected"; rejection: ParamRejection }
-);
+/** How one tool call ended; see `OperationObservation`. */
+export type ToolCallObservation<Name extends string, Facts> = OperationObservation<Name, Facts>;
 
 export interface FramelinkToolDef<Name extends string, Input extends ToolInput, Facts> {
   name: Name;
@@ -74,9 +64,7 @@ export interface FramelinkToolDef<Name extends string, Input extends ToolInput, 
 }
 
 /** Where a tool's observations go. Throwing here never affects the call. */
-export type ObserveToolCall<Name extends string, Facts> = (
-  observation: ToolCallObservation<Name, Facts>,
-) => void;
+export type ObserveToolCall<Name extends string, Facts> = ObserveOperation<Name, Facts>;
 
 const USER_GOAL_PARAM = "userGoal";
 const USER_GOAL_DESCRIPTION =
@@ -112,61 +100,24 @@ export function registerFramelinkTool<Name extends string, Input extends ToolInp
   // NoInfer: the tool's own handler fixes Facts; a composition's observer may take a wider union.
   observe: NoInfer<ObserveToolCall<Name, Facts>>,
 ): RegisteredTool {
-  const report = (observation: ToolCallObservation<Name, Facts>) => {
-    try {
-      observe(observation);
-    } catch {
-      // An observer must never turn a finished call into a failed one.
-    }
-  };
+  const report = reportingTo(observe);
   schemaRejectObserversOf(server).set(def.name, (rejection) =>
     report({ tool: def.name, kind: "rejected", durationMs: 0, rejection }),
   );
 
   const asksUserGoal = userGoalServers.has(server);
 
-  const run = async (args: Record<string, unknown>, extra: ToolExtra): Promise<CallToolResult> => {
-    const startedAt = Date.now();
+  const run = (args: Record<string, unknown>, extra: ToolExtra): Promise<CallToolResult> => {
     const { [USER_GOAL_PARAM]: userGoal, ...params } = args;
-    const intent = asksUserGoal ? statedIntent(userGoal) : undefined;
-    let facts: Facts | undefined;
-    let rejection: ParamRejection | undefined;
-    const call: FramelinkToolCall<Facts> = {
-      record: (recorded) => {
-        facts = recorded;
-      },
-      reject: (rejected) => {
-        rejection = rejected;
-      },
-    };
-    let result: CallToolResult;
-    try {
-      result = await def.handler(params as ParamsOf<Input>, call, extra);
-    } catch (error) {
-      report({
+    return observeOperation(
+      {
         tool: def.name,
-        kind: "threw",
-        durationMs: Date.now() - startedAt,
-        intent,
-        error,
-        facts,
-      });
-      throw error;
-    }
-    const durationMs = Date.now() - startedAt;
-    report(
-      rejection
-        ? { tool: def.name, kind: "rejected", durationMs, intent, rejection }
-        : {
-            tool: def.name,
-            kind: "completed",
-            durationMs,
-            intent,
-            isError: !!result.isError,
-            facts,
-          },
+        intent: asksUserGoal ? statedIntent(userGoal) : undefined,
+        observe: report,
+        isError: (result: CallToolResult) => !!result.isError,
+      },
+      (call) => def.handler(params as ParamsOf<Input>, call, extra),
     );
-    return result;
   };
 
   const config = {

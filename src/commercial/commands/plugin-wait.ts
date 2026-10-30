@@ -20,24 +20,24 @@ export function pluginWaitMs(waitSeconds: number | undefined): number {
 }
 
 /**
- * Resolve once a plugin is on the wire, or fail naming what didn't happen (`notDone`, e.g. "the
- * script was not submitted") once `waitMs` passes. An abort of `signal` rejects with its reason.
+ * Wait for a plugin on the wire: null once one is, or the text naming what didn't happen
+ * (`notDone`, e.g. "the script was not submitted") once `waitMs` passes. An abort of `signal`
+ * rejects with its reason.
  */
 export async function waitForPluginConnection(
   bridge: PluginBridge,
   waitMs: number,
   signal: AbortSignal,
   notDone: string,
-): Promise<void> {
+): Promise<string | null> {
   const expired = new AbortController();
   const timer = setTimeout(() => expired.abort(), waitMs);
   try {
     await bridge.whenPluginConnected(AbortSignal.any([signal, expired.signal]));
+    return null;
   } catch (error) {
     if (signal.aborted) throw error;
-    throw new Error(
-      `Blocked: no Figma plugin connected before --wait expired, so ${notDone}. ${pluginDisconnectedAction()}`,
-    );
+    return `Blocked: no Figma plugin connected before --wait expired, so ${notDone}. ${pluginDisconnectedAction()}`;
   } finally {
     clearTimeout(timer);
   }

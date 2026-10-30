@@ -1,12 +1,17 @@
-import { type Command, command } from "cleye";
-import { resolveCredential, resolveProxy, resolveTelemetryEnabled, UsageError } from "~/config.js";
-import { reportFramelinkIssue, reportIssueParametersSchema } from "~/mcp/report-issue-tool.js";
-import { ISSUE_REPORT_KINDS, initTelemetry, shutdown } from "~/telemetry/index.js";
+import { command } from "cleye";
+import { UsageError } from "~/config.js";
+import {
+  REPORT_FRAMELINK_ISSUE_TOOL,
+  reportFramelinkIssue,
+  reportIssueParametersSchema,
+} from "~/mcp/report-issue-tool.js";
+import { captureObservedCall, ISSUE_REPORT_KINDS } from "~/telemetry/index.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
+import { defineCliCommand } from "./cli-command.js";
+import type { CliCommandContext } from "./cli-context.js";
 
-export const reportIssueCommand: Command = command(
-  {
+export const reportIssueCommand = defineCliCommand(
+  command({
     name: "report-issue",
     strictFlags: true,
     help: buildCommandHelp({
@@ -45,27 +50,15 @@ export const reportIssueCommand: Command = command(
         description: "The failing call's shape, names and content replaced by placeholders",
       },
       userWords: { type: String, placeholder: "<text>", description: "What the user said, quoted" },
-      noTelemetry: {
-        type: Boolean,
-        description: "Turn off usage telemetry, which also means sending nothing",
-      },
     },
-  },
-  (argv) => {
-    runReportIssue(argv.flags)
-      .then((code) => {
-        process.exitCode = code;
-      })
-      .catch((error: unknown) => {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
-      })
-      .finally(() => shutdown());
-  },
+  }),
+  (argv, context) => runReportIssue(argv.flags, context),
 );
 
 // The schema strips cleye's own `help` flag, so the CLI accepts exactly what the tool does.
-export async function runReportIssue(flags: unknown): Promise<number> {
+// A token in the environment needs nothing here: the runner has already registered it for scrubbing,
+// as the server does its own, and installed the proxy Figma requests use, so a report gets out the same way.
+export async function runReportIssue(flags: unknown, context: CliCommandContext): Promise<number> {
   const parsed = reportIssueParametersSchema.safeParse(flags);
   if (!parsed.success)
     throw new UsageError(
@@ -73,21 +66,15 @@ export async function runReportIssue(flags: unknown): Promise<number> {
         .map((issue) => `--${kebab(issue.path.join("."))}: ${issue.message}`)
         .join("\n"),
     );
-  const optOut = (flags as { noTelemetry?: boolean }).noTelemetry;
-  // No token is needed to report, but one in the environment is scrubbed from the report, as the
-  // server scrubs its own. The proxy is the one Figma requests use, so a report gets out the same way.
-  const credential = resolveCredential({});
-  installFigmaProxyDispatcher(resolveProxy({}).value);
-  initTelemetry({
-    enabled: resolveTelemetryEnabled(optOut),
-    redactFromTelemetry: credential ? [credential.token] : [],
+  return context.observe(REPORT_FRAMELINK_ISSUE_TOOL, captureObservedCall, async (call) => {
+    const { delivery, text } = await reportFramelinkIssue(parsed.data, {
+      transport: "cli",
+      authMode: "none",
+    });
+    call.record({ kind: parsed.data.kind, delivery: delivery.kind });
+    console.log(text);
+    return delivery.kind === "sent" ? 0 : 1;
   });
-  const { delivery, text } = await reportFramelinkIssue(parsed.data, {
-    transport: "cli",
-    authMode: "none",
-  });
-  console.log(text);
-  return delivery.kind === "sent" ? 0 : 1;
 }
 
 const kebab = (name: string) => name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);

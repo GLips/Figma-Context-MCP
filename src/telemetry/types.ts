@@ -1,4 +1,4 @@
-import type { ParamRejection } from "~/mcp/validation-capture.js";
+import type { ParamRejection } from "~/utils/observed-operation.js";
 
 export type Transport = "stdio" | "http" | "cli";
 export type AuthMode = "oauth" | "api_key" | "none";
@@ -7,13 +7,6 @@ export type ClientInfo = { name?: string; version?: string };
 export interface InitTelemetryOptions {
   /** The resolved opt-in, from `resolveTelemetryEnabled` in config.ts. */
   enabled: boolean;
-  /**
-   * Flush events immediately instead of batching. For short-lived processes
-   * (e.g. the `fetch` CLI command) that would otherwise exit before the
-   * default flush interval fires and drop the event. Such a process also never
-   * retries a send: an unanswered one would hold it open after its output.
-   */
-  immediateFlush?: boolean;
   /**
    * Strings to scrub from every string-valued event property, and from
    * reported errors, before sending to PostHog. The shell passes whatever it

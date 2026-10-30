@@ -1,16 +1,18 @@
-import { type Command, command } from "cleye";
-import { parseOutputFormat, resolveTelemetryEnabled, UsageError } from "~/config.js";
+import { command } from "cleye";
+import { parseOutputFormat, requireGlobalCredential, UsageError } from "~/config.js";
 import { getFigmaDataTool } from "~/mcp/tools/get-figma-data-tool.js";
 import { FigmaService, staticCredentialSource } from "~/services/figma.js";
-import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
+import { captureReadToolCall } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
 import { figmaFileKey, figmaNodeId } from "~/utils/figma-url.js";
-import { REST_COMMAND_FLAGS, prepareRestCommand, resolveRestTarget } from "./rest-command.js";
+import { defineCliCommand } from "./cli-command.js";
+import { printCliFailure, type CliCommandContext } from "./cli-context.js";
+import { REST_COMMAND_FLAGS, resolveRestTarget } from "./rest-command.js";
 
-export const fetchCommand: Command = command(
-  {
+export const fetchCommand = defineCliCommand(
+  command({
     name: "fetch",
     parameters: ["[url]"],
     help: buildCommandHelp({
@@ -44,37 +46,22 @@ export const fetchCommand: Command = command(
         placeholder: "<yaml|json|tree>",
         description: "Output format (default yaml; tree is the compact one the MCP server uses)",
       },
-      noTelemetry: {
-        type: Boolean,
-        description: "Turn off usage telemetry",
-      },
     },
-  },
-  (argv) => {
-    run(argv.flags, argv._)
-      .catch((error) => {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
-      })
-      .finally(() => shutdown());
-  },
+  }),
+  (argv, context) => runFetch(argv.flags, argv._, context),
 );
 
-async function run(
+export async function runFetch(
   flags: {
     fileKey?: string;
     nodeId?: string;
     depth?: number;
     json?: boolean;
     format?: string;
-    figmaApiKey?: string;
-    figmaOauthToken?: string;
-    env?: string;
-    proxy?: string;
-    noTelemetry?: boolean;
   },
   positionals: string[],
-) {
+  context: CliCommandContext,
+): Promise<number> {
   const target = resolveRestTarget(positionals[0], flags);
   // The tool's own validation, so the CLI accepts exactly what get_figma_data does.
   const parsed = getFigmaDataTool.parametersSchema.safeParse({ ...target, depth: flags.depth });
@@ -86,17 +73,7 @@ async function run(
   const fileKey = figmaFileKey(parsed.data.fileKey);
   const nodeId = parsed.data.nodeId === undefined ? undefined : figmaNodeId(parsed.data.nodeId);
   const depth = parsed.data.depth;
-  const credential = prepareRestCommand(flags);
-
-  // Initialize telemetry only after input validation succeeds, so every
-  // captured event corresponds to an actual fetch attempt (not a usage error).
-  initTelemetry({
-    enabled: resolveTelemetryEnabled(flags.noTelemetry),
-    immediateFlush: true,
-    redactFromTelemetry: [credential.token],
-  });
-
-  const mode = authMode(credential);
+  const credential = requireGlobalCredential(context.credential);
   // The fetch CLI stays yaml-by-default (unlike the MCP server, which defaults
   // to tree): its output is piped into standard tooling (`> out.yaml`, `| jq`),
   // where tree's bespoke indented format isn't parseable. Tree's token-efficiency
@@ -104,14 +81,18 @@ async function run(
   const outputFormat: OutputFormat =
     parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 
-  const result = await getFigmaData(
-    new FigmaService(staticCredentialSource(credential)),
-    { fileKey, nodeId, depth },
-    outputFormat,
-    {
-      onComplete: (outcome) =>
-        captureGetFigmaDataCall(outcome, { transport: "cli", authMode: mode }),
-    },
-  );
-  console.log(result.formatted);
+  return context.observe("get_figma_data", captureReadToolCall, async (call) => {
+    try {
+      const result = await getFigmaData(
+        new FigmaService(staticCredentialSource(credential)).withSignal(context.signal),
+        { fileKey, nodeId, depth },
+        outputFormat,
+        { onComplete: call.record },
+      );
+      console.log(result.formatted);
+      return 0;
+    } catch (error) {
+      return printCliFailure(error);
+    }
+  });
 }

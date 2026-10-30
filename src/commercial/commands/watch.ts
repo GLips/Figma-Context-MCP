@@ -2,30 +2,27 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { type Command, command } from "cleye";
+import { command } from "cleye";
 import { z } from "zod";
-import {
-  loadEnvFile,
-  resolveCredential,
-  resolvePluginConfig,
-  resolveProxy,
-  UsageError,
-} from "~/config.js";
+import { resolvePluginConfig, UsageError } from "~/config.js";
 import { REST_COMMAND_FLAGS, resolveRestTarget } from "~/commands/rest-command.js";
-import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
+import { defineCliCommand } from "~/commands/cli-command.js";
+import { printCliFailure, type CliCommandContext } from "~/commands/cli-context.js";
 import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import {
+  FeedbackCursorError,
   WATCH_TIMEOUT_MAX_SECONDS,
   followFigmaFeedback,
   watchFigmaFeedback,
 } from "~/services/watch-figma-feedback.js";
+import { captureFeedbackWatchCall, captureObservedCall } from "~/telemetry/index.js";
 import { parseWatchFigmaFeedbackParams } from "~/mcp/tools/watch-figma-feedback-tool.js";
 import { startPluginBridge } from "~/commercial/plugin-bridge/index.js";
 import { createBridgeAnnotationSource } from "~/commercial/plugin-bridge/annotation-watch.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
 
-export const watchCommand: Command = command(
-  {
+export const watchCommand = defineCliCommand(
+  command({
     name: "watch",
     strictFlags: true,
     parameters: ["[url]"],
@@ -67,13 +64,8 @@ export const watchCommand: Command = command(
         description: "Keep watching until stopped, one JSON line per event",
       },
     },
-  },
-  (argv) => {
-    runWatch(argv.flags, argv._).catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    });
-  },
+  }),
+  (argv, context) => runWatch(argv.flags, argv._, context),
 );
 
 interface WatchFlags {
@@ -81,13 +73,14 @@ interface WatchFlags {
   cursor?: string;
   timeout?: number;
   follow?: boolean;
-  figmaApiKey?: string;
-  figmaOauthToken?: string;
-  env?: string;
-  proxy?: string;
 }
 
-export async function runWatch(flags: WatchFlags, positionals: string[]): Promise<void> {
+/** Ends 0 when stopped (Ctrl-C, SIGTERM): stopping is how a watch is meant to end. */
+async function runWatch(
+  flags: WatchFlags,
+  positionals: string[],
+  { signal, credential, observe }: CliCommandContext,
+): Promise<number> {
   if (flags.follow && flags.timeout !== undefined)
     throw new UsageError(
       "--timeout bounds a single watch; --follow watches until stopped. Pass one.",
@@ -100,11 +93,8 @@ export async function runWatch(flags: WatchFlags, positionals: string[]): Promis
   });
   // Optional, unlike the other REST commands: an agent's shell often lacks the token its MCP server
   // was configured with, and the plugin's annotations need none.
-  loadEnvFile(flags.env);
-  const credential = resolveCredential(flags);
-  if (credential) installFigmaProxyDispatcher(resolveProxy(flags).value);
   const figma = credential
-    ? new FigmaService(staticCredentialSource(credential))
+    ? new FigmaService(staticCredentialSource(credential)).withSignal(signal)
     : {
         none: true as const,
         noCommentsNote:
@@ -116,32 +106,50 @@ export async function runWatch(flags: WatchFlags, positionals: string[]): Promis
     framelinkApiUrl: config.framelinkApiUrl.value,
   });
   const annotations = createBridgeAnnotationSource(runtime.bridge);
-  const controller = new AbortController();
-  const interrupt = () => controller.abort(new Error("Interrupted"));
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
   try {
     if (flags.follow)
-      await followFigmaFeedback(figma, fileKey, {
-        cursor,
-        annotations,
-        signal: controller.signal,
-        emit: (line) => console.log(JSON.stringify(line)),
+      // No MCP twin: an agent's tool call can't stay open, so following is the CLI's alone.
+      return await observe("cli_watch_follow", captureObservedCall, async () => {
+        try {
+          await followFigmaFeedback(figma, fileKey, {
+            cursor,
+            annotations,
+            signal,
+            emit: (line) => console.log(JSON.stringify(line)),
+          });
+        } catch (error) {
+          if (error instanceof FeedbackCursorError) return printCliFailure(error);
+          if (!signal.aborted) throw error;
+        }
+        return 0;
       });
-    else {
-      const result = await watchFigmaFeedback(figma, fileKey, {
-        cursor,
-        timeoutMs,
-        annotations,
-        signal: controller.signal,
-      });
-      console.log(JSON.stringify(result, null, 2));
-    }
-  } catch (error) {
-    if (!controller.signal.aborted) throw error;
+    return await observe("watch_figma_feedback", captureFeedbackWatchCall, async (call) => {
+      const startedAt = Date.now();
+      try {
+        const result = await watchFigmaFeedback(figma, fileKey, {
+          cursor,
+          timeoutMs,
+          annotations,
+          signal,
+        });
+        call.record({ durationMs: Date.now() - startedAt, status: result.status });
+        console.log(JSON.stringify(result, null, 2));
+        return 0;
+      } catch (error) {
+        if (signal.aborted) {
+          call.record({ durationMs: Date.now() - startedAt });
+          return 0;
+        }
+        // A cursor from another file or a garbled one is the caller's to fix, as the tool says.
+        call.record(
+          error instanceof FeedbackCursorError
+            ? { durationMs: Date.now() - startedAt }
+            : { durationMs: Date.now() - startedAt, error },
+        );
+        return printCliFailure(error);
+      }
+    });
   } finally {
-    process.removeListener("SIGINT", interrupt);
-    process.removeListener("SIGTERM", interrupt);
     if (runtime.stop) runtime.stop();
     else runtime.bridge.stop();
   }

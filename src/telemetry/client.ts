@@ -1,20 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { PostHog } from "posthog-node";
 import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 import { redactFigmaIdentifiers } from "./redact-identifiers.js";
 import { redactRequestSecrets } from "~/utils/request-secrets.js";
 import type { InitTelemetryOptions } from "./types.js";
+import { exceptionProperties } from "./exception-event.js";
+import {
+  createPostHogExporter,
+  type ConfirmedSend,
+  type TelemetryExporter,
+} from "./posthog-exporter.js";
+
+export type { ConfirmedSend };
 
 // Write-only project key for the Framelink MCP analytics project.
 // This is intentionally embedded in the published package — it's a public
 // ingest key that cannot read data, only send events.
 const POSTHOG_API_KEY = "phc_w69pYvKwGNLsUHU4TGGpgAiscm8nhjudHgAJzAdzXkJV";
 const POSTHOG_HOST = "https://us.i.posthog.com";
-// The longest telemetry may hold a process's exit, and the longest one send may take: a network that
-// silently drops packets otherwise keeps the SDK's 30 s shutdown, and its in-flight retries, alive
-// after the work is done. Events that miss it are dropped.
-const TELEMETRY_EXIT_BUDGET_MS = 1500;
+// The long-lived server's batching cadence; a CLI command's events go out when it closes telemetry.
+const FLUSH_INTERVAL_MS = 10_000;
+// Identifies the sender in PostHog's `$lib` breakdowns.
+const TELEMETRY_LIB = "framelink-mcp";
 
 type CommonProperties = {
   server_version: string;
@@ -39,10 +46,11 @@ type TelemetryState =
   | { kind: "off" }
   | {
       kind: "on";
-      client: PostHog;
+      exporter: TelemetryExporter;
       sessionId: string;
       commonProps: CommonProperties;
-      redactionSecrets: readonly string[];
+      /** Grows as callers resolve credentials; read at capture time, so a later secret still counts. */
+      redactionSecrets: Set<string>;
     };
 
 let state: TelemetryState = { kind: "off" };
@@ -55,7 +63,7 @@ function parseNodeMajor(version: string): number {
 const HOME_DIR = homedir();
 const scrubbableHomeDir = HOME_DIR.length > 1 ? HOME_DIR : undefined;
 
-function redactTelemetryString(value: string, redactionSecrets: readonly string[]): string {
+function redactTelemetryString(value: string, redactionSecrets: ReadonlySet<string>): string {
   let result = value;
   for (const secret of redactionSecrets) {
     result = result.replaceAll(secret, "[REDACTED]");
@@ -71,26 +79,31 @@ function redactTelemetryString(value: string, redactionSecrets: readonly string[
   return redactFigmaIdentifiers(result);
 }
 
+/**
+ * Turn telemetry on for this process, or add `redactFromTelemetry` to the secrets an already-on
+ * client scrubs. Returns whether telemetry is on. Every caller must register the credentials it
+ * resolved here before anything it does can be captured.
+ */
 export function initTelemetry(opts: InitTelemetryOptions): boolean {
-  if (state.kind === "on") return true;
+  const secrets = (opts.redactFromTelemetry ?? []).filter(Boolean);
+  if (state.kind === "on") {
+    for (const secret of secrets) state.redactionSecrets.add(secret);
+    return true;
+  }
   if (!opts.enabled) return false;
 
-  // disableGeoip: false is load-bearing — the Node SDK defaults GeoIP to off,
-  // and our geography analytics depend on it being enabled.
-  const client = new PostHog(POSTHOG_API_KEY, {
-    host: POSTHOG_HOST,
-    disableGeoip: false,
-    requestTimeout: TELEMETRY_EXIT_BUDGET_MS,
-    ...(opts.immediateFlush ? { flushAt: 1, flushInterval: 0, fetchRetryCount: 0 } : {}),
-  });
-
+  const serverVersion = process.env.NPM_PACKAGE_VERSION ?? "unknown";
   state = {
     kind: "on",
-    client,
+    exporter: createPostHogExporter({
+      host: POSTHOG_HOST,
+      apiKey: POSTHOG_API_KEY,
+      flushIntervalMs: FLUSH_INTERVAL_MS,
+    }),
     sessionId: randomUUID(),
-    redactionSecrets: (opts.redactFromTelemetry ?? []).filter(Boolean),
+    redactionSecrets: new Set(secrets),
     commonProps: {
-      server_version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
+      server_version: serverVersion,
       os_platform: process.platform,
       nodejs_major: parseNodeMajor(process.versions.node),
       is_ci: Boolean(process.env.CI),
@@ -125,26 +138,23 @@ export function captureEvent(
   maxLengths: Readonly<Record<string, number>> = {},
 ): void {
   if (state.kind === "off") return;
-  const { client, sessionId } = state;
+  const { exporter, sessionId } = state;
   try {
-    client.capture({
-      distinctId: sessionId,
+    exporter.send({
       event,
-      properties: eventProperties(state, properties, maxLengths),
+      distinct_id: sessionId,
+      properties: withLibrary(eventProperties(state, properties, maxLengths)),
     });
   } catch {
     // intentionally empty
   }
 }
 
-export type ConfirmedSend = { kind: "sent" } | { kind: "off" } | { kind: "failed"; reason: string };
-
 const CONFIRMED_SEND_TIMEOUT_MS = 10_000;
 
 /**
  * Send one event now and say whether PostHog took it — for an event the caller reports back on,
- * unlike every other event, which must stay invisible. Posts to the capture endpoint directly:
- * the SDK's immediate capture logs a failed send and resolves anyway.
+ * unlike every other event, which must stay invisible.
  */
 export async function sendEventConfirmed(
   event: string,
@@ -152,22 +162,24 @@ export async function sendEventConfirmed(
   maxLengths: Readonly<Record<string, number>> = {},
 ): Promise<ConfirmedSend> {
   if (state.kind === "off") return { kind: "off" };
-  try {
-    const response = await fetch(`${POSTHOG_HOST}/i/v0/e/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: POSTHOG_API_KEY,
-        event,
-        distinct_id: state.sessionId,
-        properties: eventProperties(state, properties, maxLengths),
-      }),
-      signal: AbortSignal.timeout(CONFIRMED_SEND_TIMEOUT_MS),
-    });
-    return response.ok ? { kind: "sent" } : { kind: "failed", reason: `HTTP ${response.status}` };
-  } catch (error) {
-    return { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
-  }
+  return state.exporter.sendConfirmed(
+    {
+      event,
+      distinct_id: state.sessionId,
+      properties: withLibrary(eventProperties(state, properties, maxLengths)),
+    },
+    CONFIRMED_SEND_TIMEOUT_MS,
+  );
+}
+
+// GeoIP stays on by omission: PostHog enriches from the request's IP unless an event carries
+// `$geoip_disable: true`, which geography analytics depend on never being sent.
+function withLibrary(properties: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...properties,
+    $lib: TELEMETRY_LIB,
+    $lib_version: state.kind === "on" ? state.commonProps.server_version : "unknown",
+  };
 }
 
 function eventProperties(
@@ -200,7 +212,7 @@ export function captureUnexpectedError(
   properties: Record<string, string | undefined>,
 ): void {
   if (state.kind === "off") return;
-  const { client, sessionId, commonProps, redactionSecrets } = state;
+  const { exporter, sessionId, commonProps, redactionSecrets } = state;
   const scrub = (value: string) => redactTelemetryString(value, redactionSecrets);
   const reported = new Error(truncateForTelemetry(scrub(message)));
   reported.name = error instanceof Error ? error.name : "NonError";
@@ -213,23 +225,27 @@ export function captureUnexpectedError(
   for (const [key, value] of Object.entries(properties))
     if (value !== undefined) scrubbed[key] = scrub(value);
   try {
-    client.captureException(reported, sessionId, { ...commonProps, ...scrubbed });
+    exporter.send({
+      event: "$exception",
+      distinct_id: sessionId,
+      properties: withLibrary({
+        ...exceptionProperties(reported),
+        ...commonProps,
+        ...scrubbed,
+      }),
+    });
   } catch {
     // intentionally empty
   }
 }
 
-export async function shutdown(): Promise<void> {
+/**
+ * Deliver what is queued within `deadlineMs`, then abort the rest, so telemetry never holds a
+ * process's exit past it. Back to "off" afterwards, so tests can initialize again.
+ */
+export async function closeTelemetry(deadlineMs: number): Promise<void> {
   if (state.kind === "off") return;
-
-  const { client } = state;
-  // Back to "off" so the module can be re-initialized in the same process
-  // (relevant for tests; harmless in production where shutdown runs at exit).
+  const { exporter } = state;
   state = { kind: "off" };
-  try {
-    await client.shutdown(TELEMETRY_EXIT_BUDGET_MS);
-  } catch {
-    // Telemetry shutdown must never break callers — the server.ts shutdown
-    // handler and the fetch.ts cleye chain both depend on this resolving.
-  }
+  await exporter.close(deadlineMs);
 }

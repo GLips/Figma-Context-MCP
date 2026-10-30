@@ -1,27 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("~/telemetry/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/telemetry/index.js")>();
-  return {
-    ...actual,
-    captureToolCall: vi.fn(),
-  };
-});
-
 import { createServer } from "~/mcp/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import * as telemetry from "~/telemetry/index.js";
+import { closeTelemetry, initTelemetry } from "~/telemetry/index.js";
+import { stubPostHogNetwork } from "./fixtures/posthog-network.js";
 
-/** The rejections reported through `tool_called`, one per rejected call. */
-const rejections = () =>
-  vi
-    .mocked(telemetry.captureToolCall)
-    .mock.calls.flatMap(([event]) =>
-      event.rejection ? [{ tool: event.tool, ...event.rejection }] : [],
-    );
+// PostHog's capture API is the boundary; Figma requests fail at once, their outcome unneeded.
+let posthog: ReturnType<typeof stubPostHogNetwork>;
+
+/** The rejections delivered as `tool_called`, one per rejected call. */
+const rejections = async () =>
+  (await posthog.delivered()).flatMap(({ event, properties }) =>
+    event === "tool_called" && properties.validation_field !== undefined
+      ? [
+          {
+            tool: properties.tool,
+            field: properties.validation_field,
+            rule: properties.validation_rule,
+          },
+        ]
+      : [],
+  );
 
 /**
  * These tests cover the McpServer.validateToolInput monkey patch in
@@ -34,7 +35,10 @@ describe("validation reject capture (monkey patch)", () => {
   let server: McpServer;
 
   beforeEach(async () => {
-    vi.mocked(telemetry.captureToolCall).mockClear();
+    initTelemetry({ enabled: true });
+    posthog = stubPostHogNetwork(async () => {
+      throw new Error("offline");
+    });
 
     server = createServer(
       { credential: { kind: "pat", token: "test-key" }, imageDir: process.cwd() },
@@ -48,6 +52,8 @@ describe("validation reject capture (monkey patch)", () => {
   afterEach(async () => {
     await client.close();
     await server.close();
+    await closeTelemetry(5_000);
+    vi.unstubAllGlobals();
   });
 
   it("captures structured field/rule when get_figma_data fileKey fails regex", async () => {
@@ -66,8 +72,9 @@ describe("validation reject capture (monkey patch)", () => {
     );
     expect(result.isError).toBe(true);
 
-    expect(rejections()).toHaveLength(1);
-    const [input] = rejections();
+    const reported = await rejections();
+    expect(reported).toHaveLength(1);
+    const [input] = reported;
     expect(input.tool).toBe("get_figma_data");
     expect(input.field).toBe("fileKey");
     // Zod regex failures emit invalid_string in v3 and invalid_format in v4 —
@@ -93,8 +100,9 @@ describe("validation reject capture (monkey patch)", () => {
     );
     expect(result.isError).toBe(true);
 
-    expect(rejections()).toHaveLength(1);
-    const [input] = rejections();
+    const reported = await rejections();
+    expect(reported).toHaveLength(1);
+    const [input] = reported;
     expect(input.tool).toBe("download_figma_images");
     // The literal index 0 should be collapsed so `nodes.0.nodeId` doesn't
     // appear with high cardinality in PostHog.
@@ -122,6 +130,6 @@ describe("validation reject capture (monkey patch)", () => {
         // outcome, only that the validation hook stayed quiet.
       });
 
-    expect(rejections()).toEqual([]);
+    expect(await rejections()).toEqual([]);
   });
 });

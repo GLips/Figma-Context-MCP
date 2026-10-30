@@ -2,6 +2,9 @@ import { getErrorMeta } from "~/utils/error-meta.js";
 import { HttpError } from "~/utils/fetch-json.js";
 import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
 import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
+import type { OperationObservation } from "~/utils/observed-operation.js";
+import type { ReadToolOutcome } from "~/mcp/read-tools.js";
+import type { WatchFigmaFeedbackOutcome } from "~/mcp/tools/watch-figma-feedback-tool.js";
 import { captureEvent, captureUnexpectedError } from "./client.js";
 import { fingerprintResponseBody } from "./response-body-fingerprint.js";
 import type {
@@ -84,15 +87,77 @@ function captureMcpIntent(
   );
 }
 
-/** For a caller with nothing to add to the read's own event: the `fetch` command. */
-export function captureGetFigmaDataCall(
-  outcome: GetFigmaDataOutcome,
+/**
+ * One observed operation whose recorded facts are its event properties: every write tool, the
+ * report and reply tools, and the CLI-only commands.
+ */
+export function captureObservedCall(
+  observation: OperationObservation<string, ToolEventProperties>,
   context: ToolCallContext,
 ): void {
-  captureToolCall(getFigmaDataCallEvent(outcome), context);
+  captureToolCall(
+    observedCallEvent(observation, observation.kind === "rejected" ? undefined : observation.facts),
+    context,
+  );
 }
 
-export function getFigmaDataCallEvent(outcome: GetFigmaDataOutcome): ToolCallEvent {
+/** A read tool's observation, its facts being the read's own outcome. */
+export function captureReadToolCall(observation: ReadToolOutcome, context: ToolCallContext): void {
+  captureToolCall({ ...readToolCallEvent(observation), intent: observation.intent }, context);
+}
+
+export function captureFeedbackWatchCall(
+  observation: OperationObservation<"watch_figma_feedback", WatchFigmaFeedbackOutcome>,
+  context: ToolCallContext,
+): void {
+  captureToolCall(
+    observation.kind === "completed" && observation.facts
+      ? {
+          tool: observation.tool,
+          durationMs: observation.facts.durationMs,
+          intent: observation.intent,
+          isError: observation.facts.error !== undefined,
+          error: observation.facts.error,
+          properties: observation.facts.status
+            ? { watch_status: observation.facts.status }
+            : undefined,
+        }
+      : observedCallEvent(observation),
+    context,
+  );
+}
+
+function readToolCallEvent(outcome: ReadToolOutcome): ToolCallEvent {
+  if (outcome.kind !== "completed" || !outcome.facts) return observedCallEvent(outcome);
+  switch (outcome.tool) {
+    case "get_figma_data":
+      return getFigmaDataCallEvent(outcome.facts);
+    case "download_figma_images":
+      return downloadImagesCallEvent(outcome.facts);
+    case "get_figma_comments": {
+      const { durationMs, error } = outcome.facts;
+      return { tool: outcome.tool, durationMs, isError: error !== undefined, error };
+    }
+  }
+}
+
+/** A call reported from what the observation saw; `properties` are its recorded facts, if any. */
+function observedCallEvent(
+  observation: OperationObservation<string, unknown>,
+  properties?: ToolEventProperties,
+): ToolCallEvent {
+  const { tool, durationMs, intent } = observation;
+  switch (observation.kind) {
+    case "rejected":
+      return { tool, durationMs, intent, isError: true, rejection: observation.rejection };
+    case "threw":
+      return { tool, durationMs, intent, isError: true, error: observation.error, properties };
+    case "completed":
+      return { tool, durationMs, intent, isError: observation.isError, properties };
+  }
+}
+
+function getFigmaDataCallEvent(outcome: GetFigmaDataOutcome): ToolCallEvent {
   return {
     tool: "get_figma_data",
     durationMs: outcome.durationMs,
@@ -102,7 +167,7 @@ export function getFigmaDataCallEvent(outcome: GetFigmaDataOutcome): ToolCallEve
   };
 }
 
-export function downloadImagesCallEvent(outcome: DownloadImagesOutcome): ToolCallEvent {
+function downloadImagesCallEvent(outcome: DownloadImagesOutcome): ToolCallEvent {
   return {
     tool: "download_figma_images",
     durationMs: outcome.durationMs,

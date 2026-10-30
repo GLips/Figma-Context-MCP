@@ -22,6 +22,7 @@ import type { FigmaCredential } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as telemetry from "./telemetry/index.js";
+import { exitProcessAfterFlush } from "./process-exit.js";
 
 let httpServer: Server | null = null;
 // Set across the bind's await, so a second start can't slip past the running check meanwhile.
@@ -139,14 +140,12 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
   const handle = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    // onShutdown may throw (e.g. stopHttpServer failures); telemetry.shutdown
-    // swallows its own errors (see src/telemetry/client.ts). Use try/finally
-    // so process.exit(0) always runs regardless of onShutdown failure.
+    // onShutdown may throw (e.g. stopHttpServer failures); try/finally so the
+    // process still exits.
     try {
       await onShutdown();
     } finally {
-      await telemetry.shutdown();
-      process.exit(0);
+      await exitProcessAfterFlush(0);
     }
   };
   process.on("SIGINT", handle);

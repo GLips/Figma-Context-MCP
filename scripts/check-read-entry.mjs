@@ -24,8 +24,8 @@ const FORBIDDEN_INPUTS = [
   /^src\/(server|config|bin|index)\.ts$/,
   /^src\/mcp\/index\.ts$/,
 ];
-// Packages that only make sense process-wide: telemetry, the global dispatcher, HTTP/WS servers.
-const FORBIDDEN_PACKAGES = ["posthog-node", "undici", "express", "ws", "dotenv", "cleye"];
+// Packages that only make sense process-wide: the global dispatcher, HTTP/WS servers.
+const FORBIDDEN_PACKAGES = ["undici", "express", "ws", "dotenv", "cleye"];
 
 async function checkInputGraph() {
   const { metafile } = await build({

@@ -2,19 +2,15 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("~/telemetry/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/telemetry/index.js")>()),
-  captureToolCall: vi.fn(),
-}));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
-import * as telemetry from "~/telemetry/index.js";
+import { closeTelemetry, initTelemetry } from "~/telemetry/index.js";
+import { stubPostHogNetwork } from "../../tests/fixtures/posthog-network.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
@@ -67,9 +63,20 @@ async function connectedServer() {
   return { call, close: () => Promise.all([client.close(), server.close()]) };
 }
 
-const reported = () => vi.mocked(telemetry.captureToolCall).mock.calls.map(([event]) => event);
+// PostHog's capture API is the boundary: the events are what it receives.
+let posthog: ReturnType<typeof stubPostHogNetwork>;
+const delivered = async (name: string) =>
+  (await posthog.delivered()).filter(({ event }) => event === name);
 
-afterEach(() => vi.mocked(telemetry.captureToolCall).mockClear());
+beforeEach(() => {
+  initTelemetry({ enabled: true });
+  posthog = stubPostHogNetwork();
+});
+
+afterEach(async () => {
+  await closeTelemetry(5_000);
+  vi.unstubAllGlobals();
+});
 
 describe("code-mode tool telemetry", () => {
   it("attributes an executed run to its Plugin Owner, without the code or its result", async () => {
@@ -81,19 +88,19 @@ describe("code-mode tool telemetry", () => {
     });
     await close();
 
-    const [event] = reported();
-    expect(event).toMatchObject({
+    const [event] = await delivered("tool_called");
+    expect(event.properties).toMatchObject({
       tool: "figma_execute_code",
-      // The user's goal, not the panel's per-step intent.
-      intent: "Build the pricing page",
-      isError: false,
-      properties: {
-        figma_user_id: TEST_PLUGIN_OWNER.figmaUserId,
-        outcome: "executed",
-        script_source: "code",
-      },
+      has_intent: true,
+      is_error: false,
+      figma_user_id: TEST_PLUGIN_OWNER.figmaUserId,
+      outcome: "executed",
+      script_source: "code",
     });
-    expect(JSON.stringify(event)).not.toMatch(/secret/);
+    // The user's goal, not the panel's per-step intent.
+    const [intent] = await delivered("$mcp_tool_call");
+    expect(intent.properties.$mcp_intent).toBe("Build the pricing page");
+    expect(JSON.stringify(posthog.events)).not.toMatch(/secret/);
   });
 
   it("reports schema and unknown-param rejects as codes", async () => {
@@ -102,12 +109,15 @@ describe("code-mode tool telemetry", () => {
     await call("get_screenshot", { intent: "Test run", scale: "big" });
     await close();
 
-    expect(reported().map(({ tool, rejection }) => ({ tool, rejection }))).toEqual([
-      { tool: "get_screenshot", rejection: { field: "node_id", rule: "unknown_param" } },
-      {
-        tool: "get_screenshot",
-        rejection: expect.objectContaining({ field: "scale", rule: "invalid_type" }),
-      },
+    expect(
+      (await delivered("tool_called")).map(({ properties }) => ({
+        tool: properties.tool,
+        field: properties.validation_field,
+        rule: properties.validation_rule,
+      })),
+    ).toEqual([
+      { tool: "get_screenshot", field: "node_id", rule: "unknown_param" },
+      { tool: "get_screenshot", field: "scale", rule: "invalid_type" },
     ]);
   });
 });

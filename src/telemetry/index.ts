@@ -1,7 +1,7 @@
 import type { FigmaCredential } from "~/services/figma.js";
 import type { AuthMode } from "./types.js";
 
-export { initTelemetry, shutdown, type ConfirmedSend } from "./client.js";
+export { initTelemetry, closeTelemetry, type ConfirmedSend } from "./client.js";
 export {
   sendIssueReport,
   ISSUE_REPORT_KINDS,
@@ -10,9 +10,9 @@ export {
 } from "./issue-report.js";
 export {
   captureToolCall,
-  captureGetFigmaDataCall,
-  getFigmaDataCallEvent,
-  downloadImagesCallEvent,
+  captureObservedCall,
+  captureReadToolCall,
+  captureFeedbackWatchCall,
 } from "./capture.js";
 export type {
   Transport,

@@ -13,6 +13,7 @@ import { realpathSync } from "node:fs";
 import { promisify } from "node:util";
 import { WebSocket } from "ws";
 import { runExecute } from "~/commercial/commands/execute.js";
+import { createCliCommandContext } from "~/commands/cli-context.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import {
   FREE_WRITE_ALLOWANCE,
@@ -96,18 +97,22 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function run(flags: Parameters<typeof runExecute>[0] = {}) {
+function run(flags: Parameters<typeof runExecute>[0] = {}, signal = new AbortController().signal) {
   return runExecute(
-    {
-      env: join(dir, ".env"),
-      wait: 2,
-      figmaApiKey: "figd_cli_test",
-      intent: "Test run",
-      document: FIGMA_FILE.documentId,
-      ...flags,
-    },
+    { wait: 2, intent: "Test run", document: FIGMA_FILE.documentId, ...flags },
     [file],
+    createCliCommandContext({ signal, credential: { kind: "pat", token: "figd_cli_test" } }),
   );
+}
+
+/** An expected failure: answered with exit 1 and its reason on stderr, never thrown. */
+async function expectFailure(finished: Promise<number>, message: string | RegExp) {
+  expect(await finished).toBe(1);
+  const stderr = vi
+    .mocked(console.error)
+    .mock.calls.map((args) => args.map(String).join(" "))
+    .join("\n");
+  expect(stderr).toMatch(message);
 }
 
 const CLI_TEST_OWNER = { figmaUserId: "cli-test-user", name: "Test User" };
@@ -277,7 +282,8 @@ describe("saved-script CLI using production plugin services", () => {
   });
 
   it("keeps execution JSON when screenshot fails and rejects the command", async () => {
-    const finished = expect(run({ screenshot: join(dir, "missing.png") })).rejects.toThrow(
+    const finished = expectFailure(
+      run({ screenshot: join(dir, "missing.png") }),
       "Screenshot failed: unknown key",
     );
     const { closed } = await plugin((frame, socket) => {
@@ -291,7 +297,7 @@ describe("saved-script CLI using production plugin services", () => {
   });
 
   it("rejects a mid-run disconnect without replaying the saved script", async () => {
-    const finished = expect(run()).rejects.toThrow("disconnected");
+    const finished = expectFailure(run(), "disconnected");
     let attempts = 0;
     const { closed } = await plugin((frame, socket) => {
       if (frame.type === "EXECUTE_CODE") {
@@ -307,7 +313,8 @@ describe("saved-script CLI using production plugin services", () => {
 
   it("waits for Allow, and a run whose wait ran out sends nothing and says who must allow", async () => {
     const executions: Frame[] = [];
-    const expired = expect(run({ wait: 1 })).rejects.toThrow(
+    const expired = expectFailure(
+      run({ wait: 1 }),
       /Blocked: this project isn't allowed to edit "CLI file" yet, so the script did not run. Required before re-running: someone clicks Allow/,
     );
     const first = await plugin(
@@ -359,10 +366,8 @@ describe("saved-script CLI using production plugin services", () => {
     });
   });
 
-  it("fails on connection timeout and removes its signal handlers", async () => {
-    const before = process.listenerCount("SIGINT");
-    await expect(run({ wait: 0 })).rejects.toThrow("Blocked: no Figma plugin connected");
-    expect(process.listenerCount("SIGINT")).toBe(before);
+  it("fails on connection timeout", async () => {
+    await expectFailure(run({ wait: 0 }), "Blocked: no Figma plugin connected");
     expect(stdout).toBe("");
   });
 
@@ -400,7 +405,8 @@ describe("saved-script CLI using production plugin services", () => {
   });
 
   it("an untargeted run is refused with the open files to choose from, and prompts no panel", async () => {
-    const finished = expect(run({ document: undefined })).rejects.toThrow(
+    const finished = expectFailure(
+      run({ document: undefined }),
       new RegExp(`"CLI file": document ${FIGMA_FILE.documentId}.*\\n.*--document`),
     );
     const prompts: unknown[] = [];
@@ -459,7 +465,13 @@ describe("saved-script CLI using production plugin services", () => {
       run({ screenshot: join(dir, "bad.png"), key: "card", nodeId: "1:2" }),
     ).rejects.toThrow("ambiguous");
     await expect(run({ screenshot: join(dir, "bad.png"), scale: 40 })).rejects.toThrow("40");
-    await expect(runExecute({}, [join(dir, "workflow.ts")])).rejects.toThrow(".js");
+    await expect(
+      runExecute(
+        {},
+        [join(dir, "workflow.ts")],
+        createCliCommandContext({ signal: new AbortController().signal, credential: undefined }),
+      ),
+    ).rejects.toThrow(".js");
     expect(stdout).toBe("");
   });
 });
@@ -504,7 +516,7 @@ describe("one-shot bridge lifecycle", () => {
 });
 
 it("CLI sends nothing to an unpaired plugin and points at the pair command", async () => {
-  const finished = expect(run()).rejects.toThrow("npx figma-developer-mcp pair");
+  const finished = expectFailure(run(), "npx figma-developer-mcp pair");
   const frames: string[] = [];
   const { closed } = await plugin((frame) => void frames.push(String(frame.type)), {
     paired: false,
@@ -515,7 +527,7 @@ it("CLI sends nothing to an unpaired plugin and points at the pair command", asy
 });
 
 it("CLI cannot execute without a plugin owner even when the plugin claims a grant", async () => {
-  const finished = expect(run()).rejects.toThrow("which Figma user it is signed in as");
+  const finished = expectFailure(run(), "which Figma user it is signed in as");
   let executions = 0;
   const { closed } = await plugin(
     (frame) => {
@@ -528,18 +540,20 @@ it("CLI cannot execute without a plugin owner even when the plugin claims a gran
   expect(executions).toBe(0);
 });
 
-it("caller signal cancels the submitted run and returns conventional exit status without replay", async () => {
-  const finished = run();
+// The runner reports the stop's own exit status (130 for Ctrl-C) for the failure answered here.
+it("the stop signal cancels the submitted run and awaits the plugin's answer, without replay", async () => {
+  const stop = new AbortController();
+  const finished = run({}, stop.signal);
   let executions = 0;
   let cancelled = false;
   const { closed } = await plugin((frame) => {
     if (frame.type === "EXECUTE_CODE") {
       executions++;
-      process.emit("SIGINT");
+      stop.abort();
     }
     if (frame.type === "CANCEL") cancelled = true;
   });
-  expect(await finished).toBe(130);
+  expect(await finished).toBe(1);
   await closed;
   expect(executions).toBe(1);
   expect(cancelled).toBe(true);
@@ -560,7 +574,7 @@ it("CLI refuses an exhausted free allowance before sending any execution", async
       },
     },
   }));
-  const finished = expect(run()).rejects.toThrow(/allowance|Writes/);
+  const finished = expectFailure(run(), /allowance|Writes/);
   let executions = 0;
   const { closed } = await plugin((frame) => {
     if (frame.type === "EXECUTE_CODE") executions++;

@@ -1,14 +1,21 @@
-import { type Command, command } from "cleye";
+import { command } from "cleye";
 import { z } from "zod";
-import { UsageError } from "~/config.js";
+import { requireGlobalCredential, UsageError } from "~/config.js";
 import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import { getFigmaComments } from "~/services/get-figma-comments.js";
-import { parseGetFigmaCommentsParams } from "~/mcp/tools/get-figma-comments-tool.js";
+import {
+  parseGetFigmaCommentsParams,
+  type GetFigmaCommentsOutcome,
+} from "~/mcp/tools/get-figma-comments-tool.js";
+import type { OperationCall } from "~/utils/observed-operation.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-import { REST_COMMAND_FLAGS, prepareRestCommand, resolveRestTarget } from "./rest-command.js";
+import { captureReadToolCall } from "~/telemetry/index.js";
+import { defineCliCommand } from "./cli-command.js";
+import { printCliFailure, type CliCommandContext } from "./cli-context.js";
+import { REST_COMMAND_FLAGS, resolveRestTarget } from "./rest-command.js";
 
-export const commentsCommand: Command = command(
-  {
+export const commentsCommand = defineCliCommand(
+  command({
     name: "comments",
     strictFlags: true,
     parameters: ["[url]"],
@@ -48,13 +55,8 @@ export const commentsCommand: Command = command(
           "Keep threads with a comment created at or after this time, usually a previous watermark",
       },
     },
-  },
-  (argv) => {
-    runComments(argv.flags, argv._).catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    });
-  },
+  }),
+  (argv, context) => runComments(argv.flags, argv._, context),
 );
 
 interface CommentsFlags {
@@ -63,13 +65,13 @@ interface CommentsFlags {
   full?: boolean;
   all?: boolean;
   since?: string;
-  figmaApiKey?: string;
-  figmaOauthToken?: string;
-  env?: string;
-  proxy?: string;
 }
 
-export async function runComments(flags: CommentsFlags, positionals: string[]): Promise<void> {
+async function runComments(
+  flags: CommentsFlags,
+  positionals: string[],
+  context: CliCommandContext,
+): Promise<number> {
   const target = resolveRestTarget(positionals[0], flags);
   const { fileKey, options } = parseCommentsParams({
     fileKey: target.fileKey,
@@ -78,13 +80,27 @@ export async function runComments(flags: CommentsFlags, positionals: string[]): 
     status: flags.all ? "all" : "unresolved",
     since: flags.since,
   });
-  const credential = prepareRestCommand(flags);
-  const result = await getFigmaComments(
-    new FigmaService(staticCredentialSource(credential)),
-    fileKey,
-    options,
+  const credential = requireGlobalCredential(context.credential);
+  return context.observe(
+    "get_figma_comments",
+    captureReadToolCall,
+    async (call: OperationCall<GetFigmaCommentsOutcome>) => {
+      const startedAt = Date.now();
+      try {
+        const result = await getFigmaComments(
+          new FigmaService(staticCredentialSource(credential)).withSignal(context.signal),
+          fileKey,
+          options,
+        );
+        call.record({ durationMs: Date.now() - startedAt });
+        console.log(JSON.stringify(result, null, 2));
+        return 0;
+      } catch (error) {
+        call.record({ durationMs: Date.now() - startedAt, error });
+        return printCliFailure(error);
+      }
+    },
   );
-  console.log(JSON.stringify(result, null, 2));
 }
 
 // The tool's own validation, so the CLI accepts exactly what get_figma_comments does; a bad id or

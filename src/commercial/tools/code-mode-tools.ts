@@ -73,11 +73,7 @@ import {
 } from "~/commercial/plugin-bridge/session-handle.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
-import {
-  registerFramelinkTool,
-  type FramelinkToolCall,
-  type ObserveToolCall,
-} from "~/mcp/framelink-tool.js";
+import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
 import { retryableToolReply } from "~/mcp/fail-loud-params.js";
 import type { ToolEventProperties } from "~/telemetry/index.js";
 import { referenceDocumentsNote } from "~/commercial/plugin-bridge/reference-documents-note.js";
@@ -254,50 +250,6 @@ function registerCodeModeTools(
 ): void {
   const runtime = caller.plugin;
 
-  // A run that outlives its call's check-in is recorded once, when it ends: the call's own
-  // observation is dropped and replaced by one carrying the run's real outcome. registerFramelinkTool
-  // reports when the handler returns, so the swap happens here, keyed by the facts object recorded.
-  const reportAtRunEnd = new WeakMap<CodeModeFacts, (intent: string | undefined) => void>();
-  const observeRunTool: ObserveToolCall<string, CodeModeFacts> = (observation) => {
-    const atEnd =
-      observation.kind !== "rejected" && observation.facts
-        ? reportAtRunEnd.get(observation.facts)
-        : undefined;
-    if (atEnd) atEnd(observation.intent);
-    else observe(observation);
-  };
-  function reportWhenRunEnds(
-    call: FramelinkToolCall<CodeModeFacts>,
-    tool: string,
-    run: PluginRun<CodeModeFacts>,
-    facts: CodeModeFacts,
-  ): void {
-    const placeholder: CodeModeFacts = { ...facts };
-    call.record(placeholder);
-    reportAtRunEnd.set(placeholder, (intent) => {
-      const report = (
-        observation:
-          | { kind: "completed"; isError: boolean; facts: CodeModeFacts }
-          | { kind: "threw"; error: unknown; facts: CodeModeFacts },
-      ) => {
-        try {
-          observe({ tool, intent, durationMs: Date.now() - run.startedAt, ...observation });
-        } catch {
-          // An observer must never turn a finished run into a failed one.
-        }
-      };
-      run.ended.then(
-        (end) =>
-          report({
-            kind: "completed",
-            isError: !!end.reply.isError,
-            facts: { ...end.facts, checked_in: true },
-          }),
-        (error: unknown) => report({ kind: "threw", error, facts: { ...facts, checked_in: true } }),
-      );
-    });
-  }
-
   /**
    * The client's own prompt for confirming a pairing code, when it advertises form elicitation.
    * Stateless HTTP never does: it has no session to carry the client's capabilities.
@@ -445,7 +397,14 @@ function registerCodeModeTools(
     if (waited.kind === "checked-in") {
       run.detachCaller();
       const handle = detachedRuns.detach(runtime, kind, run, run.ended);
-      reportWhenRunEnds(call, tool, run, owned);
+      // The call answers now, but the run is what it reports: once, when the run ends.
+      call.record({ ...owned, checked_in: true });
+      call.completeLater(
+        run.ended.then((end) => ({
+          isError: !!end.reply.isError,
+          facts: { ...end.facts, checked_in: true },
+        })),
+      );
       return checkedInReply(run, handle, {
         lead: ranIn(target.document),
         resultTtlMs: detachedRuns.resultTtlMs,
@@ -679,7 +638,7 @@ function registerCodeModeTools(
           }
         },
       },
-      observeRunTool,
+      observe,
     ),
 
     // The full flcm authoring reference, delivered as a TOOL (not a resource): it can't fit the
@@ -871,7 +830,7 @@ Returns a PNG image.`,
           }
         },
       },
-      observeRunTool,
+      observe,
     ),
 
     registerFramelinkTool(

@@ -1,11 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
-/**
- * A call whose arguments failed a check, named by the field and rule it broke — codes, never the
- * check's message, which can quote what the agent sent.
- */
-export type ParamRejection = { field: string; rule: string; detail?: string };
+import type { ParamRejection } from "~/utils/observed-operation.js";
 
 /**
  * The MCP SDK validates tool input against the registered zod schema BEFORE calling our handler —

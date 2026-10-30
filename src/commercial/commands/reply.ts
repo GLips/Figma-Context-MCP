@@ -2,21 +2,20 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { type Command, command } from "cleye";
+import { command } from "cleye";
 import { z } from "zod";
-import { UsageError } from "~/config.js";
+import { requireGlobalCredential, UsageError } from "~/config.js";
 import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import { replyToFigmaComment } from "~/commercial/reply-to-figma-comment.js";
 import { parseReplyToFigmaCommentParams } from "~/commercial/tools/reply-to-figma-comment-tool.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
-import {
-  REST_COMMAND_FLAGS,
-  prepareRestCommand,
-  resolveRestTarget,
-} from "~/commands/rest-command.js";
+import { REST_COMMAND_FLAGS, resolveRestTarget } from "~/commands/rest-command.js";
+import { defineCliCommand } from "~/commands/cli-command.js";
+import { printCliFailure, type CliCommandContext } from "~/commands/cli-context.js";
+import { captureObservedCall } from "~/telemetry/index.js";
 
-export const replyCommand: Command = command(
-  {
+export const replyCommand = defineCliCommand(
+  command({
     name: "reply",
     strictFlags: true,
     parameters: ["[url]"],
@@ -51,13 +50,8 @@ export const replyCommand: Command = command(
           "This reply settles the thread (default: it stays open, and an earlier ✅ is taken back)",
       },
     },
-  },
-  (argv) => {
-    runReply(argv.flags, argv._).catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    });
-  },
+  }),
+  (argv, context) => runReply(argv.flags, argv._, context),
 );
 
 interface ReplyFlags {
@@ -65,13 +59,13 @@ interface ReplyFlags {
   commentId?: string;
   message?: string;
   handled?: boolean;
-  figmaApiKey?: string;
-  figmaOauthToken?: string;
-  env?: string;
-  proxy?: string;
 }
 
-export async function runReply(flags: ReplyFlags, positionals: string[]): Promise<void> {
+async function runReply(
+  flags: ReplyFlags,
+  positionals: string[],
+  context: CliCommandContext,
+): Promise<number> {
   const target = resolveRestTarget(positionals[0], flags);
   const { fileKey, options } = parseReplyParams({
     fileKey: target.fileKey,
@@ -79,19 +73,31 @@ export async function runReply(flags: ReplyFlags, positionals: string[]): Promis
     message: flags.message ?? "",
     handled: flags.handled ?? false,
   });
-  const credential = prepareRestCommand(flags);
-  const result = await replyToFigmaComment(
-    new FigmaService(staticCredentialSource(credential)),
-    fileKey,
-    options,
-  );
-  console.log(JSON.stringify(result, null, 2));
-  if (result.kind === "stale") {
-    console.error(
-      `Not posted: newer comments in this thread. Read them, then retry with --comment-id ${result.newestCommentId}.`,
-    );
-    process.exitCode = 1;
-  }
+  const credential = requireGlobalCredential(context.credential);
+  // The outcome codes are reply_to_figma_comment's own.
+  return context.observe("reply_to_figma_comment", captureObservedCall, async (call) => {
+    let result;
+    try {
+      result = await replyToFigmaComment(
+        new FigmaService(staticCredentialSource(credential)).withSignal(context.signal),
+        fileKey,
+        options,
+      );
+    } catch (error) {
+      call.record({ outcome: "failed" });
+      return printCliFailure(error);
+    }
+    console.log(JSON.stringify(result, null, 2));
+    if (result.kind === "stale") {
+      call.record({ outcome: "stale" });
+      console.error(
+        `Not posted: newer comments in this thread. Read them, then retry with --comment-id ${result.newestCommentId}.`,
+      );
+      return 1;
+    }
+    call.record({ outcome: result.handledMarkError ? "mark_failed" : "posted" });
+    return 0;
+  });
 }
 
 // The tool's own validation, so a missing --comment-id or --message is a UsageError naming the

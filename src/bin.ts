@@ -6,6 +6,7 @@ import { CLI_NAME } from "./utils/cli-help.js";
 import { startServer } from "./server.js";
 import { CLI_COMMANDS } from "./commands/index.js";
 import { enableLogging } from "./utils/logger.js";
+import { exitProcessAfterFlush } from "./process-exit.js";
 
 // stderr until the server starts: the commands and stdio mode keep stdout for their output.
 enableLogging({ http: false });
@@ -106,7 +107,8 @@ const argv = cli({
   commands: CLI_COMMANDS,
 });
 
-// Subcommand callbacks execute during cli() — only start the server when no subcommand ran.
+// A subcommand's callback hands it to the CLI runner during cli(), which owns that process from
+// there (commands/cli-runner.ts). Only start the server when no subcommand ran.
 if (!argv.command) {
   main().catch((error) => {
     if (error instanceof UsageError) {
@@ -114,7 +116,7 @@ if (!argv.command) {
     } else {
       console.error("Failed to start server:", error);
     }
-    process.exit(1);
+    return exitProcessAfterFlush(1);
   });
 }
 

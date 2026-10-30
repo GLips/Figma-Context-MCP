@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { type Command, command } from "cleye";
+import { command } from "cleye";
 import { createReadStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { request } from "node:http";
@@ -16,9 +16,13 @@ import {
   type UploadEndpointRecord,
 } from "~/commercial/plugin-bridge/upload-endpoint.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
+import { defineCliCommand } from "~/commands/cli-command.js";
+import { printCliFailure } from "~/commands/cli-context.js";
+import { captureObservedCall, type ToolEventProperties } from "~/telemetry/index.js";
+import type { OperationCall } from "~/utils/observed-operation.js";
 
-export const uploadCommand: Command = command(
-  {
+export const uploadCommand = defineCliCommand(
+  command({
     name: "upload",
     strictFlags: true,
     parameters: ["<image>"],
@@ -41,16 +45,21 @@ one when that is ambiguous.`,
         description: "The upload port of the server to use, when more than one is running",
       },
     },
-  },
-  (argv) => {
-    runUpload(argv._.image, argv.flags).then(
-      (handle) => process.stdout.write(handle + "\n"),
-      (error: unknown) => {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
-      },
-    );
-  },
+  }),
+  // No MCP twin: an agent with only MCP sends image bytes inline, never a file of its own.
+  (argv, { observe }) =>
+    observe("cli_upload", captureObservedCall, async (call: OperationCall<ToolEventProperties>) => {
+      try {
+        const handle = await runUpload(argv._.image, argv.flags);
+        call.record({ outcome: "uploaded" });
+        process.stdout.write(handle + "\n");
+        return 0;
+      } catch (error) {
+        // Every way an upload fails is the caller's or its environment's: no server, a refusal.
+        call.record({ outcome: "failed" });
+        return printCliFailure(error);
+      }
+    }),
 );
 
 /** Upload one file and return its handle. The file is read here, on the caller's side. */

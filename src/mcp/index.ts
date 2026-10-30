@@ -2,24 +2,19 @@ import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server
 import { FigmaService, staticCredentialSource } from "../services/figma.js";
 import {
   authMode,
-  captureToolCall,
-  downloadImagesCallEvent,
-  getFigmaDataCallEvent,
+  captureFeedbackWatchCall,
+  captureObservedCall,
+  captureReadToolCall,
   type ToolCallContext,
-  type ToolCallEvent,
   type ToolEventProperties,
   type Transport,
 } from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
-import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
+import { registerReadTools } from "./read-tools.js";
 import { registerFeedbackWatchTool } from "./feedback-watch-tool.js";
 import { registerReportIssueTool } from "./report-issue-tool.js";
 import type { AnnotationChangeSource } from "~/services/watch-figma-feedback.js";
-import {
-  askAgentsForUserGoal,
-  type ObserveToolCall,
-  type ToolCallObservation,
-} from "./framelink-tool.js";
+import { askAgentsForUserGoal, type ObserveToolCall } from "./framelink-tool.js";
 import type { DescribeReadRecovery } from "./tools/index.js";
 import { serverInfo } from "./server-info.js";
 import type { CallerContext } from "./caller-context.js";
@@ -101,7 +96,7 @@ function createServer<Caller extends CallerContext>(
       : caller.imageDir === null
         ? { kind: "refused" }
         : { kind: "disk", imageDir: caller.imageDir },
-    observe: (outcome) => captureReadToolOutcome(outcome, context),
+    observe: (outcome) => captureReadToolCall(outcome, context),
     describeReadRecovery: recoveries.length
       ? (error, request) =>
           recoveries.map((describe) => describe(error, request)).find((text) => text !== null) ??
@@ -112,28 +107,13 @@ function createServer<Caller extends CallerContext>(
   const annotationSources = extensions.flatMap(
     (extension) => extension.annotationChanges?.(caller) ?? [],
   );
-  registerFeedbackWatchTool(server, figmaService, annotationSources[0] ?? null, (outcome) =>
-    captureToolCall(
-      outcome.kind === "completed" && outcome.facts
-        ? {
-            tool: outcome.tool,
-            durationMs: outcome.facts.durationMs,
-            intent: outcome.intent,
-            isError: outcome.facts.error !== undefined,
-            error: outcome.facts.error,
-            properties: outcome.facts.status ? { watch_status: outcome.facts.status } : undefined,
-          }
-        : toolCallEvent(outcome),
-      context,
-    ),
+  registerFeedbackWatchTool(server, figmaService, annotationSources[0] ?? null, (observation) =>
+    captureFeedbackWatchCall(observation, context),
   );
 
   if (telemetry)
     registerReportIssueTool(server, context, (observation) =>
-      captureToolCall(
-        toolCallEvent(observation, observation.kind === "rejected" ? undefined : observation.facts),
-        context,
-      ),
+      captureObservedCall(observation, context),
     );
 
   for (const extension of extensions)
@@ -142,51 +122,10 @@ function createServer<Caller extends CallerContext>(
       caller,
       figmaService,
       getFigmaData,
-      observe: (observation) =>
-        captureToolCall(
-          toolCallEvent(
-            observation,
-            observation.kind === "rejected" ? undefined : observation.facts,
-          ),
-          context,
-        ),
+      observe: (observation) => captureObservedCall(observation, context),
     });
 
   return server;
-}
-
-function captureReadToolOutcome(outcome: ReadToolOutcome, context: ToolCallContext): void {
-  captureToolCall({ ...readToolCallEvent(outcome), intent: outcome.intent }, context);
-}
-
-function readToolCallEvent(outcome: ReadToolOutcome): ToolCallEvent {
-  if (outcome.kind !== "completed" || !outcome.facts) return toolCallEvent(outcome);
-  switch (outcome.tool) {
-    case "get_figma_data":
-      return getFigmaDataCallEvent(outcome.facts);
-    case "download_figma_images":
-      return downloadImagesCallEvent(outcome.facts);
-    case "get_figma_comments": {
-      const { durationMs, error } = outcome.facts;
-      return { tool: outcome.tool, durationMs, isError: error !== undefined, error };
-    }
-  }
-}
-
-/** A call reported from what the seam saw; an extension's recorded facts are its properties. */
-function toolCallEvent(
-  observation: ToolCallObservation<string, unknown>,
-  properties?: ToolEventProperties,
-): ToolCallEvent {
-  const { tool, durationMs, intent } = observation;
-  switch (observation.kind) {
-    case "rejected":
-      return { tool, durationMs, intent, isError: true, rejection: observation.rejection };
-    case "threw":
-      return { tool, durationMs, intent, isError: true, error: observation.error, properties };
-    case "completed":
-      return { tool, durationMs, intent, isError: observation.isError, properties };
-  }
 }
 
 export { createServer };
