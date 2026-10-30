@@ -194,7 +194,6 @@ function rawPeer(
         id: msg.id,
         document: { kind: "unidentified", problem: "a raw contract peer" },
         instance: "c0ntractpeer0001",
-        openInstances: [],
       });
       return;
     }
@@ -330,7 +329,6 @@ stranger.send(
       kind: "identified",
       documentId: ABSENT_DOCUMENT,
       fileName: "Planted",
-      pageNames: [],
     },
   }),
 );
@@ -411,8 +409,8 @@ const squatted = await realPlugin(PORT_SQUAT, { storage: pluginStorage, file: co
 await pairByPanel(squatBridge, squatted);
 const squatBinding = await target(squatBridge, contractDocument, 300);
 assert.deepEqual(
-  squatBinding,
-  { kind: "blocked", block: { kind: "grant-pending", fileName: contractFile.name } },
+  { kind: squatBinding.kind, block: squatBinding.block?.kind, file: squatBinding.block?.wait?.fileName },
+  { kind: "blocked", block: "grant-pending", file: contractFile.name },
   "a same-project server on another installation holds no grant",
 );
 console.log("✅ A same-project server paired under another state dir is asked to Allow anew");

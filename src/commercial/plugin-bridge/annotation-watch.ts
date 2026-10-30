@@ -10,7 +10,6 @@
 // Deliberately prompt-free and pairing-free, unlike a run: a watcher reads on every notice for as long
 // as the agent listens, and an Allow prompt or pairing code on each would be noise. A file not yet
 // granted is reported as unwatched, with how to grant it.
-import { setTimeout as delay } from "node:timers/promises";
 import type { AnnotationChangeSource, AnnotationPoll } from "~/services/watch-figma-feedback.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 import { BridgeRequestError, type PluginBridge } from "./bridge.js";
@@ -25,22 +24,16 @@ export function createBridgeAnnotationSource(bridge: PluginBridge): AnnotationCh
         : [];
     });
 
-  // A plugin already open reaches a relay that just started only on its next redial, so "no plugin in
-  // this file" waits until one links or every instance named open has linked or run out its grace.
+  // A plugin already open reaches a relay that just started only on its next redial, which a hidden
+  // window can take seconds over: "no plugin in this file" waits while one in it is open but unlinked.
   async function linkedInFile(fileKey: FigmaFileKey, signal: AbortSignal) {
-    const done = new AbortController();
-    const settled = bridge.whenLinkupSettled(AbortSignal.any([signal, done.signal])).then(
-      () => true,
-      () => true,
-    );
-    try {
-      for (;;) {
-        const found = inFile(fileKey);
-        if (found.length || (await Promise.race([settled, delay(250, false, { signal })])))
-          return found.length ? found : inFile(fileKey);
-      }
-    } finally {
-      done.abort();
+    for (;;) {
+      const found = inFile(fileKey);
+      if (found.length) return found;
+      const open = await bridge.openDocuments(signal);
+      if (!open.instances.some((instance) => instance.fileKey === fileKey && !instance.link))
+        return inFile(fileKey);
+      await bridge.pauseForLinkup(1_000, signal);
     }
   }
 

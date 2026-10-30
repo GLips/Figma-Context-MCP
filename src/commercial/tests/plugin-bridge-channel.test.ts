@@ -269,7 +269,7 @@ it.each([false, true])(
     const bridge = create({ capabilities: new Map([["test.future.v19", handler]]) });
     const socket = await connectFakePlugin(bridge);
     // The page and change-event registration the host meters every run by (document-changes.ts).
-    const page = { id: "0:1", name: "test", on() {}, off() {} };
+    const page = { id: "0:1", name: "test", selection: [], on() {}, off() {} };
     // The plugin is driven through pairing, its stamp and Allow directly: its replies settle these
     // waiters, never a count of event-loop turns, since the host stores and replies asynchronously.
     const credential = { id: "credential-id-1", secret: "secret-0123456789abcdef" };
@@ -278,6 +278,8 @@ it.each([false, true])(
     ]);
     const pluginData = new Map<string, string>();
     const waiters: Array<(frame: Record<string, unknown>) => boolean> = [];
+    // The Allow prompts the panel last showed: what a click names.
+    let promptIds: string[] = [];
     const awaitFrame = (match: (frame: Record<string, unknown>) => boolean) =>
       new Promise<void>((resolve) =>
         waiters.push((frame) => (match(frame) ? (resolve(), true) : false)),
@@ -305,7 +307,12 @@ it.each([false, true])(
       ui: {
         resize() {},
         onmessage: (_msg: Record<string, unknown>) => {},
-        postMessage: (msg: { to: string; frame?: Record<string, unknown> }) => {
+        postMessage: (msg: {
+          to: string;
+          frame?: Record<string, unknown>;
+          render?: { prompts: { id?: string }[] };
+        }) => {
+          if (msg.render) promptIds = msg.render.prompts.flatMap((prompt) => prompt.id ?? []);
           if (msg.to !== "server" || !msg.frame) return;
           const frame = msg.frame;
           for (const waiter of [...waiters])
@@ -369,7 +376,7 @@ it.each([false, true])(
       intent: "Test run",
     });
     const granted = awaitFrame((frame) => frame.type === "GRANT_CHANGED");
-    panel({ type: "UI_DECISION", approve: true, executionId, documentId });
+    panel({ type: "UI_DECISION", approve: true, promptId: promptIds[0] });
     await granted;
     const result = (await bridge.submitRun(
       socket.link,

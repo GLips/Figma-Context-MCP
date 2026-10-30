@@ -95,6 +95,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   const page = {
     id: "0:1",
     name: "test",
+    selection: [],
     on: (_type: string, cb: (event: unknown) => void) => nodeChangeListeners.add(cb),
     off: (_type: string, cb: (event: unknown) => void) => nodeChangeListeners.delete(cb),
   };
@@ -204,14 +205,20 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
   /** A call's GRANT_STATUS poll, for `documentId` (this file's by default). */
   const grantStatus = async (key: ConnKey, executionId: string, prompt: string, documentId = DOCUMENT_ID) =>
     (await ask(key, { type: "GRANT_STATUS", executionId, documentId, prompt })).state;
+  /** The id of the Allow prompt showing for `key`'s project. */
+  const allowPromptOf = async (key: ConnKey): Promise<string> => {
+    const project = projectOf.get(key) ?? "/proj";
+    const shown = await render((r) => r.prompts.some((p) => p.kind === "allow" && p.project === project), `${project}'s Allow prompt`);
+    return (shown.prompts.find((p) => p.kind === "allow" && p.project === project) as { id: string }).id;
+  };
   /**
-   * A call asks for Allow and the human clicks it on that call's prompt; resolved once the grant is
+   * A call asks for Allow and the human clicks it on its project's prompt; resolved once the grant is
    * saved and announced. A project already granted is asked nothing.
    */
   const allow = async (key: ConnKey, executionId = `allow-${key}-${++nextId}`, documentId = DOCUMENT_ID) => {
     if ((await grantStatus(key, executionId, "allow", documentId)) === "granted") return;
     const before = sent.length;
-    sendControl({ type: "UI_DECISION", approve: true, connKey: key, executionId, documentId });
+    sendControl({ type: "UI_DECISION", approve: true, promptId: await allowPromptOf(key) });
     await waitFor(
       () => sent.slice(before).find((s) => s.connKey === key && s.frame.type === "GRANT_CHANGED" && s.frame.granted === true),
       `the grant for ${key}`,
@@ -251,7 +258,7 @@ function host(native: Record<string, unknown> = {}, storage: Storage = pairedSto
     sent.filter(({ frame: f }) => f.type === "RUN_STATUS" && f.executionId === id && f.phase === phase).map(({ frame: f }) => JSON.parse(JSON.stringify(f)));
   /** The server's heartbeat on one link: each handled one is a status for every run there. */
   const beat = (key: ConnKey) => sendFrame(key, { type: "RUN_STATUS_REQUEST" });
-  return { beat, statuses, sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allow, connect, frame, render, result, running, deliverChanges };
+  return { beat, statuses, sent, renders, context, storage, pluginData, pauseFigma, advanceClock, sendFrame, sendControl, ask, introduce, grantStatus, allowPromptOf, allow, connect, frame, render, result, running, deliverChanges };
 }
 
 test("while Figma has paused the plugin, a new run is refused at once and a stuck run's cancel says why", async () => {
@@ -360,26 +367,23 @@ test("a run is refused before it executes without a grant, or for a document thi
   assert.equal(h.context.writes.length, 0);
 });
 
-test("two calls waiting in one panel each keep their own prompt, click and outcome", async () => {
+test("calls of one project share one Allow prompt showing the newest intent; a Deny refuses all of them, and a pick is one call's", async () => {
   const h = host();
   await h.introduce(1);
   assert.equal(await h.grantStatus(1, "call-one", "allow"), "pending");
   assert.equal(await h.grantStatus(1, "call-two", "allow"), "pending");
-  const both = await h.render((r) => r.prompts.length === 2, "both calls' prompts");
-  assert.deepEqual(JSON.parse(JSON.stringify(both.prompts.map((p) => p.executionId).sort())), ["call-one", "call-two"]);
-  // Denying one call leaves the other waiting; its own Allow then grants.
-  h.sendControl({ type: "UI_DECISION", approve: false, connKey: 1, executionId: "call-one", documentId: DOCUMENT_ID });
+  await h.render((r) => r.prompts.length === 1 && r.prompts[0].intent === "Call call-two", "one prompt, with the newest intent");
+  h.sendControl({ type: "UI_DECISION", approve: false, promptId: await h.allowPromptOf(1) });
   assert.equal(await h.grantStatus(1, "call-one", "allow"), "denied");
-  assert.equal(await h.grantStatus(1, "call-two", "allow"), "pending");
-  // A pick is one call's too, and grants nothing.
+  assert.equal(await h.grantStatus(1, "call-two", "allow"), "denied");
+  // A pick is one call's, and grants nothing.
   assert.equal(await h.grantStatus(1, "call-three", "pick"), "pending");
   h.sendControl({ type: "UI_PICK", connKey: 1, executionId: "call-three", documentId: DOCUMENT_ID });
   assert.equal(await h.grantStatus(1, "call-three", "pick"), "picked");
-  assert.equal(await h.grantStatus(1, "call-two", "none"), "absent");
-  await h.allow(1, "call-two");
-  assert.equal(await h.grantStatus(1, "call-two", "allow"), "granted");
-  // The denial was the first call's alone: the next call is asked afresh.
-  assert.equal(await h.grantStatus(1, "call-one-retried", "none"), "granted");
+  assert.equal(await h.grantStatus(1, "call-three", "none"), "absent");
+  // The denial refused the calls waiting then: the next call is asked afresh.
+  await h.allow(1, "call-four");
+  assert.equal(await h.grantStatus(1, "call-five", "none"), "granted");
 });
 
 test("a grant covers every server of its project on this file, and its revoke stops all of them", async () => {
@@ -416,7 +420,7 @@ test("a granted server's write waits out another server's Allow being saved inst
     return setAsync(key, value);
   };
   assert.equal(await h.grantStatus(2, "other-call", "allow"), "pending");
-  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2, executionId: "other-call", documentId: DOCUMENT_ID });
+  h.sendControl({ type: "UI_DECISION", approve: true, promptId: await h.allowPromptOf(2) });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "run", preamble: echoPreamble, code: "return 'ran';" });
   landed();
   assert.equal((await h.result("run", 1)).result, "ran");
@@ -435,7 +439,7 @@ test("a run held at dequeue by an Allow being saved, and the runs behind it, hea
     return setAsync(key, value);
   };
   assert.equal(await h.grantStatus(2, "other-call", "allow"), "pending");
-  h.sendControl({ type: "UI_DECISION", approve: true, connKey: 2, executionId: "other-call", documentId: DOCUMENT_ID });
+  h.sendControl({ type: "UI_DECISION", approve: true, promptId: await h.allowPromptOf(2) });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "front", preamble: echoPreamble, code: "return 'front';" });
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 'behind';" });
   await h.frame((f) => f.executionId === "behind" && (f.wait as any)?.blocker?.executionId === "front", "front blocking behind");
@@ -589,7 +593,7 @@ function relay(toHost: (inbound: unknown) => void) {
     WebSocket: Socket,
     parent: { postMessage: (msg: { pluginMessage: unknown }) => toHost(msg.pluginMessage) },
     window: {},
-    document: { getElementById: element, createElement: element },
+    document: { getElementById: element, createElement: element, visibilityState: "visible", addEventListener() {} },
     setTimeout: (callback: () => void) => (redials.set(++nextTimer, callback), nextTimer),
     clearTimeout: (timer: number) => redials.delete(timer),
     requestAnimationFrame() {},
@@ -643,7 +647,9 @@ test("a server frame can never act as the human's panel input", async () => {
   fromServer({ type: "GRANT_STATUS", id: "ask", executionId: "rogue-call", documentId: DOCUMENT_ID, prompt: "allow", intent: "Rogue call" });
   await h.frame((f) => f.id === "ask", "the rogue call's prompt");
   // Everything a panel click would say, spoken by the server instead — in every envelope spelling.
-  const decision = { approve: true, connKey: 1, executionId: "rogue-call", documentId: DOCUMENT_ID };
+  const shown = await h.render((r) => r.prompts.some((p) => p.kind === "allow"), "the rogue call's prompt");
+  const promptId = (shown.prompts[0] as { id: string }).id;
+  const decision = { approve: true, promptId, connKey: 1, executionId: "rogue-call", documentId: DOCUMENT_ID };
   fromServer({ type: "UI_DECISION", ...decision });
   fromServer({ from: "panel", control: { type: "UI_DECISION", ...decision } });
   fromServer({ type: "UI_PICK", ...decision });

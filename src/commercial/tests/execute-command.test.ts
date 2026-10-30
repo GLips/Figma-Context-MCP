@@ -43,7 +43,6 @@ const FIGMA_FILE = { documentId: "c11d0c0000000001", fileName: "CLI file", fileK
 const FIGMA_FILE_REPORT: DocumentReport = {
   kind: "identified",
   ...FIGMA_FILE,
-  pageNames: ["Page 1"],
 };
 let figmaCalls: Array<{ url: string; token: string | null }>;
 const COMMENT = {
@@ -315,7 +314,7 @@ describe("saved-script CLI using production plugin services", () => {
     const executions: Frame[] = [];
     const expired = expectFailure(
       run({ wait: 1 }),
-      /Blocked: this project isn't allowed to edit "CLI file" yet, so the script did not run. Required before re-running: someone clicks Allow/,
+      /Not run: approval hasn't been granted yet\. .* isn't allowed to edit "CLI file", .* so the script did not run\. The prompt stays in that panel\./,
     );
     const first = await plugin(
       (frame) => {
@@ -404,11 +403,8 @@ describe("saved-script CLI using production plugin services", () => {
     });
   });
 
-  it("an untargeted run is refused with the open files to choose from, and prompts no panel", async () => {
-    const finished = expectFailure(
-      run({ document: undefined }),
-      new RegExp(`"CLI file": document ${FIGMA_FILE.documentId}.*\\n.*--document`),
-    );
+  it("an untargeted run with one file open asks Allow there, as a named run does", async () => {
+    const finished = expectFailure(run({ document: undefined }), /in "CLI file"/);
     const prompts: unknown[] = [];
     const { closed } = await plugin(
       (frame) => {
@@ -418,7 +414,7 @@ describe("saved-script CLI using production plugin services", () => {
     );
     await finished;
     await closed;
-    expect(new Set(prompts)).toEqual(new Set(["none"]));
+    expect(prompts).toContain("allow");
   });
 
   it("a plugin that reports no file key gets no comment pins, quietly, and no REST call", async () => {

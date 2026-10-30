@@ -8,13 +8,12 @@
 // feed says each call did, plus what is the panel's own to know: whether it is expanded, who holds
 // the driving baton, and each row's write-access card.
 import type { ActivityEntry } from "./activity-feed.js";
-import type { GrantRow } from "./grant-gate.js";
+import type { GatePrompt, GrantRow } from "./grant-gate.js";
 import { toServer } from "./outbound.js";
 import type {
   ConnKey,
   PanelDocument,
   PanelPairing,
-  PanelPrompt,
   PanelRender,
   PanelGrantRow,
 } from "./panel.js";
@@ -35,7 +34,7 @@ const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 /** What the panel reads from the grant gate, link authentication and document identity. */
 export interface GrantPanelSource {
   rows(): GrantRow[];
-  prompts(now: number): PanelPrompt[];
+  prompts(now: number): GatePrompt[];
   activity(now: number): ActivityEntry[];
   nextPromptLapse(now: number): number | null;
   document(): PanelDocument | null;
@@ -89,8 +88,8 @@ export function createGrantPanel(source: GrantPanelSource) {
   const writeAccess = new Map<ConnKey, WriteAccessNotice>();
   const signInRequested = new Set<ConnKey>();
 
-  // One timer, re-armed for the soonest live prompt to lapse, so its row stops asking when the
-  // polls stop rather than at the next unrelated render.
+  // One timer, re-armed for the soonest prompt change, so a prompt reads as stopped waiting when the
+  // polls stop, and goes when it expires, rather than at the next unrelated render.
   let expiryRender: ReturnType<typeof setTimeout> | undefined;
 
   function scheduleExpiryRender(now: number): void {
@@ -118,7 +117,7 @@ export function createGrantPanel(source: GrantPanelSource) {
     const update: PanelRender = {
       pairings: source.pairings(),
       document: source.document(),
-      prompts: source.prompts(now),
+      prompts: source.prompts(now).map((prompt) => ({ ...prompt, label: projectLabel(prompt.project) })),
       activity: source.activity(now).map(({ project, ...entry }) => ({ ...entry, label: projectLabel(project) })),
       grantRows: grantRows(),
       expanded,

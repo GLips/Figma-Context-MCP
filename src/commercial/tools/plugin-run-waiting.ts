@@ -7,15 +7,11 @@
 // way is left running, its outcome handed to the detached-run registry. Nothing here ever cancels a
 // run for taking long; only the agent decides that.
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { RUN_STATUS_INTERVAL_MS } from "@framelink/plugin/protocol";
 import type { ExecutionId } from "~/commercial/execution-id.js";
-import type { CallDocument, PluginBridge, RunState } from "~/commercial/plugin-bridge/bridge.js";
+import type { CallDocument, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import { unsubmittedWaitText } from "~/commercial/plugin-bridge/call-wait.js";
 import { PLUGIN_ANSWER_MS } from "~/commercial/plugin-bridge/run-ledger.js";
-import {
-  formatDuration,
-  queueWaitText,
-  runCheckInText,
-} from "~/commercial/plugin-bridge/run-outcome-text.js";
+import { runCheckInText } from "~/commercial/plugin-bridge/run-outcome-text.js";
 import type { DetachedRunKind, DetachedRunOutcome, RunHandle } from "./detached-runs.js";
 
 /**
@@ -148,16 +144,17 @@ async function endedWithin<Facts>(
 }
 
 /** The reply for a call that checked in before its run was sent: nothing ran. */
-export function neverSentReply(kind: DetachedRunKind, elapsedMs: number): CallToolResult {
-  const what = kind === "screenshot" ? "the screenshot request" : "your code";
+export function neverSentReply(
+  kind: DetachedRunKind,
+  document: CallDocument,
+  elapsedMs: number,
+): CallToolResult {
+  const wait = { kind: "sending", fileName: document.fileName, subject: kind } as const;
   return {
     content: [
       {
         type: "text",
-        text:
-          `Not submitted: after ${formatDuration(elapsedMs)} this call was still getting ready to ` +
-          `send ${what} to Figma, so it stopped without sending it. Nothing ran and nothing will. ` +
-          `This is NOT a failure: retry as-is.`,
+        text: unsubmittedWaitText(wait, { surface: "mcp", elapsedMs, now: Date.now() }),
       },
     ],
   };
@@ -193,18 +190,4 @@ export function checkedInReply<Facts>(
       },
     ],
   };
-}
-
-// Silence past this many heartbeats is worth telling a person watching.
-const QUIET_PROGRESS_MS = 2 * RUN_STATUS_INTERVAL_MS;
-
-/** One progress line for a person watching the run: queued, running, or Figma quiet. */
-export function runProgressText(bridge: PluginBridge, executionId: ExecutionId): string {
-  const state: RunState | null = bridge.runState(executionId);
-  if (!state) return "Sending to the Figma plugin…";
-  if (state.status?.phase === "queued") return queueWaitText(state.status.wait);
-  const quietForMs = Date.now() - state.lastHeardAt;
-  if (quietForMs > QUIET_PROGRESS_MS)
-    return `No word from Figma for ${formatDuration(quietForMs)}: a long call such as a large export holds it…`;
-  return state.status ? "Running…" : "Submitted; waiting for the Figma plugin to start it…";
 }

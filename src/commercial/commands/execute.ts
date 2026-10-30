@@ -25,8 +25,8 @@ import { MAX_INTENT_LENGTH, MAX_SCREENSHOT_SCALE, queueWaitKey } from "@framelin
 import type { RunWatch } from "~/commercial/plugin-bridge/run-ledger.js";
 import { queueWaitText } from "~/commercial/plugin-bridge/run-outcome-text.js";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
+import { callWaitLine } from "~/commercial/plugin-bridge/call-wait.js";
 import {
-  GRANT_WAITING_TEXT,
   notGrantedText,
   quoteFigmaName,
   sessionNotFoundText,
@@ -277,8 +277,8 @@ export async function runExecute(
             signal,
             surface: "cli",
             waitMs,
-            onWaiting: () => {
-              console.error(GRANT_WAITING_TEXT);
+            onWaiting: (wait) => {
+              console.error(callWaitLine(wait, Date.now()));
               return async () => {};
             },
           });

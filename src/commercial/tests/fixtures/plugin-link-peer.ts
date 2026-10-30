@@ -9,6 +9,7 @@ import {
   type PluginOwner,
 } from "@framelink/plugin/protocol";
 import { LinkCredentialStore, linkProof } from "~/commercial/plugin-bridge/link-credential.js";
+import { openInstanceOf } from "./fake-plugin-socket.js";
 import { TEST_DOCUMENT_REPORT, TEST_PLUGIN_OWNER } from "./write-access.js";
 
 /**
@@ -49,11 +50,15 @@ export function answerLinkSetup(
     });
     return true;
   }
+  // The instance is the document id: one peer per document, so OPEN_INSTANCES names the same one.
+  const instance = document.kind === "identified" ? document.documentId : mintDocumentId();
   if (frame.type === "INTRODUCE") {
-    const instance = mintDocumentId();
-    const self =
-      document.kind === "identified" ? [{ instance, documentId: document.documentId }] : [];
-    send({ type: "INTRODUCED", id: frame.id, document, instance, openInstances: self });
+    send({ type: "INTRODUCED", id: frame.id, document, instance });
+    return true;
+  }
+  if (frame.type === "OPEN_INSTANCES") {
+    const self = document.kind === "identified" ? [openInstanceOf(document, instance)] : [];
+    send({ type: "OPEN_INSTANCES_RESULT", id: frame.id, openInstances: self });
     return true;
   }
   return false;

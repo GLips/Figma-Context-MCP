@@ -100,12 +100,12 @@ export interface LoopbackPlugin {
   /** The panel's activity feed now, newest first. */
   activity(): PanelActivity[];
   /**
-   * Click Allow on the first Allow prompt (for `executionId`, when given), waiting for one; resolves
-   * once the grant is saved and announced.
+   * Click Allow on the first Allow prompt (`project`'s, when given), waiting for one; resolves once
+   * the grant is saved and announced to every connected server (there may be none).
    */
-  allow(executionId?: string): Promise<void>;
-  /** Click Deny on the first Allow prompt (for `executionId`, when given), waiting for one. */
-  deny(executionId?: string): Promise<void>;
+  allow(project?: string): Promise<void>;
+  /** Click Deny on the first Allow prompt (`project`'s, when given), waiting for one. */
+  deny(project?: string): Promise<void>;
   /** Click "Use this one" on the first pick prompt, waiting for one. */
   pick(): Promise<void>;
   /** Click "Give this copy its own identity"; resolves once the file holds a new stamp. */
@@ -136,7 +136,6 @@ export function startLoopbackPlugin(
   const sockets = new Set<WebSocket>();
   const toasts: string[] = [];
   let lastRender: PanelRender | null = null;
-  let grantsAnnounced = 0;
   let closed = false;
 
   // ---- The relay iframe ----
@@ -192,7 +191,12 @@ export function startLoopbackPlugin(
         deferred(() => figma.ui.onmessage(message.pluginMessage)),
     },
     window: relayWindow,
-    document: { getElementById: element, createElement: element },
+    document: {
+      getElementById: element,
+      createElement: element,
+      visibilityState: "visible",
+      addEventListener() {},
+    },
     setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms).unref(),
     clearTimeout,
     requestAnimationFrame() {},
@@ -200,6 +204,9 @@ export function startLoopbackPlugin(
   });
 
   // ---- Figma, as the host sees it ----
+  // figma.on("close") handlers: run when the plugin is closed, as Figma does on a plugin close (a
+  // tab closed outright runs none, which `drop` without `close` models).
+  const closeListeners: Array<() => void> = [];
   const nodeChangeListeners = new Set<(event: unknown) => void>();
   const reportChange = (change: unknown) => {
     for (const listener of [...nodeChangeListeners]) listener({ nodeChanges: [change] });
@@ -210,6 +217,7 @@ export function startLoopbackPlugin(
     name: "Page 1",
     type: "PAGE",
     children: [],
+    selection: [],
     on: (_type: string, listener: (event: unknown) => void) => nodeChangeListeners.add(listener),
     off: (_type: string, listener: (event: unknown) => void) =>
       nodeChangeListeners.delete(listener),
@@ -234,7 +242,9 @@ export function startLoopbackPlugin(
         else file.pluginData.delete(key);
       },
     },
-    on() {},
+    on: (type: string, listener: () => void) => {
+      if (type === "close") closeListeners.push(listener);
+    },
     off() {},
     openExternal() {},
     getNodeByIdAsync: async (id: string) => nodes.get(id) ?? null,
@@ -254,8 +264,6 @@ export function startLoopbackPlugin(
       onmessage: (_inbound: HostInbound) => {},
       postMessage: (outbound: HostOutbound) => {
         if (outbound.to === "panel") lastRender = outbound.render;
-        else if (outbound.frame.type === "GRANT_CHANGED" && outbound.frame.granted)
-          grantsAnnounced++;
         deferred(() => relayWindow.onmessage?.({ data: { pluginMessage: outbound } }));
       },
     },
@@ -276,12 +284,16 @@ export function startLoopbackPlugin(
   const click = (control: PanelControl) => figma.ui.onmessage({ from: "panel", control });
   const grantRows = () => lastRender?.grantRows ?? [];
   const prompts = () => lastRender?.prompts ?? [];
-  const asking = (kind: PanelPrompt["kind"], executionId?: string) =>
+  const allowPrompt = (project?: string) =>
     prompts().find(
-      (prompt) =>
-        prompt.kind === kind &&
+      (prompt): prompt is Extract<PanelPrompt, { kind: "allow" }> =>
+        prompt.kind === "allow" &&
         !prompt.allowing &&
-        (executionId === undefined || prompt.executionId === executionId),
+        (project === undefined || prompt.project === project),
+    );
+  const pickPrompt = () =>
+    prompts().find(
+      (prompt): prompt is Extract<PanelPrompt, { kind: "pick" }> => prompt.kind === "pick",
     );
   const documentId = () => file.pluginData.get(DOCUMENT_ID_KEY) ?? null;
   const granted = (project?: string) =>
@@ -300,35 +312,22 @@ export function startLoopbackPlugin(
     documentId,
     grantRows,
     prompts,
-    isPrompting: () => prompts().some((prompt) => !prompt.allowing),
+    isPrompting: () => prompts().some((prompt) => prompt.kind === "pick" || !prompt.allowing),
     activity: () => lastRender?.activity ?? [],
-    async allow(executionId) {
-      while (!asking("allow", executionId)) await tick();
-      const { key, documentId: shown, executionId: call } = asking("allow", executionId)!;
-      const before = grantsAnnounced;
-      click({
-        type: "UI_DECISION",
-        approve: true,
-        connKey: key,
-        executionId: call,
-        documentId: shown,
-      });
-      while (grantsAnnounced === before) await tick();
+    async allow(project) {
+      while (!allowPrompt(project)) await tick();
+      const { id } = allowPrompt(project)!;
+      click({ type: "UI_DECISION", approve: true, promptId: id });
+      // Saved, the prompt goes, once its GRANT_CHANGED is out to every connected server.
+      while (prompts().some((prompt) => prompt.kind === "allow" && prompt.id === id)) await tick();
     },
-    async deny(executionId) {
-      while (!asking("allow", executionId)) await tick();
-      const { key, documentId: shown, executionId: call } = asking("allow", executionId)!;
-      click({
-        type: "UI_DECISION",
-        approve: false,
-        connKey: key,
-        executionId: call,
-        documentId: shown,
-      });
+    async deny(project) {
+      while (!allowPrompt(project)) await tick();
+      click({ type: "UI_DECISION", approve: false, promptId: allowPrompt(project)!.id });
     },
     async pick() {
-      while (!asking("pick")) await tick();
-      const { key, documentId: shown, executionId } = asking("pick")!;
+      while (!pickPrompt()) await tick();
+      const { key, documentId: shown, executionId } = pickPrompt()!;
       click({ type: "UI_PICK", connKey: key, executionId, documentId: shown });
     },
     async restamp() {
@@ -365,6 +364,7 @@ export function startLoopbackPlugin(
     },
     close() {
       closed = true;
+      for (const listener of closeListeners.splice(0)) listener();
       for (const socket of sockets) socket.terminate();
     },
   };

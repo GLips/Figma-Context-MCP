@@ -11,7 +11,7 @@
 // opens can race, and a copy given its own identity in another instance changes it under this one.
 import { DOCUMENT_ID_KEY, mintDocumentId, type DocumentReport } from "./protocol.js";
 
-// How often names and the stamp are re-read for reporting. Figma has no event for a rename without
+// How often the file's name and stamp are re-read for reporting. Figma has no event for a rename without
 // loading every page, and a read of the root's names is cheap.
 const DOCUMENT_REPORT_POLL_MS = 2_000;
 
@@ -70,7 +70,6 @@ export function createDocumentIdentity({
       kind: "identified",
       documentId,
       fileName: figma.root.name,
-      pageNames: figma.root.children.map((page) => page.name),
       ...(fileKey ? { fileKey } : {}),
     };
   }

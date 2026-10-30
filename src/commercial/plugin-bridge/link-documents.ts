@@ -3,8 +3,8 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // Which file each authenticated link is in, as its plugin reports it: the document id the plugin
-// stamped into the file, the names an agent chooses by, and the file key where the plugin build has
-// one. Nothing here is proof: the stamp tells open files apart, and grants key on it.
+// stamped into the file, its name, and the file key where the plugin build has one. Nothing here is
+// proof: the stamp tells open files apart, and grants key on it.
 import type { DocumentReport, ReplyFor, ServerRequest } from "@framelink/plugin/protocol";
 import { figmaFileKey, type FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentId } from "./document-id.js";
@@ -14,7 +14,6 @@ import type { RelayConnection } from "./relay-connection.js";
 export interface OpenFile {
   documentId: DocumentId;
   fileName: string;
-  pageNames: readonly string[];
   /** Only from builds that expose `figma.fileKey`; never inferred. */
   fileKey: FigmaFileKey | null;
 }
@@ -48,7 +47,6 @@ function linkDocumentOf(report: DocumentReport): LinkDocument {
     kind: "identified",
     documentId: report.documentId as DocumentId,
     fileName: report.fileName,
-    pageNames: report.pageNames,
     fileKey: report.fileKey === undefined ? null : figmaFileKey(report.fileKey),
   };
 }

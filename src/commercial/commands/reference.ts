@@ -81,8 +81,6 @@ export async function runReference(
             "no files were listed",
           );
           if (unconnected !== null) return printCliFailure(unconnected);
-          // The first plugin in is rarely the only one: it names the others, which are still linking.
-          await bridge.whenLinkupSettled(signal);
           const note = await referenceDocumentsNote(bridge, "cli", FILES_LOOKUP_MS);
           listed = note.listed;
           process.stdout.write(note.text + "\n");

@@ -6,22 +6,25 @@
 // holds a grant for its server's project on the document the run names, and this file carries that
 // document's stamp right now. Checked when a run arrives and again when it dequeues.
 //
-// A server only asks (GRANT_STATUS), and its asking is what opens a prompt. Prompts belong to one
-// call: keyed by the call's execution id and the socket generation that asked, so two calls waiting
-// in one panel never share a prompt, a click or a dismissal. "allow" asks to grant the project this
-// document; "pick" asks whether this copy is the one the call means, for that call only. Grants are
-// shared by every plugin instance through storage; GRANT_CHANGED tells the others. Each prompt shows
-// the intent of the call that raised it, and its course goes to the activity feed.
+// A server only asks (GRANT_STATUS), and its asking is what opens a prompt. Two kinds:
+// - "allow" asks to grant a project this document. It belongs to the grant scope it would save, not
+//   to a call: every call of that project asking here waits on the one prompt, which shows the newest
+//   call's intent. It outlives its calls and their sockets, as "stopped waiting", until it is
+//   answered, dismissed, the file's stamp changes, or STOPPED_PROMPT_EXPIRY_MS passes.
+// - "pick" asks whether this copy is the one a call means. It is that call's alone, keyed by its
+//   execution id and the socket generation that asked, and it goes when the call stops polling: a
+//   pick only steers the call that asked, so a late one would have nothing to steer.
+// Grants are shared by every plugin instance through storage; GRANT_CHANGED tells the others. Each
+// call's course goes to the activity feed.
 import type { ActivityFeed } from "./activity-feed.js";
 import type { DocumentIdentity } from "./document-identity.js";
-import type { DocumentGrant, GrantScope, GrantStore } from "./grant-store.js";
+import { grantKey, type DocumentGrant, type GrantScope, type GrantStore } from "./grant-store.js";
 import { currentPluginOwner } from "./link-auth.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey, PanelPrompt } from "./panel.js";
 import {
   GRANT_PROMPT_GRACE_MS,
   type DocumentReport,
-  type GrantPrompt,
   type GrantStatusAsk,
   type GrantState,
   type NotGrantedReason,
@@ -33,18 +36,39 @@ interface GrantConnection {
   framelinkOrigin: string | null;
 }
 
-/** One call's prompt in this panel, open while its server keeps polling. */
-interface CallPrompt {
+/** One call's pick prompt in this panel, open while its server keeps polling. */
+interface PickPrompt {
   key: ConnKey;
   executionId: string;
-  kind: Exclude<GrantPrompt, "none">;
-  // The document the prompt was raised for and shows; an Allow grants this one, never a newer stamp.
+  // The document the prompt was raised for and shows.
   documentId: string;
   intent: string;
   askedAt: number;
-  // `allowing`: the grant is being saved. `denied` and `picked` wait for the next poll to carry them.
-  state: "open" | "allowing" | "denied" | "picked";
+  // `picked` waits for the next poll to carry it.
+  state: "open" | "picked";
 }
+
+/**
+ * One project's Allow prompt on this file. `scope` is captured when it is first asked and is all an
+ * Allow ever saves. `waiting`: the calls polling it now, with the socket that asked and their last
+ * poll; empty or quiet, the prompt has stopped waiting.
+ */
+interface AllowPrompt {
+  id: string;
+  scope: GrantScope;
+  // The newest call's: its intent shows, and a Deny is recorded on it.
+  executionId: string;
+  intent: string;
+  lastAskedAt: number;
+  waiting: Map<string, { key: ConnKey; polledAt: number }>;
+  saving: boolean;
+}
+
+/** A prompt as the gate knows it; the panel adds the project's label. */
+export type GatePrompt = PanelPrompt extends infer P ? (P extends unknown ? Omit<P, "label"> : never) : never;
+
+/** How long an Allow prompt no call waits on stays in the panel: a working day and the night after. */
+export const STOPPED_PROMPT_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * What the gate knows about one project on this file: a connected server, or a project granted this
@@ -58,7 +82,7 @@ export interface GrantRow {
   connected: boolean;
 }
 
-function promptKey(key: ConnKey, executionId: string): string {
+function pickKey(key: ConnKey, executionId: string): string {
   return `${key}\n${executionId}`;
 }
 
@@ -85,7 +109,11 @@ export function createGrantGate({
   takeBaton: (key: ConnKey) => void;
 }) {
   const connections = new Map<ConnKey, GrantConnection>();
-  const prompts = new Map<string, CallPrompt>();
+  const picks = new Map<string, PickPrompt>();
+  // Keyed by grantKey(scope): one per credential, owner, project and document.
+  const allows = new Map<string, AllowPrompt>();
+  // Calls whose Allow prompt was denied, by execution id: each hears "denied" on its next poll.
+  const deniedCalls = new Map<string, { key: ConnKey; at: number }>();
   // Grants on this document, for the rows of projects whose servers aren't connected.
   let documentGrants: DocumentGrant[] = [];
 
@@ -103,31 +131,79 @@ export function createGrantGate({
     return documentId ? scopeOf(key, documentId) : null;
   }
 
-  function isLive(prompt: CallPrompt, now: number): boolean {
+  function isLivePick(prompt: PickPrompt, now: number): boolean {
     return now - prompt.askedAt < GRANT_PROMPT_GRACE_MS && prompt.documentId === identity.documentId;
   }
 
-  /** Keep a call's prompt open for another poll; a lapsed one starts over, so no stale click carries. */
-  function ask(
-    key: ConnKey,
-    project: string,
-    { executionId, prompt: kind, documentId, intent }: Extract<GrantStatusAsk, { intent: string }>,
-  ): void {
+  /** Whether any call still polls this Allow prompt: one that stopped polling has stopped waiting. */
+  function isWaitedOn(prompt: AllowPrompt, now: number): boolean {
+    for (const { polledAt } of prompt.waiting.values()) if (now - polledAt < GRANT_PROMPT_GRACE_MS) return true;
+    return false;
+  }
+
+  /**
+   * Whether an Allow prompt still asks anything: not expired, on the file's current stamp, and its
+   * scope not granted since (by another instance, say). One that doesn't is dropped.
+   */
+  function stillAsks(prompt: AllowPrompt, now: number): boolean {
+    const asks =
+      now - prompt.lastAskedAt < STOPPED_PROMPT_EXPIRY_MS &&
+      prompt.scope.documentId === identity.documentId &&
+      store.answer(prompt.scope) !== "granted";
+    if (!asks && !prompt.saving) allows.delete(prompt.id);
+    return asks;
+  }
+
+  /** Keep a call's pick open for another poll; a lapsed one starts over, so no stale pick carries. */
+  function askPick(key: ConnKey, project: string, { executionId, documentId, intent }: Extract<GrantStatusAsk, { intent: string }>): void {
     const now = Date.now();
-    const id = promptKey(key, executionId);
-    const held = prompts.get(id);
-    if (held && held.kind === kind && held.documentId === documentId && isLive(held, now)) {
+    const id = pickKey(key, executionId);
+    const held = picks.get(id);
+    if (held && held.documentId === documentId && isLivePick(held, now)) {
       held.askedAt = now;
       return;
     }
-    prompts.set(id, { key, executionId, kind, documentId, intent, askedAt: now, state: "open" });
+    picks.set(id, { key, executionId, documentId, intent, askedAt: now, state: "open" });
     activity.waiting(executionId, intent, project);
     show(true);
   }
 
-  function closePromptOf(key: ConnKey, executionId: string): void {
-    if (!prompts.delete(promptKey(key, executionId))) return;
-    show();
+  /**
+   * A call waits on its project's Allow prompt here: the one already showing for this scope, or a new
+   * one. A call new to the prompt makes its intent the one shown.
+   */
+  function askAllow(key: ConnKey, scope: GrantScope, executionId: string, intent: string): void {
+    const now = Date.now();
+    const id = grantKey(scope);
+    let prompt = allows.get(id);
+    if (!prompt) {
+      prompt = { id, scope, executionId, intent, lastAskedAt: now, waiting: new Map(), saving: false };
+      allows.set(id, prompt);
+    }
+    const joined = !prompt.waiting.has(executionId);
+    prompt.waiting.set(executionId, { key, polledAt: now });
+    prompt.lastAskedAt = now;
+    if (!joined) return;
+    prompt.executionId = executionId;
+    prompt.intent = intent;
+    activity.waiting(executionId, intent, scope.project);
+    show(true);
+  }
+
+  /** The call `executionId` on `key` stopped waiting: its pick goes, and it leaves any Allow prompt. */
+  function forgetCall(key: ConnKey, executionId: string): void {
+    const pickClosed = picks.delete(pickKey(key, executionId));
+    deniedCalls.delete(executionId);
+    let left = false;
+    for (const prompt of allows.values())
+      if (prompt.waiting.get(executionId)?.key === key) left = prompt.waiting.delete(executionId) || left;
+    if (pickClosed || left) show();
+  }
+
+  /** The Allow prompt `executionId` waits on, if any. */
+  function allowPromptOf(executionId: string): AllowPrompt | null {
+    for (const prompt of allows.values()) if (prompt.waiting.has(executionId)) return prompt;
+    return null;
   }
 
   async function refreshDocumentGrants(): Promise<void> {
@@ -203,9 +279,13 @@ export function createGrantGate({
       connections.set(key, { project: null, framelinkOrigin: null });
     },
 
+    /** A socket closed: its picks go, its calls leave their Allow prompts, and the prompts stay. */
     closed(key: ConnKey): void {
       connections.delete(key);
-      for (const [id, prompt] of prompts) if (prompt.key === key) prompts.delete(id);
+      for (const [id, prompt] of picks) if (prompt.key === key) picks.delete(id);
+      for (const prompt of allows.values())
+        for (const [executionId, waiter] of prompt.waiting) if (waiter.key === key) prompt.waiting.delete(executionId);
+      for (const [executionId, denied] of deniedCalls) if (denied.key === key) deniedCalls.delete(executionId);
       show();
     },
 
@@ -226,45 +306,56 @@ export function createGrantGate({
 
     /** The file's stamp is new: grants and prompts on the old one no longer apply here. */
     documentChanged(): void {
-      for (const [id, prompt] of prompts) if (prompt.documentId !== identity.documentId) prompts.delete(id);
+      for (const [id, prompt] of picks) if (prompt.documentId !== identity.documentId) picks.delete(id);
+      for (const [id, prompt] of allows) if (prompt.scope.documentId !== identity.documentId) allows.delete(id);
       refreshConnectionGrants(connections.keys());
       void refreshDocumentGrants();
     },
 
     /** Answer a GRANT_STATUS poll for one call, opening or keeping the prompt it asks for. */
     async answerStatus(to: ReplyTo, request: Extract<ServerFrame, { type: "GRANT_STATUS" }>): Promise<void> {
-      const { executionId, documentId, prompt } = request;
+      const { executionId, documentId } = request;
       const answer = (state: GrantState) => reply(to, { type: "GRANT", state });
       const conn = connections.get(to.connKey);
       if (!conn || conn.project === null) return answer("absent");
       const { project } = conn;
       if (identity.rereadDocumentId() !== documentId) {
-        closePromptOf(to.connKey, executionId);
+        forgetCall(to.connKey, executionId);
         return answer("other-document");
       }
       const scope = scopeOf(to.connKey, documentId);
       if (!scope) return answer("absent");
       if (request.prompt === "none") return answer((await store.settledAnswer(scope)) === "granted" ? "granted" : "absent");
-      const held = prompts.get(promptKey(to.connKey, executionId));
-      const decided = held?.kind === prompt && held.documentId === documentId ? held.state : "open";
-      if (decided === "picked" || decided === "denied") {
-        activity.advance(executionId, decided);
-        closePromptOf(to.connKey, executionId);
-        return answer(decided);
+      if (request.prompt === "pick") {
+        const held = picks.get(pickKey(to.connKey, executionId));
+        if (held?.documentId === documentId && held.state === "picked") {
+          activity.advance(executionId, "picked");
+          forgetCall(to.connKey, executionId);
+          return answer("picked");
+        }
+        askPick(to.connKey, project, request);
+        return answer("pending");
       }
-      if (prompt === "allow" && (await store.settledAnswer(scope)) === "granted") {
-        // Only a call that was asked here has a feed entry to move on; one already granted has none yet.
-        if (held) activity.advance(executionId, "allowed");
-        closePromptOf(to.connKey, executionId);
+      if (deniedCalls.get(executionId)?.key === to.connKey) {
+        forgetCall(to.connKey, executionId);
+        return answer("denied");
+      }
+      if ((await store.settledAnswer(scope)) === "granted") {
+        // Only a call that waited here has a feed entry to move on; one already granted has none yet.
+        if (allowPromptOf(executionId)) activity.advance(executionId, "allowed");
+        forgetCall(to.connKey, executionId);
         return answer("granted");
       }
-      ask(to.connKey, project, request);
+      askAllow(to.connKey, scope, executionId, request.intent);
       return answer("pending");
     },
 
-    /** The call this prompt served is over. */
+    /**
+     * The call `executionId` stopped waiting. Its pick goes; an Allow prompt it waited on stays, as
+     * stopped waiting, for the human to answer for the project's next call.
+     */
     closePrompt(to: ReplyTo, executionId: string): void {
-      closePromptOf(to.connKey, executionId);
+      forgetCall(to.connKey, executionId);
       reply(to, { type: "GRANT_PROMPT_CLOSED_ACK" });
     },
 
@@ -281,20 +372,18 @@ export function createGrantGate({
     },
 
     /**
-     * The human's Allow on one call's prompt: grant its project the document the prompt showed. If
-     * the file was given another identity since, nothing is granted, and the call is refused.
+     * The human's Allow on a project's prompt, waited on or not: save exactly the scope the prompt
+     * captured when asked and showed (credential, owner, project, this document) and nothing else.
+     * A newer stamp is never granted: if the file was given another identity since, nothing is. It
+     * runs nothing either: a grant only admits calls that arrive later, each checked again on
+     * arrival and at dequeue. So a late click carries no further than what the human saw.
      */
-    allow(key: ConnKey, executionId: string, documentId: string): void {
-      const prompt = prompts.get(promptKey(key, executionId));
-      if (!prompt || prompt.kind !== "allow" || prompt.documentId !== documentId || prompt.state !== "open") return;
-      if (identity.rereadDocumentId() !== documentId) return;
-      const scope = scopeOf(key, documentId);
-      if (!scope) {
-        if (currentPluginOwner() === null)
-          figma.notify("Framelink: sign in to Figma to let a project edit this file.", { error: true });
-        return;
-      }
-      prompt.state = "allowing";
+    allow(promptId: string): void {
+      const prompt = allows.get(promptId);
+      if (!prompt || prompt.saving || !stillAsks(prompt, Date.now())) return;
+      const { scope } = prompt;
+      if (identity.rereadDocumentId() !== scope.documentId) return;
+      prompt.saving = true;
       show();
       void store
         .grant(scope)
@@ -302,28 +391,46 @@ export function createGrantGate({
           () => {
             notifyGrantChanged(scope, true);
             void refreshDocumentGrants();
+            // Calls still polling move on at their next poll, which reads the grant from storage.
+            allows.delete(promptId);
           },
           (error: unknown) => figma.notify(`Framelink couldn't save that grant: ${String(error)}`, { error: true }),
         )
         .finally(() => {
-          // Granted, the next poll answers so from storage; refused, the prompt asks again.
-          if (prompt.state === "allowing") prompt.state = "open";
+          prompt.saving = false;
           show();
         });
     },
 
-    /** The human's Deny on one call's prompt: that call is refused. The next call asks again. */
-    deny(key: ConnKey, executionId: string): void {
-      const prompt = prompts.get(promptKey(key, executionId));
-      if (!prompt || prompt.kind !== "allow" || prompt.state !== "open") return;
-      prompt.state = "denied";
+    /**
+     * The human's Deny on a project's prompt: every call waiting on it is refused, and the newest
+     * call's entry in the feed reads denied. The project's next call asks again.
+     */
+    deny(promptId: string): void {
+      const prompt = allows.get(promptId);
+      if (!prompt || prompt.saving) return;
+      allows.delete(promptId);
+      const now = Date.now();
+      for (const [executionId, { key }] of prompt.waiting) {
+        deniedCalls.set(executionId, { key, at: now });
+        activity.advance(executionId, "denied");
+      }
+      activity.advance(prompt.executionId, "denied");
+      show();
+    },
+
+    /** The human put away a prompt no call waits on any more. Nothing is granted or recorded. */
+    dismiss(promptId: string): void {
+      const prompt = allows.get(promptId);
+      if (!prompt || prompt.saving || isWaitedOn(prompt, Date.now())) return;
+      allows.delete(promptId);
       show();
     },
 
     /** The human chose this copy for one call. It grants nothing. */
     pick(key: ConnKey, executionId: string, documentId: string): void {
-      const prompt = prompts.get(promptKey(key, executionId));
-      if (!prompt || prompt.kind !== "pick" || prompt.documentId !== documentId || prompt.state !== "open") return;
+      const prompt = picks.get(pickKey(key, executionId));
+      if (!prompt || prompt.documentId !== documentId || prompt.state !== "open") return;
       prompt.state = "picked";
       show();
     },
@@ -384,33 +491,44 @@ export function createGrantGate({
 
     rows,
 
-    /** Every call's prompt still waiting on the human, oldest first. */
-    prompts(now: number): PanelPrompt[] {
-      const result: PanelPrompt[] = [];
-      for (const prompt of prompts.values()) {
+    /**
+     * Every prompt for the human, oldest first: each call's live pick, and each project's Allow
+     * prompt, waited on or not.
+     */
+    prompts(now: number): GatePrompt[] {
+      const result: GatePrompt[] = [];
+      for (const prompt of allows.values()) {
+        if (!stillAsks(prompt, now)) continue;
+        const { id, scope, intent, saving } = prompt;
+        result.push({ kind: "allow", id, project: scope.project, intent, waitedOn: isWaitedOn(prompt, now), allowing: saving });
+      }
+      for (const prompt of picks.values()) {
         const project = connections.get(prompt.key)?.project ?? null;
-        if (project === null || !isLive(prompt, now) || (prompt.state !== "open" && prompt.state !== "allowing"))
-          continue;
-        const { key, executionId, kind, documentId, intent } = prompt;
-        result.push({ key, executionId, kind, project, documentId, intent, allowing: prompt.state === "allowing" });
+        if (project === null || !isLivePick(prompt, now) || prompt.state !== "open") continue;
+        const { key, executionId, documentId, intent } = prompt;
+        result.push({ kind: "pick", key, executionId, project, documentId, intent });
       }
       return result;
     },
 
-    /** Whether a prompt for the call `executionId` still shows here, in any connection. */
+    /** Whether the call `executionId` still waits on a prompt here, in any connection. */
     promptLive(executionId: string, now: number): boolean {
-      for (const prompt of prompts.values())
-        if (prompt.executionId === executionId && isLive(prompt, now)) return true;
-      return false;
+      for (const prompt of picks.values())
+        if (prompt.executionId === executionId && isLivePick(prompt, now)) return true;
+      const waiter = allowPromptOf(executionId)?.waiting.get(executionId);
+      return waiter !== undefined && now - waiter.polledAt < GRANT_PROMPT_GRACE_MS;
     },
 
-    /** When the soonest live prompt lapses, or null when none is live. */
+    /** When the panel next changes on its own: a call stops waiting, or a stopped prompt expires. */
     nextPromptLapse(now: number): number | null {
       let soonest: number | null = null;
-      for (const prompt of prompts.values()) {
-        if (!isLive(prompt, now)) continue;
-        const lapsesAt = prompt.askedAt + GRANT_PROMPT_GRACE_MS;
-        if (soonest === null || lapsesAt < soonest) soonest = lapsesAt;
+      const consider = (at: number) => {
+        if (at > now && (soonest === null || at < soonest)) soonest = at;
+      };
+      for (const prompt of picks.values()) if (isLivePick(prompt, now)) consider(prompt.askedAt + GRANT_PROMPT_GRACE_MS);
+      for (const prompt of allows.values()) {
+        for (const { polledAt } of prompt.waiting.values()) consider(polledAt + GRANT_PROMPT_GRACE_MS);
+        consider(prompt.lastAskedAt + STOPPED_PROMPT_EXPIRY_MS);
       }
       return soonest;
     },

@@ -30,6 +30,7 @@ import {
   type ExecutionOutcome,
 } from "~/commercial/plugin-bridge/execution.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
+import { targetForPluginCall } from "~/commercial/plugin-bridge/plugin-call-link.js";
 import { runPair } from "~/commercial/commands/pair.js";
 import { createCliCommandContext } from "~/commands/cli-context.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
@@ -150,9 +151,11 @@ async function target(
       signal: new AbortController().signal,
       waitMs,
       pollMs: 20,
-      onWaiting: () => {
-        prompted = true;
-        void whilePrompted?.();
+      onWaiting: (wait) => {
+        if ((wait.kind === "allow" || wait.kind === "pick") && !prompted) {
+          prompted = true;
+          void whilePrompted?.();
+        }
         return async () => {};
       },
     },
@@ -205,7 +208,7 @@ async function pairByPanel(bridge: PluginBridge, plugin: LoopbackPlugin): Promis
   return confirmed.link;
 }
 
-it("without a token: pairs, refuses an unnamed call with the open file, asks Allow there on retry, then writes with no clicks", async () => {
+it("without a token: pairs, an unnamed call asks Allow in the one open file, then writes with no clicks", async () => {
   const runtime = startRuntime();
   const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   const link = await pairByPanel(runtime.bridge, plugin);
@@ -213,30 +216,12 @@ it("without a token: pairs, refuses an unnamed call with the open file, asks All
   await linksReported(runtime.bridge, 1);
   const checkout = documentOf(plugin);
 
-  const unnamed = await target(runtime.bridge, null);
+  // The one open file: the call asks Allow there rather than being refused.
+  const unnamed = await target(runtime.bridge, null, () => plugin.allow());
   expect(unnamed).toMatchObject({
-    prompted: false,
-    target: {
-      kind: "blocked",
-      block: {
-        kind: "document-unchosen",
-        open: {
-          documents: [
-            {
-              documentId: checkout,
-              fileName: "Checkout",
-              pageNames: ["Page 1"],
-              fileKey: null,
-              grant: "not-granted",
-              copies: 1,
-            },
-          ],
-          complete: true,
-        },
-      },
-    },
+    prompted: true,
+    target: { kind: "targeted", document: { documentId: checkout, fileName: "Checkout" } },
   });
-  expect(plugin.isPrompting()).toBe(false);
 
   const execute = async (code: string, click?: () => unknown) => {
     const bound = await target(runtime.bridge, checkout, click);
@@ -256,9 +241,9 @@ it("without a token: pairs, refuses an unnamed call with the open file, asks All
     };
   };
 
-  const read = await execute("return 1 + 1;", () => plugin.allow());
+  const read = await execute("return 1 + 1;");
   expect(read).toMatchObject({
-    prompted: true,
+    prompted: false,
     outcome: { kind: "executed", reply: { result: 2, console: [], errors: null } },
   });
 
@@ -349,16 +334,14 @@ it("servers in one project share one grant from one click; a server in another p
     reply: { result: "sibling" },
   });
 
-  const unnamed = await target(elsewhere, null);
-  expect(unnamed).toMatchObject({
-    prompted: false,
-    target: { block: { kind: "document-unchosen" } },
-  });
+  // The one open file: an unnamed call asks to Allow there, as a named one does.
+  const unnamed = await target(elsewhere, null, undefined, 300);
+  expect(unnamed).toMatchObject({ prompted: true, target: { block: { kind: "grant-pending" } } });
   const named = await target(elsewhere, checkout, undefined, 300);
   expect(named).toMatchObject({ prompted: true, target: { block: { kind: "grant-pending" } } });
 });
 
-it("several open files: an unnamed call runs in the one granted file; with two granted it is refused with both, and naming one needs no prompt", async () => {
+it("several open files: an unnamed call is refused at once with each and its grant, and a named one asks only that file", async () => {
   const bridge = startBridge(dir, ports[0]);
   const storage = new Map<string, unknown>();
   const checkout = startPlugin(ports[0], { storage, file: loopbackFile("Checkout") });
@@ -374,30 +357,24 @@ it("several open files: an unnamed call runs in the one granted file; with two g
   });
   expect(named.target).toMatchObject({ kind: "targeted", document: { fileName: "Checkout" } });
 
-  const unnamed = await target(bridge, null);
-  expect(unnamed.prompted).toBe(false);
-  expect(unnamed.target).toMatchObject({
-    kind: "targeted",
-    document: { documentId: documentOf(checkout), fileName: "Checkout" },
-  });
-
-  await target(bridge, documentOf(settings), () => settings.allow());
   const ambiguous = await target(bridge, null);
   expect(ambiguous.prompted).toBe(false);
   if (ambiguous.target.kind !== "blocked" || ambiguous.target.block.kind !== "document-unchosen")
     throw new Error(JSON.stringify(ambiguous.target));
   expect(
-    ambiguous.target.block.open.documents.map(({ fileName, documentId, grant }) => ({
+    ambiguous.target.block.open.documents.map(({ fileName, documentId, granted }) => ({
       fileName,
       documentId,
-      grant,
+      granted,
     })),
   ).toEqual(
     expect.arrayContaining([
-      { fileName: "Checkout", documentId: documentOf(checkout), grant: "granted" },
-      { fileName: "Settings", documentId: documentOf(settings), grant: "granted" },
+      { fileName: "Checkout", documentId: documentOf(checkout), granted: true },
+      { fileName: "Settings", documentId: documentOf(settings), granted: false },
     ]),
   );
+
+  await target(bridge, documentOf(settings), () => settings.allow());
   const retried = await target(bridge, documentOf(settings));
   expect(retried.prompted).toBe(false);
   expect(await run(bridge, retried, "return 'settings';")).toMatchObject({
@@ -427,48 +404,72 @@ it("two agents write to two files in parallel", async () => {
   ]);
 });
 
-it("two calls prompting in one panel each show their own intent and keep their own outcome, and the feed records both", async () => {
+it("a call that stops waiting leaves its Allow prompt in the panel, says approval is pending, and a later Allow lets the next call run with no prompt", async () => {
+  const first = startBridge(dir, ports[0], "/work/app");
+  const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
+  await pairByPanel(first, plugin);
+  await linksReported(first, 1);
+  const checkout = documentOf(plugin);
+
+  // Nobody clicks in time: the call answers as an MCP call checking in would.
+  const unanswered = await targetForPluginCall(first, {
+    intent: "Rebuild the pricing card" as CallIntent,
+    document: parseDocumentId(checkout),
+    fileKey: null,
+    session: null,
+    pairing: { kind: "refuse" },
+    signal: new AbortController().signal,
+    surface: "mcp",
+    waitMs: 300,
+    pollMs: 20,
+  });
+  if (unanswered.kind !== "blocked") throw new Error(JSON.stringify(unanswered));
+  expect(unanswered).toMatchObject({ block: "grant_pending", isError: false });
+  expect(unanswered.text).toContain("approval hasn't been granted yet");
+  expect(unanswered.text).toContain('This project ("/work/app") isn\'t allowed to edit "Checkout"');
+  expect(unanswered.text).toContain(
+    "The prompt stays in that panel after this call. Tell the user to click Allow there.",
+  );
+  expect(unanswered.text).not.toContain("NOT a failure");
+
+  // The process exits, as a CLI run does: its socket closes, and the prompt stays, stopped waiting.
+  first.stop();
+  await expect
+    .poll(() => plugin.prompts())
+    .toEqual([expect.objectContaining({ kind: "allow", project: "/work/app", waitedOn: false })]);
+  await plugin.allow("/work/app");
+
+  const next = startBridge(dir, ports[0], "/work/app");
+  await settlesTo(next, "linked");
+  await linksReported(next, 1);
+  const retried = await target(next, checkout);
+  expect(retried.prompted).toBe(false);
+  expect(await run(next, retried, "return 'card';")).toMatchObject({
+    kind: "executed",
+    reply: { result: "card" },
+  });
+  expect(plugin.prompts()).toEqual([]);
+});
+
+it("a second call from the same project waits on the prompt the first raised, and one Allow lets both run", async () => {
   const bridge = startBridge(dir, ports[0]);
   const plugin = startPlugin(ports[0], { file: loopbackFile("Checkout") });
   await pairByPanel(bridge, plugin);
   await linksReported(bridge, 1);
   const checkout = documentOf(plugin);
 
-  const hero = "Delete the old hero";
-  const card = "Rebuild the pricing card";
-  const denied = target(bridge, { document: checkout, intent: hero });
-  const allowed = target(bridge, { document: checkout, intent: card });
-  await expect.poll(() => plugin.prompts().length).toBe(2);
-  const promptFor = (intent: string) => plugin.prompts().find((p) => p.intent === intent)!;
-  const heroCall = promptFor(hero).executionId;
-  const cardCall = promptFor(card).executionId;
-  expect(plugin.activity()).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ executionId: heroCall, intent: hero, outcome: "waiting" }),
-      expect.objectContaining({ executionId: cardCall, intent: card, outcome: "waiting" }),
-    ]),
-  );
-  await plugin.deny(heroCall);
-  await plugin.allow(cardCall);
-  const outcomes = await Promise.all([denied, allowed]);
-  const byCall = new Map(outcomes.map((outcome) => [outcome.executionId, outcome]));
-  expect(byCall.get(heroCall as ExecutionId)?.target).toMatchObject({
-    kind: "blocked",
-    block: { kind: "grant-denied" },
-  });
-  const ran = await run(bridge, byCall.get(cardCall as ExecutionId)!, "return 'card';");
-  if (ran.kind !== "executed") throw new Error(JSON.stringify(ran));
-
+  const hero = target(bridge, { document: checkout, intent: "Delete the old hero" });
+  await expect.poll(() => plugin.prompts().map((p) => p.intent)).toEqual(["Delete the old hero"]);
+  const card = target(bridge, { document: checkout, intent: "Rebuild the pricing card" });
+  // One prompt, now showing the newest call's intent.
   await expect
-    .poll(() =>
-      plugin.activity().map(({ intent, outcome, session }) => ({ intent, outcome, session })),
-    )
-    .toEqual(
-      expect.arrayContaining([
-        { intent: hero, outcome: "denied", session: null },
-        { intent: card, outcome: "done", session: ran.session },
-      ]),
-    );
+    .poll(() => plugin.prompts().map((p) => p.intent))
+    .toEqual(["Rebuild the pricing card"]);
+  await plugin.allow();
+  const [heroCall, cardCall] = await Promise.all([hero, card]);
+  for (const call of [heroCall, cardCall])
+    expect(call).toMatchObject({ prompted: true, target: { kind: "targeted" } });
+  expect(await run(bridge, cardCall, "return 'card';")).toMatchObject({ kind: "executed" });
 });
 
 it("a viewer's plugin that can't stamp its file is listed as unusable, and the granted file still defaults", async () => {
@@ -610,13 +611,13 @@ it("a plugin restart keeps the stamp and the grant; a duplicate asks for a pick 
   await expect
     .poll(async () =>
       (await bridge.openDocuments(new AbortController().signal)).documents
-        .map((document) => [document.documentId, document.grant])
+        .map((document) => [document.documentId, document.granted])
         .sort(),
     )
     .toEqual(
       [
-        [checkout, "granted"],
-        [ownId, "not-granted"],
+        [checkout, true],
+        [ownId, false],
       ].sort(),
     );
 
@@ -709,7 +710,7 @@ it("after a server restart, a session's plugin that redials later than another p
   expect((await runIn(after, { session }, "return session.kept;")).reply.result).toBe(true);
 });
 
-it("after a server restart, an unnamed call waits for the granted file's plugin that redials after an ungranted one", async () => {
+it("after a server restart, an unnamed call is refused at once with a file still redialing listed, and naming it waits for it", async () => {
   const storage = new Map<string, unknown>();
   const before = startBridge(dir, ports[0]);
   const checkout = startPlugin(ports[0], {
@@ -726,7 +727,18 @@ it("after a server restart, an unnamed call waits for the granted file's plugin 
   const after = startBridge(dir, ports[0]);
   await linksReported(after, 1);
   const unnamed = await target(after, null);
-  expect(unnamed.target).toMatchObject({
+  if (unnamed.target.kind !== "blocked" || unnamed.target.block.kind !== "document-unchosen")
+    throw new Error(JSON.stringify(unnamed.target));
+  expect(
+    unnamed.target.block.open.documents.map(({ fileName, granted }) => ({ fileName, granted })),
+  ).toEqual(
+    expect.arrayContaining([
+      { fileName: "Checkout", granted: true },
+      { fileName: "Settings", granted: false },
+    ]),
+  );
+  const named = await target(after, documentOf(checkout));
+  expect(named.target).toMatchObject({
     kind: "targeted",
     document: { documentId: documentOf(checkout), fileName: "Checkout" },
   });

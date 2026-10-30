@@ -118,13 +118,19 @@ window.onmessage = (event: MessageEvent<{ pluginMessage?: HostOutbound }>) => {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(outbound.frame));
 };
 
-// Allow / Deny → the host (sole arbiter), tagged with the call and the document the prompt showed.
-// The button carries NO grant logic: it reports the human's choice; the host records the grant.
-function decide(approve: boolean, { key, executionId, documentId }: PanelPrompt): void {
-  toSandbox({ type: "UI_DECISION", approve, connKey: key, executionId, documentId });
+// Allow / Deny / Dismiss → the host (sole arbiter), naming the prompt, whose id is the grant it saves.
+// The buttons carry NO grant logic: they report the human's choice; the host records the grant.
+function decide(approve: boolean, { id }: Extract<PanelPrompt, { kind: "allow" }>): void {
+  toSandbox({ type: "UI_DECISION", approve, promptId: id });
 }
 
 byId("strip").onclick = () => toSandbox({ type: "UI_TOGGLE" });
+
+// Whether this file is the one the human is looking at: a background tab or a hidden or minimized
+// window hides the iframe too. Not focus: a visible panel the human isn't typing in still counts.
+const reportVisibility = () => toSandbox({ type: "UI_VISIBILITY", visible: document.visibilityState === "visible" });
+document.addEventListener("visibilitychange", reportVisibility);
+reportVisibility();
 
 // The whole surface from one render: the always-on strip, plus — when expanded — the grant list.
 // Built with textContent, never innerHTML, so a project path can't inject markup.
@@ -157,7 +163,9 @@ function renderStrip({ pairings, prompts, activity, grantRows, document: doc, ex
     if (s.active) active = s;
     if (s.writeAccess?.kind === "allowance-exhausted") writesSpent = true;
   }
-  const wants = prompts.filter((prompt) => !prompt.allowing).length;
+  const asking = prompts.filter((prompt) => prompt.kind === "pick" || !prompt.allowing);
+  const wants = asking.filter((prompt) => prompt.kind === "pick" || prompt.waitedOn).length;
+  const stopped = asking.length - wants;
   const running = activity.find((entry) => entry.outcome === "running");
 
   const offered = pairings.filter((p) => p.code !== null);
@@ -168,6 +176,9 @@ function renderStrip({ pairings, prompts, activity, grantRows, document: doc, ex
     tone = "wants";
   } else if (wants) {
     text = wants === 1 ? "An agent is waiting on you" : wants + " agents are waiting on you";
+    tone = "wants";
+  } else if (stopped) {
+    text = stopped === 1 ? "A project asked to edit this file" : stopped + " projects asked to edit this file";
     tone = "wants";
   } else if (doc?.kind === "unidentified") {
     text = "Agents can't use this file";
@@ -230,13 +241,13 @@ function documentCard(doc: NonNullable<PanelRender["document"]>): HTMLElement {
   return card;
 }
 
-// One call waiting on the human. Several can wait at once, each with its own buttons, so a click
-// always answers the call it was drawn for.
+// One decision for the human. Several can show at once, each with its own buttons, so a click always
+// answers the prompt it was drawn for.
 function promptCard(p: PanelPrompt): HTMLElement {
   const card = el("div", "card waiting");
   const lines = el("div", "card-lines");
   lines.appendChild(el("div", "card-title", p.project));
-  // The agent's own words for this call, so the human knows what they are answering.
+  // The agent's own words for the call, so the human knows what they are answering.
   lines.appendChild(el("div", "intent", "“" + p.intent + "”"));
   card.appendChild(lines);
   const actions = el("div", "actions");
@@ -257,12 +268,19 @@ function promptCard(p: PanelPrompt): HTMLElement {
     button("deny", "Give this copy its own identity", () => toSandbox({ type: "UI_RESTAMP" }));
   } else if (p.allowing) {
     lines.appendChild(el("div", "status-line", "Saving…"));
-  } else {
+  } else if (p.waitedOn) {
     lines.appendChild(
       el("div", "status-line", "Wants to edit this file. Allow lets every agent in this project edit it."),
     );
     button("allow", "Allow", () => decide(true, p));
     button("deny", "Deny", () => decide(false, p));
+  } else {
+    // The call gave up waiting, but its agent will be back: Allow now, and its next call just runs.
+    lines.appendChild(
+      el("div", "status-line", "This call stopped waiting. Allow lets " + p.label + "'s next call in this file run."),
+    );
+    button("allow", "Allow", () => decide(true, p));
+    button("deny", "Dismiss", () => toSandbox({ type: "UI_DISMISS", promptId: p.id }));
   }
   card.appendChild(actions);
   return card;

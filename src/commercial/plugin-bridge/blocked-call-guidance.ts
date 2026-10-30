@@ -6,21 +6,22 @@
 // tool) gives about linking, pairing, documents and grants, worded from the state it is in. Agents looped on
 // the older "…then retry" replies: each blocked message names the blocker, the action required, and
 // that retrying sooner cannot help. Submission status is part of the state's sentence where only one
-// is true; nothing outside this module words them.
+// is true; nothing outside this module words them, but what a call is still waiting on (call-wait.ts).
 import { CLI_NAME } from "~/utils/cli-help.js";
 import type { UnlinkedResolution } from "./bridge.js";
 import {
   unnamedCallDefault,
   type CallTargetBlock,
   type NoUnnamedCallDefault,
-  type OpenDocument,
-  type OpenDocumentSnapshot,
+  type WaitingBlock,
 } from "./call-target.js";
+import type { OpenDocument, OpenDocumentSnapshot } from "./open-files.js";
 
 /** How long a disconnection counts as a redial blip before the reply escalates to a person. */
 export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
 
-const REPORT_TO_PERSON = "Report this to the user or coordinating agent, and retry only after";
+export const REPORT_TO_PERSON =
+  "Report this to the user or coordinating agent, and retry only after";
 
 /**
  * Who reads it. `mcp` is a tool result on a server that outlives the call; `cli` is a command whose
@@ -48,13 +49,6 @@ export function linkGuidance(resolution: UnlinkedResolution, surface: GuidanceSu
   }
 }
 
-/** A call on a linked plugin, waiting for the human to allow this project, or pick a file, in Figma. */
-export const GRANT_WAITING_TEXT =
-  "Waiting for the user to answer this call in the Framelink plugin in Figma. Code has not been submitted.";
-
-// A file's pages are there to tell files apart, not to list a document: a few is enough.
-const LISTED_PAGES = 5;
-
 /**
  * A file or page name as agent-facing text. Anyone who can edit an open file sets these, so they are
  * escaped: a quote or newline in one can't forge another line of the open-document list.
@@ -67,19 +61,22 @@ function documentFlag(surface: GuidanceSurface): string {
   return surface === "cli" ? "--document" : "document";
 }
 
-/** One open document, as a line an agent chooses from. */
+/** One open file, as a line an agent chooses from, from its bounded summary alone. */
 function openDocumentLine(document: OpenDocument): string {
-  const pages = document.pageNames.slice(0, LISTED_PAGES).map(quoteFigmaName);
-  const more = document.pageNames.length - pages.length;
+  const { count, names } = document.selection;
+  const more = count - names.length;
+  const selection = count
+    ? `selection ${count} node${count === 1 ? "" : "s"}${names.length ? ` (${names.map(quoteFigmaName).join(", ")}${more > 0 ? `, and ${more} more` : ""})` : ""}`
+    : "nothing selected";
   const parts = [
     `document ${document.documentId}`,
-    `pages ${pages.join(", ") || "(none)"}${more > 0 ? ` and ${more} more` : ""}`,
     ...(document.fileKey ? [`fileKey ${document.fileKey}`] : []),
-    {
-      granted: "this project may edit it",
-      "not-granted": "this project isn't allowed yet (the user is asked to Allow)",
-      unknown: "this project's access couldn't be checked",
-    }[document.grant],
+    document.granted
+      ? "allowed for this project"
+      : "not allowed for this project yet (choosing it asks the user to Allow)",
+    document.active ? "active tab" : "background",
+    `page ${quoteFigmaName(document.currentPage)} of ${document.pageCount}`,
+    selection,
     ...(document.copies > 1
       ? [`open as ${document.copies} files that share this id (the user picks one in Figma)`]
       : []),
@@ -88,8 +85,8 @@ function openDocumentLine(document: OpenDocument): string {
 }
 
 /**
- * Every open plugin's document, for an agent to choose from by name: the same list a refusal, the
- * reference and the CLI show. Ends with how to name one.
+ * Every open file, for an agent to choose from by name: the one list a refusal, the reference and the
+ * CLI show. Ends with how to name one.
  */
 export function openDocumentsText(open: OpenDocumentSnapshot, surface: GuidanceSurface): string {
   const lines: string[] = [];
@@ -101,23 +98,24 @@ export function openDocumentsText(open: OpenDocumentSnapshot, surface: GuidanceS
     lines.push(`A plugin can't be used because it couldn't mark its file: ${problem}`);
   if (!open.complete)
     lines.push(
-      "Not every open plugin has reconnected and said which file it is in, or whether this project " +
-        "may edit it, so " +
-        "this list may be missing some.",
+      "Not every connected plugin answered which file it is in, so this list may be missing some.",
     );
   if (open.documents.length)
     lines.push(
-      `Pick the file by its name and pages — read the project's own files, or ask the user if you ` +
-        `aren't sure — and pass its id as ${documentFlag(surface)}. Never guess between files.`,
+      `Name the file with ${documentFlag(surface)} (its document id) — read the project's own files, ` +
+        `or ask the user if you aren't sure; never guess between files. The session you get back ` +
+        `keeps that file, so later calls passing it need no ${documentFlag(surface)}.`,
     );
   return lines.join("\n");
 }
 
-/** Why a call got no document to run against, on `surface`. Nothing was submitted. */
+/**
+ * Why a call was refused a document to run against, on `surface`. Nothing was submitted. A call that
+ * stopped while still waiting is worded by call-wait.ts instead.
+ */
 export function callTargetGuidance(
-  block: CallTargetBlock,
+  block: Exclude<CallTargetBlock, WaitingBlock>,
   surface: "mcp" | "cli",
-  waitMs: number,
 ): string {
   switch (block.kind) {
     case "document-not-open":
@@ -146,22 +144,6 @@ export function callTargetGuidance(
         `Blocked: the Framelink plugin in ${quoteFigmaName(block.fileName)} has no signed-in Figma user, so it ` +
         `can't let this project edit the file, and nothing was submitted. ${REPORT_TO_PERSON} ` +
         `someone signs in to Figma and reopens the plugin.`
-      );
-    case "grant-pending":
-      return waitingText(
-        `this project isn't allowed to edit ${quoteFigmaName(block.fileName)} yet`,
-        `someone clicks Allow for this call in the Framelink plugin in ${quoteFigmaName(block.fileName)}`,
-        surface,
-        waitMs,
-      );
-    case "pick-pending":
-      return waitingText(
-        `${quoteFigmaName(block.fileName)} is open as more than one file that share one identity (one is a ` +
-          `copy), and nothing tells this server which one this call means`,
-        `someone clicks "Use this one" in the Framelink plugin of the file to edit, or "Give this ` +
-          `copy its own identity" in the copy`,
-        surface,
-        waitMs,
       );
     case "session-not-found":
       return sessionNotFoundText(block.session, surface);
@@ -202,33 +184,15 @@ function namedDocument(document: string | null, fileKey: string | null): string 
 
 function unchosenLead(reason: NoUnnamedCallDefault): string {
   const why =
-    reason.kind === "several-granted"
-      ? `this project may edit ${reason.count} open files, and this call named none`
-      : {
-          "no-files": "there is no open Figma file to run in",
-          incomplete: "not every open file is known yet, so this server won't choose one for you",
-          "none-granted":
-            "this project isn't allowed to edit any open file yet, and this call named none",
-        }[reason.kind];
+    reason.kind === "several-open"
+      ? `${reason.count} Figma files have the Framelink plugin open, and this call named none`
+      : reason.kind === "no-files"
+        ? "there is no open Figma file to run in"
+        : "not every open file is known yet, so this server won't choose one for you";
   return (
     `Blocked: ${why}, so nothing was submitted and no plugin panel was asked. Name the file to ` +
     `edit; if this project isn't allowed there yet, the user is asked to Allow it in that file only.`
   );
-}
-
-function waitingText(
-  state: string,
-  action: string,
-  surface: "mcp" | "cli",
-  waitMs: number,
-): string {
-  const seconds = Math.round(waitMs / 1000);
-  return surface === "mcp"
-    ? `Blocked: ${state}, so this call did not run. Required before retrying: ${action}. ` +
-        `${REPORT_TO_PERSON} they confirm — each attempt waits up to ${seconds}s and cannot ` +
-        `succeed without them. Answering later does not run this call; submit it again.`
-    : `Blocked: ${state}, so the script did not run. Required before re-running: ${action}. ` +
-        `This run waited ${seconds}s; raise --wait if they need longer.`;
 }
 
 /**
@@ -278,10 +242,10 @@ export function referenceDocumentsGuidance(
   const flag = documentFlag(surface);
   const binding =
     unnamed.kind === "default"
-      ? `Executing code without ${flag} runs in ${quoteFigmaName(unnamed.document.fileName)}.`
+      ? `Executing code without ${flag} runs in ${quoteFigmaName(unnamed.document.fileName)}, the only open file.`
       : unnamed.kind === "incomplete"
         ? `Not every open file is known yet, so where executing code without ${flag} runs isn't settled; name the file to edit.`
-        : `Executing code without ${flag} is refused until exactly one open file is allowed; name the file to edit.`;
+        : `Executing code without ${flag} is refused while more than one file is open; name the file to edit.`;
   return `${binding}\n${openDocumentsText(open, surface)}`;
 }
 

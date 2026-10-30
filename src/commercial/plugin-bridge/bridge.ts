@@ -7,15 +7,17 @@ import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
 import { Logger } from "~/utils/logger.js";
 import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import {
-  openDocumentSnapshot,
   targetPluginCall,
   type CallTarget,
   type CallTargetOptions,
   type CallTargetRequest,
   type GrantStatusRequest,
-  type OpenDocumentLookup,
-  type OpenDocumentSnapshot,
 } from "./call-target.js";
+import {
+  openDocumentSnapshot,
+  type OpenDocumentSnapshot,
+  type OpenFilesLookup,
+} from "./open-files.js";
 import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
 import { LinkCredentialStore } from "./link-credential.js";
 import {
@@ -26,7 +28,7 @@ import {
   type PairingOffer,
 } from "./link-setup.js";
 import { LinkDocuments, type LinkDocument } from "./link-documents.js";
-import { PLUGIN_LINKUP_GRACE_MS, PluginLinkup } from "./plugin-linkup.js";
+import { PluginLinkup } from "./plugin-linkup.js";
 import { canonicalProjectPath } from "./project.js";
 import { RelayConnection, isSettlingLinkStage } from "./relay-connection.js";
 import { MAX_CHANNEL_BYTES, RelayListener } from "./relay-listener.js";
@@ -38,7 +40,7 @@ import {
   type RunState,
   RunLedger,
 } from "./run-ledger.js";
-import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
+import type { ExecutionId } from "~/commercial/execution-id.js";
 import {
   parsePluginEvent,
   type AnnotationCursor,
@@ -66,9 +68,8 @@ export type {
   CallTarget,
   CallTargetBlock,
   CallTargetRequest,
-  OpenDocument,
-  OpenDocumentSnapshot,
 } from "./call-target.js";
+export type { OpenDocument, OpenDocumentSnapshot } from "./open-files.js";
 export type { LinkDocument, OpenFile } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
 
@@ -136,9 +137,14 @@ export class PluginBridge {
   private readonly setup: LinkSetup;
   private readonly documents: LinkDocuments;
   private readonly events: PluginBridgeEvents;
-  private readonly documentLookup: OpenDocumentLookup = {
+  // What this server's links introduce themselves as, and what its calls ask to be allowed.
+  private readonly project: string;
+  private readonly openFilesLookup: OpenFilesLookup = {
+    links: () => this.authenticatedLinks(),
     documentOf: (link) => this.documentOf(link),
-    grantStatus: (link, ask, signal) => this.grantStatus(link, ask, signal),
+    instanceOf: (link) => this.linkup.instanceOf(link),
+    openInstances: async (link, signal) =>
+      (await this.request(link, { type: "OPEN_INSTANCES" }, { signal })).openInstances,
   };
 
   private readonly routes: EventRoutes = {
@@ -181,7 +187,6 @@ export class PluginBridge {
     framelinkOrigin = new URL(DEFAULT_FRAMELINK_API_URL).origin,
     nonRunRequestTimeoutMs = NON_RUN_REQUEST_TIMEOUT_MS,
     unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
-    linkupGraceMs = PLUGIN_LINKUP_GRACE_MS,
     capabilities = new Map(),
     events = {},
     trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
@@ -191,13 +196,13 @@ export class PluginBridge {
     framelinkOrigin?: string;
     nonRunRequestTimeoutMs?: number;
     unauthenticatedLinkMs?: number;
-    linkupGraceMs?: number;
     capabilities?: ReadonlyMap<string, CapabilityHandler>;
     events?: PluginBridgeEvents;
     trace?: RequestTrace;
   } = {}) {
     this.events = events;
-    this.linkup = new PluginLinkup(linkupGraceMs);
+    this.project = project;
+    this.linkup = new PluginLinkup();
     this.ledger = new RunLedger({
       nonRunRequestTimeoutMs,
       trace,
@@ -217,8 +222,7 @@ export class PluginBridge {
     });
     this.documents = new LinkDocuments({
       send: (link, payload) => this.request(link, payload),
-      onIntroduced: (link, reply) =>
-        this.linkup.introduced(link, reply.instance, reply.openInstances),
+      onIntroduced: (link, reply) => this.linkup.introduced(link, reply.instance),
       project,
       framelinkOrigin,
     });
@@ -233,7 +237,6 @@ export class PluginBridge {
   /** Bind the first free port in the block; `onConnect` runs as each socket is accepted. */
   start(ports: readonly number[], onConnect?: () => void): void {
     this.onConnect = onConnect;
-    this.linkup.started();
     this.listener.start(ports);
   }
 
@@ -373,9 +376,10 @@ export class PluginBridge {
   targetCall(request: CallTargetRequest, options: CallTargetOptions): Promise<CallTarget> {
     return targetPluginCall(
       {
-        ...this.documentLookup,
+        ...this.openFilesLookup,
+        project: this.project,
         links: () => this.authenticatedLinks(),
-        linkupSettlesAt: (documentId) => this.linkup.settlesAt(documentId),
+        grantStatus: (link, ask, signal) => this.grantStatus(link, ask, signal),
         pauseForLinkup: (ms, signal) => this.linkup.pause(ms, signal),
         documentsSettled: (links) => this.documents.settled(links),
         closePrompt: (link, executionId) => {
@@ -390,21 +394,17 @@ export class PluginBridge {
   }
 
   /**
-   * Every open plugin's document and this project's grant on it, asked without prompting, once each
-   * link's introduction has answered. What a refusal and the reference show an agent to choose from.
-   * Incomplete while a plugin named open may still be linking, as an unnamed call reads it.
+   * Every file with the plugin open, linked or still linking, once each link's introduction has
+   * answered. What a refusal and the reference show an agent to choose from (open-files.ts).
    */
   async openDocuments(signal: AbortSignal): Promise<OpenDocumentSnapshot> {
-    const links = this.authenticatedLinks();
-    await this.documents.settled(links);
-    // Only a key for the plugin's prompt-free answer: nothing runs under this id.
-    const open = await openDocumentSnapshot(links, this.documentLookup, mintExecutionId(), signal);
-    return Date.now() < this.linkup.settlesAt() ? { ...open, complete: false } : open;
+    await this.documents.settled(this.authenticatedLinks());
+    return openDocumentSnapshot(this.openFilesLookup, signal);
   }
 
-  /** Resolves once every plugin instance named open has linked, or its grace ran out (plugin-linkup.ts). */
-  whenLinkupSettled(signal: AbortSignal): Promise<void> {
-    return this.linkup.whenSettled(signal);
+  /** Wait `ms`, or less: until the next plugin introduction or drop. */
+  pauseForLinkup(ms: number, signal: AbortSignal): Promise<void> {
+    return this.linkup.pause(ms, signal);
   }
 
   /** Where `link`'s annotation log last said it had moved to, if it has said. */
@@ -512,8 +512,7 @@ export class PluginBridge {
 
   private drop(link: PluginLink): void {
     if (!this.links.delete(link)) return;
-    const document = this.documents.documentOf(link);
-    this.linkup.dropped(link, document.kind === "identified" ? document.documentId : null);
+    this.linkup.dropped(link);
     this.setup.forget(link);
     link.abandon();
     if (!this.isPluginConnected()) this.disconnectedAt = Date.now();

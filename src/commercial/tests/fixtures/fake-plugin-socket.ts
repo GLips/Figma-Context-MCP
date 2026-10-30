@@ -24,7 +24,7 @@ import { TEST_DOCUMENT_REPORT, TEST_PLUGIN_OWNER } from "./write-access.js";
  * one. `frames` records what the bridge sent; `receive` delivers a frame as the plugin would. It
  * answers the link-setup envelope itself: HELLO when `answersHello`, and AUTHENTICATE with a proof
  * when it holds `credential`, LINK_UNPAIRED otherwise. INTRODUCE is answered with its `document`,
- * naming itself and `otherInstances` as the plugin instances open.
+ * and OPEN_INSTANCES with itself and `otherInstances` as the plugin instances open.
  */
 export class FakePluginSocket extends EventEmitter {
   readyState: number = WebSocket.OPEN;
@@ -79,9 +79,18 @@ export class FakePluginSocket extends EventEmitter {
         id: frame.id,
         document: this.document,
         instance: this.instance,
+      });
+    if (frame.type === "OPEN_INSTANCES" && this.answersIntroduce)
+      this.receive({
+        type: "OPEN_INSTANCES_RESULT",
+        id: frame.id,
         openInstances: [
           ...(this.document.kind === "identified"
-            ? [{ instance: this.instance, documentId: this.document.documentId }]
+            ? [
+                openInstanceOf(this.document, this.instance, {
+                  granted: this.grantState?.("none") === "granted",
+                }),
+              ]
             : []),
           ...this.otherInstances,
         ],
@@ -111,6 +120,26 @@ export class FakePluginSocket extends EventEmitter {
     this.readyState = WebSocket.CLOSED;
     this.emit("close");
   }
+}
+
+/** What a plugin open in `document` says of itself in OPEN_INSTANCES, with `overrides` on top. */
+export function openInstanceOf(
+  document: Extract<DocumentReport, { kind: "identified" }>,
+  instance: string,
+  overrides: Partial<OpenInstance> = {},
+): OpenInstance {
+  return {
+    instance,
+    documentId: document.documentId,
+    fileName: document.fileName,
+    ...(document.fileKey ? { fileKey: document.fileKey } : {}),
+    currentPage: "Page 1",
+    pageCount: 1,
+    selection: { count: 0, names: [] },
+    active: false,
+    granted: false,
+    ...overrides,
+  };
 }
 
 /**

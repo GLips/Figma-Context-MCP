@@ -12,14 +12,15 @@ import { watchForFigmaPause } from "./figma-pause.js";
 import { createDocumentIdentity } from "./document-identity.js";
 import { createPluginPresence } from "./presence.js";
 import { createGrantGate } from "./grant-gate.js";
-import { createGrantStore } from "./grant-store.js";
+import { createGrantStore, grantKey } from "./grant-store.js";
 import { createAgentSessions } from "./agent-sessions.js";
-import { createLinkAuth } from "./link-auth.js";
+import { createLinkAuth, currentPluginOwner } from "./link-auth.js";
 import { createRunExecutor } from "./run-executor.js";
 import { createGrantPanel } from "./grant-panel.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import {
   LINK_SETUP_REQUEST_TYPES,
+  MAX_SELECTION_NAMES,
   PROTOCOL_VERSION,
   parseServerFrame,
   type AnnotationChange,
@@ -70,6 +71,7 @@ const identity = createDocumentIdentity({
   },
   onReport: (document) => {
     for (const key of linkAuth.authenticatedConnections()) toServer(key, { type: "DOCUMENT_REPORTED", document });
+    presence.changed();
     panel.show();
   },
 });
@@ -126,6 +128,9 @@ const annotationLog = createAnnotationChangeLog({
 });
 watchAnnotationChanges(annotationLog);
 identity.start();
+// Whether the panel iframe is showing, as it last said: its tab or window is the one in front. True
+// until told otherwise, since the human just opened the plugin.
+let panelVisible = true;
 const presence = createPluginPresence({
   storage: {
     get: (key) => figma.clientStorage.getAsync(key),
@@ -133,9 +138,30 @@ const presence = createPluginPresence({
     delete: (key) => figma.clientStorage.deleteAsync(key),
     keys: () => figma.clientStorage.keysAsync(),
   },
-  documentId: () => identity.documentId,
+  describe: () => {
+    const report = identity.report();
+    if (report.kind !== "identified" || identity.documentId === null) return null;
+    const selection = figma.currentPage.selection;
+    return {
+      documentId: report.documentId,
+      fileName: report.fileName,
+      ...(report.fileKey ? { fileKey: report.fileKey } : {}),
+      currentPage: figma.currentPage.name,
+      pageCount: figma.root.children.length,
+      selection: { count: selection.length, names: selection.slice(0, MAX_SELECTION_NAMES).map((node) => node.name) },
+      active: panelVisible,
+    };
+  },
+  grantKeysOf: async (documentId) => {
+    const owner = currentPluginOwner();
+    if (!owner) return [];
+    const held = await grants.grantsOnDocument(owner.figmaUserId, documentId);
+    return held.map((grant) => grantKey({ ...grant, ownerId: owner.figmaUserId, documentId }));
+  },
 });
 presence.start();
+figma.on("selectionchange", () => presence.changed());
+figma.on("currentpagechange", () => presence.changed());
 panel.render();
 
 figma.ui.onmessage = (inbound: HostInbound) => {
@@ -159,6 +185,10 @@ function handlePanelControl(msg: PanelControl): void {
     case "UI_HEIGHT":
       panel.resize(msg.height);
       return;
+    case "UI_VISIBILITY":
+      panelVisible = msg.visible;
+      presence.changed();
+      return;
     case "WS_CONNECTED":
       gate.connected(msg.connKey);
       return;
@@ -171,8 +201,12 @@ function handlePanelControl(msg: PanelControl): void {
       gate.closed(msg.connKey);
       return;
     case "UI_DECISION":
-      if (msg.approve) gate.allow(msg.connKey, msg.executionId, msg.documentId);
-      else gate.deny(msg.connKey, msg.executionId);
+      if (msg.approve) gate.allow(msg.promptId);
+      else gate.deny(msg.promptId);
+      presence.changed();
+      return;
+    case "UI_DISMISS":
+      gate.dismiss(msg.promptId);
       return;
     case "UI_PICK":
       gate.pick(msg.connKey, msg.executionId, msg.documentId);
@@ -182,6 +216,7 @@ function handlePanelControl(msg: PanelControl): void {
       return;
     case "UI_REVOKE":
       gate.revoke({ credentialId: msg.credentialId, project: msg.project });
+      presence.changed();
       return;
     case "UI_SIGN_IN":
       panel.requestSignIn(msg.connKey);
@@ -263,13 +298,22 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     case "PAIR_CONFIRMED":
       void linkAuth.storeCredential(to, msg.code, msg.credentialId, msg.secret);
       return;
-    case "INTRODUCE": {
-      const document = gate.introduce(to, msg);
-      // A storage failure still answers: the link names itself, and the server falls back on its grace.
-      void presence
-        .openInstances()
-        .catch(() => [])
-        .then((openInstances) => reply(to, { type: "INTRODUCED", document, instance: presence.instance, openInstances }));
+    case "INTRODUCE":
+      reply(to, { type: "INTRODUCED", document: gate.introduce(to, msg), instance: presence.instance });
+      return;
+    case "OPEN_INSTANCES": {
+      const credentialId = linkAuth.credentialOf(key);
+      const owner = currentPluginOwner();
+      const project = gate.projectOf(key);
+      const asker =
+        credentialId !== null && owner !== null && project !== null
+          ? { credentialId, ownerId: owner.figmaUserId, project }
+          : null;
+      // A storage failure is the server's to see: an ERROR, never a list missing every other file.
+      presence.openInstances(asker).then(
+        (openInstances) => reply(to, { type: "OPEN_INSTANCES_RESULT", openInstances }),
+        (error: unknown) => reply(to, { type: "ERROR", error: `The plugin couldn't read which files are open: ${String(error)}` }),
+      );
       return;
     }
     case "GRANT_STATUS":
@@ -280,6 +324,7 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
       return;
     case "GRANT_CHANGED_ELSEWHERE":
       void gate.changedElsewhere(to, msg.project, msg.documentId);
+      presence.changed();
       return;
     case "SESSION_LOOKUP": {
       const scope = gate.rereadScopeOf(key);

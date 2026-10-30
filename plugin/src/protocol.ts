@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 24;
+export const PROTOCOL_VERSION = 26;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -91,6 +91,13 @@ export const PROTOCOL_VERSION = 24;
  *     picks its document. The plugin redials the lowest empty port fast and the rest rarely.
  * v24: silence ends no run. A run ends at its reply, a CANCEL, a revocation or its socket closing;
  *     the "unresponsive" RunCancelCause is gone from FlcmHost.
+ * v25: open files. OPEN_INSTANCES asks, at call time, for every open instance's file: its name, file
+ *     key, current page, page count, selection summary, whether its window is showing, and whether
+ *     the asking project is granted there. INTRODUCED names only the reporting instance, and a
+ *     DocumentReport carries no page names.
+ * v26: Allow prompts outlive their calls. One per project on a document, which every call of that
+ *     project asking there waits on; GRANT_PROMPT_CLOSED and a closed socket leave it showing as
+ *     stopped waiting, and an Allow on it grants the project's next call. Pick prompts stay per call.
  */
 
 // ---- Transport ----
@@ -121,8 +128,8 @@ export const RUN_STATUS_INTERVAL_MS = 2_000;
 
 /**
  * How often the plugin redials the lowest port in the block it has no open socket on. A new server
- * binds the lowest free port, so every open plugin dials it within this. A server's link-up grace is
- * derived from it.
+ * binds the lowest free port, so a visible plugin dials it within this; a hidden window's timers crawl
+ * (measured: up to ~6 s), which is why a server never infers a file closed from a late link.
  */
 export const PLUGIN_LEAD_REDIAL_MS = 1_000;
 
@@ -131,7 +138,7 @@ export const ANNOTATION_CHANGES_MAX_NODES = 50;
 
 /** How often a call waiting on the human polls GRANT_STATUS. */
 export const GRANT_POLL_MS = 750;
-/** How long after its last poll a grant prompt still reads as waiting in the panel: four missed polls. */
+/** How long after its last poll a call still counts as waiting on its prompt: four missed polls. */
 export const GRANT_PROMPT_GRACE_MS = 4 * GRANT_POLL_MS;
 
 // ---- Limits enforced on one side and documented or pre-checked on the other ----
@@ -342,7 +349,6 @@ export function isDocumentId(value: unknown): value is string {
 const MAX_PROJECT_LENGTH = 4096;
 // Names are display text an agent chooses by. Bounded so a huge file can't flood a reply.
 const MAX_NAME_LENGTH = 512;
-export const MAX_REPORTED_PAGES = 200;
 
 /**
  * What a plugin says about the file it is in. `identified`: the file's stamp, with the names an agent
@@ -350,24 +356,70 @@ export const MAX_REPORTED_PAGES = 200;
  * the stamp couldn't be written (a viewer, say), so the link executes nothing.
  */
 export type DocumentReport =
-  | { kind: "identified"; documentId: string; fileName: string; pageNames: string[]; fileKey?: string }
+  | { kind: "identified"; documentId: string; fileName: string; fileKey?: string }
   | { kind: "unidentified"; problem: string };
 
-/** A plugin instance another one's shared storage says is open, in the file it reported. */
+/** The most selected-node names an open instance reports: enough to recognise a selection. */
+export const MAX_SELECTION_NAMES = 3;
+/** Names in an open instance's summary are cut to this: it describes a file, it doesn't list it. */
+export const MAX_SUMMARY_NAME_LENGTH = 80;
+
+/**
+ * One open plugin instance's file, as an agent chooses between files: every field bounded whatever
+ * the file's size. `active`: its window or tab is showing. `granted`: the asking server's project may
+ * edit it, under that server's credential and the plugin's owner; other credentials' grants never
+ * cross.
+ */
 export interface OpenInstance {
   instance: string;
   documentId: string;
+  fileName: string;
+  fileKey?: string;
+  currentPage: string;
+  pageCount: number;
+  selection: { count: number; names: string[] };
+  active: boolean;
+  granted: boolean;
 }
 
-/** The most instances one INTRODUCED lists: more open Figma files than anyone works in at once. */
+/** The most instances one OPEN_INSTANCES_RESULT lists: more open Figma files than anyone works in at once. */
 export const MAX_OPEN_INSTANCES = 64;
+
+function summaryName(value: unknown): string | null {
+  return typeof value === "string" ? value.slice(0, MAX_SUMMARY_NAME_LENGTH) : null;
+}
+
+function parseOpenInstance(value: unknown): OpenInstance | null {
+  if (!isRecord(value) || !isDocumentId(value.instance) || !isDocumentId(value.documentId)) return null;
+  const fileName = summaryName(value.fileName);
+  const currentPage = summaryName(value.currentPage);
+  const selection = value.selection;
+  if (fileName === null || currentPage === null || !isRecord(selection)) return null;
+  if (!isCount(value.pageCount) || !isCount(selection.count) || !Array.isArray(selection.names)) return null;
+  if (typeof value.active !== "boolean" || typeof value.granted !== "boolean") return null;
+  if (value.fileKey !== undefined && !isWireFileKey(value.fileKey)) return null;
+  const names = selection.names.slice(0, MAX_SELECTION_NAMES).map(summaryName);
+  if (names.some((name) => name === null)) return null;
+  return {
+    instance: value.instance,
+    documentId: value.documentId,
+    fileName,
+    ...(value.fileKey !== undefined ? { fileKey: value.fileKey } : {}),
+    currentPage,
+    pageCount: value.pageCount,
+    selection: { count: selection.count, names: names as string[] },
+    active: value.active,
+    granted: value.granted,
+  };
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
 function parseOpenInstances(value: unknown): OpenInstance[] | null {
   if (!Array.isArray(value)) return null;
-  const open = value.slice(0, MAX_OPEN_INSTANCES).filter(
-    (entry): entry is OpenInstance => isRecord(entry) && isDocumentId(entry.instance) && isDocumentId(entry.documentId),
-  );
-  return open.map(({ instance, documentId }) => ({ instance, documentId }));
+  return value.slice(0, MAX_OPEN_INSTANCES).flatMap((entry) => parseOpenInstance(entry) ?? []);
 }
 
 function parseDocumentReport(value: unknown): DocumentReport | null {
@@ -375,12 +427,10 @@ function parseDocumentReport(value: unknown): DocumentReport | null {
   if (value.kind === "unidentified")
     return { kind: "unidentified", problem: typeof value.problem === "string" ? value.problem.slice(0, MAX_NAME_LENGTH) : "" };
   if (value.kind !== "identified" || !isDocumentId(value.documentId) || typeof value.fileName !== "string") return null;
-  if (!Array.isArray(value.pageNames) || !value.pageNames.every((name) => typeof name === "string")) return null;
   const report: DocumentReport = {
     kind: "identified",
     documentId: value.documentId,
     fileName: value.fileName.slice(0, MAX_NAME_LENGTH),
-    pageNames: (value.pageNames as string[]).slice(0, MAX_REPORTED_PAGES).map((name) => name.slice(0, MAX_NAME_LENGTH)),
   };
   if (value.fileKey !== undefined) {
     if (!isWireFileKey(value.fileKey)) return null;
@@ -400,7 +450,8 @@ export type GrantPrompt = (typeof GRANT_PROMPTS)[number];
  * A plugin's answer to GRANT_STATUS:
  *   • granted — this project may edit the named document.
  *   • absent — no grant, and nothing was asked (`none`), or no Figma user is signed in to grant one.
- *   • pending — the call's prompt is showing.
+ *   • pending — the prompt is showing: this call's pick, or its project's Allow prompt, which an
+ *     earlier call may have raised and which stays when this call stops waiting.
  *   • denied — the human said no to this call.
  *   • picked — the human chose this panel's copy for this call (`pick`); grants are untouched.
  *   • other-document — the file this plugin is in isn't stamped with the named document id (now).
@@ -542,14 +593,17 @@ export type ServerRequest =
   // document this plugin is in; later changes arrive as DOCUMENT_REPORTED.
   | { type: "INTRODUCE"; project: string; framelinkOrigin: string }
   // Is this project granted `documentId`, for the call `executionId`, prompting as `prompt` says? A
-  // prompt is the call's own: polls keep it open, and GRANT_PROMPT_CLOSED or silence ends it.
+  // pick is the call's own: polls keep it open, and GRANT_PROMPT_CLOSED or silence ends it. An Allow
+  // prompt is the project's: polls mark the call waiting on it, and it outlives them.
   | ({ type: "GRANT_STATUS" } & GrantStatusAsk)
-  // The call `executionId` is over: stop showing its prompt here.
+  // The call `executionId` stopped waiting: its pick goes, and its project's Allow prompt stays.
   | { type: "GRANT_PROMPT_CLOSED"; executionId: string }
   // Another plugin instance changed this grant: re-read it. A hint; storage is the record.
   | { type: "GRANT_CHANGED_ELSEWHERE"; project: string; documentId: string }
   // Does this plugin hold session `handle` for this server's project, in the document it is in?
   | { type: "SESSION_LOOKUP"; handle: string }
+  // Which plugin instances are open on this machine, this one included, and in which files.
+  | { type: "OPEN_INSTANCES" }
   | {
       type: "EXECUTE_CODE";
       code: string;
@@ -681,6 +735,8 @@ export function parseServerFrame(value: unknown): ServerFrame | null {
         : null;
     case "SESSION_LOOKUP":
       return isSessionHandle(f.handle) ? { type: "SESSION_LOOKUP", id, handle: f.handle } : null;
+    case "OPEN_INSTANCES":
+      return { type: "OPEN_INSTANCES", id };
     case "EXECUTE_CODE": {
       // No std-lib, document, session or intent means a server that predates this plugin:
       // refused, never defaulted.
@@ -808,12 +864,14 @@ export interface ReplyByRequest {
   PAIRING_OFFER: { type: "PAIRING_OFFER_ACK" };
   PAIRING_CLOSED: { type: "PAIRING_CLOSED_ACK" };
   PAIR_CONFIRMED: { type: "CREDENTIAL_STORED" };
-  // `instance` is this plugin run, minted like a document id; `openInstances` includes it when identified.
-  INTRODUCE: { type: "INTRODUCED"; document: DocumentReport; instance: string; openInstances: OpenInstance[] };
+  // `instance` is this plugin run, minted like a document id: what OPEN_INSTANCES names it by.
+  INTRODUCE: { type: "INTRODUCED"; document: DocumentReport; instance: string };
   GRANT_STATUS: { type: "GRANT"; state: GrantState };
   GRANT_PROMPT_CLOSED: { type: "GRANT_PROMPT_CLOSED_ACK" };
   GRANT_CHANGED_ELSEWHERE: { type: "GRANT_CHANGED_ELSEWHERE_ACK" };
   SESSION_LOOKUP: { type: "SESSION_LOOKUP_RESULT"; held: boolean };
+  // Every instance whose presence is fresh, this one included while its file is stamped.
+  OPEN_INSTANCES: { type: "OPEN_INSTANCES_RESULT"; openInstances: OpenInstance[] };
   // Runs pass the grant check first, on arrival and again at dequeue; the session check on arrival.
   EXECUTE_CODE: ExecuteCodeResult | NotGrantedReply | SessionRefusedReply | FigmaPausedReply;
   WRITE_ACCESS: { type: "WRITE_ACCESS_ACK" };
@@ -865,8 +923,11 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
     case "INTRODUCE": {
       if (f.type !== "INTRODUCED" || !isDocumentId(f.instance)) return null;
       const document = parseDocumentReport(f.document);
-      const openInstances = parseOpenInstances(f.openInstances);
-      return document && openInstances ? { type: "INTRODUCED", document, instance: f.instance, openInstances } : null;
+      return document ? { type: "INTRODUCED", document, instance: f.instance } : null;
+    }
+    case "OPEN_INSTANCES": {
+      const openInstances = f.type === "OPEN_INSTANCES_RESULT" ? parseOpenInstances(f.openInstances) : null;
+      return openInstances ? { type: "OPEN_INSTANCES_RESULT", openInstances } : null;
     }
     case "GRANT_STATUS":
       return f.type === "GRANT" && isOneOf(GRANT_STATES, f.state) ? { type: "GRANT", state: f.state } : null;
@@ -961,7 +1022,7 @@ export type PluginEvent =
   // This plugin instance granted or revoked `project` on `documentId`. The server passes it on to its
   // other links, so instances of the plugin with that document open re-read the grant.
   | { type: "GRANT_CHANGED"; project: string; documentId: string; granted: boolean }
-  // The file's stamp, name or page names changed since INTRODUCED: this is the report now.
+  // The file's stamp or name changed since INTRODUCED: this is the report now.
   | { type: "DOCUMENT_REPORTED"; document: DocumentReport }
   // The human clicked the panel's sign-in button.
   | { type: "WRITE_ACCESS_SIGN_IN" }

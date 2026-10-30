@@ -2,29 +2,27 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// How long a call waits for plugins to link: only for the instances an introduction names open, and
-// only as long as the grace for one that never comes.
+// An unnamed call against the files open on this machine, linked or still linking: it never waits to
+// learn how many there are, and waits for a plugin to link only in the file it runs in.
 import { afterEach, expect, it } from "vitest";
 import type { DocumentReport } from "@framelink/plugin/protocol";
+import { callTargetGuidance } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
-import { parseDocumentId } from "~/commercial/plugin-bridge/document-id.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
-import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
-import { TEST_DOCUMENT, TEST_DOCUMENT_REPORT, TEST_INTENT } from "./fixtures/write-access.js";
+import { connectFakePlugin, openInstanceOf } from "./fixtures/fake-plugin-socket.js";
+import { TEST_DOCUMENT, TEST_INTENT } from "./fixtures/write-access.js";
 
 const bridges: PluginBridge[] = [];
 afterEach(() => {
   for (const bridge of bridges.splice(0)) bridge.stop();
 });
 
-const SETTINGS_REPORT: DocumentReport = {
+const SETTINGS_REPORT = {
   kind: "identified",
   documentId: "s3tt1ngsd0c00002",
   fileName: "Settings",
-  pageNames: ["Account"],
-};
-// A tab closed outright: its storage entry still looks fresh, but it will never link.
-const CLOSED_TAB = { instance: "c10s3dtab0000003", documentId: "s3tt1ngsd0c00002" };
+} as const satisfies DocumentReport;
+const SETTINGS_INSTANCE = "s3tt1ngsxnst0003";
 
 /** A plugin whose project is granted, and whose panel picks it when asked to choose a copy. */
 function granted(bridge: PluginBridge, options: Parameters<typeof connectFakePlugin>[1]) {
@@ -34,74 +32,88 @@ function granted(bridge: PluginBridge, options: Parameters<typeof connectFakePlu
   });
 }
 
-function target(bridge: PluginBridge, document: string | null) {
+function unnamedCall(bridge: PluginBridge) {
   return bridge.targetCall(
     {
       executionId: mintExecutionId(),
       intent: TEST_INTENT,
       session: null,
-      document: document === null ? null : parseDocumentId(document)!,
+      document: null,
       fileKey: null,
     },
     { signal: new AbortController().signal, waitMs: 5_000 },
   );
 }
 
-it("an unnamed call runs as soon as every plugin named open has linked", async () => {
-  // A grace no call could sit out inside the test's timeout: nothing here may wait for it.
-  const bridge = new PluginBridge({ linkupGraceMs: 60_000 });
+function newBridge(): PluginBridge {
+  const bridge = new PluginBridge();
   bridges.push(bridge);
-  await granted(bridge, {});
+  return bridge;
+}
 
-  expect(await target(bridge, null)).toMatchObject({
-    kind: "targeted",
-    document: { documentId: TEST_DOCUMENT.documentId },
+it("two open files refuse an unnamed call at once, listing both, without waiting for the unlinked one", async () => {
+  const bridge = newBridge();
+  await granted(bridge, {
+    otherInstances: [
+      openInstanceOf(SETTINGS_REPORT, SETTINGS_INSTANCE, {
+        active: true,
+        currentPage: "Billing",
+        pageCount: 140,
+        selection: { count: 2, names: ["Card", "Header"] },
+      }),
+    ],
   });
-});
-
-it("a plugin named open that never links holds an unnamed call only for the grace", async () => {
-  const bridge = new PluginBridge({ linkupGraceMs: 300 });
-  bridges.push(bridge);
-  await granted(bridge, { otherInstances: [CLOSED_TAB] });
 
   const started = Date.now();
-  // Granted there too, had it linked: then the call would have been refused as ambiguous.
-  expect(await target(bridge, null)).toMatchObject({
-    kind: "targeted",
-    document: { documentId: TEST_DOCUMENT.documentId },
-  });
-  expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+  const target = await unnamedCall(bridge);
+  expect(Date.now() - started).toBeLessThan(500);
+  if (target.kind !== "blocked") throw new Error("expected a refusal");
+  if (target.block.kind !== "document-unchosen") throw new Error("expected the open-files refusal");
+  const text = callTargetGuidance(target.block, "mcp");
+  expect(text).toContain("2 Figma files have the Framelink plugin open");
+  expect(text).toContain(
+    `- "${TEST_DOCUMENT.fileName}": document ${TEST_DOCUMENT.documentId}; fileKey TESTfile1; allowed for this project; background`,
+  );
+  expect(text).toContain(
+    `- "Settings": document ${SETTINGS_REPORT.documentId}; not allowed for this project yet ` +
+      `(choosing it asks the user to Allow); active tab; page "Billing" of 140; selection 2 nodes ("Card", "Header")`,
+  );
+  expect(text).toContain("The session you get back keeps that file");
 });
 
-it("a call naming its document never waits on another plugin, linking or frozen", async () => {
-  const bridge = new PluginBridge({ linkupGraceMs: 60_000 });
-  bridges.push(bridge);
-  await granted(bridge, { document: TEST_DOCUMENT_REPORT, otherInstances: [CLOSED_TAB] });
-  await connectFakePlugin(bridge, { document: SETTINGS_REPORT, answersIntroduce: false });
+it("the one open file runs an unnamed call once its slow plugin links", async () => {
+  const bridge = newBridge();
+  // A viewer's plugin can't stamp its file, so the only usable file is the one still linking.
+  await connectFakePlugin(bridge, {
+    document: { kind: "unidentified", problem: "view only" },
+    otherInstances: [openInstanceOf(SETTINGS_REPORT, SETTINGS_INSTANCE)],
+  });
+  const call = unnamedCall(bridge);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const late = await granted(bridge, { document: SETTINGS_REPORT, instance: SETTINGS_INSTANCE });
 
-  expect(await target(bridge, TEST_DOCUMENT.documentId)).toMatchObject({
+  expect(await call).toMatchObject({
     kind: "targeted",
-    document: { documentId: TEST_DOCUMENT.documentId },
+    link: late.link,
+    document: { documentId: SETTINGS_REPORT.documentId },
   });
 });
 
-it("a call naming its document waits for a copy of it still linking, and asks which copy", async () => {
-  const bridge = new PluginBridge({ linkupGraceMs: 60_000 });
-  bridges.push(bridge);
+it("duplicates of one document are one file, and the human picks the copy", async () => {
+  const bridge = newBridge();
   const copyInstance = "c0pyxnstanc00004";
+  // Neither reports a file key, so nothing tells the original from its duplicate.
   const unkeyed: DocumentReport = {
     kind: "identified",
     documentId: TEST_DOCUMENT.documentId,
     fileName: TEST_DOCUMENT.fileName,
-    pageNames: ["Page 1"],
   };
-  // Neither reports a file key, so nothing tells the original from its duplicate.
   await connectFakePlugin(bridge, {
     document: unkeyed,
-    otherInstances: [{ instance: copyInstance, documentId: TEST_DOCUMENT.documentId }],
+    otherInstances: [openInstanceOf(unkeyed, copyInstance)],
     grantState: () => "pending",
   });
-  const call = target(bridge, TEST_DOCUMENT.documentId);
+  const call = unnamedCall(bridge);
   await new Promise((resolve) => setTimeout(resolve, 50));
   const copy = await granted(bridge, { document: unkeyed, instance: copyInstance });
 

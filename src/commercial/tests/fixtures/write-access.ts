@@ -46,7 +46,6 @@ export const TEST_DOCUMENT_REPORT: DocumentReport = {
   kind: "identified",
   documentId: TEST_DOCUMENT.documentId,
   fileName: TEST_DOCUMENT.fileName,
-  pageNames: ["Page 1"],
   fileKey: "TESTfile1",
 };
 

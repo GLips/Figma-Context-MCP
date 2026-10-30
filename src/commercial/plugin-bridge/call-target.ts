@@ -8,26 +8,30 @@
 // - A call naming a session runs only in the plugin run holding it, in the document it is bound to.
 //   If no plugin holds it, or the call also names a document or file key that isn't that one, it is
 //   refused and never falls through to the rules below.
-// - A call naming a document (or a file key, which matches only links that reported it) runs only
+// - A call naming a document (or a file key, which matches only plugins that reported it) runs only
 //   there, and only that document's panels are asked to Allow.
-// - A call naming neither runs in the one open document already granted to this project, once every
-//   open plugin's file and grant is known and every plugin instance named open has linked or run out
-//   its grace (plugin-linkup.ts). Otherwise it is refused with the open documents, for the agent to
-//   choose from by name. No panel is asked.
+// - A call naming neither runs in the one file with the plugin open, asking to Allow there if this
+//   project isn't yet. With two or more open it is refused at once with the list (open-files.ts),
+//   for the agent to choose from by name. No panel is asked.
+//
+// Nothing waits on a plugin still linking but the file a call named or was given: that one is the
+// run, so the call waits for it to link, within the caller's wait.
 //
 // A document is its stamp. One stamp on two links is either one file open twice (both reported the
 // same file key) or a copy; when nothing tells them apart, the human picks in those panels.
-import {
-  GRANT_POLL_MS,
-  type GrantPrompt,
-  type GrantState,
-  type GrantStatusAsk,
-} from "@framelink/plugin/protocol";
+import { GRANT_POLL_MS, type GrantState, type GrantStatusAsk } from "@framelink/plugin/protocol";
 import type { ExecutionId } from "~/commercial/execution-id.js";
 import type { CallIntent } from "./call-intent.js";
+import type { CallWait } from "./call-wait.js";
 import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentId } from "./document-id.js";
 import type { LinkDocument, OpenFile } from "./link-documents.js";
+import {
+  openDocumentSnapshot,
+  type OpenDocument,
+  type OpenDocumentSnapshot,
+  type OpenFilesLookup,
+} from "./open-files.js";
 import type { RelayConnection } from "./relay-connection.js";
 import type { SessionHandle } from "./session-handle.js";
 
@@ -49,25 +53,6 @@ export interface CallTargetRequest {
   fileKey: FigmaFileKey | null;
 }
 
-/** One open document, as an agent chooses from: its names, and where this project stands on it. */
-export interface OpenDocument extends OpenFile {
-  /** `unknown`: a plugin with it open couldn't be asked. Never read as "not granted". */
-  grant: "granted" | "not-granted" | "unknown";
-  /** How many open files carry this stamp that nothing tells apart: above 1, a copy is open. */
-  copies: number;
-}
-
-/**
- * Every open plugin's document, for a refusal or the reference to show. `complete` is false when a
- * plugin hasn't said which file it is in, or couldn't be asked for its grant: then no call defaults.
- */
-export interface OpenDocumentSnapshot {
-  documents: OpenDocument[];
-  /** Why each plugin that couldn't stamp its file can't be used. */
-  unidentified: string[];
-  complete: boolean;
-}
-
 /** Why a call got no document. Nothing was submitted in any of them. */
 export type CallTargetBlock =
   | {
@@ -76,14 +61,17 @@ export type CallTargetBlock =
       fileKey: FigmaFileKey | null;
       open: OpenDocumentSnapshot;
     }
-  // Named nothing, and not exactly one open document is known to be granted: the agent chooses.
+  // Named nothing, and not exactly one file is open: the agent chooses.
   | { kind: "document-unchosen"; reason: NoUnnamedCallDefault; open: OpenDocumentSnapshot }
+  // The file the call named or was given is open, but its plugin didn't link within the call's wait.
+  | { kind: "document-reconnecting"; wait: Extract<CallWait, { kind: "reconnecting" }> }
   // The file the call was waiting on was given a new stamp: the agent chooses again.
   | { kind: "document-changed"; fileName: string; open: OpenDocumentSnapshot }
   | { kind: "grant-denied"; fileName: string }
   | { kind: "grant-unavailable"; fileName: string }
-  | { kind: "grant-pending"; fileName: string }
-  | { kind: "pick-pending"; fileName: string }
+  // The call stopped waiting on a person: the project's Allow prompt stays in the panel; a pick goes.
+  | { kind: "grant-pending"; wait: Extract<CallWait, { kind: "allow" }> }
+  | { kind: "pick-pending"; wait: Extract<CallWait, { kind: "pick" }> }
   | { kind: "session-not-found"; session: SessionHandle }
   // An open plugin couldn't be asked whether it holds the session, and none that answered does.
   | { kind: "session-lookup-failed"; session: SessionHandle }
@@ -96,6 +84,9 @@ export type CallTargetBlock =
       document: DocumentId | null;
       fileKey: FigmaFileKey | null;
     };
+
+/** A block that is a wait the call stopped in, not a refusal: it carries what it waited on. */
+export type WaitingBlock = Extract<CallTargetBlock, { wait: unknown }>;
 
 type Targeted = { kind: "targeted"; link: RelayConnection; document: CallDocument };
 
@@ -110,35 +101,30 @@ export const GRANT_WAIT_MS = 120_000;
 
 export interface CallTargetOptions {
   signal: AbortSignal;
+  /** The whole wait: for plugins in the call's file to link, then for the human. */
   waitMs?: number;
   pollMs?: number;
-  /** Called once, when the call starts waiting on the human; what it returns runs when it stops. */
-  onWaiting?: () => () => Promise<void>;
+  /**
+   * Called when the call starts waiting, and again when what it waits on changes. What the first
+   * call returns runs when it stops.
+   */
+  onWaiting?: (wait: CallWait) => () => Promise<void>;
 }
 
 /** One GRANT_STATUS question: a prompting one shows the intent of the call it asks for. */
 export type GrantStatusRequest = GrantStatusAsk<ExecutionId, DocumentId, CallIntent>;
 
-/** What a snapshot reads: each link's document, and its plugin's grant on it. */
-export interface OpenDocumentLookup {
-  documentOf(link: RelayConnection): LinkDocument;
+export interface CallTargetDeps extends OpenFilesLookup {
+  /** This server's project: what an Allow prompt asks to grant. */
+  project: string;
+  /** The authenticated links now: read afresh each round, so a panel that joins mid-wait is seen. */
+  links(): RelayConnection[];
   /** Rejects when the plugin couldn't be asked. */
   grantStatus(
     link: RelayConnection,
     request: GrantStatusRequest,
     signal: AbortSignal,
   ): Promise<GrantState>;
-}
-
-export interface CallTargetDeps extends OpenDocumentLookup {
-  /** The authenticated links now: read afresh each round, so a panel that joins mid-wait is seen. */
-  links(): RelayConnection[];
-  /**
-   * When the wait ends for every plugin instance named open (in `documentId` only, if given) that
-   * hasn't linked: at or before now when none is awaited. Until then, a plugin missing from links()
-   * may only be on its way.
-   */
-  linkupSettlesAt(documentId?: DocumentId): number;
   /** Wait `ms`, or less: until the next plugin introduction or drop. */
   pauseForLinkup(ms: number, signal: AbortSignal): Promise<void>;
   /** Resolves once each of `links` has said which file it is in, or couldn't. */
@@ -151,6 +137,9 @@ export interface CallTargetDeps extends OpenDocumentLookup {
     signal: AbortSignal,
   ): Promise<boolean>;
 }
+
+// How often a call waiting on a plugin to link re-reads the open files: an instance may go stale.
+const LINKUP_POLL_MS = 1_000;
 
 function identifiedFile(document: LinkDocument): OpenFile | null {
   return document.kind === "identified" ? document : null;
@@ -177,83 +166,24 @@ function distinctFiles(
 }
 
 /**
- * Every open document, with this project's grant on each, without prompting. Documents are counted
- * by stamp, not by link: one file in two plugin instances is one entry.
- */
-export async function openDocumentSnapshot(
-  links: readonly RelayConnection[],
-  lookup: OpenDocumentLookup,
-  executionId: ExecutionId,
-  signal: AbortSignal,
-): Promise<OpenDocumentSnapshot> {
-  const documents = links.map((link) => lookup.documentOf(link));
-  const states = await Promise.all(
-    links.map((link, index) => {
-      const file = identifiedFile(documents[index]);
-      return file
-        ? lookup
-            .grantStatus(link, { executionId, documentId: file.documentId, prompt: "none" }, signal)
-            .catch(() => null)
-        : null;
-    }),
-  );
-  signal.throwIfAborted();
-  const byId = new Map<
-    DocumentId,
-    { file: OpenFile; links: RelayConnection[]; states: unknown[] }
-  >();
-  links.forEach((link, index) => {
-    const file = identifiedFile(documents[index]);
-    if (!file) return;
-    const entry = byId.get(file.documentId) ?? { file, links: [], states: [] };
-    entry.links.push(link);
-    entry.states.push(states[index]);
-    byId.set(file.documentId, entry);
-  });
-  const open = [...byId.values()].map(({ file, links: copies, states: answers }) => ({
-    documentId: file.documentId,
-    fileName: file.fileName,
-    pageNames: file.pageNames,
-    fileKey: file.fileKey,
-    grant: answers.includes("granted")
-      ? ("granted" as const)
-      : answers.every((state) => state === "absent")
-        ? ("not-granted" as const)
-        : ("unknown" as const),
-    copies: distinctFiles(copies, (link) => lookup.documentOf(link)).length,
-  }));
-  return {
-    documents: open,
-    unidentified: documents.flatMap((document) =>
-      document.kind === "unidentified" ? [document.problem] : [],
-    ),
-    complete:
-      documents.every((document) => document.kind !== "unknown") &&
-      open.every((document) => document.grant !== "unknown"),
-  };
-}
-
-/**
- * Where a call naming nothing runs, by `open` alone: the one open document granted to this project,
- * or why there is none. The one rule the binder, its refusal and the reference all read.
+ * Where a call naming nothing runs, by `open` alone: the one open file, or why there is none. The one
+ * rule the binder, its refusal and the reference all read.
  */
 export type UnnamedCallDefault =
   | { kind: "default"; document: OpenDocument }
   | { kind: "no-files" }
-  // More granted documents can only appear as links arrive, so this never resolves to a default.
-  | { kind: "several-granted"; count: number }
-  | { kind: "incomplete" }
-  | { kind: "none-granted" };
+  | { kind: "several-open"; count: number }
+  // A linked plugin hasn't said which file it is in: it may be a second one.
+  | { kind: "incomplete" };
 
 export type NoUnnamedCallDefault = Exclude<UnnamedCallDefault, { kind: "default" }>;
 
 export function unnamedCallDefault(open: OpenDocumentSnapshot): UnnamedCallDefault {
-  const granted = open.documents.filter((document) => document.grant === "granted");
-  if (!open.documents.length) return { kind: "no-files" };
-  if (granted.length > 1) return { kind: "several-granted", count: granted.length };
-  // With a plugin whose file or grant is unknown, the one granted document may not be the only one.
+  if (open.documents.length > 1) return { kind: "several-open", count: open.documents.length };
   if (!open.complete) return { kind: "incomplete" };
-  return granted.length ? { kind: "default", document: granted[0] } : { kind: "none-granted" };
+  return open.documents.length
+    ? { kind: "default", document: open.documents[0] }
+    : { kind: "no-files" };
 }
 
 export async function targetPluginCall(
@@ -262,10 +192,15 @@ export async function targetPluginCall(
   options: CallTargetOptions,
 ): Promise<CallTarget> {
   let stopWaiting: (() => Promise<void>) | undefined;
+  let shown: string | undefined;
   const waiting = {
     ...options,
-    onWaiting: () => {
-      stopWaiting ??= options.onWaiting?.();
+    onWaiting: (wait: CallWait) => {
+      const key = JSON.stringify(wait);
+      if (key === shown) return;
+      shown = key;
+      const stop = options.onWaiting?.(wait);
+      stopWaiting ??= stop;
     },
   };
   try {
@@ -279,15 +214,23 @@ export async function targetPluginCall(
   }
 }
 
-type WaitingOptions = Omit<CallTargetOptions, "onWaiting"> & { onWaiting: () => void };
+type WaitingOptions = Omit<CallTargetOptions, "onWaiting"> & {
+  onWaiting: (wait: CallWait) => void;
+};
 
-/** The open documents now, for a refusal: read without prompting, under this call's id. */
+/** The open files now, for a call to bind by or a refusal to list. */
 function snapshotNow(
   deps: CallTargetDeps,
-  request: CallTargetRequest,
   { signal }: WaitingOptions,
 ): Promise<OpenDocumentSnapshot> {
-  return openDocumentSnapshot(deps.links(), deps, request.executionId, signal);
+  return openDocumentSnapshot(deps, signal);
+}
+
+/** Open instances not linked to this server yet, by file name: what a call still linking waits on. */
+function reconnecting(
+  names: readonly { fileName: string }[],
+): Extract<CallWait, { kind: "reconnecting" }> {
+  return { kind: "reconnecting", fileNames: [...new Set(names.map((name) => name.fileName))] };
 }
 
 /** A call naming its session: the one plugin run holding it, asked for a grant there and nowhere else. */
@@ -320,15 +263,16 @@ async function targetSession(
 }
 
 /**
- * The one open plugin run holding `session`. A miss is final only once every plugin instance named
- * open has linked or run out its grace, so a holder still linking isn't reported gone. Links are
+ * The one open plugin run holding `session`. A miss is final only once every open plugin instance has
+ * linked, so a holder still linking isn't reported gone; that wait is bounded by the call's. Links are
  * asked until they answer; one that never could makes the miss a failed lookup.
  */
 async function findSessionHolder(
   deps: CallTargetDeps,
   session: SessionHandle,
-  { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS }: WaitingOptions,
+  options: WaitingOptions,
 ): Promise<{ kind: "found"; holder: RelayConnection } | BlockedCallTarget> {
+  const { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS } = options;
   const giveUpAt = Date.now() + waitMs;
   const answered = new Map<RelayConnection, boolean>();
   const failed = new Set<RelayConnection>();
@@ -349,51 +293,91 @@ async function findSessionHolder(
     const holders = deps.links().filter((link) => answered.get(link) === true);
     if (holders.length > 1) return blocked({ kind: "session-ambiguous", session });
     if (holders.length === 1) return { kind: "found", holder: holders[0] };
-    const settleAt = Math.min(deps.linkupSettlesAt(), giveUpAt);
-    if (Date.now() >= settleAt) {
+    const linking = (await snapshotNow(deps, options)).instances.filter((i) => i.link === null);
+    if (!linking.length || Date.now() >= giveUpAt) {
       const unreachable = deps.links().some((link) => failed.has(link));
       return blocked({
         kind: unreachable ? "session-lookup-failed" : "session-not-found",
         session,
       });
     }
-    await deps.pauseForLinkup(Math.min(pollMs, settleAt - Date.now()), signal);
+    options.onWaiting(reconnecting(linking));
+    await deps.pauseForLinkup(Math.min(pollMs, giveUpAt - Date.now()), signal);
   }
 }
 
-/** A call naming a document, a file key, or both: links matching every name given, and no other. */
+/**
+ * A call naming a document, a file key, or both: links matching every name given, and no other. A
+ * file-key call learns its document from the first plugin, linked or not, that reported that key.
+ */
 async function targetNamed(
   deps: CallTargetDeps,
   request: CallTargetRequest,
   options: WaitingOptions,
 ): Promise<CallTarget> {
-  const matches = (link: RelayConnection) => {
-    const file = identifiedFile(deps.documentOf(link));
-    return (
-      file !== null &&
-      (request.document === null || file.documentId === request.document) &&
-      (request.fileKey === null || file.fileKey === request.fileKey)
-    );
-  };
-  // Waits only for instances listed in the matched document, never for another document's. A copy of
-  // that document still linking must be in bindFiles' pick, or the call may write into the wrong copy.
-  // With no match yet, a file-key call can't tell which document it is, so it waits for every one.
-  const { signal } = options;
+  if (request.document !== null) return targetDocument(deps, request, request.document, options);
+  const keyed = (await snapshotNow(deps, options)).instances.find(
+    (instance) => instance.fileKey === request.fileKey,
+  );
+  if (keyed) return targetDocument(deps, request, keyed.documentId, options);
+  await abortable(deps.documentsSettled(deps.links()), options.signal);
+  const linked = deps
+    .links()
+    .map((link) => identifiedFile(deps.documentOf(link)))
+    .find((file) => file?.fileKey === request.fileKey);
+  return linked
+    ? targetDocument(deps, request, linked.documentId, options)
+    : documentNotOpen(deps, request, options, null);
+}
+
+/**
+ * Run in `documentId` (and the call's file key, if it named one). Every open instance of it that
+ * would be a distinct file is waited for until it links, within the call's wait: one still linking
+ * must be in bindFiles' pick, or the call may write into the wrong copy. Instances in other documents
+ * are never waited on.
+ */
+async function targetDocument(
+  deps: CallTargetDeps,
+  request: CallTargetRequest,
+  documentId: DocumentId,
+  options: WaitingOptions,
+): Promise<CallTarget> {
+  const { signal, waitMs = GRANT_WAIT_MS } = options;
+  const giveUpAt = Date.now() + waitMs;
+  const matches = (file: { documentId: DocumentId; fileKey: FigmaFileKey | null } | null) =>
+    file !== null &&
+    file.documentId === documentId &&
+    (request.fileKey === null || file.fileKey === request.fileKey);
   for (;;) {
-    const candidates = deps.links().filter(matches);
-    const awaited =
-      request.document ??
-      (candidates.length ? identifiedFile(deps.documentOf(candidates[0]))!.documentId : undefined);
-    const settleAt = deps.linkupSettlesAt(awaited);
-    if (Date.now() < settleAt) {
-      await deps.pauseForLinkup(settleAt - Date.now(), signal);
+    const open = await snapshotNow(deps, options);
+    const candidates = deps
+      .links()
+      .filter((link) => matches(identifiedFile(deps.documentOf(link))));
+    const linkedKeys = new Set(
+      candidates.flatMap((link) => identifiedFile(deps.documentOf(link))?.fileKey ?? []),
+    );
+    // One reporting the file key of a linked one is that same file open again: nothing to pick.
+    const linking = open.instances.filter(
+      (instance) =>
+        instance.link === null &&
+        matches(instance) &&
+        !(instance.fileKey !== null && linkedKeys.has(instance.fileKey)),
+    );
+    if (!linking.length) {
+      if (candidates.length)
+        return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), {
+          ...options,
+          waitMs: Math.max(giveUpAt - Date.now(), 0),
+        });
+      await abortable(deps.documentsSettled(deps.links()), signal);
+      if (!deps.links().some((link) => matches(identifiedFile(deps.documentOf(link)))))
+        return documentNotOpen(deps, request, options, documentId);
       continue;
     }
-    if (candidates.length)
-      return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
-    await abortable(deps.documentsSettled(deps.links()), signal);
-    if (!deps.links().some(matches))
-      return documentNotOpen(deps, request, options, request.document);
+    if (Date.now() >= giveUpAt)
+      return blocked({ kind: "document-reconnecting", wait: reconnecting(linking) });
+    options.onWaiting(reconnecting(linking));
+    await deps.pauseForLinkup(Math.min(LINKUP_POLL_MS, giveUpAt - Date.now()), signal);
   }
 }
 
@@ -408,40 +392,25 @@ async function documentNotOpen(
     kind: "document-not-open",
     document,
     fileKey: request.fileKey,
-    open: await snapshotNow(deps, request, options),
+    open: await snapshotNow(deps, options),
   });
 }
 
 /**
- * A call naming nothing: the one open document granted to this project, or a refusal to choose.
- * Decided only once every instance named open has linked or run out its grace: one still linking may
- * hold the grant (none seen yet) or a second one (one seen).
+ * A call naming nothing: the one open file, or a refusal to choose. Decided on the open files now,
+ * listed or linked: a plugin still linking is a file like any other, and is never waited for to tell.
  */
 async function targetUnnamed(
   deps: CallTargetDeps,
   request: CallTargetRequest,
   options: WaitingOptions,
 ): Promise<CallTarget> {
-  const { signal } = options;
-  let documentId: DocumentId;
-  for (;;) {
-    await abortable(deps.documentsSettled(deps.links()), signal);
-    const open = await snapshotNow(deps, request, options);
-    const unnamed = unnamedCallDefault(open);
-    const settleAt = deps.linkupSettlesAt();
-    const settled = Date.now() >= settleAt;
-    if (unnamed.kind === "default" && settled) {
-      documentId = unnamed.document.documentId;
-      break;
-    }
-    if (unnamed.kind !== "default" && (settled || unnamed.kind === "several-granted"))
-      return blocked({ kind: "document-unchosen", reason: unnamed, open });
-    await deps.pauseForLinkup(settleAt - Date.now(), signal);
-  }
-  const candidates = deps
-    .links()
-    .filter((link) => identifiedFile(deps.documentOf(link))?.documentId === documentId);
-  return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
+  await abortable(deps.documentsSettled(deps.links()), options.signal);
+  const open = await snapshotNow(deps, options);
+  const unnamed = unnamedCallDefault(open);
+  if (unnamed.kind !== "default")
+    return blocked({ kind: "document-unchosen", reason: unnamed, open });
+  return targetDocument(deps, request, unnamed.document.documentId, options);
 }
 
 /** Run in one of `files` (all one document): picked by the human when nothing tells them apart. */
@@ -471,8 +440,8 @@ interface Answer {
 /**
  * Ask `prompt` of every link in `links()` for this call, round after round, until `decide` settles
  * it, the links all close (`gone`), or the wait runs out (`expired`). A link whose file was given a
- * new stamp ends the wait: the agent chooses again from the refreshed documents. Every prompt this
- * round opened is closed on the way out, but the decided link's.
+ * new stamp ends the wait: the agent chooses again from the refreshed documents. On the way out every
+ * panel asked but the decided one is told the call stopped waiting: a pick goes, an Allow prompt stays.
  */
 async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: RelayConnection }>(
   deps: CallTargetDeps,
@@ -480,7 +449,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
   file: OpenFile,
   options: WaitingOptions,
   round: {
-    prompt: Exclude<GrantPrompt, "none">;
+    wait: Extract<CallWait, { kind: "allow" | "pick" }>;
     links: () => RelayConnection[];
     decide: (answers: Answer[]) => Decided | BlockedCallTarget | null;
     gone: () => Promise<BlockedCallTarget>;
@@ -495,7 +464,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
     blocked({
       kind: "document-changed",
       fileName: file.fileName,
-      open: await snapshotNow(deps, request, options),
+      open: await snapshotNow(deps, options),
     });
   try {
     for (;;) {
@@ -514,7 +483,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
               {
                 executionId: request.executionId,
                 documentId: file.documentId,
-                prompt: round.prompt,
+                prompt: round.wait.kind,
                 intent: request.intent,
               },
               signal,
@@ -532,7 +501,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
         return outcome;
       }
       if (Date.now() >= deadline) return round.expired();
-      options.onWaiting();
+      options.onWaiting(round.wait);
       await pause(Math.min(pollMs, Math.max(deadline - Date.now(), 0)), signal);
     }
   } finally {
@@ -549,15 +518,16 @@ async function waitForPick(
   file: OpenFile,
   options: WaitingOptions,
 ): Promise<{ kind: "picked"; link: RelayConnection } | BlockedCallTarget> {
+  const wait = { kind: "pick" as const, fileName: file.fileName, since: Date.now() };
   return pollPanels(deps, request, file, options, {
-    prompt: "pick",
+    wait,
     links: () => files.flat(),
     decide: (answers) => {
       const picked = answers.find((answer) => answer.state === "picked");
       return picked ? { kind: "picked" as const, link: picked.link } : null;
     },
     gone: () => documentNotOpen(deps, request, options, file.documentId),
-    expired: () => blocked({ kind: "pick-pending", fileName: file.fileName }),
+    expired: () => blocked({ kind: "pick-pending", wait }),
   });
 }
 
@@ -570,8 +540,14 @@ async function waitForGrant(
   options: WaitingOptions,
   gone: () => Promise<BlockedCallTarget>,
 ): Promise<CallTarget> {
+  const wait = {
+    kind: "allow" as const,
+    project: deps.project,
+    fileName: file.fileName,
+    since: Date.now(),
+  };
   return pollPanels(deps, request, file, options, {
-    prompt: "allow",
+    wait,
     links: () => links,
     decide: (answers) => {
       const granted = answers.find((answer) => answer.state === "granted");
@@ -583,7 +559,7 @@ async function waitForGrant(
       return null;
     },
     gone,
-    expired: () => blocked({ kind: "grant-pending", fileName: file.fileName }),
+    expired: () => blocked({ kind: "grant-pending", wait }),
   });
 }
 

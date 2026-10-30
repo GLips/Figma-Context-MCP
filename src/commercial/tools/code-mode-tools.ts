@@ -23,8 +23,8 @@ import {
   type PluginPresenceSource,
 } from "~/commercial/plugin-bridge/index.js";
 import { GRANT_WAIT_MS } from "~/commercial/plugin-bridge/call-target.js";
+import { callWaitLine, type CallWait } from "~/commercial/plugin-bridge/call-wait.js";
 import {
-  GRANT_WAITING_TEXT,
   notGrantedText,
   pairingCodeUnknownText,
   quoteFigmaName,
@@ -55,7 +55,6 @@ import {
   checkedInReply,
   launchPluginRun,
   neverSentReply,
-  runProgressText,
   waitOnPluginRun,
   type PluginRun,
   type PluginRunEnd,
@@ -325,9 +324,9 @@ function registerCodeModeTools(
         GRANT_WAIT_MS,
         Math.max(progress.checkInAt - PLUGIN_ANSWER_MS - Date.now(), 0),
       ),
-      onWaiting: () => {
-        progress.show(() => GRANT_WAITING_TEXT);
-        return async () => progress.show(FINDING_FILE_PROGRESS);
+      onWaiting: (wait) => {
+        progress.show(() => wait);
+        return async () => progress.show(FINDING_FILE);
       },
     });
     if (targeted.kind === "targeted") return targeted;
@@ -354,7 +353,7 @@ function registerCodeModeTools(
     const owned = { ...facts, ...ownedBy(target.link) };
     const notSent = (): CallToolResult => {
       call.record({ ...owned, outcome: "not_run", failure: "checked_in_before_sending" });
-      return neverSentReply(kind, Date.now() - startedAt);
+      return neverSentReply(kind, target.document, Date.now() - startedAt);
     };
     if (Date.now() >= progress.checkInAt - PLUGIN_ANSWER_MS) return notSent();
     const run = launchPluginRun<CodeModeFacts>(
@@ -372,7 +371,7 @@ function registerCodeModeTools(
         } catch (error) {
           if (signal.reason === CHECKED_IN_BEFORE_SENDING)
             return {
-              reply: neverSentReply(kind, Date.now() - startedAt),
+              reply: neverSentReply(kind, target.document, Date.now() - startedAt),
               session: null,
               facts: { ...owned, outcome: "not_run", failure: "checked_in_before_sending" },
             };
@@ -387,7 +386,7 @@ function registerCodeModeTools(
         }
       },
     );
-    progress.show(() => runProgressText(runtime.bridge, run.executionId));
+    progress.show(() => ({ kind: "run", state: runtime.bridge.runState(run.executionId) }));
     const waited = await waitOnPluginRun(run, {
       checkInAt: progress.checkInAt,
       signal: extra.signal,
@@ -901,7 +900,10 @@ Returns a PNG image.`,
             working.run.bridge.cancelRun(working.run.executionId);
           }
           const progress = startCallProgress(extra, checkInAt);
-          progress.show(() => runProgressText(working.run.bridge, working.run.executionId));
+          progress.show(() => ({
+            kind: "run",
+            state: working.run.bridge.runState(working.run.executionId),
+          }));
           try {
             const waited = await waitOnPluginRun(working.run, {
               checkInAt,
@@ -1024,19 +1026,20 @@ const AWAIT_EXECUTION_DESCRIPTION =
 /** One call's progress line for clients that show progress, and when the call checks in. */
 interface CallProgress {
   checkInAt: number;
-  show(text: () => string): void;
+  /** What the call waits on now: read at each heartbeat, so a run's state and a wait's age stay current. */
+  show(wait: () => CallWait): void;
   stop(): Promise<void>;
 }
 
-const FINDING_FILE_PROGRESS = () => "Finding the Figma file…";
+const FINDING_FILE = (): CallWait => ({ kind: "finding-file" });
 
 function startCallProgress(extra: ToolExtra, checkInAt: number): CallProgress {
-  let text = FINDING_FILE_PROGRESS;
-  const stop = startProgressHeartbeat(extra, () => text(), 3000);
+  let wait = FINDING_FILE;
+  const stop = startProgressHeartbeat(extra, () => callWaitLine(wait(), Date.now()), 3000);
   return {
     checkInAt,
     show: (next) => {
-      text = next;
+      wait = next;
     },
     stop,
   };

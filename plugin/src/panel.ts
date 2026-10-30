@@ -37,25 +37,31 @@ export interface PanelGrantRow {
 }
 
 /**
- * One call waiting on the human in this panel: `allow` to let its project edit this document, or
- * `pick` to choose this copy where two open files carry one document id. Clicks name the call and the
- * document shown, so they can't land on another call, or on a stamp the human never saw.
+ * A decision for the human in this panel:
+ *   • allow — let a project edit this document. One per project, whichever of its calls asked; it
+ *     stays after they stop waiting (`waitedOn` false), and Allow then lets the project's next call in.
+ *     Clicks name `id`, the grant scope it saves, so they can't land on another project or stamp.
+ *   • pick — whether this copy is the one a call means, where two open files carry one document id.
+ *     That call's alone, and its click names the call and the document shown.
  */
-export interface PanelPrompt {
-  key: ConnKey;
-  executionId: string;
-  kind: "allow" | "pick";
-  project: string;
-  documentId: string;
-  // What the call says it is for: display text only, rendered as plain text.
-  intent: string;
-  // An Allow is being saved.
-  allowing: boolean;
-}
+export type PanelPrompt =
+  | {
+      kind: "allow";
+      id: string;
+      project: string;
+      // The project's short name, as its grant row is labelled.
+      label: string;
+      // The newest asking call's own words: display text only, rendered as plain text.
+      intent: string;
+      waitedOn: boolean;
+      // An Allow is being saved.
+      allowing: boolean;
+    }
+  | { kind: "pick"; key: ConnKey; executionId: string; project: string; label: string; documentId: string; intent: string };
 
 /**
  * Where one call in this file stands, as the activity feed shows it:
- *   • waiting — its prompt is showing here. A prompt that lapsed or closed unanswered is not-run.
+ *   • waiting — it waits on a prompt here. One that stopped waiting unanswered is not-run.
  *   • allowed / picked — the human answered its prompt here, and the call is on its way.
  *   • denied — the human denied it here; refused — the plugin refused it before anything ran.
  *   • queued, running — then done or failed by what its run reported, or cancelled.
@@ -119,11 +125,15 @@ export type PanelControl =
   | { type: "UI_READY" }
   | { type: "UI_TOGGLE" }
   | { type: "UI_HEIGHT"; height: number }
+  // The iframe's document.visibilityState: whether this plugin's tab or window is showing.
+  | { type: "UI_VISIBILITY"; visible: boolean }
   // Only for a socket that actually opened, never for the empty block ports the relay also dials.
   | { type: "WS_CONNECTED"; connKey: ConnKey }
   | { type: "WS_CLOSED"; connKey: ConnKey }
-  // Allow grants the call's project the document the prompt showed; Deny refuses that call.
-  | { type: "UI_DECISION"; connKey: ConnKey; executionId: string; documentId: string; approve: boolean }
+  // Allow saves the grant the prompt showed; Deny refuses every call waiting on it.
+  | { type: "UI_DECISION"; promptId: string; approve: boolean }
+  // Put away an Allow prompt no call waits on any more.
+  | { type: "UI_DISMISS"; promptId: string }
   // This copy is the one the call means: for that call only.
   | { type: "UI_PICK"; connKey: ConnKey; executionId: string; documentId: string }
   // Give this file a fresh stamp, apart from the copy it shares one with.

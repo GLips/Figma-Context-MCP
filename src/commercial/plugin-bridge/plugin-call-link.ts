@@ -18,7 +18,8 @@ import type { FigmaFileKey } from "~/utils/figma-url.js";
 import type { DocumentId } from "./document-id.js";
 import type { CallIntent } from "./call-intent.js";
 import type { SessionHandle } from "./session-handle.js";
-import type { CallTargetOptions } from "./call-target.js";
+import type { CallTargetOptions, WaitingBlock } from "./call-target.js";
+import { unsubmittedWaitText } from "./call-wait.js";
 import type { PluginCallTarget } from "./execution.js";
 import {
   callTargetGuidance,
@@ -52,6 +53,7 @@ export type PairingSurface = "mcp" | "cli";
 export type PluginCallBlock =
   | "document_not_open"
   | "document_unchosen"
+  | "document_reconnecting"
   | "document_changed"
   | "pick_pending"
   | "grant_denied"
@@ -96,7 +98,7 @@ export type PluginCallPairing =
 export interface PluginCallTargetOptions {
   /** What the call is for, shown in the plugin panel; it never decides where the call runs. */
   intent: CallIntent;
-  /** The document the call names, or null to run in the one granted open document. */
+  /** The document the call names, or null to run in the one open file. */
   document: DocumentId | null;
   /** A file key naming the document, matched exactly against what plugins reported; null: none. */
   fileKey: FigmaFileKey | null;
@@ -136,6 +138,7 @@ export async function targetForPluginCall(
     resolution = await bridge.resolveLink(signal);
   }
   if (resolution.kind !== "linked") return unlinked(resolution, surface);
+  const startedAt = Date.now();
   // Minted before targeting: the call's prompts in the plugin are keyed by it, and it is the id the
   // call then runs under.
   const executionId = mintExecutionId();
@@ -144,17 +147,24 @@ export async function targetForPluginCall(
     { signal, waitMs, pollMs, onWaiting },
   );
   if (target.kind === "targeted") return { ...target, executionId, intent, session };
-  return blocked(
-    BLOCK_FOR_TARGET[target.block.kind],
-    callTargetGuidance(target.block, surface, waitMs),
-    // Waiting on a person is not a failure; everything else is.
-    !WAITING_BLOCKS.has(target.block.kind),
-  );
+  const { block } = target;
+  // Still waiting when the call had to answer is not a failure; every refusal is.
+  if (isWaitingBlock(block)) {
+    const now = Date.now();
+    const text = unsubmittedWaitText(block.wait, { surface, elapsedMs: now - startedAt, now });
+    return blocked(BLOCK_FOR_TARGET[block.kind], text, false);
+  }
+  return blocked(BLOCK_FOR_TARGET[block.kind], callTargetGuidance(block, surface), true);
+}
+
+function isWaitingBlock(block: CallTargetBlock): block is WaitingBlock {
+  return "wait" in block;
 }
 
 const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
   "document-not-open": "document_not_open",
   "document-unchosen": "document_unchosen",
+  "document-reconnecting": "document_reconnecting",
   "document-changed": "document_changed",
   "pick-pending": "pick_pending",
   "grant-denied": "grant_denied",
@@ -165,8 +175,6 @@ const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
   "session-ambiguous": "session_ambiguous",
   "session-document-mismatch": "session_document_mismatch",
 };
-
-const WAITING_BLOCKS = new Set<CallTargetBlock["kind"]>(["grant-pending", "pick-pending"]);
 
 /** Pair this server with the plugin unless it already is. Nothing is submitted here. */
 export async function pairPluginLink(

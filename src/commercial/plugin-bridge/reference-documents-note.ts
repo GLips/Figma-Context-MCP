@@ -4,7 +4,7 @@
  */
 import type { LinkResolution } from "./bridge.js";
 import { referenceDocumentsGuidance, referenceLinkGuidance } from "./blocked-call-guidance.js";
-import type { OpenDocumentSnapshot } from "./call-target.js";
+import type { OpenDocumentSnapshot } from "./open-files.js";
 
 /** The lookups the reference note makes: which links, then the open documents on them. */
 export interface ReferenceDocumentsLookup {
