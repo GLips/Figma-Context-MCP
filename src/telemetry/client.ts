@@ -11,6 +11,10 @@ import type { InitTelemetryOptions } from "./types.js";
 // ingest key that cannot read data, only send events.
 const POSTHOG_API_KEY = "phc_w69pYvKwGNLsUHU4TGGpgAiscm8nhjudHgAJzAdzXkJV";
 const POSTHOG_HOST = "https://us.i.posthog.com";
+// The longest telemetry may hold a process's exit, and the longest one send may take: a network that
+// silently drops packets otherwise keeps the SDK's 30 s shutdown, and its in-flight retries, alive
+// after the work is done. Events that miss it are dropped.
+const TELEMETRY_EXIT_BUDGET_MS = 1500;
 
 type CommonProperties = {
   server_version: string;
@@ -76,7 +80,8 @@ export function initTelemetry(opts: InitTelemetryOptions): boolean {
   const client = new PostHog(POSTHOG_API_KEY, {
     host: POSTHOG_HOST,
     disableGeoip: false,
-    ...(opts.immediateFlush ? { flushAt: 1, flushInterval: 0 } : {}),
+    requestTimeout: TELEMETRY_EXIT_BUDGET_MS,
+    ...(opts.immediateFlush ? { flushAt: 1, flushInterval: 0, fetchRetryCount: 0 } : {}),
   });
 
   state = {
@@ -222,7 +227,7 @@ export async function shutdown(): Promise<void> {
   // (relevant for tests; harmless in production where shutdown runs at exit).
   state = { kind: "off" };
   try {
-    await client.shutdown();
+    await client.shutdown(TELEMETRY_EXIT_BUDGET_MS);
   } catch {
     // Telemetry shutdown must never break callers — the server.ts shutdown
     // handler and the fetch.ts cleye chain both depend on this resolving.

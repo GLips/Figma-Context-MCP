@@ -10,7 +10,8 @@ export interface InitTelemetryOptions {
   /**
    * Flush events immediately instead of batching. For short-lived processes
    * (e.g. the `fetch` CLI command) that would otherwise exit before the
-   * default flush interval fires and drop the event.
+   * default flush interval fires and drop the event. Such a process also never
+   * retries a send: an unanswered one would hold it open after its output.
    */
   immediateFlush?: boolean;
   /**
