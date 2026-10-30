@@ -94,7 +94,13 @@ const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
  */
 const target = (bridge, document, waitMs = 5_000) =>
   bridge.targetCall(
-    { executionId: mintExecutionId(), intent: "Contract call", session: null, document, fileKey: null },
+    {
+      executionId: mintExecutionId(),
+      intent: "Contract call",
+      session: null,
+      document,
+      fileKey: null,
+    },
     { signal: new AbortController().signal, waitMs, pollMs: 20 },
   );
 
@@ -310,12 +316,22 @@ const stranger = rawPeer(URL, {
 await opened(stranger);
 await wait(100);
 stranger.send(
-  JSON.stringify({ type: "GRANT_CHANGED", project: "/p", documentId: ABSENT_DOCUMENT, granted: true }),
+  JSON.stringify({
+    type: "GRANT_CHANGED",
+    project: "/p",
+    documentId: ABSENT_DOCUMENT,
+    granted: true,
+  }),
 );
 stranger.send(
   JSON.stringify({
     type: "DOCUMENT_REPORTED",
-    document: { kind: "identified", documentId: ABSENT_DOCUMENT, fileName: "Planted", pageNames: [] },
+    document: {
+      kind: "identified",
+      documentId: ABSENT_DOCUMENT,
+      fileName: "Planted",
+      pageNames: [],
+    },
   }),
 );
 stranger.send(
@@ -451,10 +467,7 @@ for (const [server, what] of [
 ]) {
   const granted = await target(server, null);
   assert.equal(granted.kind, "targeted", `${what} is granted by the stored Allow`);
-  assert.equal(
-    (await execute(server, granted.link, { documentId: restartDocument })).result,
-    "ok",
-  );
+  assert.equal((await execute(server, granted.link, { documentId: restartDocument })).result, "ok");
 }
 assert.equal(r2.isPrompting(), false, "with no second Allow");
 console.log("✅ Pairing and the grant survive a restart, and a same-project sibling shares it");
@@ -597,14 +610,14 @@ console.log(
   `✅ manifest devAllowedDomains mirrors WS_PORT_BLOCK exactly (${WS_PORT_BLOCK.length} ports)`,
 );
 
-// --- Budgets: cancel, never abandon; the cancel is ANSWERED ---
-// A run its caller's budget cuts off is CANCELLED with a run-scoped, id-less CANCEL, and the caller's
+// --- A requested cancel: never abandoned; the cancel is ANSWERED ---
+// A run its caller cancels is CANCELLED with a run-scoped, id-less CANCEL, and the caller's
 // rejection is worded from the plugin's answer — "never executed; retry" and "inspect the canvas" differ.
 const PORT_T = 19895;
 const bridgeT = bridgeOn(PORT_T);
 await wait(150);
 const framesT = [];
-let disposition = "never-executed";
+const disposition = "never-executed";
 const silent = rawPeer(`ws://127.0.0.1:${PORT_T}`, {
   credentialDir: bridgeT.stateDir,
   onFrame: (msg) => {
@@ -616,21 +629,20 @@ const silent = rawPeer(`ws://127.0.0.1:${PORT_T}`, {
   },
 });
 const silentLink = await linkOf(bridgeT);
-const tStall = Date.now();
-const timeoutErr = await execute(bridgeT, silentLink, { code: "stall forever" }, { budgetMs: 400 }).catch(
-  (e) => e,
-);
-assert.ok(/budget of 400ms ran out/.test(timeoutErr.message), "a stalled run rejects naming its budget");
-assert.ok(Date.now() - tStall < 2000, "the budget fired");
-assert.ok(/did not run/.test(timeoutErr.message), "worded from the plugin's cancel answer");
-assert.equal(timeoutErr.outcome, "not-submitted", "a run that never executed is safe to retry");
+const stalling = execute(bridgeT, silentLink, { code: "stall forever" }).catch((e) => e);
+await wait(100);
+const stalled = framesT.find((f) => f.type === "EXECUTE_CODE");
+assert.ok(bridgeT.cancelRun(stalled.id), "a run in flight can be cancelled");
+const cancelErr = await stalling;
+assert.ok(/Cancelled at your request/.test(cancelErr.message), "a cancelled run rejects saying so");
+assert.ok(/did not run/.test(cancelErr.message), "worded from the plugin's cancel answer");
+assert.equal(cancelErr.outcome, "not-submitted", "a run that never executed is safe to retry");
 await wait(50);
 const cancelFrame = framesT.find((f) => f.type === "CANCEL");
-const stalled = framesT.find((f) => f.type === "EXECUTE_CODE");
 assert.equal(cancelFrame?.executionId, stalled.id, "the CANCEL is scoped to the stalled run");
 assert.equal(cancelFrame.id, undefined, "CANCEL is id-less — a notification, never a request");
 console.log(
-  "✅ A run past its budget is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's answer",
+  "✅ A cancelled run gets a run-scoped, id-less CANCEL and is rejected with the plugin's answer",
 );
 
 silent.close();
@@ -770,7 +782,11 @@ const linkC = await linkOf(bridgeC);
 // A GRANT_STATUS is pending too; drawing on one would let a hostile link burn fetches against a
 // pending it was never granted a run for. The refusal must leave that pending intact.
 const statusP = bridgeC
-  .grantStatus(linkC, { executionId: mintExecutionId(), documentId: ABSENT_DOCUMENT, prompt: "none" })
+  .grantStatus(linkC, {
+    executionId: mintExecutionId(),
+    documentId: ABSENT_DOCUMENT,
+    prompt: "none",
+  })
   .catch((e) => e);
 await wait(50);
 const infoId = framesC.find((f) => f.type === "GRANT_STATUS").id;
@@ -788,7 +804,9 @@ imageRequest("preq-g", infoId, ["u1"]);
 await wait(100);
 const gateRefusal = framesC.find((f) => f.type === "CHANNEL_RESPONSE" && f.id === "preq-g");
 assert.ok(
-  gateRefusal?.ok === false && gateRefusal.error.code === "INVALID_INPUT" && /outside a script run/.test(gateRefusal.error.message),
+  gateRefusal?.ok === false &&
+    gateRefusal.error.code === "INVALID_INPUT" &&
+    /outside a script run/.test(gateRefusal.error.message),
   "an image request against a non-EXECUTE_CODE pending is refused",
 );
 pluginC.send(JSON.stringify({ type: "GRANT", id: infoId, state: "absent" }));

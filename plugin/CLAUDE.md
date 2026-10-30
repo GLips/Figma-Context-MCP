@@ -47,8 +47,9 @@ do follow-up `figma.*` work after the reply.
 The server's explicit allowlist is the `capabilities` map in `src/commercial/plugin-bridge/index.ts`:
 `images.fetch` (a source array in, a source-to-base64 record out) and `comments.pins`. Image parsing and policy live in the server and preamble adapters.
 The channel owns correlation, connection ownership, dead-run refusal, the four-service concurrency
-cap, and the 100 MiB frame limit. A run's only time limit is the caller's own per-call budget
-(45 s over MCP, none from the CLI): a run whose status goes quiet is Figma busy, never a reason to end it. The current caller requires an
+cap, and the 100 MiB frame limit. A run has no time limit: it ends at its reply, a cancel, or
+its link closing, and a run whose status goes quiet is Figma busy, never a reason to end it. An MCP
+call that can't wait longer checks in and leaves the run running (see the root CLAUDE.md). The current caller requires an
 `EXECUTE_CODE` run. The frame does not constrain future callers to that request type.
 
 Handlers receive `(payload, { signal })`. The run aborts that signal on cancellation, disconnect,

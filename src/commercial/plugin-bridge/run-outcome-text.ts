@@ -2,11 +2,12 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The words for a run the server stopped waiting for, withdrew, or is still waiting on. Every
+// The words for a run the server cancelled, withdrew, or is still waiting on. Every
 // sentence is a fact an agent acts on: what ran, what occupies the plugin, and what the plugin last
 // said. Pure, so the ledger keeps only timers and correlation.
 import {
   RUN_REQUEST_TYPES,
+  RUN_STATUS_INTERVAL_MS,
   type CancelAnswer,
   type QueueBlocker,
   type QueueWait,
@@ -15,19 +16,21 @@ import {
   type ServerRequestType,
 } from "@framelink/plugin/protocol";
 import { figmaPausedReason } from "./figma-paused.js";
+import type { RunState } from "./run-ledger.js";
 
 /**
- * Why the server gave up on a request: no answer to a request that is no run, the caller's budget,
- * or the caller itself. A run's silence is never one: it means Figma is busy.
+ * Why the server gave up on a request: no answer to a request that is no run, a cancel someone
+ * asked for while still reading the outcome, or the caller abandoning it. A run's silence is never
+ * one: it means Figma is busy.
  */
-export type RunStopCause = "unanswered" | "budget" | "caller";
+export type RunStopCause = "unanswered" | "requested" | "caller";
 
 export const NO_CANCEL_ANSWER: CancelAnswer = { disposition: "unknown" };
 
 export interface StoppedRunFacts {
   payloadType: ServerRequestType;
   cause: RunStopCause;
-  /** The answer deadline or the budget, whichever `cause` names. */
+  /** The answer deadline, for `unanswered`. */
   limitMs: number;
   answer: CancelAnswer;
   /** The plugin's latest RUN_STATUS for the run; null when it sent none. */
@@ -54,16 +57,12 @@ export function stoppedRunText({
     const lead =
       cause === "unanswered"
         ? `The Figma plugin did not answer ${payloadType} within ${spelled(limitMs)}.`
-        : cause === "budget"
-          ? `The call's budget of ${spelled(limitMs)} ran out before the Figma plugin answered ${payloadType}.`
-          : `The call was cancelled before the Figma plugin answered ${payloadType}.`;
+        : `The call was cancelled before the Figma plugin answered ${payloadType}.`;
     return { message: `${lead} Nothing was submitted.`, outcome: "not-submitted" };
   }
   const screenshot = payloadType === "SCREENSHOT";
   const lead =
-    (cause === "budget"
-      ? `The call's budget of ${spelled(limitMs)} ran out.`
-      : "The call was cancelled.") +
+    (cause === "requested" ? "Cancelled at your request." : "The call was cancelled.") +
     // A paused plugin is why the run made no progress, so it comes before what became of the run.
     (figmaPausedMs === undefined ? "" : ` ${figmaPausedReason(figmaPausedMs, "this file")}`);
   if (disposition === "never-executed")
@@ -104,7 +103,7 @@ export function withdrawnRunText(
 ): string {
   return (
     `${notRunText(payloadType)}: it was withdrawn from the plugin's queue, so this request made no changes.` +
-    (blocker ? ` ${blockerText(blocker)}` : "")
+    (blocker ? ` ${blockerText(blocker)}` : " Retry as-is.")
   );
 }
 
@@ -121,12 +120,48 @@ export function queueWaitText({ ahead, blocker }: QueueWait): string {
   );
 }
 
-/** What an MCP agent does about a code run its call's budget cut off. */
-export function mcpBudgetAdviceText(budgetMs: number, cliName: string): string {
-  return (
-    `Split the work across smaller calls, or run it with \`npx ${cliName} execute\`, which has no ` +
-    `${Math.round(budgetMs / 1000)}-second limit.`
-  );
+// Quiet for longer than this, and the run's status has missed more than one heartbeat: Figma's main
+// thread is held, typically by a large export or render.
+const QUIET_WORTH_SAYING_MS = 2 * RUN_STATUS_INTERVAL_MS;
+
+/**
+ * Where a run stands when its caller checks in without its reply: what it waits on, how long Figma
+ * has been quiet and the oldest call still pending, for the agent to judge whether that is expected.
+ * `elapsedMs` counts from the call that started it.
+ */
+export function runCheckInText({
+  payloadType,
+  elapsedMs,
+  state,
+  now,
+}: {
+  payloadType: ServerRequestType;
+  elapsedMs: number;
+  /** Null: the run is not in flight on this server's side (its reply is on its way). */
+  state: RunState | null;
+  now: number;
+}): string {
+  const what = payloadType === "SCREENSHOT" ? "The screenshot" : "The run";
+  const after = formatDuration(elapsedMs);
+  if (!state) return `${what} was still in flight after ${after}.`;
+  const quietForMs = Math.max(now - state.lastHeardAt, 0);
+  const quiet =
+    quietForMs > QUIET_WORTH_SAYING_MS
+      ? ` Figma has been quiet for ${formatDuration(quietForMs)}: nothing in the file answers while ` +
+        `a long call such as a large export or render holds Figma's main thread.`
+      : "";
+  const { status } = state;
+  if (!status)
+    return `${what} was submitted, and the Figma plugin has not reported on it after ${after}.${quiet}`;
+  if (status.phase === "queued")
+    return `${what} is still waiting after ${after}. ${queueWaitText(status.wait)}${quiet}`;
+  const { oldestPending, callsSettled } = status.activity;
+  const pending = oldestPending
+    ? ` Its oldest pending call is ${oldestPending.operation}, waiting ` +
+      `${formatDuration(oldestPending.sinceMs + Math.max(now - status.at, 0))}; ${callsSettled} ` +
+      `${callsSettled === 1 ? "call" : "calls"} settled.`
+    : "";
+  return `${what} is still running after ${after}.${quiet}${pending}`;
 }
 
 function notRunText(payloadType: ServerRequestType): string {
@@ -178,7 +213,7 @@ function spelled(ms: number): string {
 }
 
 /** A run's length as an agent reads it: "850ms", "14s", "14m 02s". */
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1_000) return `${Math.round(ms)}ms`;
   const seconds = Math.floor(ms / 1_000);
   if (seconds < 60) return `${seconds}s`;

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
-import { mintExecutionId } from "~/commercial/execution-id.js";
+import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 
 const bridges: PluginBridge[] = [];
 // A request with a trivial reply, for tests about the ledger rather than the payload.
@@ -61,13 +61,12 @@ describe("link-owned execution", () => {
           preamble: "x",
         },
         mintExecutionId(),
-        { budgetMs: 100 },
       )
       .catch((e: unknown) => e);
     await Promise.resolve();
-    const id = socket.frames[0].id as string;
-    // Submitted, never acknowledged: the budget is what ends the wait on a plugin that says nothing.
-    await vi.advanceTimersByTimeAsync(100);
+    const id = socket.frames[0].id as ExecutionId;
+    // Submitted, never acknowledged, and cancelled by the agent waiting on it.
+    expect(bridge.cancelRun(id)).toBe(true);
     expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
     // Nothing answers the cancellation — the one case where "unconfirmed" is the true word.
     await vi.advanceTimersByTimeAsync(1_000);
@@ -75,10 +74,10 @@ describe("link-owned execution", () => {
     expect(error).toBeInstanceOf(BridgeRequestError);
     expect(error).toMatchObject({ outcome: "unconfirmed" });
     expect(String(error)).toContain(
-      "The call's budget of 100ms ran out. Cancellation requested; the run may still be executing. The plugin sent no status for this run.",
+      "Cancelled at your request. Cancellation requested; the run may still be executing. The plugin sent no status for this run.",
     );
   });
-  it("rejects a run its budget cut off while queued as never executed, naming what it waited behind", async () => {
+  it("rejects a run cancelled while queued as never executed, naming what it waited behind", async () => {
     vi.useFakeTimers();
     const bridge = create();
     const socket = await connectFakePlugin(bridge);
@@ -95,11 +94,10 @@ describe("link-owned execution", () => {
           preamble: "x",
         },
         mintExecutionId(),
-        { budgetMs: 600 },
       )
       .catch((e: unknown) => e);
     await Promise.resolve();
-    const id = socket.frames[0].id as string;
+    const id = socket.frames[0].id as ExecutionId;
     socket.receive({
       type: "RUN_STATUS",
       executionId: id,
@@ -107,9 +105,7 @@ describe("link-owned execution", () => {
       phase: "queued",
       wait: { ahead: 1 },
     });
-    await vi.advanceTimersByTimeAsync(599);
-    expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
+    bridge.cancelRun(id);
     expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
     socket.receive({
       type: "CANCEL_RESULT",
@@ -130,9 +126,9 @@ describe("link-owned execution", () => {
       },
     });
     const error = await call;
-    expect(error).toMatchObject({ outcome: "not-submitted", stoppedBy: "budget" });
+    expect(error).toMatchObject({ outcome: "not-submitted" });
     expect(String(error)).toContain(
-      "The call's budget of 600ms ran out. Your code did not run; this request made no changes. " +
+      "Cancelled at your request. Your code did not run; this request made no changes. " +
         `Run ${blocker} ("Shape the new Promo card variants", session soft-size-skull-fruit) still ` +
         "occupies the plugin and has run 14m 02s. Cancellation was requested 13m 47s ago. Its last " +
         "status: figma.loadFontAsync pending for 2m 10s, 412 calls settled. Retrying now will queue " +

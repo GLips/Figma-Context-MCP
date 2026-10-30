@@ -31,6 +31,7 @@ import {
   sessionNotFoundText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
+  ExecutionReplyLostError,
   executePluginCode,
   capturePluginScreenshot,
   type PluginCallTarget,
@@ -41,7 +42,24 @@ import {
   type PluginLink,
   type RunWatch,
 } from "~/commercial/plugin-bridge/bridge.js";
-import { mcpBudgetAdviceText } from "~/commercial/plugin-bridge/run-outcome-text.js";
+import { PLUGIN_ANSWER_MS } from "~/commercial/plugin-bridge/run-ledger.js";
+import {
+  DetachedRunRegistry,
+  parseRunHandle,
+  type DetachedRunKind,
+  type DetachedRunStatus,
+} from "./detached-runs.js";
+import {
+  CHECKED_IN_BEFORE_SENDING,
+  MCP_CHECK_IN_MS,
+  checkedInReply,
+  launchPluginRun,
+  neverSentReply,
+  runProgressText,
+  waitOnPluginRun,
+  type PluginRun,
+  type PluginRunEnd,
+} from "./plugin-run-waiting.js";
 import { parseDocumentId, type DocumentId } from "~/commercial/plugin-bridge/document-id.js";
 import {
   intentProblemText,
@@ -55,7 +73,11 @@ import {
 } from "~/commercial/plugin-bridge/session-handle.js";
 import type { CallerContext, ServerExtension, ServerExtensionContext } from "~/mcp/index.js";
 import { getFigmaDataTool } from "~/mcp/tools/index.js";
-import { registerFramelinkTool, type FramelinkToolCall } from "~/mcp/framelink-tool.js";
+import {
+  registerFramelinkTool,
+  type FramelinkToolCall,
+  type ObserveToolCall,
+} from "~/mcp/framelink-tool.js";
 import { retryableToolReply } from "~/mcp/fail-loud-params.js";
 import type { ToolEventProperties } from "~/telemetry/index.js";
 import { referenceDocumentsNote } from "~/commercial/plugin-bridge/reference-documents-note.js";
@@ -110,6 +132,9 @@ export function codeModeExtension(
   presence: PluginPresenceSource,
   { codeMode }: { codeMode: boolean },
 ): ServerExtension<CodeModeCallerContext> {
+  // One per process, shared by every MCP server instance: a run detached by one stateless HTTP
+  // request is awaited by another.
+  const detachedRuns: DetachedRuns = new DetachedRunRegistry();
   return {
     describeReadRecovery: ({ plugin }) =>
       plugin && ((error, request) => describePluginReadRecovery(plugin, error, request)),
@@ -121,7 +146,7 @@ export function codeModeExtension(
           baseDescription: getFigmaDataTool.description,
           transport: context.transport,
         });
-      registerCodeModeTools(server, presence, { ...context, codeMode });
+      registerCodeModeTools(server, presence, { ...context, codeMode, detachedRuns });
     },
   };
 }
@@ -136,7 +161,14 @@ type CodeModeFacts = ToolEventProperties & {
   outcome?: "executed" | "captured" | "paired" | "refused" | "failed" | "not_run";
   /** A failure answered to the agent as a result — the plugin or its grant, never a bug. */
   failure?: string;
+  /** The run outlived its call's check-in, so this is recorded when it ended, not when the call did. */
+  checked_in?: boolean;
+  /** await_figma_execution: where the run it named stood when the await answered. */
+  run_status?: DetachedRunStatus | "gone" | "unknown";
 };
+
+/** The process's detached runs, each held as the tool that started it holds it. */
+type DetachedRuns = DetachedRunRegistry<PluginRun<CodeModeFacts>>;
 
 /** Who a run is attributed to: the Figma user its plugin link is signed in as. */
 function ownedBy(link: PluginLink): CodeModeFacts {
@@ -144,20 +176,32 @@ function ownedBy(link: PluginLink): CodeModeFacts {
 }
 
 /**
- * The expected ways a plugin call ends without a reply, as a code — or null for anything else,
- * which is a bug and propagates.
+ * An expected way for a plugin call to end without a reply, as the result the SDK would have made of
+ * the throw (the same text) and its telemetry code; null for anything else, which is a bug and
+ * propagates. `not_run` only where the bridge proves nothing ran: a request lost after submission
+ * may have run.
  */
-function expectedRunFailure(error: unknown, signal: AbortSignal): string | null {
-  if (error instanceof BridgeRequestError) return `bridge_${error.outcome.replace("-", "_")}`;
-  if (signal.aborted) return "cancelled";
+function expectedRunFailure(
+  error: unknown,
+  signal: AbortSignal,
+): { reply: CallToolResult; facts: CodeModeFacts } | null {
+  const reply = (): CallToolResult => ({
+    isError: true,
+    content: [{ type: "text", text: (error as Error).message }],
+  });
+  if (error instanceof BridgeRequestError)
+    return {
+      reply: reply(),
+      facts: {
+        outcome: error.outcome === "not-submitted" ? "not_run" : "failed",
+        failure: `bridge_${error.outcome.replace("-", "_")}`,
+      },
+    };
+  if (signal.aborted) return { reply: reply(), facts: { outcome: "failed", failure: "cancelled" } };
   return null;
 }
 
-/**
- * Answer an expected failure as the result the SDK would have made of the throw — the same text —
- * so only a bug escapes the handler (and reaches error tracking as one). `failed`, not `not_run`: a
- * request lost after submission may have run.
- */
+/** Targeting's expected failures, answered as results so only a bug escapes the handler. */
 async function answeringExpectedFailures(
   call: FramelinkToolCall<CodeModeFacts>,
   extra: ToolExtra,
@@ -169,46 +213,18 @@ async function answeringExpectedFailures(
   } catch (error) {
     const failure = expectedRunFailure(error, extra.signal);
     if (!failure) throw error;
-    call.record({ ...facts, outcome: "failed", failure });
-    return { isError: true, content: [{ type: "text", text: (error as Error).message }] };
+    call.record({ ...facts, ...failure.facts });
+    return failure.reply;
   }
 }
 
-// An MCP client abandons a call at its own ~60s default, so a run gets this long, leaving the rest for
-// targeting and the grant wait in the common (already-granted) case. The CLI waits with no budget.
-const MCP_RUN_BUDGET_MS = 45_000;
-
-/**
- * How an MCP call waits on its plugin run: within the budget, and never behind a cancelled run, from
- * any link and for any cause, whose end nothing here can hurry. A code run the budget cut off gets
- * the advice for fitting the work in.
- */
-async function waitingUnderMcpBudget<T>(
-  kind: "code" | "screenshot",
-  run: (watch: RunWatch) => Promise<T>,
-): Promise<T> {
-  try {
-    return await run({
-      budgetMs: MCP_RUN_BUDGET_MS,
-      onWaiting: ({ wait, withdraw }) => {
-        if (wait.blocker?.cancelledForMs !== undefined) void withdraw();
-      },
-    });
-  } catch (error) {
-    if (
-      kind === "code" &&
-      error instanceof BridgeRequestError &&
-      error.stoppedBy === "budget" &&
-      error.outcome === "unconfirmed"
-    )
-      throw new BridgeRequestError(
-        `${error.message} ${mcpBudgetAdviceText(MCP_RUN_BUDGET_MS, CLI_NAME)}`,
-        error.outcome,
-        error.stoppedBy,
-      );
-    throw error;
-  }
-}
+// A call queued behind a cancelled run waits on an end nothing here can hurry, from any link and for
+// any cause: it is withdrawn at once.
+const WITHDRAW_BEHIND_CANCELLED_RUN: RunWatch = {
+  onWaiting: ({ wait, withdraw }) => {
+    if (wait.blocker?.cancelledForMs !== undefined) void withdraw();
+  },
+};
 
 type CodeModeToolsOptions = Pick<
   ServerExtensionContext<CodeModeCallerContext>,
@@ -216,11 +232,12 @@ type CodeModeToolsOptions = Pick<
 > & {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
   codeMode: boolean;
+  detachedRuns: DetachedRuns;
 };
 
 /**
  * Register the code-mode (write-path) tools: figma_execute_code, get_flcm_reference, get_screenshot,
- * pair_figma_plugin.
+ * await_figma_execution, pair_figma_plugin.
  *
  * Dynamic exposure: the tools are registered but DISABLED until a plugin is connected or expected
  * (`bindPluginAdvertisement` over `pluginPresence()`), so the many read-only users of this server
@@ -233,9 +250,53 @@ type CodeModeToolsOptions = Pick<
 function registerCodeModeTools(
   server: McpServer,
   presence: PluginPresenceSource,
-  { codeMode, transport, caller, figmaService, observe }: CodeModeToolsOptions,
+  { codeMode, transport, caller, figmaService, observe, detachedRuns }: CodeModeToolsOptions,
 ): void {
   const runtime = caller.plugin;
+
+  // A run that outlives its call's check-in is recorded once, when it ends: the call's own
+  // observation is dropped and replaced by one carrying the run's real outcome. registerFramelinkTool
+  // reports when the handler returns, so the swap happens here, keyed by the facts object recorded.
+  const reportAtRunEnd = new WeakMap<CodeModeFacts, (intent: string | undefined) => void>();
+  const observeRunTool: ObserveToolCall<string, CodeModeFacts> = (observation) => {
+    const atEnd =
+      observation.kind !== "rejected" && observation.facts
+        ? reportAtRunEnd.get(observation.facts)
+        : undefined;
+    if (atEnd) atEnd(observation.intent);
+    else observe(observation);
+  };
+  function reportWhenRunEnds(
+    call: FramelinkToolCall<CodeModeFacts>,
+    tool: string,
+    run: PluginRun<CodeModeFacts>,
+    facts: CodeModeFacts,
+  ): void {
+    const placeholder: CodeModeFacts = { ...facts };
+    call.record(placeholder);
+    reportAtRunEnd.set(placeholder, (intent) => {
+      const report = (
+        observation:
+          | { kind: "completed"; isError: boolean; facts: CodeModeFacts }
+          | { kind: "threw"; error: unknown; facts: CodeModeFacts },
+      ) => {
+        try {
+          observe({ tool, intent, durationMs: Date.now() - run.startedAt, ...observation });
+        } catch {
+          // An observer must never turn a finished run into a failed one.
+        }
+      };
+      run.ended.then(
+        (end) =>
+          report({
+            kind: "completed",
+            isError: !!end.reply.isError,
+            facts: { ...end.facts, checked_in: true },
+          }),
+        (error: unknown) => report({ kind: "threw", error, facts: { ...facts, checked_in: true } }),
+      );
+    });
+  }
 
   /**
    * The client's own prompt for confirming a pairing code, when it advertises form elicitation.
@@ -297,6 +358,7 @@ function registerCodeModeTools(
       fileKey: FigmaFileKey | null;
       session: SessionHandle | null;
     },
+    progress: CallProgress,
   ): Promise<PluginCallTarget | { reply: CallToolResult }> {
     const targeted = await targetForPluginCall(bridge, {
       intent,
@@ -306,11 +368,115 @@ function registerCodeModeTools(
       pairing: { kind: "offer", ask: pairingCodeAsker(extra) },
       signal: extra.signal,
       surface: "mcp",
-      waitMs: GRANT_WAIT_MS,
-      onWaiting: () => startProgressHeartbeat(extra, () => GRANT_WAITING_TEXT, 3000),
+      // A human answering a prompt is part of the call, so their wait ends by its check-in.
+      waitMs: Math.min(
+        GRANT_WAIT_MS,
+        Math.max(progress.checkInAt - PLUGIN_ANSWER_MS - Date.now(), 0),
+      ),
+      onWaiting: () => {
+        progress.show(() => GRANT_WAITING_TEXT);
+        return async () => progress.show(FINDING_FILE_PROGRESS);
+      },
     });
     if (targeted.kind === "targeted") return targeted;
     return { reply: blockedCallReply(call, facts, targeted) };
+  }
+
+  /**
+   * A call's way to its plugin run: refused while this caller already has too many detached runs
+   * working, never started once the call is due to check in, and otherwise run until it ends or the
+   * call checks in. Shared by figma_execute_code and get_screenshot.
+   */
+  async function runUntilCheckIn(
+    runtime: PluginBridgeRuntime,
+    tool: "figma_execute_code" | "get_screenshot",
+    call: FramelinkToolCall<CodeModeFacts>,
+    extra: ToolExtra,
+    progress: CallProgress,
+    target: PluginCallTarget,
+    facts: CodeModeFacts,
+    start: (signal: AbortSignal) => Promise<PluginRunEnd<CodeModeFacts>>,
+  ): Promise<CallToolResult> {
+    const kind: DetachedRunKind = tool === "get_screenshot" ? "screenshot" : "code";
+    const startedAt = progress.checkInAt - MCP_CHECK_IN_MS;
+    const owned = { ...facts, ...ownedBy(target.link) };
+    const notSent = (): CallToolResult => {
+      call.record({ ...owned, outcome: "not_run", failure: "checked_in_before_sending" });
+      return neverSentReply(kind, Date.now() - startedAt);
+    };
+    if (Date.now() >= progress.checkInAt - PLUGIN_ANSWER_MS) return notSent();
+    const run = launchPluginRun<CodeModeFacts>(
+      {
+        executionId: target.executionId,
+        kind,
+        bridge: runtime.bridge,
+        document: target.document,
+        startedAt,
+      },
+      extra.signal,
+      async (signal) => {
+        try {
+          return await start(signal);
+        } catch (error) {
+          if (signal.reason === CHECKED_IN_BEFORE_SENDING)
+            return {
+              reply: neverSentReply(kind, Date.now() - startedAt),
+              session: null,
+              facts: { ...owned, outcome: "not_run", failure: "checked_in_before_sending" },
+            };
+          const failure = expectedRunFailure(error, signal);
+          if (!failure) throw error;
+          return {
+            reply: failure.reply,
+            // A fresh session exists nowhere else, so a lost reply keeps it for an expired result.
+            session: error instanceof ExecutionReplyLostError ? error.session : null,
+            facts: { ...owned, ...failure.facts },
+          };
+        }
+      },
+    );
+    progress.show(() => runProgressText(runtime.bridge, run.executionId));
+    const waited = await waitOnPluginRun(run, {
+      checkInAt: progress.checkInAt,
+      signal: extra.signal,
+      first: true,
+    });
+    if (waited.kind === "never-sent") return notSent();
+    if (waited.kind === "checked-in") {
+      run.detachCaller();
+      const handle = detachedRuns.detach(runtime, kind, run, run.ended);
+      reportWhenRunEnds(call, tool, run, owned);
+      return checkedInReply(run, handle, {
+        lead: ranIn(target.document),
+        resultTtlMs: detachedRuns.resultTtlMs,
+      });
+    }
+    // Abandoned: the caller's cancellation reached the run too, which ends at once.
+    const end = waited.kind === "ended" ? waited.end : await run.ended;
+    call.record(end.facts);
+    return end.reply;
+  }
+
+  /** The refusal for a call while this caller already has the most detached runs still working. */
+  function tooManyDetachedRunsReply(
+    call: FramelinkToolCall<CodeModeFacts>,
+    tool: string,
+    facts: CodeModeFacts,
+    working: readonly string[],
+  ): CallToolResult {
+    call.record({ ...facts, outcome: "not_run", failure: "too_many_detached_runs" });
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text:
+            `${tool} did not run: ${working.length} earlier runs are still working with no call ` +
+            `waiting on them (${working.join(", ")}). Await or cancel them with ` +
+            `await_figma_execution, then retry.`,
+        },
+      ],
+    };
   }
 
   function scriptSourceReply(got: "neither" | "both"): CallToolResult {
@@ -321,21 +487,18 @@ function registerCodeModeTools(
   }
 
   /** The plugin refused a bound call on arrival: its grant was revoked, or its file was re-stamped. */
-  function notGrantedReply(
-    call: FramelinkToolCall<CodeModeFacts>,
+  function notGrantedEnd(
     facts: CodeModeFacts,
     target: PluginCallTarget,
     reason: "no-grant" | "other-document",
-  ): CallToolResult {
-    call.record({
-      ...facts,
-      ...ownedBy(target.link),
-      outcome: "refused",
-      failure: `not_granted_${reason.replace("-", "_")}`,
-    });
+  ): PluginRunEnd<CodeModeFacts> {
     return {
-      isError: true,
-      content: [{ type: "text", text: notGrantedText(reason, target.document.fileName) }],
+      reply: {
+        isError: true,
+        content: [{ type: "text", text: notGrantedText(reason, target.document.fileName) }],
+      },
+      session: null,
+      facts: { ...facts, outcome: "refused", failure: `not_granted_${reason.replace("-", "_")}` },
     };
   }
 
@@ -393,6 +556,7 @@ function registerCodeModeTools(
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
+          const checkInAt = Date.now() + MCP_CHECK_IN_MS;
           const source = { script_source: code === undefined ? "script_path" : "code" };
           // Before scriptPath is read: the asset root is part of the grant.
           if (!runtime) {
@@ -433,62 +597,89 @@ function registerCodeModeTools(
               );
             }
           } else return scriptSourceReply("neither");
-          return answeringExpectedFailures(call, extra, source, async () => {
-            const target = await pluginCallTarget(runtime, call, source, extra, {
-              intent: callIntent.intent,
-              document: targetDocument,
-              fileKey: targetFileKey,
-              session: targetSession,
-            });
-            if ("reply" in target) return target.reply;
-            const { link } = target;
-            const outcome = await waitingUnderMcpBudget("code", (watch) =>
-              executePluginCode(runtime, target, script, {
-                figma: figmaService,
-                signal: extra.signal,
-                ...watch,
-              }),
-            );
-            if (outcome.kind === "not-granted")
-              return notGrantedReply(call, source, target, outcome.reason);
-            if (outcome.kind === "session-not-found") {
-              call.record({ ...source, outcome: "not_run", failure: "session_not_found" });
-              return {
-                isError: true,
-                content: [{ type: "text", text: sessionNotFoundText(outcome.session, "mcp") }],
-              };
-            }
-            if (outcome.kind === "refused") {
-              call.record({
-                ...source,
-                ...ownedBy(link),
-                outcome: "refused",
-                failure: outcome.refusal.reason,
-              });
-              return { content: [{ type: "text", text: outcome.message }], isError: true };
-            }
-            call.record({
-              ...source,
-              ...ownedBy(link),
-              outcome: "executed",
-              script_errored: outcome.reply.errors !== null,
-            });
-            return {
-              content: [
+          const working = detachedRuns.workingHandles(runtime);
+          if (working.length >= detachedRuns.maxWorking)
+            return tooManyDetachedRunsReply(call, "figma_execute_code", source, working);
+          const progress = startCallProgress(extra, checkInAt);
+          try {
+            return await answeringExpectedFailures(call, extra, source, async () => {
+              const target = await pluginCallTarget(
+                runtime,
+                call,
+                source,
+                extra,
                 {
-                  type: "text",
-                  text: [
-                    ranIn(target.document),
-                    usedSession(outcome.session),
-                    formatExecuteCodeReply(outcome.reply),
-                  ].join("\n"),
+                  intent: callIntent.intent,
+                  document: targetDocument,
+                  fileKey: targetFileKey,
+                  session: targetSession,
                 },
-              ],
-            };
-          });
+                progress,
+              );
+              if ("reply" in target) return target.reply;
+              const owned = { ...source, ...ownedBy(target.link) };
+              return runUntilCheckIn(
+                runtime,
+                "figma_execute_code",
+                call,
+                extra,
+                progress,
+                target,
+                source,
+                async (signal): Promise<PluginRunEnd<CodeModeFacts>> => {
+                  const outcome = await executePluginCode(runtime, target, script, {
+                    figma: figmaService,
+                    signal,
+                    ...WITHDRAW_BEHIND_CANCELLED_RUN,
+                  });
+                  if (outcome.kind === "not-granted")
+                    return notGrantedEnd(owned, target, outcome.reason);
+                  if (outcome.kind === "session-not-found")
+                    return {
+                      reply: {
+                        isError: true,
+                        content: [
+                          { type: "text", text: sessionNotFoundText(outcome.session, "mcp") },
+                        ],
+                      },
+                      session: null,
+                      facts: { ...source, outcome: "not_run", failure: "session_not_found" },
+                    };
+                  if (outcome.kind === "refused")
+                    return {
+                      reply: { content: [{ type: "text", text: outcome.message }], isError: true },
+                      session: null,
+                      facts: { ...owned, outcome: "refused", failure: outcome.refusal.reason },
+                    };
+                  return {
+                    reply: {
+                      content: [
+                        {
+                          type: "text",
+                          text: [
+                            ranIn(target.document),
+                            usedSession(outcome.session),
+                            formatExecuteCodeReply(outcome.reply),
+                          ].join("\n"),
+                        },
+                      ],
+                    },
+                    session: outcome.session,
+                    facts: {
+                      ...owned,
+                      outcome: "executed",
+                      script_errored: outcome.reply.errors !== null,
+                    },
+                  };
+                },
+              );
+            });
+          } finally {
+            await progress.stop();
+          }
         },
       },
-      observe,
+      observeRunTool,
     ),
 
     // The full flcm authoring reference, delivered as a TOOL (not a resource): it can't fit the
@@ -597,6 +788,7 @@ Returns a PNG image.`,
           call: FramelinkToolCall<CodeModeFacts>,
           extra: ToolExtra,
         ) => {
+          const checkInAt = Date.now() + MCP_CHECK_IN_MS;
           if (!runtime) {
             call.record({ outcome: "refused", failure: "remote_caller" });
             return localWritesRefusal();
@@ -617,38 +809,161 @@ Returns a PNG image.`,
               `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
             );
           }
-          return answeringExpectedFailures(call, extra, {}, async () => {
-            const located = await pluginCallTarget(runtime, call, {}, extra, {
-              intent: callIntent.intent,
-              document: targetDocument,
-              fileKey: targetFileKey,
-              session: null,
+          const working = detachedRuns.workingHandles(runtime);
+          if (working.length >= detachedRuns.maxWorking)
+            return tooManyDetachedRunsReply(call, "get_screenshot", {}, working);
+          const progress = startCallProgress(extra, checkInAt);
+          try {
+            return await answeringExpectedFailures(call, extra, {}, async () => {
+              const located = await pluginCallTarget(
+                runtime,
+                call,
+                {},
+                extra,
+                {
+                  intent: callIntent.intent,
+                  document: targetDocument,
+                  fileKey: targetFileKey,
+                  session: null,
+                },
+                progress,
+              );
+              if ("reply" in located) return located.reply;
+              const owned = ownedBy(located.link);
+              return runUntilCheckIn(
+                runtime,
+                "get_screenshot",
+                call,
+                extra,
+                progress,
+                located,
+                {},
+                async (signal): Promise<PluginRunEnd<CodeModeFacts>> => {
+                  const outcome = await capturePluginScreenshot(runtime.bridge, located, target, {
+                    signal,
+                    ...WITHDRAW_BEHIND_CANCELLED_RUN,
+                  });
+                  if (outcome.kind === "not-granted")
+                    return notGrantedEnd(owned, located, outcome.reason);
+                  const reply = outcome.reply;
+                  const facts: CodeModeFacts = { ...owned, outcome: "captured" };
+                  if ("errors" in reply)
+                    return {
+                      reply: { content: [{ type: "text", text: reply.errors }], isError: true },
+                      session: null,
+                      facts: { ...facts, failure: "screenshot_failed" },
+                    };
+                  return {
+                    reply: {
+                      content: [
+                        { type: "text", text: ranIn(located.document) },
+                        { type: "image", data: reply.image, mimeType: "image/png" },
+                      ],
+                    },
+                    session: null,
+                    facts,
+                  };
+                },
+              );
             });
-            if ("reply" in located) return located.reply;
-            const { link } = located;
-            const outcome = await waitingUnderMcpBudget("screenshot", (watch) =>
-              capturePluginScreenshot(runtime.bridge, located, target, {
-                signal: extra.signal,
-                ...watch,
-              }),
+          } finally {
+            await progress.stop();
+          }
+        },
+      },
+      observeRunTool,
+    ),
+
+    registerFramelinkTool(
+      server,
+      {
+        name: "await_figma_execution",
+        unknownParams: "fail-loud",
+        description: AWAIT_EXECUTION_DESCRIPTION,
+        inputSchema: {
+          // Optional at the wire, like intent, so a missing one reaches the handler's guidance.
+          run: z
+            .string()
+            .optional()
+            .describe(
+              "Required. The run handle a figma_execute_code or get_screenshot reply named (e.g. run-7k2m9q4r8t1v3x5z9abc), exactly as given.",
+            ),
+          cancel: z
+            .boolean()
+            .optional()
+            .describe(
+              "Stop the run instead of waiting for it. Cancellation is cooperative: a run still queued never starts, a running one stops before its next Figma call, and its writes so far stay.",
+            ),
+        },
+        handler: async (
+          { run, cancel }: { run?: string; cancel?: boolean },
+          call: FramelinkToolCall<CodeModeFacts>,
+          extra: ToolExtra,
+        ) => {
+          const checkInAt = Date.now() + MCP_CHECK_IN_MS;
+          if (!runtime) {
+            call.record({ outcome: "refused", failure: "remote_caller" });
+            return localWritesRefusal();
+          }
+          const handle = parseRunHandle(run ?? "");
+          if (!handle) {
+            call.reject({
+              field: "run",
+              rule: run === undefined ? "run_missing" : "run_malformed",
+            });
+            return retryableToolReply(
+              "await_figma_execution needs run: the run handle a figma_execute_code or get_screenshot reply named (run- and 20 letters and digits), exactly as given. This is NOT a failure: copy the handle and retry.",
             );
-            if (outcome.kind === "not-granted")
-              return notGrantedReply(call, {}, located, outcome.reason);
-            const reply = outcome.reply;
-            const failed = "errors" in reply;
-            call.record({
-              ...ownedBy(link),
-              outcome: "captured",
-              failure: failed ? "screenshot_failed" : undefined,
-            });
-            if (failed) return { content: [{ type: "text", text: reply.errors }], isError: true };
+          }
+          const found = detachedRuns.lookup(runtime, handle);
+          if (found.state === "unknown") {
+            call.record({ run_status: "unknown" });
+            return { isError: true, content: [{ type: "text", text: unknownRunText(handle) }] };
+          }
+          if (found.state === "gone") {
+            call.record({ run_status: "gone" });
+            return { isError: true, content: [{ type: "text", text: goneRunText(handle, found) }] };
+          }
+          if (found.state === "finished") {
+            call.record({ run_status: found.status });
+            if (!cancel) return found.outcome.reply;
+            const { reply } = found.outcome;
             return {
+              ...reply,
               content: [
-                { type: "text", text: ranIn(located.document) },
-                { type: "image", data: reply.image, mimeType: "image/png" },
+                { type: "text", text: `Nothing to cancel: run ${handle} had already finished.` },
+                ...reply.content,
               ],
             };
-          });
+          }
+          const { working } = found;
+          if (cancel) {
+            detachedRuns.markCancelRequested(working);
+            working.run.bridge.cancelRun(working.run.executionId);
+          }
+          const progress = startCallProgress(extra, checkInAt);
+          progress.show(() => runProgressText(working.run.bridge, working.run.executionId));
+          try {
+            const waited = await waitOnPluginRun(working.run, {
+              checkInAt,
+              signal: extra.signal,
+              first: false,
+            });
+            if (waited.kind === "ended") {
+              const { reply } = waited.end;
+              call.record({
+                run_status: !reply.isError ? "completed" : cancel ? "cancelled" : "failed",
+              });
+              return reply;
+            }
+            call.record({ run_status: "working" });
+            return checkedInReply(working.run, handle, {
+              lead: ranIn(working.run.document),
+              resultTtlMs: detachedRuns.resultTtlMs,
+            });
+          } finally {
+            await progress.stop();
+          }
         },
       },
       observe,
@@ -736,6 +1051,65 @@ Returns a PNG image.`,
       else tool.disable();
     }
   });
+}
+
+const AWAIT_EXECUTION_DESCRIPTION =
+  "Wait for, or cancel, a figma_execute_code or get_screenshot run that outlived its call. Those " +
+  `calls answer within about ${MCP_CHECK_IN_MS / 1000} seconds; a run still going then keeps going, ` +
+  "and the reply names a run handle, how long Figma has been quiet and its oldest pending call " +
+  "instead of the result. Pass the handle here to get exactly the reply the original call would have " +
+  "returned: the code's result and console, or the screenshot image. A run still going after another " +
+  `${MCP_CHECK_IN_MS / 1000} seconds gets its status again: await again, or pass cancel: true. A result ` +
+  "can be fetched again until it expires, 10 minutes after the run finished.";
+
+/** One call's progress line for clients that show progress, and when the call checks in. */
+interface CallProgress {
+  checkInAt: number;
+  show(text: () => string): void;
+  stop(): Promise<void>;
+}
+
+const FINDING_FILE_PROGRESS = () => "Finding the Figma file…";
+
+function startCallProgress(extra: ToolExtra, checkInAt: number): CallProgress {
+  let text = FINDING_FILE_PROGRESS;
+  const stop = startProgressHeartbeat(extra, () => text(), 3000);
+  return {
+    checkInAt,
+    show: (next) => {
+      text = next;
+    },
+    stop,
+  };
+}
+
+/** An await of a handle this process never minted, or minted for someone else. */
+function unknownRunText(handle: string): string {
+  return (
+    `Outcome unavailable: this server knows no run ${handle}. It keeps runs in memory only, so a ` +
+    `server restart since the run started loses them, and that does not mean the run didn't ` +
+    `happen. Check the document before redoing its work.`
+  );
+}
+
+/** An await of a run whose result was dropped: what is left to read instead. */
+function goneRunText(
+  handle: string,
+  {
+    reason,
+    kind,
+    session,
+  }: { reason: "expired" | "evicted"; kind: DetachedRunKind; session: SessionHandle | null },
+): string {
+  const lead =
+    reason === "expired"
+      ? `Result expired: run ${handle} finished, and its result is kept only 10 minutes after that.`
+      : `Result evicted: run ${handle} finished, and its result was dropped to make room for newer ones.`;
+  if (kind === "screenshot") return `${lead} Take the screenshot again.`;
+  return session
+    ? `${lead} Session ${session} may still contain the latest returned value in session.last: pass ` +
+        `it as session to figma_execute_code and return session.last.`
+    : `${lead} Check the document before redoing its work.`;
 }
 
 /** Why a call got no plugin link, recorded and answered. */

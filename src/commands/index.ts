@@ -105,6 +105,9 @@ export const MCP_TOOL_CLI_COUNTERPARTS: Record<string, CliCounterpart> = {
     },
   },
   get_flcm_reference: { command: "reference", inputs: { sections: "[sections...]" } },
+  await_figma_execution: {
+    exempt: "A CLI execute waits for its run to finish, so it never leaves one to await.",
+  },
   // The code is minted by the process that shows it, so a flag could only carry a code from some
   // other process's attempt. `pair` prints its own and asks whether the panel matches.
   report_framelink_issue: {

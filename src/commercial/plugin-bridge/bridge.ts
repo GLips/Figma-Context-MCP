@@ -35,6 +35,7 @@ import {
   BridgeRequestError,
   NON_RUN_REQUEST_TIMEOUT_MS,
   type LedgerSubmitOptions,
+  type RunState,
   RunLedger,
 } from "./run-ledger.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
@@ -48,11 +49,13 @@ import {
   type ReplyFor,
   type RUN_REQUEST_TYPES,
   type ServerRequest,
+  type WithdrawOutcome,
 } from "@framelink/plugin/protocol";
 
 export {
   BridgeRequestError,
   type ChannelRunContext,
+  type RunState,
   type RunWaiting,
   type RunWatch,
 } from "./run-ledger.js";
@@ -463,6 +466,27 @@ export class PluginBridge {
     options: Omit<LedgerSubmitOptions, "id"> = {},
   ): Promise<ReplyFor<T["type"]>> {
     return this.submit(link, payload, { ...options, id: executionId });
+  }
+
+  /** What the server last knew of a run in flight, or null once it settled (or before it was sent). */
+  runState(executionId: ExecutionId): RunState | null {
+    return this.ledger.runState(executionId);
+  }
+
+  /**
+   * Ask the plugin to drop a run that hasn't started. On `withdrawn` its submission rejects as
+   * not-submitted; on any other answer it runs on.
+   */
+  withdrawRun(executionId: ExecutionId): Promise<WithdrawOutcome> {
+    return this.ledger.withdrawRun(executionId);
+  }
+
+  /**
+   * Cancel a run in flight, cooperatively: its submission rejects worded from the plugin's cancel
+   * answer. False when it is not in flight.
+   */
+  cancelRun(executionId: ExecutionId): boolean {
+    return this.ledger.cancelRun(executionId);
   }
 
   private submit<T extends LinkRequest>(

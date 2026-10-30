@@ -8,7 +8,7 @@ import { RequestTrace, type TraceEvent } from "~/commercial/plugin-bridge/reques
 import { Logger } from "~/utils/logger.js";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
-import { mintExecutionId } from "~/commercial/execution-id.js";
+import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -48,23 +48,22 @@ test("statuses are logged as counts only, and a late result is diagnostic only",
         preamble: "private preamble",
       },
       mintExecutionId(),
-      { budgetMs: 100 },
     )
     .catch((error) => error);
   const id = sent[0].id!;
   receive({ ...running(id, "figma.loadFontAsync", { code: "secret" }), code: "secret" });
-  await vi.advanceTimersByTimeAsync(100);
+  bridge.cancelRun(id as ExecutionId);
   receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toContain("The call's budget of 100ms ran out");
+  expect((error as Error).message).toContain("Cancelled at your request");
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
   await connectFakePlugin(bridge);
   receive({ id, result: { private: "response content" } }, socket);
   expect(trace.snapshot(id).map((event) => event.stage)).toEqual([
     "submitted",
     "status",
-    "timeout-budget",
+    "requested-cancelled",
     "late-reply",
   ]);
   expect(trace.snapshot(id)[1]).toMatchObject({
@@ -91,18 +90,17 @@ test("another link's status for a run never enters its trace", async () => {
         preamble: "",
       },
       mintExecutionId(),
-      { budgetMs: 100 },
     )
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
   receive(running(id, "figma.loadFontAsync"), stranger);
-  await vi.advanceTimersByTimeAsync(20);
+  bridge.cancelRun(id as ExecutionId);
   receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
   expect(await result).toBeInstanceOf(Error);
   const events = trace.snapshot(id);
   expect(events.some((event) => event.stage === "status")).toBe(false);
-  expect(events.at(-1)?.stage).toBe("timeout-budget");
+  expect(events.at(-1)?.stage).toBe("requested-cancelled");
 });
 test("trace is bounded, stage-only, expires terminal entries, and keeps timeout context after noise", () => {
   let now = 0;
@@ -121,12 +119,12 @@ test("trace is bounded, stage-only, expires terminal entries, and keeps timeout 
       phase: "queued",
       wait: { ahead: 1 },
     });
-  trace.record("run", owner, "timeout-budget");
+  trace.record("run", owner, "timeout-unanswered");
   trace.record("run", owner, "late-reply");
   trace.record("run", owner, "late-reply");
   expect(emitted).toHaveLength(34);
   expect(trace.snapshot("run")).toHaveLength(32);
-  expect(emitted.at(-2)).toMatchObject({ stage: "timeout-budget", phase: "queued", ahead: 1 });
+  expect(emitted.at(-2)).toMatchObject({ stage: "timeout-unanswered", phase: "queued", ahead: 1 });
   now = 60_000;
   expect(trace.snapshot("run")).toEqual([]);
   for (let i = 0; i < 129; i++) trace.start(String(i), owner);

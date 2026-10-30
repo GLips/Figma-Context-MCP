@@ -16,8 +16,8 @@ export type CapabilityHandler = (
 ) => Promise<unknown>;
 
 // How many channel services one run may have in flight. Excess requests are refused, not queued,
-// to bound work from a runaway or hostile plugin link. The run's own deadline and its caller's budget
-// bound the total service window.
+// to bound work from a runaway or hostile plugin link. The total service window is the run's own:
+// it ends at the run's reply, its cancellation or its link closing.
 const MAX_INFLIGHT_SERVICES_PER_RUN = 4;
 
 /**

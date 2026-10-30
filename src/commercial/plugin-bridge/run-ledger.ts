@@ -76,12 +76,10 @@ export interface RunWaiting {
 }
 
 /**
- * How a caller waits on a run: mechanism only, so the policy (how long, and whether to wait behind an
- * abandoned run) stays with the caller that owns the budget.
+ * How a caller waits on a run: mechanism only, so the policy (whether to wait behind an abandoned
+ * run) stays with the caller. A run has no time limit here: a caller that can't wait detaches.
  */
 export interface RunWatch {
-  /** Stop waiting this long after submission, cancelling the run. Omitted: no limit. */
-  budgetMs?: number;
   /** Each RUN_STATUS while the run is queued, on arrival; never after it starts running. */
   onWaiting?: (waiting: RunWaiting) => void;
   /**
@@ -99,8 +97,6 @@ export class BridgeRequestError extends Error {
     // What the caller may DO about it, not where it happened: `not-submitted` means nothing ran and
     // the call can be retried as-is; `unconfirmed` means the document may have been touched.
     readonly outcome: "not-submitted" | "unconfirmed",
-    /** Why the server stopped waiting, when it did: the edge words its own advice from it. */
-    readonly stoppedBy?: RunStopCause,
   ) {
     super(message);
     this.name = "BridgeRequestError";
@@ -115,7 +111,16 @@ export const NON_RUN_REQUEST_TIMEOUT_MS = 15_000;
 // How long the caller's rejection waits for the plugin's CANCEL_RESULT, and a withdrawal for its
 // WITHDRAW_RESULT, before reading the answer as unknown. The plugin answers from state it already
 // holds, so what spends this is a plugin that CAN'T answer (socket dying, main thread held).
-const PLUGIN_ANSWER_MS = 1_000;
+export const PLUGIN_ANSWER_MS = 1_000;
+
+/** What the server last knew of a run in flight: for a caller reporting on it, never deciding liveness. */
+export interface RunState {
+  phase: RequestPhase;
+  /** The plugin's latest RUN_STATUS for the run; null when it sent none. */
+  status: RunStatus | null;
+  /** When the last RUN_STATUS arrived, or when the run was submitted. */
+  lastHeardAt: number;
+}
 
 // Only runs can have their cancellation answered. Everything else (handshake, grant polling)
 // never reaches the document, so its cancellation rejects on the spot.
@@ -142,7 +147,6 @@ export interface LedgerEntry {
   lastHeardAt: number;
   /** A request that is no run: when its wait for an answer ends. */
   readonly answerTimer: ReturnType<typeof setTimeout> | null;
-  readonly budgetTimer: ReturnType<typeof setTimeout> | null;
   readonly onWaiting: RunWatch["onWaiting"];
   readonly onQuiet: RunWatch["onQuiet"];
   readonly cleanup: () => void;
@@ -167,9 +171,9 @@ interface AwaitedAnswer<T> {
  * Every server→plugin request in flight, and the clocks that bound it. `submit` sends a request under
  * the id its caller chose — a run's execution id, or a fresh correlation id — and resolves when a
  * reply carrying that same id arrives; replies without a matching entry are dropped. A run ends only
- * at its reply, its caller's budget or signal, or its link closing; a budget never silently abandons
- * it: it sends the id-less CANCEL and words the caller's rejection from the plugin's CANCEL_RESULT
- * (see cancel()).
+ * at its reply, its caller's signal, a requested cancel, or its link closing; a requested cancel
+ * never silently abandons it: it sends the id-less CANCEL and words the caller's rejection from the
+ * plugin's CANCEL_RESULT (see cancel()).
  */
 export class RunLedger {
   private readonly entries = new Map<string, LedgerEntry>();
@@ -216,7 +220,6 @@ export class RunLedger {
       id = randomUUID(),
       signal,
       runContext = NO_RUN_CONTEXT,
-      budgetMs,
       onWaiting,
       onQuiet,
     }: LedgerSubmitOptions = {},
@@ -240,14 +243,7 @@ export class RunLedger {
         lastHeardAt: Date.now(),
         answerTimer: run
           ? null
-          : setTimeout(
-              () => this.timeout(id, "unanswered", nonRunRequestTimeoutMs),
-              nonRunRequestTimeoutMs,
-            ),
-        budgetTimer:
-          budgetMs === undefined
-            ? null
-            : setTimeout(() => this.timeout(id, "budget", budgetMs), budgetMs),
+          : setTimeout(() => this.timeout(id, nonRunRequestTimeoutMs), nonRunRequestTimeoutMs),
         onWaiting,
         onQuiet,
         cleanup: () => signal?.removeEventListener("abort", cancel),
@@ -372,6 +368,29 @@ export class RunLedger {
         this.settleWithdrawAnswer(id, { outcome: "unknown" });
   }
 
+  /** What the server last knew of the run `id`, or null when it is not in flight. */
+  runState(id: string): RunState | null {
+    const entry = this.entries.get(id);
+    if (!entry || !RUN_REQUESTS.has(entry.payloadType)) return null;
+    return { phase: entry.phase, status: entry.status, lastHeardAt: entry.lastHeardAt };
+  }
+
+  /** Withdraw the run `id` if it is still in flight (see withdraw()); "unknown" when it is not. */
+  withdrawRun(id: string): Promise<WithdrawOutcome> {
+    const entry = this.entries.get(id);
+    return entry ? this.withdraw(entry) : Promise.resolve("unknown");
+  }
+
+  /**
+   * Cancel the run `id` at its caller's request: its submission rejects worded from the plugin's
+   * answer. False when it is not in flight.
+   */
+  cancelRun(id: string): boolean {
+    if (!this.runState(id)) return false;
+    this.cancel(id, "requested");
+    return true;
+  }
+
   /**
    * Ask the plugin to drop a queued run. A `withdrawn` answer rejects the submission as not-submitted;
    * any other leaves the run (and its caller's wait) as it was. One WITHDRAW per run at a time.
@@ -416,7 +435,6 @@ export class RunLedger {
     if (!entry) return undefined;
     entry.cleanup();
     clearTimeout(entry.answerTimer ?? undefined);
-    clearTimeout(entry.budgetTimer ?? undefined);
     this.entries.delete(id);
     entry.servicesAbort.abort();
     if (!this.hasRunsOn(entry.connection)) {
@@ -453,10 +471,10 @@ export class RunLedger {
     );
   }
 
-  private timeout(id: string, cause: "unanswered" | "budget", limitMs: number): void {
+  private timeout(id: string, limitMs: number): void {
     const entry = this.entries.get(id);
-    if (entry) this.trace.record(id, entry.connection, `timeout-${cause}`);
-    this.cancel(id, cause, limitMs);
+    if (entry) this.trace.record(id, entry.connection, "timeout-unanswered");
+    this.cancel(id, "unanswered", limitMs);
   }
 
   /**
@@ -471,11 +489,11 @@ export class RunLedger {
    * What is held for one round trip is only the WORDING: "never executed; retry as-is" and "was
    * executing; inspect the canvas" are different instructions to the agent reading them.
    */
-  /** `limitMs` is the answer deadline or budget that ran out; a caller's cancel has none. */
+  /** `limitMs` is the answer deadline that ran out; a cancel by request has none. */
   private cancel(id: string, cause: RunStopCause, limitMs = 0): void {
     const entry = this.take(id);
     if (!entry) return;
-    if (cause === "caller") this.trace.record(id, entry.connection, "caller-cancelled");
+    if (cause !== "unanswered") this.trace.record(id, entry.connection, `${cause}-cancelled`);
     const open = entry.connection.isOpen;
     if (open) entry.connection.send({ type: "CANCEL", executionId: id });
     const reject = (answer: CancelAnswer): void => {
@@ -487,7 +505,7 @@ export class RunLedger {
         latest: entry.status,
         now: Date.now(),
       });
-      entry.reject(new BridgeRequestError(message, outcome, cause));
+      entry.reject(new BridgeRequestError(message, outcome));
     };
     // Three requests have no answer worth waiting for: one on a dead socket, a non-run one (the plugin
     // tracks no phase for it), and one the CALLER cancelled — it is no longer reading.

@@ -65,7 +65,6 @@ export class ExecutionReplyLostError extends BridgeRequestError {
       `${lost.message} The run was submitted in session ${session}: continue that session to read ` +
         `its session.last and see what the run did.`,
       lost.outcome,
-      lost.stoppedBy,
     );
     this.name = "ExecutionReplyLostError";
   }
@@ -88,7 +87,7 @@ export async function executePluginCode(
   }: Pick<PluginBridgeRuntime, "bridge" | "writeMeter" | "readLocalImage">,
   { executionId, intent, link, document, session: namedSession }: PluginCallTarget,
   code: string,
-  // The caller's waiting policy (budget, and what to do behind a blocker) rides through untouched.
+  // The caller's waiting policy (what to do behind a blocker) rides through untouched.
   { figma, ...watch }: Pick<ChannelRunContext, "figma"> & { signal?: AbortSignal } & RunWatch = {
     figma: null,
   },

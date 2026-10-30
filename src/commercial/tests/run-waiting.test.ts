@@ -3,9 +3,9 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 // How a caller waits on a plugin run: liveness from the plugin's RUN_STATUS answers to the server's
-// heartbeat alone, and the
-// caller's own policy on top — the MCP tools' 45-second budget and withdraw-behind-a-cancelled-run,
-// the CLI's patience. The MCP cases go through a real tool call over a real bridge.
+// heartbeat alone, and the caller's own policy on top — the MCP tools' check-in (a run outliving it
+// is detached and awaited, never cancelled) and withdraw-behind-a-cancelled-run, the CLI's patience.
+// The MCP cases go through a real tool call over a real bridge.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -15,11 +15,12 @@ import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { RunWaiting } from "~/commercial/plugin-bridge/run-ledger.js";
 import { codeModeExtension } from "~/commercial/tools/code-mode-tools.js";
 import { createServer } from "~/mcp/index.js";
-import { mintExecutionId } from "~/commercial/execution-id.js";
+import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import { RUN_STATUS_INTERVAL_MS, type QueueBlocker } from "@framelink/plugin/protocol";
 import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 import {
   TEST_DOCUMENT,
+  TEST_PLUGIN_OWNER,
   TEST_SESSION_REQUEST,
   createTestWriteAccess,
   linkedTestResolution,
@@ -87,12 +88,16 @@ async function mcpOverBridge() {
   const bridge = {
     submitRun: ((_link, ...rest) =>
       real.submitRun(socket.link, ...rest)) as PluginBridge["submitRun"],
+    runState: (id: ExecutionId) => real.runState(id),
+    withdrawRun: (id: ExecutionId) => real.withdrawRun(id),
+    cancelRun: (id: ExecutionId) => real.cancelRun(id),
     targetCall: targetedTestCall,
     resolveLink: linkedTestResolution,
   } as unknown as PluginBridge;
+  const access = createTestWriteAccess();
   const runtime: PluginBridgeRuntime = {
     bridge,
-    writeMeter: createTestWriteAccess().writeMeter,
+    writeMeter: access.writeMeter,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
     readLocalImage: () => Promise.reject(new Error("no local images in this test")),
     pluginPresence: () => "connected",
@@ -105,14 +110,17 @@ async function mcpOverBridge() {
   const client = new Client({ name: "run-waiting-test", version: "1.0.0" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientT), server.connect(serverT)]);
-  const execute = () =>
+  const callTool = (name: string, args: Record<string, unknown>) =>
     client.request(
-      {
-        method: "tools/call",
-        params: { name: "figma_execute_code", arguments: { intent: "Test run", code: "x" } },
-      },
+      { method: "tools/call", params: { name, arguments: args } },
       CallToolResultSchema,
     );
+  const execute = () => callTool("figma_execute_code", { intent: "Test run", code: "x" });
+  const awaitRun = (run: string, cancel?: boolean) =>
+    callTool("await_figma_execution", cancel ? { run, cancel } : { run });
+  /** Executions charged to the test plugin owner. */
+  const charged = () =>
+    access.store.read().ledger[TEST_PLUGIN_OWNER.figmaUserId]?.executions.length ?? 0;
   /** The execution id once the run is on the wire, advancing fake clocks if they are installed. */
   const submitted = async (): Promise<string> => {
     for (let i = 0; i < 100; i++) {
@@ -123,7 +131,14 @@ async function mcpOverBridge() {
     }
     throw new Error("no EXECUTE_CODE was sent");
   };
-  return { socket, execute, submitted, close: () => Promise.all([client.close(), server.close()]) };
+  return {
+    socket,
+    execute,
+    awaitRun,
+    charged,
+    submitted,
+    close: () => Promise.all([client.close(), server.close()]),
+  };
 }
 
 const textOf = (result: { content: unknown[] }) =>
@@ -254,28 +269,112 @@ describe("the MCP tools' waiting policy", () => {
     }
   });
 
-  it("cancels a run still going at 45 seconds, and says how to fit the work in", async () => {
+  /** Keep a run's statuses flowing for `ms`, two seconds at a time. */
+  async function runningFor(
+    mcp: Awaited<ReturnType<typeof mcpOverBridge>>,
+    id: string,
+    ms: number,
+    oldestPending?: { operation: string; sinceMs: number },
+  ) {
+    for (let elapsed = 0; elapsed < ms; elapsed += 2_000) {
+      mcp.socket.receive(runningStatus(id, oldestPending));
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+  }
+  const handleIn = (text: string) => /Run: (run-[a-z2-9]{20})/.exec(text)?.[1];
+
+  it("checks in on a run still going at 45s without cancelling it, and await_figma_execution returns its real result, billed once", async () => {
     vi.useFakeTimers();
     const mcp = await mcpOverBridge();
     try {
       const result = mcp.execute();
       const id = await mcp.submitted();
-      const cancelled = () => mcp.socket.frames.some((f) => f.type === "CANCEL");
-      for (let i = 0; i < 22 && !cancelled(); i++) {
-        mcp.socket.receive(runningStatus(id, { operation: "flcm.render", sinceMs: i * 2_000 }));
+      // Figma answers for 20s, then a long export holds its main thread.
+      await runningFor(mcp, id, 20_000, { operation: "figma.exportAsync", sinceMs: 0 });
+      await vi.advanceTimersByTimeAsync(25_000);
+      const checkIn = await result;
+      const text = textOf(checkIn);
+      expect(checkIn.isError).toBeFalsy();
+      // Checked in a second early, leaving room for a queued run's withdraw answer.
+      expect(text).toContain("The run is still running after 44s.");
+      expect(text).toMatch(/Figma has been quiet for 2\ds/);
+      expect(text).toMatch(/oldest pending call is figma\.exportAsync, waiting 2\ds/);
+      expect(text).toContain("It has not been cancelled.");
+      expect(text).not.toMatch(/retry|did not run/i);
+      expect(mcp.socket.frames.some((f) => f.type === "CANCEL" || f.type === "WITHDRAW")).toBe(
+        false,
+      );
+      const handle = handleIn(text)!;
+      expect(handle).toBeDefined();
+
+      const awaiting = mcp.awaitRun(handle);
+      await vi.advanceTimersByTimeAsync(10_000);
+      mcp.socket.receive({ ...executed(id), documentChanged: true });
+      const reply = await awaiting;
+      expect(reply.isError).toBeFalsy();
+      expect(textOf(reply)).toMatch(/Session: [a-z]+-[a-z]+-[a-z]+-[a-z]+ /);
+      expect(textOf(reply)).toContain("done");
+      // Held for repeat fetches, and charged once, when the run itself settled.
+      expect(await mcp.awaitRun(handle)).toEqual(reply);
+      expect(mcp.charged()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      const expired = await mcp.awaitRun(handle);
+      expect(expired.isError).toBe(true);
+      const session = /Session: (\S+)/.exec(textOf(reply))![1];
+      expect(textOf(expired)).toMatch(/^Result expired: /);
+      expect(textOf(expired)).toContain(
+        `Session ${session} may still contain the latest returned value in session.last`,
+      );
+      expect(mcp.charged()).toBe(1);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  it("withdraws a run still queued at its check-in, and says it did not run only once the plugin confirms", async () => {
+    vi.useFakeTimers();
+    const mcp = await mcpOverBridge();
+    try {
+      const result = mcp.execute();
+      const id = await mcp.submitted();
+      for (let elapsed = 0; elapsed < 44_000; elapsed += 2_000) {
+        mcp.socket.receive(queuedStatus(id, 1));
         await vi.advanceTimersByTimeAsync(2_000);
       }
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(mcp.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
-      mcp.socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
+      expect(mcp.socket.frames).toContainEqual({ type: "WITHDRAW", executionId: id });
+      mcp.socket.receive({ type: "WITHDRAW_RESULT", executionId: id, outcome: "withdrawn" });
       const reply = await result;
       expect(reply.isError).toBe(true);
-      const text = textOf(reply);
-      expect(text).toMatch(/^The call's budget of 45 seconds ran out\. Cancellation requested; /);
-      expect(text).toContain("flcm.render pending for");
-      expect(text).toMatch(
-        /Split the work across smaller calls, or run it with `npx [\w-]+ execute`, which has no 45-second limit\.$/,
+      expect(textOf(reply)).toBe(
+        "Your code did not run: it was withdrawn from the plugin's queue, so this request made no changes. Retry as-is.",
       );
+      expect(mcp.socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
+      expect(mcp.charged()).toBe(0);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  it("cancels a detached run on request, reporting the plugin's cancel answer", async () => {
+    vi.useFakeTimers();
+    const mcp = await mcpOverBridge();
+    try {
+      const result = mcp.execute();
+      const id = await mcp.submitted();
+      await runningFor(mcp, id, 46_000, { operation: "flcm.render", sinceMs: 0 });
+      const handle = handleIn(textOf(await result))!;
+      const cancelling = mcp.awaitRun(handle, true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mcp.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
+      mcp.socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
+      const reply = await cancelling;
+      expect(reply.isError).toBe(true);
+      expect(textOf(reply)).toMatch(
+        /^Cancelled at your request\. Cancellation requested; the plugin confirmed the run was executing\./,
+      );
+      // A run that may have written is charged, as any lost run is.
+      expect(mcp.charged()).toBe(1);
     } finally {
       await mcp.close();
     }

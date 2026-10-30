@@ -175,7 +175,7 @@ export function isCallOperation(value: unknown): value is CallOperation {
 
 /**
  * What a running run has visibly done: diagnostic only. Nothing decides liveness or completion from
- * it; a slow Figma call and a hung one look the same here until the caller's budget runs out.
+ * it; a slow Figma call and a hung one look the same here, so the agent reading it decides.
  */
 export interface RunActivity {
   /** Calls the run has made that have returned or thrown, flcm verbs and figma.* alike. */

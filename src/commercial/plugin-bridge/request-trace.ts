@@ -9,7 +9,7 @@ type Stage =
   | "submitted"
   | "status"
   | "timeout-unanswered"
-  | "timeout-budget"
+  | "requested-cancelled"
   | "caller-cancelled"
   | "withdrawn"
   | "disconnected"
@@ -18,7 +18,7 @@ type Stage =
   | "late-reply";
 const TERMINAL: ReadonlySet<Stage> = new Set([
   "timeout-unanswered",
-  "timeout-budget",
+  "requested-cancelled",
   "caller-cancelled",
   "withdrawn",
   "disconnected",
