@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { setTimeout as delay } from "node:timers/promises";
 import type { WebSocket } from "ws";
 import { DEFAULT_FRAMELINK_API_URL } from "~/config.js";
 import { Logger } from "~/utils/logger.js";
@@ -27,6 +26,7 @@ import {
   type PairingOffer,
 } from "./link-setup.js";
 import { LinkDocuments, type LinkDocument } from "./link-documents.js";
+import { PLUGIN_LINKUP_GRACE_MS, PluginLinkup } from "./plugin-linkup.js";
 import { canonicalProjectPath } from "./project.js";
 import { RelayConnection, isSettlingLinkStage } from "./relay-connection.js";
 import { MAX_CHANNEL_BYTES, RelayListener } from "./relay-listener.js";
@@ -39,7 +39,6 @@ import {
 } from "./run-ledger.js";
 import { mintExecutionId, type ExecutionId } from "~/commercial/execution-id.js";
 import {
-  PLUGIN_REDIAL_MAX_MS,
   parsePluginEvent,
   type AnnotationCursor,
   type GrantState,
@@ -69,10 +68,6 @@ export type {
 } from "./call-target.js";
 export type { LinkDocument, OpenFile } from "./link-documents.js";
 export type { PairingConfirmation, PairingOffer } from "./link-setup.js";
-
-// How long after this server starts, or loses a link, a plugin that is still open may take to be back
-// on an authenticated link: its longest redial wait, then a handshake.
-export const PLUGIN_LINK_SETTLE_MS = PLUGIN_REDIAL_MAX_MS + 2_000;
 
 /** One plugin link: a socket from one plugin incarnation, in whatever stage of setup it reached. */
 export type PluginLink = RelayConnection;
@@ -126,9 +121,7 @@ type EventRoutes = {
 export class PluginBridge {
   private readonly links = new Set<RelayConnection>();
   private disconnectedAt: number | null = null;
-  // The last time a plugin that is still open may have been off this server: its start, or a drop.
-  private linksUnsettledSince = Date.now();
-  private readonly linkSettleMs: number;
+  private readonly linkup: PluginLinkup;
   private onConnect: (() => void) | undefined;
   private readonly connectionWaiters = new Set<() => void>();
   // Each link's latest ANNOTATIONS_CHANGED, gone with the link, and who waits for the next.
@@ -185,7 +178,7 @@ export class PluginBridge {
     framelinkOrigin = new URL(DEFAULT_FRAMELINK_API_URL).origin,
     requestTimeoutMs = DEFAULT_TIMEOUT_MS,
     unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
-    linkSettleMs = PLUGIN_LINK_SETTLE_MS,
+    linkupGraceMs = PLUGIN_LINKUP_GRACE_MS,
     capabilities = new Map(),
     events = {},
     trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
@@ -195,13 +188,13 @@ export class PluginBridge {
     framelinkOrigin?: string;
     requestTimeoutMs?: number;
     unauthenticatedLinkMs?: number;
-    linkSettleMs?: number;
+    linkupGraceMs?: number;
     capabilities?: ReadonlyMap<string, CapabilityHandler>;
     events?: PluginBridgeEvents;
     trace?: RequestTrace;
   } = {}) {
     this.events = events;
-    this.linkSettleMs = linkSettleMs;
+    this.linkup = new PluginLinkup(linkupGraceMs);
     this.ledger = new RunLedger({
       requestTimeoutMs,
       trace,
@@ -221,6 +214,8 @@ export class PluginBridge {
     });
     this.documents = new LinkDocuments({
       send: (link, payload) => this.request(link, payload),
+      onIntroduced: (link, reply) =>
+        this.linkup.introduced(link, reply.instance, reply.openInstances),
       project,
       framelinkOrigin,
     });
@@ -235,7 +230,7 @@ export class PluginBridge {
   /** Bind the first free port in the block; `onConnect` runs as each socket is accepted. */
   start(ports: readonly number[], onConnect?: () => void): void {
     this.onConnect = onConnect;
-    this.linksUnsettledSince = Date.now();
+    this.linkup.started();
     this.listener.start(ports);
   }
 
@@ -377,7 +372,8 @@ export class PluginBridge {
       {
         ...this.documentLookup,
         links: () => this.authenticatedLinks(),
-        linksSettleAt: () => this.linksSettleAt(),
+        linkupSettlesAt: (documentId) => this.linkup.settlesAt(documentId),
+        pauseForLinkup: (ms, signal) => this.linkup.pause(ms, signal),
         documentsSettled: (links) => this.documents.settled(links),
         closePrompt: (link, executionId) => {
           this.request(link, { type: "GRANT_PROMPT_CLOSED", executionId }).catch(() => {});
@@ -393,29 +389,19 @@ export class PluginBridge {
   /**
    * Every open plugin's document and this project's grant on it, asked without prompting, once each
    * link's introduction has answered. What a refusal and the reference show an agent to choose from.
-   * Incomplete while a plugin still open may be on its redial backoff, as an unnamed call reads it.
+   * Incomplete while a plugin named open may still be linking, as an unnamed call reads it.
    */
   async openDocuments(signal: AbortSignal): Promise<OpenDocumentSnapshot> {
     const links = this.authenticatedLinks();
     await this.documents.settled(links);
     // Only a key for the plugin's prompt-free answer: nothing runs under this id.
     const open = await openDocumentSnapshot(links, this.documentLookup, mintExecutionId(), signal);
-    return Date.now() < this.linksSettleAt() ? { ...open, complete: false } : open;
+    return Date.now() < this.linkup.settlesAt() ? { ...open, complete: false } : open;
   }
 
-  /** Resolves once every plugin still open should be back on a link: see PLUGIN_LINK_SETTLE_MS. */
-  async whenLinksSettled(signal: AbortSignal): Promise<void> {
-    // The window restarts when a link drops, so it is re-read after each wait.
-    for (
-      let wait = this.linksSettleAt() - Date.now();
-      wait > 0;
-      wait = this.linksSettleAt() - Date.now()
-    )
-      await delay(wait, undefined, { signal });
-  }
-
-  private linksSettleAt(): number {
-    return this.linksUnsettledSince + this.linkSettleMs;
+  /** Resolves once every plugin instance named open has linked, or its grace ran out (plugin-linkup.ts). */
+  whenLinkupSettled(signal: AbortSignal): Promise<void> {
+    return this.linkup.whenSettled(signal);
   }
 
   /** Where `link`'s annotation log last said it had moved to, if it has said. */
@@ -502,7 +488,8 @@ export class PluginBridge {
 
   private drop(link: PluginLink): void {
     if (!this.links.delete(link)) return;
-    if (link.isAuthenticated) this.linksUnsettledSince = Date.now();
+    const document = this.documents.documentOf(link);
+    this.linkup.dropped(link, document.kind === "identified" ? document.documentId : null);
     this.setup.forget(link);
     link.abandon();
     if (!this.isPluginConnected()) this.disconnectedAt = Date.now();

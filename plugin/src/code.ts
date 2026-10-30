@@ -10,6 +10,7 @@ import { createActivityFeed } from "./activity-feed.js";
 import { createAnnotationChangeLog, readAnnotationChanges, watchAnnotationChanges } from "./annotation-changes.js";
 import { watchForFigmaPause } from "./figma-pause.js";
 import { createDocumentIdentity } from "./document-identity.js";
+import { createPluginPresence } from "./presence.js";
 import { createGrantGate } from "./grant-gate.js";
 import { createGrantStore } from "./grant-store.js";
 import { createAgentSessions } from "./agent-sessions.js";
@@ -125,6 +126,16 @@ const annotationLog = createAnnotationChangeLog({
 });
 watchAnnotationChanges(annotationLog);
 identity.start();
+const presence = createPluginPresence({
+  storage: {
+    get: (key) => figma.clientStorage.getAsync(key),
+    set: (key, value) => figma.clientStorage.setAsync(key, value),
+    delete: (key) => figma.clientStorage.deleteAsync(key),
+    keys: () => figma.clientStorage.keysAsync(),
+  },
+  documentId: () => identity.documentId,
+});
+presence.start();
 panel.render();
 
 figma.ui.onmessage = (inbound: HostInbound) => {
@@ -192,6 +203,7 @@ function isLinkSetupRequest(type: ServerRequestType): boolean {
  */
 function handleServerFrame(raw: unknown, key: ConnKey): void {
   figmaPause.arm();
+  presence.touch();
   const msg = parseServerFrame(raw);
   if (!msg) {
     // Frozen-envelope contract: every id-carrying inbound gets a reply, so a newer server against
@@ -251,9 +263,15 @@ function handleServerFrame(raw: unknown, key: ConnKey): void {
     case "PAIR_CONFIRMED":
       void linkAuth.storeCredential(to, msg.code, msg.credentialId, msg.secret);
       return;
-    case "INTRODUCE":
-      gate.introduce(to, msg);
+    case "INTRODUCE": {
+      const document = gate.introduce(to, msg);
+      // A storage failure still answers: the link names itself, and the server falls back on its grace.
+      void presence
+        .openInstances()
+        .catch(() => [])
+        .then((openInstances) => reply(to, { type: "INTRODUCED", document, instance: presence.instance, openInstances }));
       return;
+    }
     case "GRANT_STATUS":
       void gate.answerStatus(to, msg);
       return;

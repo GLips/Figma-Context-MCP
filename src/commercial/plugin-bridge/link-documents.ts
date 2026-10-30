@@ -33,6 +33,8 @@ export interface LinkDocumentsOptions {
     link: RelayConnection,
     payload: Extract<ServerRequest, { type: "INTRODUCE" }>,
   ) => Promise<ReplyFor<"INTRODUCE">>;
+  /** A link's introduction answered while it was still open. */
+  onIntroduced: (link: RelayConnection, reply: ReplyFor<"INTRODUCE">) => void;
   project: string;
   framelinkOrigin: string;
 }
@@ -70,9 +72,10 @@ export class LinkDocuments {
       .send(link, { type: "INTRODUCE", project, framelinkOrigin })
       .then(
         (reply) => {
+          if (!link.isOpen) return;
           // A report that arrived while the introduction was in flight is newer: keep it.
-          if (link.isOpen && !this.documents.has(link))
-            this.documents.set(link, linkDocumentOf(reply.document));
+          if (!this.documents.has(link)) this.documents.set(link, linkDocumentOf(reply.document));
+          this.options.onIntroduced(link, reply);
         },
         () => {},
       )

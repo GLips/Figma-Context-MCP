@@ -24,7 +24,8 @@ it("a call granted in a panel whose file is re-stamped mid-round stays bound to 
   ]);
   const deps: CallTargetDeps = {
     links: () => [fast, slow],
-    linksSettleAt: () => 0,
+    linkupSettlesAt: () => 0,
+    pauseForLinkup: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     documentsSettled: async () => {},
     documentOf: (link) => documents.get(link)!,
     closePrompt: () => {},
@@ -52,7 +53,7 @@ it("a call granted in a panel whose file is re-stamped mid-round stays bound to 
   expect(target).toMatchObject({ kind: "targeted", link: fast, document: { documentId: named } });
 });
 
-it("a call naming a file whose plugin is still redialing waits for it instead of refusing", async () => {
+it("a call naming a file whose plugin is still linking waits for it instead of refusing", async () => {
   const named = parseDocumentId("n4medd0c00000001")!;
   const other = parseDocumentId("0therd0c00000002")!;
   const early = { isOpen: true } as RelayConnection;
@@ -80,11 +81,13 @@ it("a call naming a file whose plugin is still redialing waits for it instead of
       },
     ],
   ]);
-  // The named file's plugin dials back a moment after the call arrives, inside the settle window.
+  // The named file's plugin links a moment after the call arrives, inside its grace.
   setTimeout(() => links.push(late), 30);
+  const settlesAt = Date.now() + 1_000;
   const deps: CallTargetDeps = {
     links: () => [...links],
-    linksSettleAt: () => Date.now() + 1_000,
+    linkupSettlesAt: () => settlesAt,
+    pauseForLinkup: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 10))),
     documentsSettled: async () => {},
     documentOf: (link) => documents.get(link)!,
     closePrompt: () => {},

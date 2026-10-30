@@ -20,6 +20,7 @@ import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey, PanelPrompt } from "./panel.js";
 import {
   GRANT_PROMPT_GRACE_MS,
+  type DocumentReport,
   type GrantPrompt,
   type GrantStatusAsk,
   type GrantState,
@@ -208,17 +209,19 @@ export function createGrantGate({
       show();
     },
 
-    /** A server says who it is, over an authenticated link; it is answered with this file's report. */
-    introduce(to: ReplyTo, msg: Extract<ServerFrame, { type: "INTRODUCE" }>): void {
+    /**
+     * A server says who it is, over an authenticated link. Returns this file's report for the reply,
+     * which the caller sends: the server's first question must find the fresh grant read in flight.
+     */
+    introduce(to: ReplyTo, msg: Extract<ServerFrame, { type: "INTRODUCE" }>): DocumentReport {
       const conn = connections.get(to.connKey);
       if (conn) {
         conn.project = msg.project;
         conn.framelinkOrigin = msg.framelinkOrigin;
       }
-      // Before the reply: the server's first question must find the fresh read already in flight.
       refreshConnectionGrants([to.connKey]);
-      reply(to, { type: "INTRODUCED", document: identity.rereadReport() });
       show();
+      return identity.rereadReport();
     },
 
     /** The file's stamp is new: grants and prompts on the old one no longer apply here. */

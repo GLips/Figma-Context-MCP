@@ -87,16 +87,9 @@ function startPlugin(...args: Parameters<typeof startLoopbackPlugin>): LoopbackP
   return plugin;
 }
 
-/**
- * A bare relay for a project. Its links settle sooner than production's: the loopback plugin
- * redials a server it just lost within a second.
- */
+/** A bare relay for a project. */
 function startBridge(stateDir: string, port: number, project = "/loopback/project"): PluginBridge {
-  const bridge = new PluginBridge({
-    linkCredentials: new LinkCredentialStore(stateDir),
-    project,
-    linkSettleMs: 3_000,
-  });
+  const bridge = new PluginBridge({ linkCredentials: new LinkCredentialStore(stateDir), project });
   bridge.start([port]);
   cleanups.push(() => bridge.stop());
   return bridge;

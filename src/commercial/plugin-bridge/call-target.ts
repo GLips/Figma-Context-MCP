@@ -11,9 +11,9 @@
 // - A call naming a document (or a file key, which matches only links that reported it) runs only
 //   there, and only that document's panels are asked to Allow.
 // - A call naming neither runs in the one open document already granted to this project, once every
-//   open plugin's file and grant is known and every plugin still open has had time to redial.
-//   Otherwise it is refused with the open documents, for the
-//   agent to choose from by name. No panel is asked.
+//   open plugin's file and grant is known and every plugin instance named open has linked or run out
+//   its grace (plugin-linkup.ts). Otherwise it is refused with the open documents, for the agent to
+//   choose from by name. No panel is asked.
 //
 // A document is its stamp. One stamp on two links is either one file open twice (both reported the
 // same file key) or a copy; when nothing tells them apart, the human picks in those panels.
@@ -134,10 +134,13 @@ export interface CallTargetDeps extends OpenDocumentLookup {
   /** The authenticated links now: read afresh each round, so a panel that joins mid-wait is seen. */
   links(): RelayConnection[];
   /**
-   * When every plugin still open should have dialed this server again, after it started or a link
-   * dropped. Until then a plugin missing from links() may only be on its redial backoff.
+   * When the wait ends for every plugin instance named open (in `documentId` only, if given) that
+   * hasn't linked: at or before now when none is awaited. Until then, a plugin missing from links()
+   * may only be on its way.
    */
-  linksSettleAt(): number;
+  linkupSettlesAt(documentId?: DocumentId): number;
+  /** Wait `ms`, or less: until the next plugin introduction or drop. */
+  pauseForLinkup(ms: number, signal: AbortSignal): Promise<void>;
   /** Resolves once each of `links` has said which file it is in, or couldn't. */
   documentsSettled(links: readonly RelayConnection[]): Promise<void>;
   closePrompt(link: RelayConnection, executionId: ExecutionId): void;
@@ -266,7 +269,6 @@ export async function targetPluginCall(
     },
   };
   try {
-    await abortable(deps.documentsSettled(deps.links()), options.signal);
     if (request.session !== null)
       return await targetSession(deps, request, request.session, waiting);
     if (request.document !== null || request.fileKey !== null)
@@ -318,16 +320,16 @@ async function targetSession(
 }
 
 /**
- * The one open plugin run holding `session`. A miss is final only once every plugin still open has
- * had time to dial in, so a holder on its redial backoff after a server (re)start isn't reported
- * gone. Links are asked until they answer; one that never could makes the miss a failed lookup.
+ * The one open plugin run holding `session`. A miss is final only once every plugin instance named
+ * open has linked or run out its grace, so a holder still linking isn't reported gone. Links are
+ * asked until they answer; one that never could makes the miss a failed lookup.
  */
 async function findSessionHolder(
   deps: CallTargetDeps,
   session: SessionHandle,
   { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS }: WaitingOptions,
 ): Promise<{ kind: "found"; holder: RelayConnection } | BlockedCallTarget> {
-  const settleAt = Math.min(deps.linksSettleAt(), Date.now() + waitMs);
+  const giveUpAt = Date.now() + waitMs;
   const answered = new Map<RelayConnection, boolean>();
   const failed = new Set<RelayConnection>();
   for (;;) {
@@ -347,6 +349,7 @@ async function findSessionHolder(
     const holders = deps.links().filter((link) => answered.get(link) === true);
     if (holders.length > 1) return blocked({ kind: "session-ambiguous", session });
     if (holders.length === 1) return { kind: "found", holder: holders[0] };
+    const settleAt = Math.min(deps.linkupSettlesAt(), giveUpAt);
     if (Date.now() >= settleAt) {
       const unreachable = deps.links().some((link) => failed.has(link));
       return blocked({
@@ -354,7 +357,7 @@ async function findSessionHolder(
         session,
       });
     }
-    await pause(Math.min(pollMs, Math.max(settleAt - Date.now(), 0)), signal);
+    await deps.pauseForLinkup(Math.min(pollMs, settleAt - Date.now()), signal);
   }
 }
 
@@ -372,17 +375,23 @@ async function targetNamed(
       (request.fileKey === null || file.fileKey === request.fileKey)
     );
   };
-  // A plugin in the named file may still be on its redial backoff (a hidden Figma window's timers
-  // run late), so "not open" is only said once every plugin still open has had time to dial back.
-  const { signal, pollMs = GRANT_POLL_MS } = options;
+  // Bound as soon as a match is known: an unrelated plugin's introduction or link-up is never waited
+  // on. "Not open" waits only for instances named open in this document, and for introductions in
+  // flight, any of which may be the match.
+  const { signal } = options;
+  const awaited = request.document ?? undefined;
   for (;;) {
-    await abortable(deps.documentsSettled(deps.links()), signal);
     const candidates = deps.links().filter(matches);
     if (candidates.length)
       return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
-    const settleAt = deps.linksSettleAt();
-    if (Date.now() >= settleAt) return documentNotOpen(deps, request, options, request.document);
-    await pause(Math.min(pollMs, settleAt - Date.now()), signal);
+    const settleAt = deps.linkupSettlesAt(awaited);
+    if (Date.now() < settleAt) {
+      await deps.pauseForLinkup(settleAt - Date.now(), signal);
+      continue;
+    }
+    await abortable(deps.documentsSettled(deps.links()), signal);
+    if (!deps.links().some(matches))
+      return documentNotOpen(deps, request, options, request.document);
   }
 }
 
@@ -403,20 +412,21 @@ async function documentNotOpen(
 
 /**
  * A call naming nothing: the one open document granted to this project, or a refusal to choose.
- * Decided only once every plugin still open has had time to redial: one on its backoff may hold
- * the grant (none seen yet) or a second one (one seen).
+ * Decided only once every instance named open has linked or run out its grace: one still linking may
+ * hold the grant (none seen yet) or a second one (one seen).
  */
 async function targetUnnamed(
   deps: CallTargetDeps,
   request: CallTargetRequest,
   options: WaitingOptions,
 ): Promise<CallTarget> {
-  const { signal, pollMs = GRANT_POLL_MS } = options;
+  const { signal } = options;
   let documentId: DocumentId;
   for (;;) {
+    await abortable(deps.documentsSettled(deps.links()), signal);
     const open = await snapshotNow(deps, request, options);
     const unnamed = unnamedCallDefault(open);
-    const settleAt = deps.linksSettleAt();
+    const settleAt = deps.linkupSettlesAt();
     const settled = Date.now() >= settleAt;
     if (unnamed.kind === "default" && settled) {
       documentId = unnamed.document.documentId;
@@ -424,7 +434,7 @@ async function targetUnnamed(
     }
     if (unnamed.kind !== "default" && (settled || unnamed.kind === "several-granted"))
       return blocked({ kind: "document-unchosen", reason: unnamed, open });
-    await pause(Math.min(pollMs, settleAt - Date.now()), signal);
+    await deps.pauseForLinkup(settleAt - Date.now(), signal);
   }
   const candidates = deps
     .links()

@@ -582,21 +582,27 @@ function relay(toHost: (inbound: unknown) => void) {
     }
   }
   const dialed: Socket[] = [];
-  const redials: (() => void)[] = [];
+  const redials = new Map<number, () => void>();
+  let nextTimer = 0;
   const element = () => ({ setAttribute() {}, appendChild() {}, style: {} });
   const context = vm.createContext({
     WebSocket: Socket,
     parent: { postMessage: (msg: { pluginMessage: unknown }) => toHost(msg.pluginMessage) },
     window: {},
     document: { getElementById: element, createElement: element },
-    setTimeout: (callback: () => void) => redials.push(callback),
+    setTimeout: (callback: () => void) => (redials.set(++nextTimer, callback), nextTimer),
+    clearTimeout: (timer: number) => redials.delete(timer),
     requestAnimationFrame() {},
     console,
   });
   vm.runInContext(uiScript, context);
   return {
     opened: (port: number) => dialed.filter((socket) => socket.port === port).at(-1)!,
-    reconnect: () => redials.splice(0).forEach((callback) => callback()),
+    reconnect: () => {
+      const due = [...redials.values()];
+      redials.clear();
+      due.forEach((callback) => callback());
+    },
     fromHost: (outbound: unknown) => context.window.onmessage({ data: { pluginMessage: outbound } }),
   };
 }

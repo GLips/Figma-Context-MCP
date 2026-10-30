@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { afterEach, describe, it, expect, vi } from "vitest";
+import type { OpenInstance } from "@framelink/plugin/protocol";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { referenceDocumentsNote } from "~/commercial/plugin-bridge/reference-documents-note.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
@@ -23,12 +24,12 @@ const OTHER_REPORT = {
 /** A settled bridge with fake plugins, each answering grant polls as `grants` says for its document. */
 async function bridgeWith(
   plugins: Array<{ report: typeof TEST_DOCUMENT_REPORT | typeof OTHER_REPORT; grant: string }>,
-  linkSettleMs = 0,
+  otherInstances: OpenInstance[] = [],
 ) {
-  const bridge = new PluginBridge({ linkSettleMs });
+  const bridge = new PluginBridge({ linkupGraceMs: 60_000 });
   bridges.push(bridge);
   for (const { report, grant } of plugins) {
-    const socket = await connectFakePlugin(bridge, { document: report });
+    const socket = await connectFakePlugin(bridge, { document: report, otherInstances });
     socket.onFrame = (frame) => {
       if (frame.type === "GRANT_STATUS")
         socket.receive({ type: "GRANT", id: frame.id, state: grant });
@@ -89,9 +90,12 @@ describe("the reference's open-document note", () => {
     expect(note).not.toContain("runs in");
   });
 
-  it("while other open plugins may still be redialing, the list is incomplete and names no default", async () => {
+  it("while another plugin named open may still be linking, the list is incomplete and names no default", async () => {
     const { text } = await referenceDocumentsNote(
-      await bridgeWith([{ report: TEST_DOCUMENT_REPORT, grant: "granted" }], 60_000),
+      await bridgeWith(
+        [{ report: TEST_DOCUMENT_REPORT, grant: "granted" }],
+        [{ instance: "0th3r1nst0nc0002", documentId: OTHER_REPORT.documentId }],
+      ),
       "reference",
     );
     expect(text).toContain("this list may be missing some");

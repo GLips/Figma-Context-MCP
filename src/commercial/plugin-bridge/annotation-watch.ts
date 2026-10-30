@@ -25,11 +25,11 @@ export function createBridgeAnnotationSource(bridge: PluginBridge): AnnotationCh
         : [];
     });
 
-  // A plugin already open dials a relay that just started only on its next redial, so "no plugin in
-  // this file" waits until one links or every open plugin has had its chance.
+  // A plugin already open reaches a relay that just started only on its next redial, so "no plugin in
+  // this file" waits until one links or every instance named open has linked or run out its grace.
   async function linkedInFile(fileKey: FigmaFileKey, signal: AbortSignal) {
     const done = new AbortController();
-    const settled = bridge.whenLinksSettled(AbortSignal.any([signal, done.signal])).then(
+    const settled = bridge.whenLinkupSettled(AbortSignal.any([signal, done.signal])).then(
       () => true,
       () => true,
     );

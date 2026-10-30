@@ -6,7 +6,9 @@ import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
 import {
   PROTOCOL_VERSION,
+  mintDocumentId,
   type DocumentReport,
+  type OpenInstance,
   type PluginOwner,
 } from "@framelink/plugin/protocol";
 import type { PluginBridge, PluginLink } from "~/commercial/plugin-bridge/bridge.js";
@@ -21,7 +23,8 @@ import { TEST_DOCUMENT_REPORT, TEST_PLUGIN_OWNER } from "./write-access.js";
  * An in-memory plugin socket, handed to `PluginBridge.accept` the way the listener hands it a real
  * one. `frames` records what the bridge sent; `receive` delivers a frame as the plugin would. It
  * answers the link-setup envelope itself: HELLO when `answersHello`, and AUTHENTICATE with a proof
- * when it holds `credential`, LINK_UNPAIRED otherwise. INTRODUCE is answered with its `document`.
+ * when it holds `credential`, LINK_UNPAIRED otherwise. INTRODUCE is answered with its `document`,
+ * naming itself and `otherInstances` as the plugin instances open.
  */
 export class FakePluginSocket extends EventEmitter {
   readyState: number = WebSocket.OPEN;
@@ -30,12 +33,15 @@ export class FakePluginSocket extends EventEmitter {
   onFrame?: (frame: Record<string, unknown>) => void;
   /** The bridge's link for this socket, once connectFakePlugin has settled it. */
   link!: PluginLink;
+  readonly instance = mintDocumentId();
 
   constructor(
     private readonly answersHello: boolean,
     public credential: LinkCredential | null,
     private readonly owner: PluginOwner | null = TEST_PLUGIN_OWNER,
     private readonly document: DocumentReport = TEST_DOCUMENT_REPORT,
+    private readonly otherInstances: readonly OpenInstance[] = [],
+    private readonly answersIntroduce = true,
   ) {
     super();
   }
@@ -66,8 +72,19 @@ export class FakePluginSocket extends EventEmitter {
     }
     if (frame.type === "PAIRING_OFFER" || frame.type === "PAIRING_CLOSED")
       this.receive({ type: `${frame.type}_ACK`, id: frame.id });
-    if (frame.type === "INTRODUCE")
-      this.receive({ type: "INTRODUCED", id: frame.id, document: this.document });
+    if (frame.type === "INTRODUCE" && this.answersIntroduce)
+      this.receive({
+        type: "INTRODUCED",
+        id: frame.id,
+        document: this.document,
+        instance: this.instance,
+        openInstances: [
+          ...(this.document.kind === "identified"
+            ? [{ instance: this.instance, documentId: this.document.documentId }]
+            : []),
+          ...this.otherInstances,
+        ],
+      });
     if (frame.type === "GRANT_PROMPT_CLOSED")
       this.receive({ type: "GRANT_PROMPT_CLOSED_ACK", id: frame.id });
     if (frame.type === "PAIR_CONFIRMED") {
@@ -107,6 +124,8 @@ export async function connectFakePlugin(
     owner = TEST_PLUGIN_OWNER,
     credentials = new LinkCredentialStore(),
     document = TEST_DOCUMENT_REPORT,
+    otherInstances = [],
+    answersIntroduce = true,
   }: {
     answersHello?: boolean;
     paired?: boolean;
@@ -114,6 +133,10 @@ export async function connectFakePlugin(
     credentials?: LinkCredentialStore;
     /** What the plugin reports about the file it is open in. */
     document?: DocumentReport;
+    /** Other plugin instances its storage says are open, which may never link. */
+    otherInstances?: readonly OpenInstance[];
+    /** False: a plugin whose main thread is blocked, so its introduction never answers. */
+    answersIntroduce?: boolean;
   } = {},
 ): Promise<FakePluginSocket> {
   const socket = new FakePluginSocket(
@@ -121,6 +144,8 @@ export async function connectFakePlugin(
     paired ? credentials.readOrCreate() : null,
     owner,
     document,
+    otherInstances,
+    answersIntroduce,
   );
   bridge.accept(socket as unknown as WebSocket);
   // Settled when it authenticated, or (unpaired) once its AUTHENTICATE was answered and handled.

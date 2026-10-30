@@ -7,7 +7,7 @@
 // visible status strip that expands into the grant list. The host drives it with one render
 // envelope and owns every decision; this file only reports clicks and its own measured height.
 // Messages both ways are typed in panel.ts. build.mjs inlines the bundle into dist/ui.html.
-import { PLUGIN_REDIAL_MAX_MS, WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
+import { PLUGIN_LEAD_REDIAL_MS, WS_PORT_BLOCK, type WriteAccessNotice } from "./protocol.js";
 import type {
   ActivityOutcome,
   ConnKey,
@@ -26,18 +26,27 @@ const sockets = new Map<number, WebSocket>();
 const routes = new Map<ConnKey, WebSocket>();
 let nextConnectionKey = 0;
 
-// Reconnect cadence, per port. A port that has NEVER opened is almost certainly empty, so its retries
-// back off 1s → 15s. This is purely to tame console noise: every doomed connect emits a browser-level
-// "WebSocket connection to … failed" line that JS cannot catch or mute. A port that has opened (a// real server) stays on the fast cadence so a dropped/restarted server reappears promptly.
-const BASE_RECONNECT_MS = 1000;
-const reconnectDelays = new Map<number, number>();
-// When each port last had a socket open, and how long after that it keeps the fast cadence through
-// failed retries. A server restart's first retry lands in the rebuild gap and never opens; without
-// the grace the doubling pushes a port we KNOW hosts a server onto the slow cadence at the one moment
-// it must be rediscovered. A grace, not a permanent exemption: closed-for-good servers accumulate
-// over a long session, and polling each of them every second recreates the console storm.
-const FAST_RECONNECT_GRACE_MS = 30000;
-const lastOpenAt = new Map<number, number>();
+// Redial cadence. A new server always binds the lowest free port in the block, so only the lowest port
+// with no open socket (the lead) is redialed fast; the rest are dialed rarely, for two servers that
+// started at once. Every refused dial logs a browser-level "WebSocket connection to … failed" line JS
+// cannot mute, so this keeps the console near one such line a second.
+const IDLE_REDIAL_MS = 60_000;
+const openPorts = new Set<number>();
+const redials = new Map<number, ReturnType<typeof setTimeout>>();
+
+function leadPort(): number | undefined {
+  return WS_PORT_BLOCK.find((port) => !openPorts.has(port));
+}
+
+// The lead moved when a socket opened: the new lead may be waiting out the idle cadence.
+function dialLeadNow(): void {
+  const lead = leadPort();
+  const pending = lead === undefined ? undefined : redials.get(lead);
+  if (lead === undefined || pending === undefined) return;
+  clearTimeout(pending);
+  redials.delete(lead);
+  connect(lead);
+}
 
 function toHost(inbound: HostInbound): void {
   parent.postMessage({ pluginMessage: inbound }, "*");
@@ -55,7 +64,7 @@ function toSandbox(control: PanelControl): void {
 // validator rejects IP literals, and the allowlist host must match the host dialed. A refused `::1`
 // connect returns instantly, so Chromium falls back to the server's IPv4 loopback unnoticed.
 //
-// Called only at startup and from onclose, which has already dropped this port's socket.
+// Called at startup, then only from a port's redial, after onclose has dropped its socket.
 function connect(port: number): void {
   const ws = new WebSocket("ws://localhost:" + port);
   const connKey = ++nextConnectionKey;
@@ -67,12 +76,12 @@ function connect(port: number): void {
     if (sockets.get(port) !== ws) return;
     routes.set(connKey, ws);
     opened = true;
-    lastOpenAt.set(port, Date.now());
-    reconnectDelays.set(port, BASE_RECONNECT_MS);
+    openPorts.add(port);
     // A FRESH connection: the host starts it unauthenticated and ungranted, so a different local
     // server that grabbed a freed port can't ride the previous socket's standing. onopen fires before any onmessage on this
     // socket, so the reset lands before the new server's first frame.
     toSandbox({ type: "WS_CONNECTED", connKey });
+    dialLeadNow();
   };
   ws.onmessage = (event: MessageEvent<string>) => {
     if (sockets.get(port) !== ws) return;
@@ -82,14 +91,17 @@ function connect(port: number): void {
     routes.delete(connKey);
     if (sockets.get(port) !== ws) return;
     sockets.delete(port);
+    openPorts.delete(port);
     if (opened) toSandbox({ type: "WS_CLOSED", connKey });
-    else if (Date.now() - (lastOpenAt.get(port) ?? 0) > FAST_RECONNECT_GRACE_MS) {
-      const previous = reconnectDelays.get(port) ?? BASE_RECONNECT_MS;
-      reconnectDelays.set(port, Math.min(previous * 2, PLUGIN_REDIAL_MAX_MS));
-    }
-    // Auto-reconnect either way: the plugin outlives any single server run, and an empty port keeps
-    // its slot warm for a server that may yet bind it.
-    setTimeout(() => connect(port), reconnectDelays.get(port) ?? BASE_RECONNECT_MS);
+    // A socket that just closed redials fast once: its server may only have dropped the link.
+    const delay = opened || port === leadPort() ? PLUGIN_LEAD_REDIAL_MS : IDLE_REDIAL_MS;
+    redials.set(
+      port,
+      setTimeout(() => {
+        redials.delete(port);
+        connect(port);
+      }, delay),
+    );
   };
 }
 

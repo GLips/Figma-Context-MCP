@@ -4,6 +4,7 @@
  */
 import {
   PROTOCOL_VERSION,
+  mintDocumentId,
   type DocumentReport,
   type PluginOwner,
 } from "@framelink/plugin/protocol";
@@ -49,7 +50,10 @@ export function answerLinkSetup(
     return true;
   }
   if (frame.type === "INTRODUCE") {
-    send({ type: "INTRODUCED", id: frame.id, document });
+    const instance = mintDocumentId();
+    const self =
+      document.kind === "identified" ? [{ instance, documentId: document.documentId }] : [];
+    send({ type: "INTRODUCED", id: frame.id, document, instance, openInstances: self });
     return true;
   }
   return false;

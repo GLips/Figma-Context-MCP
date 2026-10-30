@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 22;
+export const PROTOCOL_VERSION = 23;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -86,6 +86,9 @@ export const PROTOCOL_VERSION = 22;
  *     throttles the plugin's chained timers to about one tick a minute but still delivers messages.
  * v22: a run's documentChanged is final. RUN_CHANGED, RUN_SETTLED and EXECUTE_CODE's
  *     lateChangeWindowMs are gone: the plugin no longer watches the document past its reply.
+ * v23: link-up. INTRODUCED names the reporting plugin instance and every instance this plugin's
+ *     shared storage says is open, so a new server waits for exactly those before an unnamed call
+ *     picks its document. The plugin redials the lowest empty port fast and the rest rarely.
  */
 
 // ---- Transport ----
@@ -121,10 +124,11 @@ export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
 export const RUN_STATUS_INTERVAL_MS = 2_000;
 
 /**
- * The longest the plugin waits between dials to a port that keeps refusing. A server that just
- * started, or just lost a link, hears from every open plugin within it.
+ * How often the plugin redials the lowest port in the block it has no open socket on. A new server
+ * binds the lowest free port, so every open plugin dials it within this. A server's link-up grace is
+ * derived from it.
  */
-export const PLUGIN_REDIAL_MAX_MS = 15_000;
+export const PLUGIN_LEAD_REDIAL_MS = 1_000;
 
 /** The most changed nodes one ANNOTATION_CHANGES reply reads out; the rest come on the next ask. */
 export const ANNOTATION_CHANGES_MAX_NODES = 50;
@@ -352,6 +356,23 @@ export const MAX_REPORTED_PAGES = 200;
 export type DocumentReport =
   | { kind: "identified"; documentId: string; fileName: string; pageNames: string[]; fileKey?: string }
   | { kind: "unidentified"; problem: string };
+
+/** A plugin instance another one's shared storage says is open, in the file it reported. */
+export interface OpenInstance {
+  instance: string;
+  documentId: string;
+}
+
+/** The most instances one INTRODUCED lists: more open Figma files than anyone works in at once. */
+export const MAX_OPEN_INSTANCES = 64;
+
+function parseOpenInstances(value: unknown): OpenInstance[] | null {
+  if (!Array.isArray(value)) return null;
+  const open = value.slice(0, MAX_OPEN_INSTANCES).filter(
+    (entry): entry is OpenInstance => isRecord(entry) && isDocumentId(entry.instance) && isDocumentId(entry.documentId),
+  );
+  return open.map(({ instance, documentId }) => ({ instance, documentId }));
+}
 
 function parseDocumentReport(value: unknown): DocumentReport | null {
   if (!isRecord(value)) return null;
@@ -791,7 +812,8 @@ export interface ReplyByRequest {
   PAIRING_OFFER: { type: "PAIRING_OFFER_ACK" };
   PAIRING_CLOSED: { type: "PAIRING_CLOSED_ACK" };
   PAIR_CONFIRMED: { type: "CREDENTIAL_STORED" };
-  INTRODUCE: { type: "INTRODUCED"; document: DocumentReport };
+  // `instance` is this plugin run, minted like a document id; `openInstances` includes it when identified.
+  INTRODUCE: { type: "INTRODUCED"; document: DocumentReport; instance: string; openInstances: OpenInstance[] };
   GRANT_STATUS: { type: "GRANT"; state: GrantState };
   GRANT_PROMPT_CLOSED: { type: "GRANT_PROMPT_CLOSED_ACK" };
   GRANT_CHANGED_ELSEWHERE: { type: "GRANT_CHANGED_ELSEWHERE_ACK" };
@@ -845,8 +867,10 @@ function parseAnyReply(requestType: ServerRequestType, value: unknown): PluginRe
     case "PAIR_CONFIRMED":
       return f.type === "CREDENTIAL_STORED" ? { type: "CREDENTIAL_STORED" } : null;
     case "INTRODUCE": {
-      const document = f.type === "INTRODUCED" ? parseDocumentReport(f.document) : null;
-      return document ? { type: "INTRODUCED", document } : null;
+      if (f.type !== "INTRODUCED" || !isDocumentId(f.instance)) return null;
+      const document = parseDocumentReport(f.document);
+      const openInstances = parseOpenInstances(f.openInstances);
+      return document && openInstances ? { type: "INTRODUCED", document, instance: f.instance, openInstances } : null;
     }
     case "GRANT_STATUS":
       return f.type === "GRANT" && isOneOf(GRANT_STATES, f.state) ? { type: "GRANT", state: f.state } : null;

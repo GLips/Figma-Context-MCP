@@ -194,6 +194,7 @@ export function startLoopbackPlugin(
     window: relayWindow,
     document: { getElementById: element, createElement: element },
     setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms).unref(),
+    clearTimeout,
     requestAnimationFrame() {},
     console,
   });

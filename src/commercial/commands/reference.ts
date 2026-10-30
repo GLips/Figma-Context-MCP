@@ -78,8 +78,8 @@ export async function runReference(
     try {
       bridge.start(WS_PORT_BLOCK);
       await waitForPluginConnection(bridge, waitMs, controller.signal, "no files were listed");
-      // The first plugin in is rarely the only one: the others are still on their redial backoff.
-      await bridge.whenLinksSettled(controller.signal);
+      // The first plugin in is rarely the only one: it names the others, which are still linking.
+      await bridge.whenLinkupSettled(controller.signal);
       const note = await referenceDocumentsNote(bridge, "cli", FILES_LOOKUP_MS);
       listed = note.listed;
       process.stdout.write(note.text + "\n");

@@ -104,8 +104,6 @@ const freshStateDir = () => mkdtempSync(join(tmpdir(), "flcm-contract-"));
 function bridgeOn(ports, { stateDir = freshStateDir(), onConnect, ...options } = {}) {
   const bridge = new PluginBridge({
     linkCredentials: new LinkCredentialStore(stateDir),
-    // The real plugin redials a lost server within a second; an unnamed call waits this out.
-    linkSettleMs: 1_500,
     ...options,
   });
   bridge.start([ports].flat(), onConnect);
@@ -188,6 +186,8 @@ function rawPeer(
         type: "INTRODUCED",
         id: msg.id,
         document: { kind: "unidentified", problem: "a raw contract peer" },
+        instance: "c0ntractpeer0001",
+        openInstances: [],
       });
       return;
     }
