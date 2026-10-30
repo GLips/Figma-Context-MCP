@@ -22,7 +22,7 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 //     mutationQueueIdle, which the host drains before it replies.
 //
 //   • Enforce cancellation during execution: once the host says this run may not continue
-//     (cancelled, or latched unresponsive by its watchdog) no further verb STARTS. Checked as each
+//     (cancelled, disconnected or revoked) no further verb STARTS. Checked as each
 //     verb's turn arrives AND again after its preparation (the font/image awaits are the run's long
 //     suspension points; a cancel that lands during them refuses before the entry seal), so a
 //     zombie run can never mutate a canvas the agent was already told is unchanged. The full

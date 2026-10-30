@@ -8,7 +8,7 @@ import type { CallOperation, RunPhase, RunStatus } from "@framelink/plugin/proto
 type Stage =
   | "submitted"
   | "status"
-  | "timeout-inactivity"
+  | "timeout-unanswered"
   | "timeout-budget"
   | "caller-cancelled"
   | "withdrawn"
@@ -17,7 +17,7 @@ type Stage =
   | "error"
   | "late-reply";
 const TERMINAL: ReadonlySet<Stage> = new Set([
-  "timeout-inactivity",
+  "timeout-unanswered",
   "timeout-budget",
   "caller-cancelled",
   "withdrawn",

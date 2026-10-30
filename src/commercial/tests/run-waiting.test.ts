@@ -152,37 +152,27 @@ describe("liveness is the plugin's heartbeat", () => {
     expect(asked()).toBe(2);
   });
 
-  it("keeps a heartbeating run alive past the deadline, cancels on 15s of silence naming its pending call, and a stale stamp buys nothing", async () => {
+  it("waits out a run that goes silent for a minute, telling the caller how long Figma has been quiet", async () => {
     vi.useFakeTimers();
     const { bridge, socket } = await pluginBridge();
-    const call = submitCode(bridge, socket);
+    const quiet: number[] = [];
+    const call = submitCode(bridge, socket, { onQuiet: (ms: number) => quiet.push(ms) });
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    for (let elapsed = 2_000; elapsed <= 20_000; elapsed += 2_000) {
-      await vi.advanceTimersByTimeAsync(2_000);
-      socket.receive(
-        runningStatus(id, { operation: "figma.loadFontAsync", sinceMs: elapsed - 2_000 }),
-      );
-    }
+    socket.receive(runningStatus(id));
+    // Figma's thread is held: no status answers any heartbeat for a minute.
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
-    // Arrives now, but stamped long ago: the plugin's thread was held, so it re-arms nothing.
-    await vi.advanceTimersByTimeAsync(5_000);
-    socket.receive({ ...runningStatus(id), at: Date.now() - 30_000 });
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
-    socket.receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
-    const error = await call;
-    expect(error).toMatchObject({ outcome: "unconfirmed" });
-    expect(String(error)).toContain(
-      "No plugin status for 15 seconds. Cancellation requested; the plugin confirmed the run was " +
-        "executing. It ends the run as soon as it handles the cancel: what the run awaits is " +
-        "abandoned and its later figma.* calls are refused, but code already in flight can still " +
-        "write to nodes it holds. Its writes so far stay. " +
-        "Last seen 15s ago: figma.loadFontAsync pending for 18s, 3 calls settled. Inspect affected " +
-        "nodes before retrying.",
-    );
+    expect(quiet.at(-1)).toBe(60_000);
+    socket.receive({
+      type: "EXECUTE_CODE_RESULT",
+      id,
+      result: "done",
+      console: [],
+      errors: null,
+      documentChanged: true,
+    });
+    expect(await call).toMatchObject({ type: "EXECUTE_CODE_RESULT", result: "done" });
   });
 
   it("lets a caller with no budget wait past 45s while statuses flow, seeing its place in the queue", async () => {

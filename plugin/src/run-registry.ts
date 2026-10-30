@@ -4,11 +4,11 @@
  */
 // The plugin's one row per outstanding run, from acceptance to settlement, and everything a run's
 // status and its cancellation are read from: its phase and place in the write chain, why it may not
-// continue, the calls its code has pending, and when its server's heartbeat last reached it. "No row" is what
-// makes a cancel or a withdrawal answer `unknown`.
+// continue, and the calls its code has pending. "No row" is what makes a cancel or a withdrawal
+// answer `unknown`.
 import { isCallOperation, queueWaitKey, type CallOperation, type CancelAnswer, type QueueWait, type RunActivity, type WithdrawAnswer } from "./protocol.js";
 import type { CallToken, RunCancelCause } from "./preamble/host.js";
-import { inactivityExpired, queueWait, runActivity, type QueueRow } from "./run-status.js";
+import { queueWait, runActivity, type QueueRow } from "./run-status.js";
 
 // connKey identifies one socket generation, assigned by the relay iframe (ui.ts) and never reused,
 // so an old generation's settlement can only release its own run.
@@ -28,17 +28,12 @@ export interface RunLabel {
   session: string | null;
 }
 
-/** The causes that come from outside the run, so the only ones that can stop it while it is queued. */
-export type ExternalCancelCause = Exclude<RunCancelCause, "unresponsive">;
-export type ConnectionCancelCause = Exclude<ExternalCancelCause, "server">;
+export type ConnectionCancelCause = Exclude<RunCancelCause, "server">;
 
 type Run = QueueRow & {
-  // Why the run may not continue; the first cause sticks. "unresponsive" is latched by the watchdog,
-  // which arms only once the run executes.
+  // Why the run may not continue; the first cause sticks.
   cause: RunCancelCause | null;
   cancelListeners: Set<(cause: RunCancelCause) => void>;
-  // The watchdog's clock: null until the run executes.
-  lastTickAt: number | null;
   // The change key of what this queued run was last told.
   sentWaitKey: string | null;
 };
@@ -78,7 +73,6 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
         cancelledAt: null,
         calls: null,
         cancelListeners: new Set(),
-        lastTickAt: null,
         sentWaitKey: null,
       });
       onQueueChange();
@@ -92,29 +86,19 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
       run.frontAt = Date.now();
       onQueueChange();
     },
-    /** The run executes from here: a CANCEL is answered "was-running", and its watchdog arms. */
+    /** The run executes from here: a CANCEL is answered "was-running". */
     markRunning(ref: RunRef): void {
       const run = runOf(ref);
       if (!run) return;
       run.phase = "running";
-      run.lastTickAt = Date.now();
       if (run.kind === "code") run.calls = { pending: new Map(), settled: 0 };
     },
     isIdle: (): boolean => runs.size === 0,
-    /**
-     * `connKey`'s server asked for status: tick the watchdog of the running run on that link and name
-     * it, or null with none. The gap is checked before the clock moves, so the first request handled
-     * after a long block latches the run rather than reviving it.
-     */
-    heartbeat(connKey: number): RunRef | null {
+    /** The run executing on `connKey`'s link, or null with none. */
+    runningOn(connKey: number): RunRef | null {
       // The write chain runs one at a time, so at most one row is running.
-      for (const run of runs.values()) {
-        if (run.lastTickAt === null || run.connKey !== connKey) continue;
-        const now = Date.now();
-        if (inactivityExpired(now, run.lastTickAt)) cancel(run, "unresponsive");
-        run.lastTickAt = now;
-        return { id: run.id, connKey: run.connKey };
-      }
+      for (const run of runs.values())
+        if (run.phase === "running" && run.connKey === connKey) return { id: run.id, connKey: run.connKey };
       return null;
     },
     /** A call the run's status names while pending. An unknown name is counted, never named. */
@@ -164,24 +148,13 @@ export function createRunRegistry({ onQueueChange }: { onQueueChange: () => void
       onQueueChange();
       return blocker ? { outcome: "withdrawn", blocker } : { outcome: "withdrawn" };
     },
-    /**
-     * May this run continue? Why not, or null. Past the inactivity deadline since its last heartbeat
-     * tick it latches "unresponsive": a blocking call's continuation can run before the overdue tick.
-     */
+    /** May this run continue? Why not, or null. */
     cancellation(ref: RunRef): RunCancelCause | null {
-      const run = runOf(ref);
-      if (!run) return null;
-      if (run.lastTickAt !== null && inactivityExpired(Date.now(), run.lastTickAt)) cancel(run, "unresponsive");
-      return run.cause;
-    },
-    /** Why a run still queued was cancelled, or null: only a cause from outside reaches one. */
-    queuedCancellation(ref: RunRef): ExternalCancelCause | null {
-      const cause = runOf(ref)?.cause ?? null;
-      return cause === "unresponsive" ? null : cause;
+      return runOf(ref)?.cause ?? null;
     },
     /**
-     * Hear the run's cancellation, as the CANCEL message is handled or the watchdog latches — the one
-     * thing that still happens when Figma stalls a call the run awaits. Returns the unsubscribe.
+     * Hear the run's cancellation as its CANCEL, disconnect or revocation is handled — the one thing
+     * that still happens when Figma stalls a call the run awaits. Returns the unsubscribe.
      */
     onCancelled(ref: RunRef, listener: (cause: RunCancelCause) => void): () => void {
       const run = runOf(ref);

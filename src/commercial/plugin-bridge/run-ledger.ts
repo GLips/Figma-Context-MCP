@@ -8,7 +8,6 @@ import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import type { RelayConnection } from "./relay-connection.js";
 import type { RequestTrace } from "./request-trace.js";
 import {
-  RUN_INACTIVITY_DEADLINE_MS,
   RUN_REQUEST_TYPES,
   RUN_STATUS_INTERVAL_MS,
   parseReply,
@@ -81,10 +80,15 @@ export interface RunWaiting {
  * abandoned run) stays with the caller that owns the budget.
  */
 export interface RunWatch {
-  /** Stop waiting this long after submission, cancelling the run. Omitted: no limit but inactivity. */
+  /** Stop waiting this long after submission, cancelling the run. Omitted: no limit. */
   budgetMs?: number;
   /** Each RUN_STATUS while the run is queued, on arrival; never after it starts running. */
   onWaiting?: (waiting: RunWaiting) => void;
+  /**
+   * Each heartbeat the plugin left unanswered, with how long the run's status has been quiet. Quiet
+   * means Figma's main thread is held, so it is news for a person watching, never a reason to stop.
+   */
+  onQuiet?: (quietForMs: number) => void;
 }
 
 type RequestPhase = "submitted" | RunPhase;
@@ -103,12 +107,10 @@ export class BridgeRequestError extends Error {
   }
 }
 
-// The per-request INACTIVITY deadline, not a hard cap: every fresh RUN_STATUS re-arms it, and the
-// plugin answers each RUN_STATUS_REQUEST (sent every RUN_STATUS_INTERVAL_MS) with one at once while
-// its thread is free, so a run dies here only when the plugin's thread has been held for this long.
-// The plugin latches the same deadline between the requests it handles, refusing the run's next
-// verb or figma.* access.
-export const DEFAULT_TIMEOUT_MS = RUN_INACTIVITY_DEADLINE_MS;
+// How long a request that is no run (a handshake, a grant poll) waits for its answer. The plugin
+// answers these from state it holds, so only a thread held by a run's large export or render spends
+// this. A run has no such deadline: its silence means Figma is busy, and a gone plugin closes its socket.
+export const NON_RUN_REQUEST_TIMEOUT_MS = 15_000;
 
 // How long the caller's rejection waits for the plugin's CANCEL_RESULT, and a withdrawal for its
 // WITHDRAW_RESULT, before reading the answer as unknown. The plugin answers from state it already
@@ -118,17 +120,6 @@ const PLUGIN_ANSWER_MS = 1_000;
 // Only runs can have their cancellation answered. Everything else (handshake, grant polling)
 // never reaches the document, so its cancellation rejects on the spot.
 const RUN_REQUESTS = new Set<ServerRequestType>(RUN_REQUEST_TYPES);
-
-/**
- * When a status stamped `at` was true, from the server's clock. The frame leaves the plugin only once
- * its thread goes idle, so it can arrive seconds late; counting from arrival would let a run that held
- * the thread outlive the deadline the plugin counts from its own timer. Comparing the two clocks is
- * sound because the relay listens on loopback only. Clamped, so a skewed stamp can neither land in
- * the future nor spend more than the whole deadline.
- */
-function stampedAt(at: number, timeoutMs: number, now: number): number {
-  return now - Math.min(Math.max(now - at, 0), timeoutMs);
-}
 
 /** One request in flight: correlated by id, owned by the connection it went out on. */
 export interface LedgerEntry {
@@ -147,18 +138,20 @@ export interface LedgerEntry {
    * reads it: a run awaiting a server call has a free thread, so its heartbeat keeps coming.
    */
   services: number;
-  /** When the inactivity deadline fires, and its timer. */
-  deadlineAt: number;
-  timer: ReturnType<typeof setTimeout> | null;
+  /** When the last RUN_STATUS for the run arrived, or when it was submitted. */
+  lastHeardAt: number;
+  /** A request that is no run: when its wait for an answer ends. */
+  readonly answerTimer: ReturnType<typeof setTimeout> | null;
   readonly budgetTimer: ReturnType<typeof setTimeout> | null;
   readonly onWaiting: RunWatch["onWaiting"];
+  readonly onQuiet: RunWatch["onQuiet"];
   readonly cleanup: () => void;
   readonly resolve: (value: PluginReply) => void;
   readonly reject: (err: Error) => void;
 }
 
 export interface RunLedgerOptions {
-  requestTimeoutMs: number;
+  nonRunRequestTimeoutMs: number;
   trace: RequestTrace;
   /** How long the plugin has been gone, for the wording of a non-run request its drop cut short. */
   disconnectedDurationMs(): number | null;
@@ -173,9 +166,10 @@ interface AwaitedAnswer<T> {
 /**
  * Every server→plugin request in flight, and the clocks that bound it. `submit` sends a request under
  * the id its caller chose — a run's execution id, or a fresh correlation id — and resolves when a
- * reply carrying that same id arrives; replies without a matching entry are dropped. A deadline never
- * silently abandons a request: it sends the id-less CANCEL and words the caller's rejection from the
- * plugin's CANCEL_RESULT (see cancel()).
+ * reply carrying that same id arrives; replies without a matching entry are dropped. A run ends only
+ * at its reply, its caller's budget or signal, or its link closing; a budget never silently abandons
+ * it: it sends the id-less CANCEL and words the caller's rejection from the plugin's CANCEL_RESULT
+ * (see cancel()).
  */
 export class RunLedger {
   private readonly entries = new Map<string, LedgerEntry>();
@@ -224,12 +218,15 @@ export class RunLedger {
       runContext = NO_RUN_CONTEXT,
       budgetMs,
       onWaiting,
+      onQuiet,
     }: LedgerSubmitOptions = {},
   ): Promise<PluginReply> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     return new Promise((resolve, reject) => {
       const cancel = () => this.cancel(id, "caller");
       signal?.addEventListener("abort", cancel, { once: true });
+      const run = RUN_REQUESTS.has(payload.type);
+      const { nonRunRequestTimeoutMs } = this.options;
       const entry: LedgerEntry = {
         id,
         connection,
@@ -240,20 +237,25 @@ export class RunLedger {
         status: null,
         startedAt: Date.now(),
         services: 0,
-        deadlineAt: 0,
-        timer: null,
+        lastHeardAt: Date.now(),
+        answerTimer: run
+          ? null
+          : setTimeout(
+              () => this.timeout(id, "unanswered", nonRunRequestTimeoutMs),
+              nonRunRequestTimeoutMs,
+            ),
         budgetTimer:
           budgetMs === undefined
             ? null
             : setTimeout(() => this.timeout(id, "budget", budgetMs), budgetMs),
         onWaiting,
+        onQuiet,
         cleanup: () => signal?.removeEventListener("abort", cancel),
         resolve,
         reject,
       };
       this.entries.set(id, entry);
-      this.armInactivityDeadline(entry, entry.startedAt + this.options.requestTimeoutMs);
-      if (RUN_REQUESTS.has(payload.type)) {
+      if (run) {
         this.trace.start(id, connection);
         this.requestStatusWhileRunsOn(connection);
       }
@@ -300,8 +302,8 @@ export class RunLedger {
   }
 
   /**
-   * The plugin's latest word about a run on the connection that owns it: the sign of life that
-   * re-arms its deadline, from the status's own stamp, and what a queued run's caller is shown.
+   * The plugin's latest word about a run on the connection that owns it: what a queued run's caller
+   * is shown, and the end of any quiet spell.
    */
   runStatus(connection: RelayConnection, status: RunStatus): void {
     const entry = this.entries.get(status.executionId);
@@ -315,11 +317,7 @@ export class RunLedger {
       );
     entry.status = status;
     entry.phase = status.phase;
-    const now = Date.now();
-    this.armInactivityDeadline(
-      entry,
-      stampedAt(status.at, this.options.requestTimeoutMs, now) + this.options.requestTimeoutMs,
-    );
+    entry.lastHeardAt = Date.now();
     if (status.phase === "queued")
       entry.onWaiting?.({ wait: status.wait, withdraw: () => this.withdraw(entry) });
   }
@@ -417,7 +415,7 @@ export class RunLedger {
     const entry = this.entries.get(id);
     if (!entry) return undefined;
     entry.cleanup();
-    clearTimeout(entry.timer ?? undefined);
+    clearTimeout(entry.answerTimer ?? undefined);
     clearTimeout(entry.budgetTimer ?? undefined);
     this.entries.delete(id);
     entry.servicesAbort.abort();
@@ -434,33 +432,28 @@ export class RunLedger {
     return false;
   }
 
-  /** Ask `connection` for its runs' statuses each interval, until it has none (take() stops it). */
+  /**
+   * Ask `connection` for its runs' statuses each interval, until it has none (take() stops it). A run
+   * whose status missed the last request hears how long it has been quiet.
+   */
   private requestStatusWhileRunsOn(connection: RelayConnection): void {
     if (this.statusRequests.has(connection)) return;
     this.statusRequests.set(
       connection,
       setInterval(() => {
-        if (connection.isOpen)
-          connection.send({ type: "RUN_STATUS_REQUEST" } satisfies ServerFrame);
+        if (!connection.isOpen) return;
+        const now = Date.now();
+        for (const entry of this.entries.values()) {
+          const quietForMs = now - entry.lastHeardAt;
+          if (entry.connection === connection && quietForMs > RUN_STATUS_INTERVAL_MS)
+            entry.onQuiet?.(quietForMs);
+        }
+        connection.send({ type: "RUN_STATUS_REQUEST" } satisfies ServerFrame);
       }, RUN_STATUS_INTERVAL_MS),
     );
   }
 
-  /**
-   * Move an entry's inactivity deadline to `deadlineAt`, never earlier: a status that arrives after a
-   * fresher one, or stamped long before it arrived, must not cut the run's time short either.
-   */
-  private armInactivityDeadline(entry: LedgerEntry, deadlineAt: number): void {
-    if (entry.timer !== null && deadlineAt <= entry.deadlineAt) return;
-    clearTimeout(entry.timer ?? undefined);
-    entry.deadlineAt = deadlineAt;
-    entry.timer = setTimeout(
-      () => this.timeout(entry.id, "inactivity", this.options.requestTimeoutMs),
-      Math.max(deadlineAt - Date.now(), 0),
-    );
-  }
-
-  private timeout(id: string, cause: "inactivity" | "budget", limitMs: number): void {
+  private timeout(id: string, cause: "unanswered" | "budget", limitMs: number): void {
     const entry = this.entries.get(id);
     if (entry) this.trace.record(id, entry.connection, `timeout-${cause}`);
     this.cancel(id, cause, limitMs);
@@ -478,7 +471,7 @@ export class RunLedger {
    * What is held for one round trip is only the WORDING: "never executed; retry as-is" and "was
    * executing; inspect the canvas" are different instructions to the agent reading them.
    */
-  /** `limitMs` is the deadline or budget that ran out; a caller's cancel has none. */
+  /** `limitMs` is the answer deadline or budget that ran out; a caller's cancel has none. */
   private cancel(id: string, cause: RunStopCause, limitMs = 0): void {
     const entry = this.take(id);
     if (!entry) return;

@@ -47,7 +47,7 @@ describe("link-owned execution", () => {
   });
   it("hedges only when nothing answers the cancellation", async () => {
     vi.useFakeTimers();
-    const bridge = create({ requestTimeoutMs: 100 });
+    const bridge = create();
     const socket = await connectFakePlugin(bridge);
     const call = bridge
       .submitRun(
@@ -61,11 +61,12 @@ describe("link-owned execution", () => {
           preamble: "x",
         },
         mintExecutionId(),
+        { budgetMs: 100 },
       )
       .catch((e: unknown) => e);
     await Promise.resolve();
     const id = socket.frames[0].id as string;
-    // Submitted, never acknowledged: the inactivity deadline still covers a plugin that says nothing.
+    // Submitted, never acknowledged: the budget is what ends the wait on a plugin that says nothing.
     await vi.advanceTimersByTimeAsync(100);
     expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: id });
     // Nothing answers the cancellation — the one case where "unconfirmed" is the true word.
@@ -74,7 +75,7 @@ describe("link-owned execution", () => {
     expect(error).toBeInstanceOf(BridgeRequestError);
     expect(error).toMatchObject({ outcome: "unconfirmed" });
     expect(String(error)).toContain(
-      "No plugin status for 100ms. Cancellation requested; the run may still be executing. The plugin sent no status for this run.",
+      "The call's budget of 100ms ran out. Cancellation requested; the run may still be executing. The plugin sent no status for this run.",
     );
   });
   it("rejects a run its budget cut off while queued as never executed, naming what it waited behind", async () => {

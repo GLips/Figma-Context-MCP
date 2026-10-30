@@ -70,7 +70,7 @@ let contractDocument = null;
 
 // The real plugin evals what it is sent, so it gets the real std-lib (ADR-0010).
 const PREAMBLE = await buildSandboxPreamble();
-const execute = (bridge, link, fields = {}) =>
+const execute = (bridge, link, fields = {}, watch = {}) =>
   bridge.submitRun(
     link,
     {
@@ -84,6 +84,7 @@ const execute = (bridge, link, fields = {}) =>
       ...fields,
     },
     mintExecutionId(),
+    watch,
   );
 const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
@@ -500,7 +501,7 @@ await wait(150);
 // never challenged, offered a code, or sent code.
 const RACE_PORT = 19888;
 const raceUrl = `ws://127.0.0.1:${RACE_PORT}`;
-const raceBridge = bridgeOn(RACE_PORT, { requestTimeoutMs: 500 });
+const raceBridge = bridgeOn(RACE_PORT, { nonRunRequestTimeoutMs: 500 });
 await wait(150);
 const stale = rawPeer(raceUrl, {
   protocolVersion: PROTOCOL_VERSION - 1,
@@ -596,11 +597,11 @@ console.log(
   `✅ manifest devAllowedDomains mirrors WS_PORT_BLOCK exactly (${WS_PORT_BLOCK.length} ports)`,
 );
 
-// --- Deadlines: cancel, never abandon; the cancel is ANSWERED ---
-// A run that stalls is CANCELLED with a run-scoped, id-less CANCEL, and the caller's rejection is
-// worded from the plugin's answer — "never executed; retry" and "inspect the canvas" differ.
+// --- Budgets: cancel, never abandon; the cancel is ANSWERED ---
+// A run its caller's budget cuts off is CANCELLED with a run-scoped, id-less CANCEL, and the caller's
+// rejection is worded from the plugin's answer — "never executed; retry" and "inspect the canvas" differ.
 const PORT_T = 19895;
-const bridgeT = bridgeOn(PORT_T, { requestTimeoutMs: 400 });
+const bridgeT = bridgeOn(PORT_T);
 await wait(150);
 const framesT = [];
 let disposition = "never-executed";
@@ -616,12 +617,11 @@ const silent = rawPeer(`ws://127.0.0.1:${PORT_T}`, {
 });
 const silentLink = await linkOf(bridgeT);
 const tStall = Date.now();
-const timeoutErr = await execute(bridgeT, silentLink, { code: "stall forever" }).catch((e) => e);
-assert.ok(
-  /No plugin status/.test(timeoutErr.message),
-  "a stalled run rejects with the inactivity message",
+const timeoutErr = await execute(bridgeT, silentLink, { code: "stall forever" }, { budgetMs: 400 }).catch(
+  (e) => e,
 );
-assert.ok(Date.now() - tStall < 2000, "the injected short deadline fired, not the 15s default");
+assert.ok(/budget of 400ms ran out/.test(timeoutErr.message), "a stalled run rejects naming its budget");
+assert.ok(Date.now() - tStall < 2000, "the budget fired");
 assert.ok(/did not run/.test(timeoutErr.message), "worded from the plugin's cancel answer");
 assert.equal(timeoutErr.outcome, "not-submitted", "a run that never executed is safe to retry");
 await wait(50);
@@ -630,7 +630,7 @@ const stalled = framesT.find((f) => f.type === "EXECUTE_CODE");
 assert.equal(cancelFrame?.executionId, stalled.id, "the CANCEL is scoped to the stalled run");
 assert.equal(cancelFrame.id, undefined, "CANCEL is id-less — a notification, never a request");
 console.log(
-  "✅ A stalled run is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's answer",
+  "✅ A run past its budget is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's answer",
 );
 
 silent.close();
@@ -639,13 +639,11 @@ await wait(150);
 
 // --- The reverse channel: a mid-run image fetch ---
 // The plugin's CHANNEL_REQUEST (its own id namespace, tagged with the run) is answered by a typed
-// CHANNEL_RESPONSE; a run awaiting it keeps heartbeating, as the plugin's free thread does, so a
-// fetch longer than the deadline still completes; a request for a run the server no longer tracks is
-// refused. Driven by a raw socket speaking the plugin's half on a timetable.
+// CHANNEL_RESPONSE, and the run awaiting it completes in ONE run; a request for a run the server no
+// longer tracks is refused. Driven by a raw socket speaking the plugin's half on a timetable.
 const PORT_I = 19896;
 const servedBatches = [];
 const bridgeI = bridgeOn(PORT_I, {
-  requestTimeoutMs: 500,
   capabilities: new Map([
     [
       "images.fetch",
@@ -653,7 +651,7 @@ const bridgeI = bridgeOn(PORT_I, {
         servedBatches.push(urls);
         if (urls.includes("boom"))
           throw new Error('flcm.image could not load "boom": blocked range');
-        await wait(700); // longer than the whole deadline: the run's heartbeat carries it through
+        await wait(700);
         return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
       },
     ],
@@ -722,10 +720,7 @@ const imgRun = await execute(bridgeI, imgLink, { code: "render with images" });
 assert.deepEqual(imgRun.result, { u1: "b64-u1", u2: "b64-u2" }, "the run completed with the bytes");
 assert.equal(imagesReply.id, "preq-1", "the reply carries the PLUGIN-issued id");
 assert.deepEqual(servedBatches[0], ["u1", "u1", "u2"], "the handler received the raw batch");
-// ~900ms of wall clock against a 500ms deadline: the heartbeat through the fetch is what lets it succeed.
-console.log(
-  "✅ Mid-run image fetch round-trips in ONE run, the run heartbeating through it",
-);
+console.log("✅ Mid-run image fetch round-trips in ONE run");
 
 const boomRun = await execute(bridgeI, imgLink, { code: "boom run" });
 assert.match(String(boomRun.errors), /could not load "boom"/, "a fetch failure reaches the run");
@@ -754,7 +749,6 @@ await wait(150);
 // --- Reverse-channel guards: only a code run can be drawn on ---
 const PORT_C = 19897;
 const bridgeC = bridgeOn(PORT_C, {
-  requestTimeoutMs: 500,
   capabilities: new Map([
     [
       "images.fetch",
@@ -801,22 +795,19 @@ pluginC.send(JSON.stringify({ type: "GRANT", id: infoId, state: "absent" }));
 assert.equal(await statusP, "absent", "the refusal left the pending intact");
 console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse channel");
 
-// Two overlapping services for ONE run, the slow (1200ms) one outlasting the 500ms deadline: the run
-// awaiting them leaves the plugin's thread free, and its RUN_STATUS heartbeat is what keeps it alive.
+// Two overlapping services for ONE run, the slow (1200ms) one replying long after the fast one.
 const runP = execute(bridgeC, linkC, { code: "two fetches" }).catch((e) => e);
 await wait(50);
 const executionIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
-const heartbeat = setInterval(() => pluginC.send(runningStatus(executionIdC)), 200);
 imageRequest("preq-f", executionIdC, ["fast"]);
 await wait(20);
 imageRequest("preq-s", executionIdC, ["slow"]);
 await wait(1400);
-clearInterval(heartbeat);
 const served = (id) => framesC.some((f) => f.type === "CHANNEL_RESPONSE" && f.ok && f.id === id);
 assert.ok(served("preq-f") && served("preq-s"), "both services replied");
 assert.ok(
   !framesC.some((f) => f.type === "CANCEL"),
-  "no CANCEL fired while the run heartbeat through its services",
+  "no CANCEL fired while the run awaited its services",
 );
 pluginC.send(
   JSON.stringify({
@@ -829,7 +820,7 @@ pluginC.send(
   }),
 );
 assert.equal((await runP).result, "built", "the run finished after both services settled");
-console.log("✅ A run heartbeating through concurrent services outlives its deadline");
+console.log("✅ A run awaiting concurrent services gets both replies");
 pluginC.close();
 bridgeC.stop();
 bridge.stop();

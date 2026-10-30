@@ -16,15 +16,18 @@ import {
 } from "@framelink/plugin/protocol";
 import { figmaPausedReason } from "./figma-paused.js";
 
-/** Why the server gave up on a request: the plugin's silence, the caller's budget, or the caller itself. */
-export type RunStopCause = "inactivity" | "budget" | "caller";
+/**
+ * Why the server gave up on a request: no answer to a request that is no run, the caller's budget,
+ * or the caller itself. A run's silence is never one: it means Figma is busy.
+ */
+export type RunStopCause = "unanswered" | "budget" | "caller";
 
 export const NO_CANCEL_ANSWER: CancelAnswer = { disposition: "unknown" };
 
 export interface StoppedRunFacts {
   payloadType: ServerRequestType;
   cause: RunStopCause;
-  /** The inactivity deadline or the budget, whichever `cause` names. */
+  /** The answer deadline or the budget, whichever `cause` names. */
   limitMs: number;
   answer: CancelAnswer;
   /** The plugin's latest RUN_STATUS for the run; null when it sent none. */
@@ -49,7 +52,7 @@ export function stoppedRunText({
 }: StoppedRunFacts): { message: string; outcome: "not-submitted" | "unconfirmed" } {
   if (!RUN_REQUESTS.has(payloadType)) {
     const lead =
-      cause === "inactivity"
+      cause === "unanswered"
         ? `The Figma plugin did not answer ${payloadType} within ${spelled(limitMs)}.`
         : cause === "budget"
           ? `The call's budget of ${spelled(limitMs)} ran out before the Figma plugin answered ${payloadType}.`
@@ -58,12 +61,10 @@ export function stoppedRunText({
   }
   const screenshot = payloadType === "SCREENSHOT";
   const lead =
-    (cause === "inactivity"
-      ? `No plugin status for ${spelled(limitMs)}.`
-      : cause === "budget"
-        ? `The call's budget of ${spelled(limitMs)} ran out.`
-        : "The call was cancelled.") +
-    // A paused plugin is the reason the run went quiet, so it comes before what became of the run.
+    (cause === "budget"
+      ? `The call's budget of ${spelled(limitMs)} ran out.`
+      : "The call was cancelled.") +
+    // A paused plugin is why the run made no progress, so it comes before what became of the run.
     (figmaPausedMs === undefined ? "" : ` ${figmaPausedReason(figmaPausedMs, "this file")}`);
   if (disposition === "never-executed")
     return {

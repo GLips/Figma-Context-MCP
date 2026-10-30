@@ -33,7 +33,7 @@ import { MAX_CHANNEL_BYTES, RelayListener } from "./relay-listener.js";
 import { RequestTrace } from "./request-trace.js";
 import {
   BridgeRequestError,
-  DEFAULT_TIMEOUT_MS,
+  NON_RUN_REQUEST_TIMEOUT_MS,
   type LedgerSubmitOptions,
   RunLedger,
 } from "./run-ledger.js";
@@ -176,7 +176,7 @@ export class PluginBridge {
     linkCredentials = new LinkCredentialStore(),
     project = canonicalProjectPath(),
     framelinkOrigin = new URL(DEFAULT_FRAMELINK_API_URL).origin,
-    requestTimeoutMs = DEFAULT_TIMEOUT_MS,
+    nonRunRequestTimeoutMs = NON_RUN_REQUEST_TIMEOUT_MS,
     unauthenticatedLinkMs = UNAUTHENTICATED_LINK_MS,
     linkupGraceMs = PLUGIN_LINKUP_GRACE_MS,
     capabilities = new Map(),
@@ -186,7 +186,7 @@ export class PluginBridge {
     linkCredentials?: LinkCredentialStore;
     project?: string;
     framelinkOrigin?: string;
-    requestTimeoutMs?: number;
+    nonRunRequestTimeoutMs?: number;
     unauthenticatedLinkMs?: number;
     linkupGraceMs?: number;
     capabilities?: ReadonlyMap<string, CapabilityHandler>;
@@ -196,7 +196,7 @@ export class PluginBridge {
     this.events = events;
     this.linkup = new PluginLinkup(linkupGraceMs);
     this.ledger = new RunLedger({
-      requestTimeoutMs,
+      nonRunRequestTimeoutMs,
       trace,
       disconnectedDurationMs: () => this.disconnectedDurationMs(),
     });

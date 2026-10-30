@@ -30,7 +30,6 @@ const serviceAborted = new Promise<void>((resolve) => {
   aborted = resolve;
 });
 const bridge = new PluginBridge({
-  requestTimeoutMs: 30_000,
   capabilities: new Map([
     [
       "test.wait",

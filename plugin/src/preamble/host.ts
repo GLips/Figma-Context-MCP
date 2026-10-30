@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { FLCM_ERROR_KINDS, RUN_INACTIVITY_DEADLINE_MS, type CallOperation, type FlcmErrorKind } from "../protocol.js";
+import { FLCM_ERROR_KINDS, type CallOperation, type FlcmErrorKind } from "../protocol.js";
 import { FlcmError, describeFailure } from "./flcm-error.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
@@ -23,14 +23,14 @@ import { FlcmError, describeFailure } from "./flcm-error.js";
 // other end is the factory wrapper index.mjs writes around this bundle, which refuses to emit one
 // that doesn't reference the name. Rename it here alone and the generator throws.
 // Execution services are required. Call reporting only feeds the run's status: it never changes a
-// call's result and never counts as a sign of life, which only the server's handled heartbeat request is.
+// call's result.
 
 /**
- * Why a run may not continue, which the refusal words for the agent: the server gave up on it, its
- * server disconnected, the human revoked its project's grant on the file, or its thread handled no
- * server heartbeat for RUN_INACTIVITY_DEADLINE_MS (so it could not have heard a CANCEL either).
+ * Why a run may not continue, which the refusal words for the agent: the server cancelled it, its
+ * server disconnected, or the human revoked its project's grant on the file. Cancellation is
+ * cooperative: the run hears it only once Figma's thread is free to handle the message.
  */
-export type RunCancelCause = "server" | "disconnected" | "revoked" | "unresponsive";
+export type RunCancelCause = "server" | "disconnected" | "revoked";
 
 /** The host's handle on one reported call: opaque, and meaningful only to the run that issued it. */
 export type CallToken = number;
@@ -54,16 +54,12 @@ export interface FlcmHost {
    * goes through serverCall below, so a finished runtime is refused before it asks.
    */
   callServer(capability: string, payload: unknown): Promise<unknown>;
-  /**
-   * May this run continue? Why not, or null. A CHECK, not a getter: past the inactivity deadline
-   * since the host last handled its server's heartbeat, it latches "unresponsive" for good, so a late tick after a
-   * long block never revives the run. Asked before every verb and every figma.* access.
-   */
+  /** May this run continue? Why not, or null. Asked before every verb and every figma.* access. */
   runCancellation(): RunCancelCause | null;
   /**
    * Call `listener` once when this run is cancelled (at once if it already is); the returned function
    * unsubscribes. A Figma call can stall with the plugin's timers stalled too, so this, driven by the
-   * CANCEL message (or the heartbeat request that latches the watchdog), is the only thing that can end the wait (untilCancelled).
+   * CANCEL message, is the only thing that can end the wait (untilCancelled).
    */
   onCancelled(listener: (cause: RunCancelCause) => void): () => void;
   /**
@@ -234,14 +230,11 @@ export function untilCancelled<T>(operation: `figma.${string}`, call: PromiseLik
   });
 }
 
-// The server doesn't say why it cancelled: its caller's time budget ran out, the caller gave up, or
-// it heard no status from the plugin for the inactivity deadline.
+// The server doesn't say why it cancelled: its caller's time budget ran out, or the caller gave up.
 export const CANCELLED_BECAUSE: Record<RunCancelCause, string> = {
   server: "the server cancelled this run",
   disconnected: "this run's server disconnected, so the run was cancelled",
   revoked: "the human revoked this project's grant on the file in Figma, so the run was cancelled",
-  unresponsive:
-    "the plugin handled no heartbeat from this run's server for " + RUN_INACTIVITY_DEADLINE_MS / 1000 + "s during this run",
 };
 
 /**

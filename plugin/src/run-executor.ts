@@ -11,13 +11,13 @@ import type { AgentSession, AgentSessions } from "./agent-sessions.js";
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 import { resolveWireSnapshot, serializeForWire, snapshotForWire, type IsFigmaNode, type WireSnapshot } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
-import { createRunRegistry, type ConnectionCancelCause, type ExternalCancelCause, type RunLabel, type RunRef } from "./run-registry.js";
+import { createRunRegistry, type ConnectionCancelCause, type RunLabel, type RunRef } from "./run-registry.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
 import { createServerCallTable } from "./server-calls.js";
 import type { FigmaPauseWatch } from "./figma-pause.js";
 import { reply, toServer, type ReplyTo } from "./outbound.js";
 import type { ConnKey } from "./panel.js";
-import { RUN_INACTIVITY_DEADLINE_MS, type NotGrantedReason, type ServerFrame } from "./protocol.js";
+import type { NotGrantedReason, ServerFrame } from "./protocol.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
@@ -28,7 +28,7 @@ import type * as SandboxRuntime from "./preamble/sandbox.js";
 import { FlcmError, formatFailureForAgent, wrapAgentCode } from "./preamble/flcm-error.js";
 
 // What a run cancelled before it started tells its (late) reply, by cause.
-const CANCELLED_WHILE_QUEUED: Record<ExternalCancelCause, string> = {
+const CANCELLED_WHILE_QUEUED: Record<RunCancelCause, string> = {
   server: "this run was cancelled by the server while it was still queued",
   disconnected: "this run's server disconnected while the run was still queued",
   revoked: "the human revoked this project's grant on the file while the run was still queued",
@@ -40,7 +40,6 @@ const RUN_CANCELLED_BY: Record<RunCancelCause, string> = {
   server: "the server cancelled this run",
   disconnected: "this run's server disconnected",
   revoked: "the human revoked this project's grant on the file",
-  unresponsive: `the plugin handled no heartbeat from this run's server for ${RUN_INACTIVITY_DEADLINE_MS / 1000}s during this run and stopped it`,
 };
 // Microtask hops before the run's own cancel rejection lands. A turn of the timer queue would be
 // simpler, but Figma can stall timers while it still delivers the CANCEL.
@@ -156,7 +155,7 @@ export function createRunExecutor({
       refuseQueued(WITHDRAWN_WHILE_QUEUED);
       return false;
     }
-    const cancelled = runs.queuedCancellation(to);
+    const cancelled = runs.cancellation(to);
     if (cancelled) {
       runs.settle(to);
       activity.advance(to.id, "cancelled");
@@ -428,12 +427,11 @@ export function createRunExecutor({
     idle: (): Promise<void> => writeChain,
 
     /**
-     * The server's heartbeat: every run tracked on its link says where it stands, since the server
-     * stops waiting on any run it hears nothing about. Answered synchronously, so only a held thread
-     * delays it; each request is also the watchdog's tick for the link's running run.
+     * The server's heartbeat: every run tracked on its link says where it stands. Answered
+     * synchronously, so only a held thread delays it, and the server reads that gap as Figma busy.
      */
     statusRequested(connKey: ConnKey): void {
-      const running = runs.heartbeat(connKey);
+      const running = runs.runningOn(connKey);
       if (running) sendRunning(running);
       publishQueue(connKey);
     },

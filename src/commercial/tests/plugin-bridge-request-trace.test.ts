@@ -14,9 +14,9 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-async function connectedBridge(timeout = 100) {
+async function connectedBridge() {
   const trace = new RequestTrace(() => {});
-  const bridge = new PluginBridge({ requestTimeoutMs: timeout, trace });
+  const bridge = new PluginBridge({ trace });
   // Another authenticated link: wired to the bridge, but not the one the runs go out on.
   const stranger = await connectFakePlugin(bridge);
   const socket = await connectFakePlugin(bridge);
@@ -48,6 +48,7 @@ test("statuses are logged as counts only, and a late result is diagnostic only",
         preamble: "private preamble",
       },
       mintExecutionId(),
+      { budgetMs: 100 },
     )
     .catch((error) => error);
   const id = sent[0].id!;
@@ -56,14 +57,14 @@ test("statuses are logged as counts only, and a late result is diagnostic only",
   receive({ type: "CANCEL_RESULT", executionId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toContain("No plugin status for 100ms");
+  expect((error as Error).message).toContain("The call's budget of 100ms ran out");
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
   await connectFakePlugin(bridge);
   receive({ id, result: { private: "response content" } }, socket);
   expect(trace.snapshot(id).map((event) => event.stage)).toEqual([
     "submitted",
     "status",
-    "timeout-inactivity",
+    "timeout-budget",
     "late-reply",
   ]);
   expect(trace.snapshot(id)[1]).toMatchObject({
@@ -74,7 +75,7 @@ test("statuses are logged as counts only, and a late result is diagnostic only",
   expect(JSON.stringify(trace.snapshot(id))).not.toMatch(/secret|private|response content/);
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
 });
-test("another link's status for a run neither re-arms its deadline nor enters its trace", async () => {
+test("another link's status for a run never enters its trace", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
   const { bridge, link, trace, sent, stranger, receive } = await connectedBridge();
@@ -90,6 +91,7 @@ test("another link's status for a run neither re-arms its deadline nor enters it
         preamble: "",
       },
       mintExecutionId(),
+      { budgetMs: 100 },
     )
     .catch((error) => error);
   const id = sent[0].id!;
@@ -100,7 +102,7 @@ test("another link's status for a run neither re-arms its deadline nor enters it
   expect(await result).toBeInstanceOf(Error);
   const events = trace.snapshot(id);
   expect(events.some((event) => event.stage === "status")).toBe(false);
-  expect(events.at(-1)?.stage).toBe("timeout-inactivity");
+  expect(events.at(-1)?.stage).toBe("timeout-budget");
 });
 test("trace is bounded, stage-only, expires terminal entries, and keeps timeout context after noise", () => {
   let now = 0;
@@ -119,12 +121,12 @@ test("trace is bounded, stage-only, expires terminal entries, and keeps timeout 
       phase: "queued",
       wait: { ahead: 1 },
     });
-  trace.record("run", owner, "timeout-inactivity");
+  trace.record("run", owner, "timeout-budget");
   trace.record("run", owner, "late-reply");
   trace.record("run", owner, "late-reply");
   expect(emitted).toHaveLength(34);
   expect(trace.snapshot("run")).toHaveLength(32);
-  expect(emitted.at(-2)).toMatchObject({ stage: "timeout-inactivity", phase: "queued", ahead: 1 });
+  expect(emitted.at(-2)).toMatchObject({ stage: "timeout-budget", phase: "queued", ahead: 1 });
   now = 60_000;
   expect(trace.snapshot("run")).toEqual([]);
   for (let i = 0; i < 129; i++) trace.start(String(i), owner);

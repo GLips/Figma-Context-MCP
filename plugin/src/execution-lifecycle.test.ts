@@ -1006,40 +1006,24 @@ test("a raw run the server gave up on ends at once, and a run queued behind it h
   assert.match((await h.result("raw")).errors, /your code was still awaiting when the server cancelled this run/);
 });
 
-test("a synchronous figma.* loop is refused once 15s pass without a heartbeat, and the run stays refused after it ends", async () => {
+test("a run that holds Figma's thread for 20s without a heartbeat still writes and replies", async () => {
   const h = host();
   await h.connect(1);
-  let reached!: () => void;
-  const refused = new Promise<void>((resolve) => { reached = resolve; });
-  let release!: () => void;
-  const reports: unknown[] = [];
   Object.assign(h.context, {
-    hold: new Promise<void>((resolve) => { release = resolve; }),
-    report: (...said: unknown[]) => { reports.push(said); reached(); },
-    // Each call takes a second of a thread that never yields, so no heartbeat can be handled.
+    // A second of a thread that never yields, as a large export or render takes: no heartbeat is handled.
     spendSecond: () => h.advanceClock(1_000),
   });
   h.sendFrame(1, {
     type: "EXECUTE_CODE",
-    id: "loop",
+    id: "export",
     preamble: await realPreamble,
-    code: `let calls = 0;
-      try { for (;;) { figma.createRectangle(); calls++; spendSecond(); } } catch (e) { report(calls, e.message); }
-      await hold;
-      try { figma.createRectangle(); report("revived"); } catch (e) { report(e.message); }`,
+    code: `for (let i = 0; i < 20; i++) spendSecond();
+      figma.createRectangle();
+      return "done";`,
   });
-  await refused;
-  // The heartbeat handled once the thread yields must not revive the latched run.
   h.beat(1);
-  assert.match((await h.result("loop")).errors, /your code was still awaiting when the plugin handled no heartbeat from this run.s server for 15s during this run/);
-  release();
-  await h.context.hold;
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(reports.length, 2);
-  const [[calls, first], [second]] = reports as [[number, string], [string]];
-  assert.equal(calls, 15);
-  assert.match(first, /plugin handled no heartbeat from this run.s server for 15s during this run, so figma\.createRectangle and every figma\.\* access after it is refused/);
-  assert.match(second, /plugin handled no heartbeat from this run.s server for 15s/);
+  const { result, errors } = await h.result("export");
+  assert.deepEqual([result, errors], ["done", null]);
 });
 
 test("a run awaiting a Figma call that never settles keeps its heartbeat, naming the call and how long it has waited", async () => {
@@ -1056,7 +1040,7 @@ test("a run awaiting a Figma call that never settles keeps its heartbeat, naming
   await h.running("font", 1);
   // Queued now: arriving after the clock jumps would read as Figma having paused the plugin.
   h.sendFrame(1, { type: "EXECUTE_CODE", id: "behind", preamble: echoPreamble, code: "return 'ran';" });
-  // Past the inactivity deadline, in heartbeat steps: a thread that keeps yielding is never refused.
+  // Twenty seconds in heartbeat steps: the status names the pending call at every one.
   for (let beat = 0; beat < 10; beat++) {
     h.advanceClock(RUN_STATUS_INTERVAL_MS);
     h.beat(1);

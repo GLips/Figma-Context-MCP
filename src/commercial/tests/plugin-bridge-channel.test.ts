@@ -37,7 +37,6 @@ async function running(
 ) {
   const bridge = create({
     capabilities: new Map([["test.only", handler]]),
-    requestTimeoutMs: 100,
     ...options,
   });
   const socket = await connectFakePlugin(bridge);
@@ -80,7 +79,7 @@ it("refuses unknown names, including prototype names, without invoking any handl
   await h.result;
 });
 
-it("caps concurrent services, and services in flight never hold a silent run open", async () => {
+it("caps concurrent services", async () => {
   vi.useFakeTimers();
   const releases: Array<(payload: unknown) => void> = [];
   const h = await running(() => new Promise((resolve) => releases.push(resolve)));
@@ -99,15 +98,7 @@ it("caps concurrent services, and services in flight never hold a silent run ope
     ok: true,
     payload: { arbitrary: [1, true, null] },
   });
-  // A run awaiting the server leaves the plugin's thread free to heartbeat, so its silence is the
-  // plugin's, whatever the server is still doing for it.
-  await vi.advanceTimersByTimeAsync(100);
-  expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
-  h.socket.receive({
-    type: "CANCEL_RESULT",
-    executionId: h.executionId,
-    disposition: "was-running",
-  });
+  h.bridge.stop();
   expect(await h.result).toBeInstanceOf(BridgeRequestError);
 });
 
@@ -120,15 +111,12 @@ it("refuses both late requests and late service results once the run is dead", a
         release = resolve;
       }),
   );
-  const h = await running(handler);
+  const caller = new AbortController();
+  const h = await running(handler, {}, caller.signal);
   h.request("first");
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(0);
+  caller.abort();
   expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
-  h.socket.receive({
-    type: "CANCEL_RESULT",
-    executionId: h.executionId,
-    disposition: "was-running",
-  });
   await h.result;
   h.request("late");
   expect(h.socket.frames.at(-1)).toMatchObject({
@@ -146,28 +134,23 @@ it("refuses both late requests and late service results once the run is dead", a
   expect(handler).toHaveBeenCalledTimes(1);
 });
 
-it.each([false, true])(
-  "normalizes handler failures and rearms the deadline (async=%s)",
-  async (asynchronous) => {
-    vi.useFakeTimers();
-    const h = await running(() => {
-      if (asynchronous) return Promise.reject(new Error("failure"));
-      throw new Error("failure");
-    });
-    h.request("failure");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.socket.frames.at(-1)).toMatchObject({
-      type: "CHANNEL_RESPONSE",
-      id: "failure",
-      ok: false,
-      error: { code: "COMPUTATION_FAILED", message: "failure" },
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL" });
-    h.bridge.stop();
-    await h.result;
-  },
-);
+it.each([false, true])("normalizes handler failures (async=%s)", async (asynchronous) => {
+  vi.useFakeTimers();
+  const h = await running(() => {
+    if (asynchronous) return Promise.reject(new Error("failure"));
+    throw new Error("failure");
+  });
+  h.request("failure");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.socket.frames.at(-1)).toMatchObject({
+    type: "CHANNEL_RESPONSE",
+    id: "failure",
+    ok: false,
+    error: { code: "COMPUTATION_FAILED", message: "failure" },
+  });
+  h.bridge.stop();
+  await h.result;
+});
 
 // The images capability decides whose failure an image that won't load is, and says so on the wire:
 // the agent named the source, so the failure is the agent's to fix, and only the verb names itself.

@@ -294,6 +294,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       figma,
       signal: controller.signal,
       onWaiting: printingQueueMoves(),
+      onQuiet: printingQuietSpells(),
     });
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "not-granted")
@@ -316,7 +317,11 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
         runtime.bridge,
         { ...bound, executionId: mintExecutionId() },
         target,
-        { signal: controller.signal, onWaiting: printingQueueMoves() },
+        {
+          signal: controller.signal,
+          onWaiting: printingQueueMoves(),
+          onQuiet: printingQuietSpells(),
+        },
       );
       if (captured.kind === "not-granted")
         throw new Error(
@@ -338,6 +343,29 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     if (runtime.stop) runtime.stop();
     else runtime.bridge.stop();
   }
+}
+
+// A quiet spell is announced once it is long enough to notice, then again at this cadence.
+const QUIET_FIRST_ANNOUNCE_MS = 10_000;
+const QUIET_REANNOUNCE_MS = 30_000;
+
+/**
+ * The CLI waits on a run however long Figma takes, so a person watching a quiet one is told why
+ * nothing is happening and how to stop it.
+ */
+function printingQuietSpells(): RunWatch["onQuiet"] {
+  let announceAt = QUIET_FIRST_ANNOUNCE_MS;
+  let previous = 0;
+  return (quietForMs) => {
+    // Shorter than the last one: the run spoke in between, so this is a new spell.
+    if (quietForMs < previous) announceAt = QUIET_FIRST_ANNOUNCE_MS;
+    previous = quietForMs;
+    if (quietForMs < announceAt) return;
+    announceAt = quietForMs + QUIET_REANNOUNCE_MS;
+    console.error(
+      `No word from Figma for ${Math.round(quietForMs / 1000)}s; it may be busy (a large export or render). Waiting. Ctrl-C cancels.`,
+    );
+  };
 }
 
 /**

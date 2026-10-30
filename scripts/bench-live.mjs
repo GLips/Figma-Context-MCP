@@ -30,7 +30,7 @@ import { mintSessionHandle } from "../src/commercial/plugin-bridge/session-handl
 const PREAMBLE = await buildSandboxPreamble();
 const PAGE = process.env.BENCH_PAGE;
 const INSTANCES = Number(process.env.BENCH_INSTANCES ?? 200);
-// Raw createInstance is cheap, but a batch must still finish inside the server's inactivity deadline.
+// Raw createInstance is cheap; batches keep each call's timing readable.
 const INSTANCES_PER_CALL = 40;
 const FIXTURE_SECTION = "bench-fixture";
 

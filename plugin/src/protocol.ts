@@ -23,7 +23,7 @@
  * preamble (preamble/host.ts). Bump it on any change an installed plugin can't absorb; the server
  * refuses a plugin that reports any version but the one it was built with (version.ts).
  */
-export const PROTOCOL_VERSION = 23;
+export const PROTOCOL_VERSION = 24;
 
 // The changelog. Nothing has ever shipped at any version, so there is deliberately no compat path:
 // the fix for skew is always a re-import, and the refusal names it.
@@ -89,6 +89,8 @@ export const PROTOCOL_VERSION = 23;
  * v23: link-up. INTRODUCED names the reporting plugin instance and every instance this plugin's
  *     shared storage says is open, so a new server waits for exactly those before an unnamed call
  *     picks its document. The plugin redials the lowest empty port fast and the rest rarely.
+ * v24: silence ends no run. A run ends at its reply, a CANCEL, a revocation or its socket closing;
+ *     the "unresponsive" RunCancelCause is gone from FlcmHost.
  */
 
 // ---- Transport ----
@@ -109,15 +111,9 @@ export const WS_PORT_BLOCK: readonly number[] = Array.from(
 // ---- Timing both processes reason against ----
 
 /**
- * How long a run may go without a fresh RUN_STATUS before the server stops waiting for it. The plugin
- * holds the same deadline between the RUN_STATUS_REQUESTs it handles: a thread that handled none for
- * this long could not have dispatched a CANCEL either, so the run latches unresponsive and refuses
- * its next verb or figma.* access.
- */
-export const RUN_INACTIVITY_DEADLINE_MS = 15_000;
-
-/**
- * How often the server sends a link RUN_STATUS_REQUEST while it has runs there. The server paces the
+ * How often the server sends a link RUN_STATUS_REQUEST while it has runs there. A run's status goes
+ * quiet only while Figma's main thread is held (a large export or render), so silence is shown as
+ * Figma busy and never ends the run: a plugin that is gone closes its socket. The server paces the
  * heartbeat because Figma can't: a hidden window throttles a plugin's chained timer to about one tick
  * a minute (measured live, 2026-10-27) while it still handles each message within milliseconds.
  */
