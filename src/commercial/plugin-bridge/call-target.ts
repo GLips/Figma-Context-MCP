@@ -375,20 +375,22 @@ async function targetNamed(
       (request.fileKey === null || file.fileKey === request.fileKey)
     );
   };
-  // Bound as soon as a match is known: an unrelated plugin's introduction or link-up is never waited
-  // on. "Not open" waits only for instances named open in this document, and for introductions in
-  // flight, any of which may be the match.
+  // Waits only for instances listed in the matched document, never for another document's. A copy of
+  // that document still linking must be in bindFiles' pick, or the call may write into the wrong copy.
+  // With no match yet, a file-key call can't tell which document it is, so it waits for every one.
   const { signal } = options;
-  const awaited = request.document ?? undefined;
   for (;;) {
     const candidates = deps.links().filter(matches);
-    if (candidates.length)
-      return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
+    const awaited =
+      request.document ??
+      (candidates.length ? identifiedFile(deps.documentOf(candidates[0]))!.documentId : undefined);
     const settleAt = deps.linkupSettlesAt(awaited);
     if (Date.now() < settleAt) {
       await deps.pauseForLinkup(settleAt - Date.now(), signal);
       continue;
     }
+    if (candidates.length)
+      return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options);
     await abortable(deps.documentsSettled(deps.links()), signal);
     if (!deps.links().some(matches))
       return documentNotOpen(deps, request, options, request.document);

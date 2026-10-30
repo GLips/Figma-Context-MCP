@@ -26,13 +26,12 @@ const SETTINGS_REPORT: DocumentReport = {
 // A tab closed outright: its storage entry still looks fresh, but it will never link.
 const CLOSED_TAB = { instance: "c10s3dtab0000003", documentId: "s3tt1ngsd0c00002" };
 
-async function granted(bridge: PluginBridge, options: Parameters<typeof connectFakePlugin>[1]) {
-  const socket = await connectFakePlugin(bridge, options);
-  socket.onFrame = (frame) => {
-    if (frame.type === "GRANT_STATUS")
-      socket.receive({ type: "GRANT", id: frame.id, state: "granted" });
-  };
-  return socket;
+/** A plugin whose project is granted, and whose panel picks it when asked to choose a copy. */
+function granted(bridge: PluginBridge, options: Parameters<typeof connectFakePlugin>[1]) {
+  return connectFakePlugin(bridge, {
+    ...options,
+    grantState: (prompt) => (prompt === "pick" ? "picked" : "granted"),
+  });
 }
 
 function target(bridge: PluginBridge, document: string | null) {
@@ -84,4 +83,27 @@ it("a call naming its document never waits on another plugin, linking or frozen"
     kind: "targeted",
     document: { documentId: TEST_DOCUMENT.documentId },
   });
+});
+
+it("a call naming its document waits for a copy of it still linking, and asks which copy", async () => {
+  const bridge = new PluginBridge({ linkupGraceMs: 60_000 });
+  bridges.push(bridge);
+  const copyInstance = "c0pyxnstanc00004";
+  const unkeyed: DocumentReport = {
+    kind: "identified",
+    documentId: TEST_DOCUMENT.documentId,
+    fileName: TEST_DOCUMENT.fileName,
+    pageNames: ["Page 1"],
+  };
+  // Neither reports a file key, so nothing tells the original from its duplicate.
+  await connectFakePlugin(bridge, {
+    document: unkeyed,
+    otherInstances: [{ instance: copyInstance, documentId: TEST_DOCUMENT.documentId }],
+    grantState: () => "pending",
+  });
+  const call = target(bridge, TEST_DOCUMENT.documentId);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const copy = await granted(bridge, { document: unkeyed, instance: copyInstance });
+
+  expect(await call).toMatchObject({ kind: "targeted", link: copy.link });
 });

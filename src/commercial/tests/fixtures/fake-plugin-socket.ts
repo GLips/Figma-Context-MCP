@@ -33,7 +33,6 @@ export class FakePluginSocket extends EventEmitter {
   onFrame?: (frame: Record<string, unknown>) => void;
   /** The bridge's link for this socket, once connectFakePlugin has settled it. */
   link!: PluginLink;
-  readonly instance = mintDocumentId();
 
   constructor(
     private readonly answersHello: boolean,
@@ -42,6 +41,8 @@ export class FakePluginSocket extends EventEmitter {
     private readonly document: DocumentReport = TEST_DOCUMENT_REPORT,
     private readonly otherInstances: readonly OpenInstance[] = [],
     private readonly answersIntroduce = true,
+    readonly instance = mintDocumentId(),
+    private readonly grantState?: (prompt: unknown) => string,
   ) {
     super();
   }
@@ -85,6 +86,8 @@ export class FakePluginSocket extends EventEmitter {
           ...this.otherInstances,
         ],
       });
+    if (frame.type === "GRANT_STATUS" && this.grantState)
+      this.receive({ type: "GRANT", id: frame.id, state: this.grantState(frame.prompt) });
     if (frame.type === "GRANT_PROMPT_CLOSED")
       this.receive({ type: "GRANT_PROMPT_CLOSED_ACK", id: frame.id });
     if (frame.type === "PAIR_CONFIRMED") {
@@ -126,6 +129,8 @@ export async function connectFakePlugin(
     document = TEST_DOCUMENT_REPORT,
     otherInstances = [],
     answersIntroduce = true,
+    instance,
+    grantState,
   }: {
     answersHello?: boolean;
     paired?: boolean;
@@ -137,6 +142,13 @@ export async function connectFakePlugin(
     otherInstances?: readonly OpenInstance[];
     /** False: a plugin whose main thread is blocked, so its introduction never answers. */
     answersIntroduce?: boolean;
+    /** The plugin run's instance id, for another fake's `otherInstances` to name. */
+    instance?: string;
+    /**
+     * How it answers GRANT_STATUS, by prompt, from its first poll on: a call may poll it before
+     * connectFakePlugin returns.
+     */
+    grantState?: (prompt: unknown) => string;
   } = {},
 ): Promise<FakePluginSocket> {
   const socket = new FakePluginSocket(
@@ -146,6 +158,8 @@ export async function connectFakePlugin(
     document,
     otherInstances,
     answersIntroduce,
+    instance,
+    grantState,
   );
   bridge.accept(socket as unknown as WebSocket);
   // Settled when it authenticated, or (unpaired) once its AUTHENTICATE was answered and handled.
