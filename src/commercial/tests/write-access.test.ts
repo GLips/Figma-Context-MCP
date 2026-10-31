@@ -28,11 +28,18 @@ import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import type { PluginReply, ReplyFor, WriteAccessNotice } from "@framelink/plugin/protocol";
-import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
+import {
+  FREE_WRITE_ALLOWANCE,
+  writesUsedThisMonth,
+} from "~/commercial/entitlement/write-ledger.js";
+import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
+import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import {
   createTestWriteAccess,
   linkedTestResolution,
   targetedTestCall,
+  TEST_DOCUMENT,
+  TEST_INTENT,
   TEST_PLUGIN_LINK,
   TEST_PLUGIN_OWNER,
 } from "./fixtures/write-access.js";
@@ -339,6 +346,36 @@ describe("write authorization", () => {
     await lose(false);
     await writeAccess.reportWriteUsage(USER_ID);
     expect(app.reportedExecutionIds).toEqual([mayHaveRun]);
+  });
+
+  it("a caller cancelling a queued run spends no Write once the plugin answers that it never ran", async () => {
+    const { store, writeMeter } = await setup();
+    const bridge = new PluginBridge();
+    cleanups.push(async () => bridge.stop());
+    const plugin = await connectFakePlugin(bridge);
+    const executionId = mintExecutionId();
+    const caller = new AbortController();
+    const run = executePluginCode(
+      {
+        bridge,
+        writeMeter,
+        readLocalImage: () => Promise.reject(new Error("no local images in this test")),
+      },
+      {
+        executionId,
+        intent: TEST_INTENT,
+        link: plugin.link,
+        document: TEST_DOCUMENT,
+        session: null,
+      },
+      "x",
+      { figma: null, signal: caller.signal },
+    ).catch((error: unknown) => error);
+    await expect.poll(() => plugin.frames.some((f) => f.type === "EXECUTE_CODE")).toBe(true);
+    caller.abort();
+    plugin.receive({ type: "CANCEL_RESULT", executionId, disposition: "never-executed" });
+    expect(await run).toMatchObject({ outcome: "not-submitted" });
+    expect(writesUsedThisMonth(store.read().ledger, USER_ID, new Date())).toBe(0);
   });
 
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {

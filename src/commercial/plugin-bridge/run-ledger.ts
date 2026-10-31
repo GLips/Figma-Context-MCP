@@ -171,9 +171,9 @@ interface AwaitedAnswer<T> {
  * Every server→plugin request in flight, and the clocks that bound it. `submit` sends a request under
  * the id its caller chose — a run's execution id, or a fresh correlation id — and resolves when a
  * reply carrying that same id arrives; replies without a matching entry are dropped. A run ends only
- * at its reply, its caller's signal, a requested cancel, or its link closing; a requested cancel
- * never silently abandons it: it sends the id-less CANCEL and words the caller's rejection from the
- * plugin's CANCEL_RESULT (see cancel()).
+ * at its reply, its caller's signal, a requested cancel, or its link closing; a cancel never silently
+ * abandons it: it sends the id-less CANCEL and words the caller's rejection from the plugin's
+ * CANCEL_RESULT (see cancel()).
  */
 export class RunLedger {
   private readonly entries = new Map<string, LedgerEntry>();
@@ -486,8 +486,8 @@ export class RunLedger {
    * Don't add a second enforcement path here. The frame is id-less, deliberately not a request: a
    * CANCEL that awaited a correlated reply could itself time out and cancel, recursively.
    *
-   * What is held for one round trip is only the WORDING: "never executed; retry as-is" and "was
-   * executing; inspect the canvas" are different instructions to the agent reading them.
+   * What is held for one round trip is the WORDING and the charge: "never executed; retry as-is" is
+   * no Write, and "was executing; inspect the canvas" may be one.
    */
   /** `limitMs` is the answer deadline that ran out; a cancel by request has none. */
   private cancel(id: string, cause: RunStopCause, limitMs = 0): void {
@@ -507,9 +507,9 @@ export class RunLedger {
       });
       entry.reject(new BridgeRequestError(message, outcome));
     };
-    // Three requests have no answer worth waiting for: one on a dead socket, a non-run one (the plugin
-    // tracks no phase for it), and one the CALLER cancelled — it is no longer reading.
-    if (!open || cause === "caller" || !RUN_REQUESTS.has(entry.payloadType)) {
+    // Two requests have no answer worth waiting for: one on a dead socket, and a non-run one (the
+    // plugin tracks no phase for it). A caller's cancel waits too: its charge settles from the answer.
+    if (!open || !RUN_REQUESTS.has(entry.payloadType)) {
       reject(NO_CANCEL_ANSWER);
       return;
     }

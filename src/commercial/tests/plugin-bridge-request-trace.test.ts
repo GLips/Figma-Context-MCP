@@ -168,8 +168,9 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
     if (stage === "error") receive({ id, type: "ERROR", error: "private native error" });
     if (stage === "caller-cancelled") controller.abort();
     if (stage === "disconnected") socket.terminate();
-    await result;
+    // Past PLUGIN_ANSWER_MS: a caller's cancel waits that long for the plugin's answer.
     await vi.advanceTimersByTimeAsync(2000);
+    await result;
     const events = trace.snapshot(id);
     expect(events.at(-1)).toMatchObject({
       stage,

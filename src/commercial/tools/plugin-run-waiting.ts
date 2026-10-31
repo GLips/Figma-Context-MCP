@@ -59,6 +59,8 @@ export function launchPluginRun<Facts>(
 ): PluginRun<Facts> {
   const lifetime = new AbortController();
   const cancelForCaller = () => lifetime.abort(callerSignal.reason);
+  // An abort event doesn't replay: a caller already gone must not start a live run.
+  if (callerSignal.aborted) cancelForCaller();
   callerSignal.addEventListener("abort", cancelForCaller, { once: true });
   const detachCaller = () => callerSignal.removeEventListener("abort", cancelForCaller);
   const ended = start(lifetime.signal).finally(detachCaller);

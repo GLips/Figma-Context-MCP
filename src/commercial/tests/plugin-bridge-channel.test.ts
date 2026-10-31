@@ -12,6 +12,7 @@ import { figmaFileKey } from "~/utils/figma-url.js";
 import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 import { TEST_DOCUMENT, TEST_SESSION_REQUEST } from "./fixtures/write-access.js";
 import { mintExecutionId } from "~/commercial/execution-id.js";
+import { PLUGIN_ANSWER_MS } from "~/commercial/plugin-bridge/run-ledger.js";
 import {
   createImageSourceFetcher,
   createImagesCapability,
@@ -117,6 +118,8 @@ it("refuses both late requests and late service results once the run is dead", a
   await vi.advanceTimersByTimeAsync(0);
   caller.abort();
   expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", executionId: h.executionId });
+  // A caller's cancel waits for the plugin's answer, which never comes here.
+  await vi.advanceTimersByTimeAsync(PLUGIN_ANSWER_MS);
   await h.result;
   h.request("late");
   expect(h.socket.frames.at(-1)).toMatchObject({
