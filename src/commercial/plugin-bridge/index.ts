@@ -50,7 +50,10 @@ export type PluginPresence = "connected" | "expected" | "absent";
  */
 export interface PluginBridgeRuntime {
   bridge: PluginBridge;
-  /** Close a short-lived CLI runtime and its background synchronization. */
+  /**
+   * Close the relay, settling every run in flight as its link closing would, and its background
+   * synchronization. Optional only for stand-ins: startPluginBridge always returns it.
+   */
   stop?(): void;
   /** Seat and free-allowance authorization for figma_execute_code, and each run's charge. */
   writeMeter: WriteMeter;
@@ -100,7 +103,7 @@ export function startPluginBridge({
    * that made it, so a CLI run's own short-lived runtime has nothing to hold handles for.
    */
   acceptUploads?: boolean;
-}): PluginBridgeRuntime {
+}): PluginBridgeRuntime & Required<Pick<PluginBridgeRuntime, "stop">> {
   // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
   // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
   // paths through the run's grant of the asset-root-contained file read (uncached — see

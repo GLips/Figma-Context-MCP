@@ -114,12 +114,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
     const server = createServer(operator, serverOptions);
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    registerShutdownHandlers(async () => {});
+    registerShutdownHandlers(pluginBridge.stop);
   } else {
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
     await startHttpServer(config.host, config.port, operator, serverOptions);
 
-    registerShutdownHandlers(async () => {
+    registerShutdownHandlers(pluginBridge.stop, async () => {
       Logger.log("Shutting down server...");
       await stopHttpServer();
       Logger.log("Server shutdown complete");
@@ -128,14 +128,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
 }
 
 /**
- * Register SIGINT + SIGTERM handlers that run mode-specific cleanup and then
+ * Register SIGINT + SIGTERM handlers that stop the plugin relay, run mode-specific cleanup and then
  * flush telemetry before exiting. MCP hosts commonly send SIGTERM, so both
  * signals must be handled in both transport modes.
  *
  * Idempotent: if both signals fire (or a signal fires twice) the second
  * invocation is ignored so we never double-shutdown.
  */
-function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
+function registerShutdownHandlers(
+  stopPluginBridge: () => void,
+  onShutdown: () => Promise<void> = async () => {},
+): void {
   let shuttingDown = false;
   const handle = async () => {
     if (shuttingDown) return;
@@ -143,6 +146,10 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
     // onShutdown may throw (e.g. stopHttpServer failures); try/finally so the
     // process still exits.
     try {
+      // First: every run in flight, attached or detached, settles as a closed link settles it (a
+      // Write charged if it may have run). The charge is saved synchronously, a microtask after
+      // this, so it lands before the exit's awaits finish.
+      stopPluginBridge();
       await onShutdown();
     } finally {
       await exitProcessAfterFlush(0);

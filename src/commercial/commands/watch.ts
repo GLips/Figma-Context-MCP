@@ -150,8 +150,7 @@ async function runWatch(
       }
     });
   } finally {
-    if (runtime.stop) runtime.stop();
-    else runtime.bridge.stop();
+    runtime.stop();
   }
 }
 
