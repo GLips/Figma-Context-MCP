@@ -5,7 +5,7 @@
 // What a plugin call is waiting on, as one value, and the only words for it. The value is produced
 // where the waiting happens (targeting, the grant and pick prompts, sending, the run) and rendered
 // here into every surface: MCP progress, the CLI's waiting lines, and the reply when a call stops
-// waiting before anything was submitted (an MCP check-in, a CLI timeout). An agent acts on these, so
+// waiting before anything was submitted (its deadline: an MCP check-in, a CLI's --wait). An agent acts on these, so
 // each names its specific reason, and says plainly when a person has to do something.
 import { RUN_STATUS_INTERVAL_MS } from "@framelink/plugin/protocol";
 import { quoteFigmaName, REPORT_TO_PERSON } from "./blocked-call-guidance.js";
@@ -18,6 +18,9 @@ import type { RunState } from "./run-ledger.js";
  * the project's next call there waits on it rather than raising another.
  */
 export type CallWait =
+  // A one-shot CLI relay waits for any plugin to dial in, until the call's deadline.
+  | { kind: "connecting"; deadline: number }
+  // Not every open plugin has said which file it is in, so the call's file may have another copy.
   | { kind: "finding-file" }
   // Plugins open in these files haven't linked to this server yet.
   | { kind: "reconnecting"; fileNames: string[] }
@@ -31,7 +34,7 @@ export type CallWait =
 /** A wait a call can stop in with nothing submitted, and be told why. */
 export type UnsubmittedWait = Extract<
   CallWait,
-  { kind: "reconnecting" | "allow" | "pick" | "sending" }
+  { kind: "finding-file" | "reconnecting" | "allow" | "pick" | "sending" }
 >;
 
 // Silence past this many heartbeats is worth telling a person watching.
@@ -40,6 +43,8 @@ const QUIET_PROGRESS_MS = 2 * RUN_STATUS_INTERVAL_MS;
 /** One line for a person watching the call: MCP progress, or the CLI's line as the wait changes. */
 export function callWaitLine(wait: CallWait, now: number): string {
   switch (wait.kind) {
+    case "connecting":
+      return `Waiting up to ${formatDuration(wait.deadline - now)} for the Framelink plugin in Figma.`;
     case "finding-file":
       return "Finding the Figma file…";
     case "reconnecting":
@@ -114,6 +119,14 @@ export function unsubmittedWaitText(
         : `Blocked: ${state}, so ${notRun}. Required before re-running: ${action}. ` +
             `This run waited ${formatDuration(now - wait.since)}; raise --wait if they need longer.`;
     }
+    case "finding-file":
+      return surface === "mcp"
+        ? `Not submitted: not every open Framelink plugin had said which Figma file it is in before ` +
+            `the call had to answer, so this server couldn't rule out another open copy of the file ` +
+            `this call named, and nothing was submitted. Call again the same way.`
+        : `Blocked: not every open Framelink plugin said which Figma file it is in within ` +
+            `${formatDuration(elapsedMs)}, so this server couldn't rule out another open copy of the ` +
+            `file named, and ${notRun}. Re-run, raising --wait.`;
     case "reconnecting": {
       const files = wait.fileNames.map(quoteFigmaName).join(", ");
       return surface === "mcp"

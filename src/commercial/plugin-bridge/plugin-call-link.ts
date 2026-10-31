@@ -54,6 +54,7 @@ export type PluginCallBlock =
   | "document_not_open"
   | "document_unchosen"
   | "document_reconnecting"
+  | "document_list_incomplete"
   | "document_changed"
   | "pick_pending"
   | "grant_denied"
@@ -107,7 +108,8 @@ export interface PluginCallTargetOptions {
   pairing: PluginCallPairing;
   signal: AbortSignal;
   surface: PairingSurface;
-  waitMs: number;
+  /** When the call stops waiting (epoch ms): on links settling, then targeting. */
+  deadline: CallTargetOptions["deadline"];
   pollMs?: number;
   onWaiting?: CallTargetOptions["onWaiting"];
 }
@@ -126,16 +128,16 @@ export async function targetForPluginCall(
     pairing,
     signal,
     surface,
-    waitMs,
+    deadline,
     pollMs,
     onWaiting,
   }: PluginCallTargetOptions,
 ): Promise<PluginCallTargeting> {
-  let resolution = await bridge.resolveLink(signal);
+  let resolution = await bridge.resolveLink(signal, deadline);
   if (resolution.kind === "unpaired" && pairing.kind === "offer") {
     const paired = await confirmShownCode(bridge, pairing.ask, signal, surface);
     if (paired.kind === "blocked") return paired;
-    resolution = await bridge.resolveLink(signal);
+    resolution = await bridge.resolveLink(signal, deadline);
   }
   if (resolution.kind !== "linked") return unlinked(resolution, surface);
   const startedAt = Date.now();
@@ -144,7 +146,7 @@ export async function targetForPluginCall(
   const executionId = mintExecutionId();
   const target = await bridge.targetCall(
     { executionId, intent, session, document, fileKey },
-    { signal, waitMs, pollMs, onWaiting },
+    { signal, deadline, pollMs, onWaiting },
   );
   if (target.kind === "targeted") return { ...target, executionId, intent, session };
   const { block } = target;
@@ -165,6 +167,7 @@ const BLOCK_FOR_TARGET: Record<CallTargetBlock["kind"], PluginCallBlock> = {
   "document-not-open": "document_not_open",
   "document-unchosen": "document_unchosen",
   "document-reconnecting": "document_reconnecting",
+  "document-list-incomplete": "document_list_incomplete",
   "document-changed": "document_changed",
   "pick-pending": "pick_pending",
   "grant-denied": "grant_denied",

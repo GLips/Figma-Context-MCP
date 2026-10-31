@@ -149,7 +149,7 @@ async function target(
     },
     {
       signal: new AbortController().signal,
-      waitMs,
+      deadline: Date.now() + waitMs,
       pollMs: 20,
       onWaiting: (wait) => {
         if ((wait.kind === "allow" || wait.kind === "pick") && !prompted) {
@@ -420,7 +420,7 @@ it("a call that stops waiting leaves its Allow prompt in the panel, says approva
     pairing: { kind: "refuse" },
     signal: new AbortController().signal,
     surface: "mcp",
-    waitMs: 300,
+    deadline: Date.now() + 300,
     pollMs: 20,
   });
   if (unanswered.kind !== "blocked") throw new Error(JSON.stringify(unanswered));

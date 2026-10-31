@@ -43,7 +43,7 @@ import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
 import {
   DEFAULT_PLUGIN_WAIT_SECONDS,
-  pluginWaitMs,
+  pluginWaitDeadline,
   waitForPluginConnection,
 } from "./plugin-wait.js";
 
@@ -146,7 +146,7 @@ run is never resubmitted automatically.`,
       wait: {
         type: Number,
         placeholder: "<seconds>",
-        description: `Wait this long for the plugin to connect, and again for you to allow this project in it (default ${DEFAULT_PLUGIN_WAIT_SECONDS}; 0 fails at once)`,
+        description: `Wait at most this long in all for the plugin to connect, find the file, and for you to allow this project in it; the run itself has no limit (default ${DEFAULT_PLUGIN_WAIT_SECONDS}; 0 fails at once)`,
       },
       assetRoot: {
         type: String,
@@ -198,7 +198,7 @@ export async function runExecute(
   if (positionals.length !== 1 || !isSavedScriptPath(positionals[0])) {
     throw new UsageError("execute requires one .js file containing an async function body.");
   }
-  const waitMs = pluginWaitMs(flags.wait);
+  const deadline = pluginWaitDeadline(flags.wait);
   const target = {
     nodeId: flags.nodeId,
     key: flags.key,
@@ -255,10 +255,9 @@ export async function runExecute(
         const source = { script_source: "script_path" };
         call.record({ ...source, outcome: "not_run" });
         return answeringExpectedFailures(call, signal, source, async () => {
-          console.error(`Waiting up to ${waitMs / 1000}s for the Framelink plugin in Figma.`);
           const unconnected = await waitForPluginConnection(
             runtime.bridge,
-            waitMs,
+            deadline,
             signal,
             "the script was not submitted",
           );
@@ -276,7 +275,7 @@ export async function runExecute(
             pairing: { kind: "refuse" },
             signal,
             surface: "cli",
-            waitMs,
+            deadline,
             onWaiting: (wait) => {
               console.error(callWaitLine(wait, Date.now()));
               return async () => {};
@@ -383,8 +382,7 @@ export async function runExecute(
     return scriptExit || screenshotExit;
   } finally {
     // After any cancelled run has had its answer: closing first would drop the plugin's reply.
-    if (runtime.stop) runtime.stop();
-    else runtime.bridge.stop();
+    runtime.stop();
   }
 }
 

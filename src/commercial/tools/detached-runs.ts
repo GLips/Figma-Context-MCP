@@ -81,14 +81,14 @@ export type DetachedRunLookup<Run> =
   | (Omit<RunTombstone, "scope"> & { state: "gone" })
   | { state: "unknown" };
 
+// No cap on runs still working: a call still waiting on its run has none either, so a cap here
+// would never bound Figma's queue. Only finished results, which this registry alone holds, are capped.
 export interface DetachedRunLimits {
   /** How long a result is held after its run finished. */
   resultTtlMs: number;
   maxResults: number;
   maxResultBytes: number;
   maxTombstones: number;
-  /** Detached runs still working, per scope, past which a new call isn't started. */
-  maxWorking: number;
 }
 
 export const DETACHED_RUN_LIMITS: DetachedRunLimits = {
@@ -97,8 +97,6 @@ export const DETACHED_RUN_LIMITS: DetachedRunLimits = {
   maxResultBytes: 64 * 1024 * 1024,
   // A tombstone is a few dozen bytes; enough to outlast any transcript an agent still acts on.
   maxTombstones: 1_000,
-  // The plugin runs one call at a time per file, so a handful already means a long queue.
-  maxWorking: 8,
 };
 
 /**
@@ -116,15 +114,6 @@ export class DetachedRunRegistry<Run> {
     private readonly limits: DetachedRunLimits = DETACHED_RUN_LIMITS,
     private readonly now: () => number = Date.now,
   ) {}
-
-  /** Handles of `scope`'s detached runs still working. */
-  workingHandles(scope: object): RunHandle[] {
-    return [...this.working.values()].filter((w) => w.scope === scope).map((w) => w.handle);
-  }
-
-  get maxWorking(): number {
-    return this.limits.maxWorking;
-  }
 
   get resultTtlMs(): number {
     return this.limits.resultTtlMs;

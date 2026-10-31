@@ -86,8 +86,10 @@ function boundedAsk(
   lookup: OpenFilesLookup,
   link: RelayConnection,
   signal: AbortSignal,
+  deadline: number,
 ): Promise<OpenInstance[] | null> {
-  const ask = AbortSignal.any([signal, AbortSignal.timeout(OPEN_INSTANCES_ASK_MS)]);
+  const limitMs = Math.max(Math.min(OPEN_INSTANCES_ASK_MS, deadline - Date.now()), 0);
+  const ask = AbortSignal.any([signal, AbortSignal.timeout(limitMs)]);
   return lookup.openInstances(link, ask).catch(() => null);
 }
 
@@ -96,14 +98,18 @@ function representative(instances: readonly OpenFileInstance[]): OpenFileInstanc
   return instances.find((i) => i.active) ?? instances.find((i) => i.link) ?? instances[0];
 }
 
+/** A plugin not answering by `deadline` (a call's, when one asks) leaves the snapshot incomplete. */
 export async function openDocumentSnapshot(
   lookup: OpenFilesLookup,
   signal: AbortSignal,
+  deadline = Infinity,
 ): Promise<OpenDocumentSnapshot> {
   const links = lookup.links();
   const documents = links.map((link) => lookup.documentOf(link));
   const asked = links.filter((_, index) => documents[index].kind !== "unknown");
-  const replies = await Promise.all(asked.map((link) => boundedAsk(lookup, link, signal)));
+  const replies = await Promise.all(
+    asked.map((link) => boundedAsk(lookup, link, signal, deadline)),
+  );
   signal.throwIfAborted();
   const linkOf = new Map<string, RelayConnection>();
   for (const link of links) {

@@ -41,7 +41,7 @@ function unnamedCall(bridge: PluginBridge) {
       document: null,
       fileKey: null,
     },
-    { signal: new AbortController().signal, waitMs: 5_000 },
+    { signal: new AbortController().signal, deadline: Date.now() + 5_000 },
   );
 }
 

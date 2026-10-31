@@ -15,7 +15,8 @@
 //   for the agent to choose from by name. No panel is asked.
 //
 // Nothing waits on a plugin still linking but the file a call named or was given: that one is the
-// run, so the call waits for it to link, within the caller's wait.
+// run, so the call waits for it to link. Every wait in a call (linking, the file list, a pick, Allow)
+// spends one deadline, set when the call started, and each request it sends ends by it.
 //
 // A document is its stamp. One stamp on two links is either one file open twice (both reported the
 // same file key) or a copy; when nothing tells them apart, the human picks in those panels.
@@ -65,6 +66,8 @@ export type CallTargetBlock =
   | { kind: "document-unchosen"; reason: NoUnnamedCallDefault; open: OpenDocumentSnapshot }
   // The file the call named or was given is open, but its plugin didn't link within the call's wait.
   | { kind: "document-reconnecting"; wait: Extract<CallWait, { kind: "reconnecting" }> }
+  // A named call's file list was still incomplete at its deadline: an unknown plugin may be a copy.
+  | { kind: "document-list-incomplete"; wait: Extract<CallWait, { kind: "finding-file" }> }
   // The file the call was waiting on was given a new stamp: the agent chooses again.
   | { kind: "document-changed"; fileName: string; open: OpenDocumentSnapshot }
   | { kind: "grant-denied"; fileName: string }
@@ -94,15 +97,14 @@ export type CallTarget = Targeted | BlockedCallTarget;
 
 type BlockedCallTarget = { kind: "blocked"; block: CallTargetBlock };
 
-// Human-scale wait. SDK 1.29 only resets idle timeouts if the CLIENT opts into
-// resetTimeoutOnProgress. Caller abort wins. A private client deadline that sends
-// neither cancellation nor disconnect is not observable by this server.
-export const GRANT_WAIT_MS = 120_000;
-
 export interface CallTargetOptions {
+  /** The caller's cancellation: targeting rejects with its reason. */
   signal: AbortSignal;
-  /** The whole wait: for plugins in the call's file to link, then for the human. */
-  waitMs?: number;
+  /**
+   * When the call stops waiting (epoch ms), whatever it waits on: reaching it answers with that wait,
+   * never with an error.
+   */
+  deadline: number;
   pollMs?: number;
   /**
    * Called when the call starts waiting, and again when what it waits on changes. What the first
@@ -221,9 +223,28 @@ type WaitingOptions = Omit<CallTargetOptions, "onWaiting"> & {
 /** The open files now, for a call to bind by or a refusal to list. */
 function snapshotNow(
   deps: CallTargetDeps,
-  { signal }: WaitingOptions,
+  { signal, deadline }: WaitingOptions,
 ): Promise<OpenDocumentSnapshot> {
-  return openDocumentSnapshot(deps, signal);
+  return openDocumentSnapshot(deps, signal, deadline);
+}
+
+function remainingMs(deadline: number): number {
+  return Math.max(deadline - Date.now(), 0);
+}
+
+/** The caller's signal, also aborted at the deadline: for each request a call sends to a plugin. */
+function requestSignal({ signal, deadline }: WaitingOptions): AbortSignal {
+  return AbortSignal.any([signal, AbortSignal.timeout(remainingMs(deadline))]);
+}
+
+/** Wait for `settled` until the deadline; past it, go on with what is known. Caller cancel rejects. */
+async function settledByDeadline(settled: Promise<void>, options: WaitingOptions): Promise<void> {
+  const bounded = requestSignal(options);
+  try {
+    await abortable(settled, bounded);
+  } catch (error) {
+    if (options.signal.aborted || !bounded.aborted) throw error;
+  }
 }
 
 /** Open instances not linked to this server yet, by file name: what a call still linking waits on. */
@@ -243,7 +264,7 @@ async function targetSession(
   const found = await findSessionHolder(deps, session, options);
   if (found.kind === "blocked") return found;
   const { holder } = found;
-  await abortable(deps.documentsSettled([holder]), options.signal);
+  await settledByDeadline(deps.documentsSettled([holder]), options);
   const file = identifiedFile(deps.documentOf(holder));
   if (!file) return blocked({ kind: "session-lookup-failed", session });
   if (
@@ -272,14 +293,14 @@ async function findSessionHolder(
   session: SessionHandle,
   options: WaitingOptions,
 ): Promise<{ kind: "found"; holder: RelayConnection } | BlockedCallTarget> {
-  const { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS } = options;
-  const giveUpAt = Date.now() + waitMs;
+  const { signal, deadline, pollMs = GRANT_POLL_MS } = options;
   const answered = new Map<RelayConnection, boolean>();
   const failed = new Set<RelayConnection>();
   for (;;) {
     const unasked = deps.links().filter((link) => !answered.has(link));
+    const asking = requestSignal(options);
     const held = await Promise.all(
-      unasked.map((link) => deps.lookupSession(link, session, signal).catch(() => null)),
+      unasked.map((link) => deps.lookupSession(link, session, asking).catch(() => null)),
     );
     signal.throwIfAborted();
     unasked.forEach((link, index) => {
@@ -294,7 +315,7 @@ async function findSessionHolder(
     if (holders.length > 1) return blocked({ kind: "session-ambiguous", session });
     if (holders.length === 1) return { kind: "found", holder: holders[0] };
     const linking = (await snapshotNow(deps, options)).instances.filter((i) => i.link === null);
-    if (!linking.length || Date.now() >= giveUpAt) {
+    if (!linking.length || Date.now() >= deadline) {
       const unreachable = deps.links().some((link) => failed.has(link));
       return blocked({
         kind: unreachable ? "session-lookup-failed" : "session-not-found",
@@ -302,7 +323,7 @@ async function findSessionHolder(
       });
     }
     options.onWaiting(reconnecting(linking));
-    await deps.pauseForLinkup(Math.min(pollMs, giveUpAt - Date.now()), signal);
+    await deps.pauseForLinkup(Math.min(pollMs, remainingMs(deadline)), signal);
   }
 }
 
@@ -320,7 +341,7 @@ async function targetNamed(
     (instance) => instance.fileKey === request.fileKey,
   );
   if (keyed) return targetDocument(deps, request, keyed.documentId, options);
-  await abortable(deps.documentsSettled(deps.links()), options.signal);
+  await settledByDeadline(deps.documentsSettled(deps.links()), options);
   const linked = deps
     .links()
     .map((link) => identifiedFile(deps.documentOf(link)))
@@ -331,10 +352,11 @@ async function targetNamed(
 }
 
 /**
- * Run in `documentId` (and the call's file key, if it named one). Every open instance of it that
- * would be a distinct file is waited for until it links, within the call's wait: one still linking
- * must be in bindFiles' pick, or the call may write into the wrong copy. Instances in other documents
- * are never waited on.
+ * Run in `documentId` (and the call's file key, if it named one). Binding waits until the open files
+ * are known: every open instance of it that would be a distinct file has linked, and every linked
+ * plugin has said which file it is in and answered. One still linking, or unknown, may be a copy that
+ * must be in bindFiles' pick, or the call may write into the wrong copy. A plugin in another document
+ * holds it only by not answering: its list may name such a copy.
  */
 async function targetDocument(
   deps: CallTargetDeps,
@@ -342,8 +364,7 @@ async function targetDocument(
   documentId: DocumentId,
   options: WaitingOptions,
 ): Promise<CallTarget> {
-  const { signal, waitMs = GRANT_WAIT_MS } = options;
-  const giveUpAt = Date.now() + waitMs;
+  const { signal, deadline } = options;
   const matches = (file: { documentId: DocumentId; fileKey: FigmaFileKey | null } | null) =>
     file !== null &&
     file.documentId === documentId &&
@@ -363,21 +384,21 @@ async function targetDocument(
         matches(instance) &&
         !(instance.fileKey !== null && linkedKeys.has(instance.fileKey)),
     );
-    if (!linking.length) {
-      if (candidates.length)
-        return bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), {
-          ...options,
-          waitMs: Math.max(giveUpAt - Date.now(), 0),
-        });
-      await abortable(deps.documentsSettled(deps.links()), signal);
-      if (!deps.links().some((link) => matches(identifiedFile(deps.documentOf(link)))))
-        return documentNotOpen(deps, request, options, documentId);
-      continue;
+    if (open.complete && !linking.length)
+      return candidates.length
+        ? bindFiles(deps, request, distinctFiles(candidates, deps.documentOf), options)
+        : documentNotOpen(deps, request, options, documentId, open);
+    const expired = Date.now() >= deadline;
+    if (linking.length) {
+      const wait = reconnecting(linking);
+      if (expired) return blocked({ kind: "document-reconnecting", wait });
+      options.onWaiting(wait);
+    } else {
+      const wait = { kind: "finding-file" } as const;
+      if (expired) return blocked({ kind: "document-list-incomplete", wait });
+      options.onWaiting(wait);
     }
-    if (Date.now() >= giveUpAt)
-      return blocked({ kind: "document-reconnecting", wait: reconnecting(linking) });
-    options.onWaiting(reconnecting(linking));
-    await deps.pauseForLinkup(Math.min(LINKUP_POLL_MS, giveUpAt - Date.now()), signal);
+    await deps.pauseForLinkup(Math.min(LINKUP_POLL_MS, remainingMs(deadline)), signal);
   }
 }
 
@@ -387,12 +408,13 @@ async function documentNotOpen(
   request: CallTargetRequest,
   options: WaitingOptions,
   document: DocumentId | null,
+  open?: OpenDocumentSnapshot,
 ): Promise<BlockedCallTarget> {
   return blocked({
     kind: "document-not-open",
     document,
     fileKey: request.fileKey,
-    open: await snapshotNow(deps, options),
+    open: open ?? (await snapshotNow(deps, options)),
   });
 }
 
@@ -405,7 +427,7 @@ async function targetUnnamed(
   request: CallTargetRequest,
   options: WaitingOptions,
 ): Promise<CallTarget> {
-  await abortable(deps.documentsSettled(deps.links()), options.signal);
+  await settledByDeadline(deps.documentsSettled(deps.links()), options);
   const open = await snapshotNow(deps, options);
   const unnamed = unnamedCallDefault(open);
   if (unnamed.kind !== "default")
@@ -456,8 +478,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
     expired: () => BlockedCallTarget;
   },
 ): Promise<Decided | BlockedCallTarget> {
-  const { signal, waitMs = GRANT_WAIT_MS, pollMs = GRANT_POLL_MS } = options;
-  const deadline = Date.now() + waitMs;
+  const { signal, deadline, pollMs = GRANT_POLL_MS } = options;
   const asked = new Set<RelayConnection>();
   let decided: RelayConnection | null = null;
   const restamped = async () =>
@@ -474,6 +495,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
       )
         return await restamped();
       if (!live.length) return await round.gone();
+      const asking = requestSignal(options);
       const answers = await Promise.all(
         live.map(async (link) => {
           asked.add(link);
@@ -486,7 +508,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
                 prompt: round.wait.kind,
                 intent: request.intent,
               },
-              signal,
+              asking,
             )
             .catch(() => null);
           return state === null ? [] : [{ link, state }];
@@ -502,7 +524,7 @@ async function pollPanels<Decided extends { kind: "targeted" | "picked"; link: R
       }
       if (Date.now() >= deadline) return round.expired();
       options.onWaiting(round.wait);
-      await pause(Math.min(pollMs, Math.max(deadline - Date.now(), 0)), signal);
+      await pause(Math.min(pollMs, remainingMs(deadline)), signal);
     }
   } finally {
     for (const link of asked)

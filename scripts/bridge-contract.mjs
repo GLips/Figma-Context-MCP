@@ -101,7 +101,7 @@ const target = (bridge, document, waitMs = 5_000) =>
       document,
       fileKey: null,
     },
-    { signal: new AbortController().signal, waitMs, pollMs: 20 },
+    { signal: new AbortController().signal, deadline: Date.now() + waitMs, pollMs: 20 },
   );
 
 // Every bridge gets its OWN state dir — the link credential — so nothing one bridge persists is

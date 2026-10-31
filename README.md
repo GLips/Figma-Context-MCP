@@ -113,7 +113,7 @@ Each run gets a fresh `session` object, and its JSON names that session's handle
 
 The execution reply is JSON on stdout; progress and errors go to stderr. `--output` also saves that JSON. `--screenshot` saves a PNG after a completed execution, including a script error; select a target with `--node-id` or `--key`, or omit both for the current page. `--context` also captures the canvas around a target, with `--margin` pixels on each side. Script and transport failures return a nonzero exit status. An interrupted or disconnected execution is never automatically resubmitted.
 
-`--wait` sets the connection wait and the wait for Allow separately (600 seconds by default); it does not extend execution deadlines. `--asset-root` confines local image reads, defaulting to the working directory. `--env` selects an environment file; `FRAMELINK_ASSET_ROOT` and `FRAMELINK_API_URL` retain their server meanings.
+`--wait` is one deadline, counted from the start, for everything before the run: the plugin connecting, finding the file and Allow (60 seconds by default). The run itself has no time limit. `--asset-root` confines local image reads, defaulting to the working directory. `--env` selects an environment file; `FRAMELINK_ASSET_ROOT` and `FRAMELINK_API_URL` retain their server meanings.
 
 The command exits as soon as the execution replies. Ctrl-C exits with status 130.
 

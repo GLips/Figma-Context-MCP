@@ -17,7 +17,7 @@ import { defineCliCommand } from "~/commands/cli-command.js";
 import { printCliFailure, type CliCommandContext } from "~/commands/cli-context.js";
 import { captureObservedCall, type ToolEventProperties } from "~/telemetry/index.js";
 import type { OperationCall } from "~/utils/observed-operation.js";
-import { pluginWaitMs, waitForPluginConnection } from "./plugin-wait.js";
+import { pluginWaitDeadline, waitForPluginConnection } from "./plugin-wait.js";
 
 // A listing is a glance, not a run: it waits briefly for a plugin, not the execute default.
 const FILES_WAIT_SECONDS = 20;
@@ -64,7 +64,7 @@ export async function runReference(
   { signal, observe }: Pick<CliCommandContext, "signal" | "observe">,
   { bridge = new PluginBridge() }: { bridge?: PluginBridge } = {},
 ): Promise<number> {
-  const waitMs = files ? pluginWaitMs(wait ?? FILES_WAIT_SECONDS) : 0;
+  const deadline = files ? pluginWaitDeadline(wait ?? FILES_WAIT_SECONDS) : 0;
   return observe(
     "get_flcm_reference",
     captureObservedCall,
@@ -76,7 +76,7 @@ export async function runReference(
           bridge.start(WS_PORT_BLOCK);
           const unconnected = await waitForPluginConnection(
             bridge,
-            waitMs,
+            deadline,
             signal,
             "no files were listed",
           );

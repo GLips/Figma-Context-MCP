@@ -324,16 +324,27 @@ export class PluginBridge {
 
   /**
    * Whether a call has links to run on. Links a credential failed are challenged again first, and
-   * links still setting up are waited out rather than guessed about.
+   * links still setting up are waited out rather than guessed about, until the call's `deadline`:
+   * then they are judged as they stand.
    */
-  async resolveLink(signal?: AbortSignal): Promise<LinkResolution> {
+  async resolveLink(signal?: AbortSignal, deadline = Infinity): Promise<LinkResolution> {
     this.setup.rechallenge();
     for (;;) {
       const settling = [...this.links].filter(
         (link) => link.isOpen && isSettlingLinkStage(link.stage),
       );
-      if (!settling.length) break;
-      await waitForSignal(Promise.race(settling.map((link) => link.stageChanged)), signal);
+      if (!settling.length || Date.now() >= deadline) break;
+      const changed = Promise.race(settling.map((link) => link.stageChanged));
+      if (!Number.isFinite(deadline)) {
+        await waitForSignal(changed, signal);
+        continue;
+      }
+      const timeUp = AbortSignal.timeout(Math.max(deadline - Date.now(), 0));
+      await waitForSignal(changed, AbortSignal.any([...(signal ? [signal] : []), timeUp])).catch(
+        (error: unknown) => {
+          if (!timeUp.aborted || signal?.aborted) throw error;
+        },
+      );
     }
     const open = [...this.links].filter((link) => link.isOpen);
     const authenticated = open.filter((link) => link.isAuthenticated);

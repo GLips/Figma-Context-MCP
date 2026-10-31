@@ -14,7 +14,7 @@ import { captureObservedCall, type ToolEventProperties } from "~/telemetry/index
 import type { OperationCall } from "~/utils/observed-operation.js";
 import {
   DEFAULT_PLUGIN_WAIT_SECONDS,
-  pluginWaitMs,
+  pluginWaitDeadline,
   waitForPluginConnection,
 } from "./plugin-wait.js";
 import { terminalPairingCodeAsker } from "./terminal-pairing.js";
@@ -58,7 +58,7 @@ export async function runPair(
     bridge = new PluginBridge(),
   }: { input?: NodeJS.ReadableStream; bridge?: PluginBridge } = {},
 ): Promise<number> {
-  const waitMs = pluginWaitMs(wait);
+  const deadline = pluginWaitDeadline(wait);
   const lines = createInterface({ input, output: process.stderr, terminal: false });
   try {
     // The facts pair_figma_plugin records, so a pairing reads the same from either surface.
@@ -67,11 +67,10 @@ export async function runPair(
       captureObservedCall,
       async (call: OperationCall<ToolEventProperties>) => {
         call.record({ outcome: "not_run" });
-        console.error(`Waiting up to ${waitMs / 1000}s for the Framelink plugin in Figma.`);
         bridge.start(WS_PORT_BLOCK);
         const unconnected = await waitForPluginConnection(
           bridge,
-          waitMs,
+          deadline,
           signal,
           "nothing was paired",
         );

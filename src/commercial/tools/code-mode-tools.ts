@@ -22,7 +22,6 @@ import {
   type PluginBridgeRuntime,
   type PluginPresenceSource,
 } from "~/commercial/plugin-bridge/index.js";
-import { GRANT_WAIT_MS } from "~/commercial/plugin-bridge/call-target.js";
 import { callWaitLine, type CallWait } from "~/commercial/plugin-bridge/call-wait.js";
 import {
   notGrantedText,
@@ -250,15 +249,16 @@ function registerCodeModeTools(
   const runtime = caller.plugin;
 
   /**
-   * The client's own prompt for confirming a pairing code, when it advertises form elicitation.
-   * Stateless HTTP never does: it has no session to carry the client's capabilities.
+   * The client's own prompt for confirming a pairing code, when it advertises form elicitation, open
+   * until the call's `deadline` at most. Stateless HTTP never advertises it: it has no session to
+   * carry the client's capabilities.
    */
-  function pairingCodeAsker(extra: ToolExtra): PairingCodeAsker | null {
+  function pairingCodeAsker(extra: ToolExtra, deadline: number): PairingCodeAsker | null {
     if (!server.server.getClientCapabilities()?.elicitation?.form) return null;
     return async (code, expiresInMs, signal) => {
       // A client that advertises prompts but never answers must hand back while the code still has
       // time for the agent to ask instead.
-      const timeout = Math.min(PAIRING_PROMPT_MAX_MS, expiresInMs - PAIRING_GUIDANCE_MIN_LIFE_MS);
+      const timeout = Math.min(deadline - Date.now(), expiresInMs - PAIRING_GUIDANCE_MIN_LIFE_MS);
       if (timeout <= 0) return "unanswered";
       try {
         const answer = await server.server.elicitInput(
@@ -311,19 +311,17 @@ function registerCodeModeTools(
     },
     progress: CallProgress,
   ): Promise<PluginCallTarget | { reply: CallToolResult }> {
+    // Every wait before the run, a person's answers included, ends in time for the check-in.
+    const deadline = progress.checkInAt - PLUGIN_ANSWER_MS;
     const targeted = await targetForPluginCall(bridge, {
       intent,
       document,
       fileKey,
       session,
-      pairing: { kind: "offer", ask: pairingCodeAsker(extra) },
+      pairing: { kind: "offer", ask: pairingCodeAsker(extra, deadline) },
       signal: extra.signal,
       surface: "mcp",
-      // A human answering a prompt is part of the call, so their wait ends by its check-in.
-      waitMs: Math.min(
-        GRANT_WAIT_MS,
-        Math.max(progress.checkInAt - PLUGIN_ANSWER_MS - Date.now(), 0),
-      ),
+      deadline,
       onWaiting: (wait) => {
         progress.show(() => wait);
         return async () => progress.show(FINDING_FILE);
@@ -334,9 +332,8 @@ function registerCodeModeTools(
   }
 
   /**
-   * A call's way to its plugin run: refused while this caller already has too many detached runs
-   * working, never started once the call is due to check in, and otherwise run until it ends or the
-   * call checks in. Shared by figma_execute_code and get_screenshot.
+   * A call's way to its plugin run: never started once the call is due to check in, and otherwise
+   * run until it ends or the call checks in. Shared by figma_execute_code and get_screenshot.
    */
   async function runUntilCheckIn(
     runtime: PluginBridgeRuntime,
@@ -413,28 +410,6 @@ function registerCodeModeTools(
     const end = waited.kind === "ended" ? waited.end : await run.ended;
     call.record(end.facts);
     return end.reply;
-  }
-
-  /** The refusal for a call while this caller already has the most detached runs still working. */
-  function tooManyDetachedRunsReply(
-    call: FramelinkToolCall<CodeModeFacts>,
-    tool: string,
-    facts: CodeModeFacts,
-    working: readonly string[],
-  ): CallToolResult {
-    call.record({ ...facts, outcome: "not_run", failure: "too_many_detached_runs" });
-    return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text:
-            `${tool} did not run: ${working.length} earlier runs are still working with no call ` +
-            `waiting on them (${working.join(", ")}). Await or cancel them with ` +
-            `await_figma_execution, then retry.`,
-        },
-      ],
-    };
   }
 
   function scriptSourceReply(got: "neither" | "both"): CallToolResult {
@@ -555,9 +530,6 @@ function registerCodeModeTools(
               );
             }
           } else return scriptSourceReply("neither");
-          const working = detachedRuns.workingHandles(runtime);
-          if (working.length >= detachedRuns.maxWorking)
-            return tooManyDetachedRunsReply(call, "figma_execute_code", source, working);
           const progress = startCallProgress(extra, checkInAt);
           try {
             return await answeringExpectedFailures(call, extra, source, async () => {
@@ -767,9 +739,6 @@ Returns a PNG image.`,
               `get_screenshot: ${inputError} This is NOT a failure: correct the arguments and retry.`,
             );
           }
-          const working = detachedRuns.workingHandles(runtime);
-          if (working.length >= detachedRuns.maxWorking)
-            return tooManyDetachedRunsReply(call, "get_screenshot", {}, working);
           const progress = startCallProgress(extra, checkInAt);
           try {
             return await answeringExpectedFailures(call, extra, {}, async () => {
@@ -962,7 +931,7 @@ Returns a PNG image.`,
           if (code === undefined) {
             const pairing = await pairPluginLink(
               bridge,
-              pairingCodeAsker(extra),
+              pairingCodeAsker(extra, Date.now() + MCP_CHECK_IN_MS),
               extra.signal,
               "mcp",
             );
@@ -1165,9 +1134,6 @@ function usedSession(session: SessionHandle): string {
 function ranIn({ fileName, documentId, fileKey }: CallDocument): string {
   return `Figma file: ${quoteFigmaName(fileName)} (document ${documentId}${fileKey ? `, fileKey ${fileKey}` : ""})`;
 }
-
-// How long a client's pairing prompt may stay open before the call falls back to agent guidance.
-const PAIRING_PROMPT_MAX_MS = 90_000;
 
 const PAIRED_TEXT =
   "Paired: this server and the Framelink plugin are linked, and stay linked across restarts. Retry the call that needed the plugin.";
