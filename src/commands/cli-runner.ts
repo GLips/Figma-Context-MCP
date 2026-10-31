@@ -20,10 +20,10 @@ export type CliProcessFlags = {
 /** Why a command was told to stop, and the exit code that reports it when it didn't succeed. */
 export class CliStop extends Error {
   constructor(
-    readonly stoppedBy: "SIGINT" | "SIGTERM" | "output-closed",
+    readonly stoppedBy: "SIGINT" | "SIGTERM" | "output-failed",
     readonly exitCode: number,
   ) {
-    super(stoppedBy === "output-closed" ? "Output closed" : `Stopped by ${stoppedBy}`);
+    super(stoppedBy === "output-failed" ? "Output failed" : `Stopped by ${stoppedBy}`);
     this.name = "CliStop";
   }
 }
@@ -31,6 +31,11 @@ export class CliStop extends Error {
 const SIGNAL_EXIT_CODES = { SIGINT: 130, SIGTERM: 143 } as const;
 // What a shell reports for a process killed by SIGPIPE, the usual end of `cmd | head`.
 const OUTPUT_CLOSED_EXIT_CODE = 141;
+
+/** Output that failed outweighs the command's own answer: what it printed didn't all arrive. */
+function outputFailureExitCode(error: NodeJS.ErrnoException): number {
+  return error.code === "EPIPE" ? OUTPUT_CLOSED_EXIT_CODE : 1;
+}
 
 /**
  * Everything a command's process needs before the command runs: the env file, the proxy every
@@ -59,9 +64,13 @@ export async function runCliCommand(
     if (stop.signal.aborted) process.exit(SIGNAL_EXIT_CODES[signal]);
     stop.abort(new CliStop(signal, SIGNAL_EXIT_CODES[signal]));
   };
-  // Without a listener, a write to a closed pipe (EPIPE) is an uncaught error.
-  const onOutputError = () => {
-    if (!stop.signal.aborted) stop.abort(new CliStop("output-closed", OUTPUT_CLOSED_EXIT_CODE));
+  // Without a listener, a write to a closed pipe (EPIPE) is an uncaught error. Kept until the exit:
+  // the final flush can meet one too.
+  let outputError: NodeJS.ErrnoException | undefined;
+  const onOutputError = (error: NodeJS.ErrnoException) => {
+    outputError ??= error;
+    if (!stop.signal.aborted)
+      stop.abort(new CliStop("output-failed", outputFailureExitCode(error)));
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
@@ -78,5 +87,5 @@ export async function runCliCommand(
   }
   const reason: unknown = stop.signal.reason;
   if (code !== 0 && reason instanceof CliStop) code = reason.exitCode;
-  return exitProcessAfterFlush(code);
+  return exitProcessAfterFlush(() => (outputError ? outputFailureExitCode(outputError) : code));
 }

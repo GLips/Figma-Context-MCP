@@ -8,12 +8,13 @@ const TELEMETRY_EXIT_BUDGET_MS = 1500;
 /**
  * The one way a Framelink process ends once its work is done, the server's shutdown and every CLI
  * command alike: telemetry gets its budget, then everything written to stdout and stderr is handed
- * to the OS, then the process exits with `code` whatever handles are still open.
+ * to the OS, then the process exits with `code` whatever handles are still open. A function `code`
+ * is read only then, so an output error the flush itself met can still decide it.
  */
-export async function exitProcessAfterFlush(code: number): Promise<never> {
+export async function exitProcessAfterFlush(code: number | (() => number)): Promise<never> {
   await closeTelemetry(TELEMETRY_EXIT_BUDGET_MS);
   await Promise.all([flushOutput(process.stdout), flushOutput(process.stderr)]);
-  process.exit(code);
+  process.exit(typeof code === "number" ? code : code());
 }
 
 // An empty write's callback runs once every earlier write has been handed off, or failed: a pipe
