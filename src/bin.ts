@@ -4,6 +4,7 @@ import { cli } from "cleye";
 import { getServerConfig, UsageError } from "./config.js";
 import { startServer } from "./server.js";
 import { fetchCommand } from "./commands/fetch.js";
+import { downloadImagesCommand } from "./commands/download-images.js";
 
 const argv = cli({
   name: "figma-developer-mcp",
@@ -60,7 +61,7 @@ const argv = cli({
       description: "Disable usage telemetry (telemetry is on by default)",
     },
   },
-  commands: [fetchCommand],
+  commands: [fetchCommand, downloadImagesCommand],
 });
 
 // Subcommand callbacks execute during cli() — only start the server when no subcommand ran.
