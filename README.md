@@ -86,6 +86,20 @@ Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink MCP for Figma, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
+## Command-line usage
+
+The package also works without an MCP client. `fetch` prints simplified design data, and `download-images` exports nodes as PNG or SVG files and prints the saved paths:
+
+```bash
+# Export the node in a Figma link as a PNG at 2x scale into ./exports
+npx figma-developer-mcp download-images "https://www.figma.com/design/ABC123/My-File?node-id=1-2" --image-dir ./exports
+
+# Export several nodes as SVG
+npx figma-developer-mcp download-images --file-key ABC123 --node-id 1:2 --node-id 3:4 --format svg
+```
+
+Files are named after their node ID (e.g. `1-2.png`). Run `npx figma-developer-mcp download-images --help` for all options. Both commands take `--figma-api-key`, or read `FIGMA_API_KEY` / `FIGMA_OAUTH_TOKEN` from the environment or a `.env` file.
+
 ## Star History
 
 <a href="https://star-history.com/#GLips/Figma-Context-MCP"><img src="https://api.star-history.com/svg?repos=GLips/Figma-Context-MCP&type=Date" alt="Star History Chart" width="600" /></a>
