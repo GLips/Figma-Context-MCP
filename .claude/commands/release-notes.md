@@ -61,10 +61,11 @@ Collect everything needed to write the _why_, not just the _what_:
    a. **Plan / brainstorm docs** — search `docs/plans/completed/` and `docs/brainstorms/completed/`
    for a matching doc (by feature name or date); read its Problem / Motivation section. Richest
    source when it exists, but **many features won't have one.**
-   b. **tk tickets** — the ticket tracker (prefix `fig`) holds the durable _what & why_ in each
-   ticket's description. `tk list --json` to scan titles/descriptions, then `tk show <id>` for
-   the full ticket + activity log. Tickets are often closed with `--commit <hash>`, so a commit
-   in the release range may point straight to its ticket.
+   b. **tk tickets** — tk's board `fig` holds the durable _what & why_ in each ticket's
+   description. Find them with tk's tools (`search-work` by feature, `read-ticket` for the full
+   ticket, its messages and its recorded commits), never the `tk` shell command, which is tk1.
+   A commit subject in the release range often names its ticket ref; confirm it against the
+   commits `read-ticket` lists.
    c. **Claude Code session transcripts** — if neither has it, the feature was likely built in a
    session. Transcripts live in
    `~/.claude/projects/-Users-graham-Programming-figma-mcp/*.jsonl` (JSONL). Grep them for the

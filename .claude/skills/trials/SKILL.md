@@ -33,7 +33,7 @@ Every run is **ergo** (find friction) unless `--craft` (find the design ceiling:
 1. `trials run <trial> [--craft] [--model m]` **in the background** (`run_in_background`) — it blocks for the build plus the interview, routinely 10–30 minutes, and fails fast if the plugin isn't connected or the scratch dir isn't trusted. Do nothing else with that session while it runs. If a run dies between build and report, `trials interview <slug>` and `trials report <slug>` pick it up from the run record.
 2. When it returns, read the report it names. Then **triage**: every interview item goes under `### Fix now` or `### File a ticket` in the report — nothing stays unclassified.
    - _Fix now_: a rename, a default, a doc line, an error message — small enough to land before the next round.
-   - _File a ticket_: needs design, touches the schema shape, or is one of the known fidelity-ceiling gaps. File it with `tk add` and put the ref in the report.
+   - _File a ticket_: needs design, touches the schema shape, or is one of the known fidelity-ceiling gaps. File it with tk's `create-ticket` tool (never the `tk` shell command, which is tk1) and put the ref in the report.
    - Don't take the agent's word for a bug: `sq tail <slug> --type tool_result` and check the error text before classifying it.
 3. Craft run: tell Graham the page name so he can fill `## Verdict`.
 4. `sq close <slug>` once the report is triaged; the transcript stays on disk.
